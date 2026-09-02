@@ -2745,6 +2745,14 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  And the pool has a group of its own: the wake and the settle of
+      --  each product after the first are what it saves, which a generated
+      --  token was paying five times a layer.
+      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU then
+         Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status);
+         return;
+      end if;
+
       Status := E.Success;
       for Index in Weights'Range loop
          Product

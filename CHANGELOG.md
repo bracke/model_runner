@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Faster
 
+- **Five jobs a layer where there were two.** The processor's generating row
+  was 1.11 behind, and the bus said why: one run moves **38.6 GB/s** of the
+  model where two runs together move **43.1** — twelve per cent the part will
+  deliver and one run was not asking for. Two attempts at that headroom
+  inside the kernel measured flat and are not kept: two rows at a time
+  (1.810 s against 1.808) and a software prefetch (1.812).
+
+  The engine's own phase account said where it really is. Feeding, projecting
+  and reading out take 69.6 / 19.8 / 5.7 per cent against 73.6 / 20.0 / 6.3
+  of the model's bytes — proportional — at **41.2 / 39.3 / 43.7 GB/s**. The
+  projections are the smallest matrices and the most jobs and the only phase
+  well off the saturated rate.
+
+  So a group of matrices reading one input is now **one pool job rather than
+  one each**: a layer's queries, keys and values are one job and its gate and
+  up another, and a generated token posts **89 jobs where it posted 155**.
+  The parts share the chunk counter but not their tiles, so each part's rows
+  are cut where they would have been cut alone and no digest moves.
+  **Projecting 0.363 s against 0.387 (6.2%)**, generating 1.787 against 1.808
+  (1.2%).
+
 - **The residual joins folded into the products they follow.** A layer joins
   twice, and each join was a dispatch: two arms read, a buffer written, and
   the normalization after it reading that buffer back. By removal they cost

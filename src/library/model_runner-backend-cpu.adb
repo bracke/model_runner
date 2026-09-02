@@ -650,7 +650,8 @@ package body Model_Runner.Backend.CPU is
          Values => null,
          Scales => null,
          Totals => null,
-         Work   => Work);
+         Work   => Work,
+         others => <>);
 
       Item.Control.Post (Job_Of, Taken);
       if not Taken then
@@ -738,7 +739,17 @@ package body Model_Runner.Backend.CPU is
    is
       Step   : constant Element_Count :=
         (if Grain <= 1 then 1 else Grain);
-      Tiles  : constant Element_Count := (Work.Rows + Step - 1) / Step;
+
+      --  Tiles a part holds, each part beginning at a tile of its own so
+      --  that no chunk crosses from one matrix into the next. That is what
+      --  makes a grouped job the same arithmetic as the products run one at
+      --  a time: a part's rows are cut where they would have been cut
+      --  alone.
+      One   : constant Element_Count := (Work.Rows + Step - 1) / Step;
+      Two   : constant Element_Count := (Work.Rows_Two + Step - 1) / Step;
+      Three : constant Element_Count := (Work.Rows_Three + Step - 1) / Step;
+
+      Tiles : constant Element_Count := One + Two + Three;
    begin
       if Waking = null or else Work.Rows = 0
         or else Work.Vector = null or else Work.Target = null
@@ -755,11 +766,34 @@ package body Model_Runner.Backend.CPU is
               or else Element_Count (Mine) >= Tiles;
 
             declare
-               First : constant Element_Count := Element_Count (Mine) * Step;
-               Last  : constant Element_Count :=
-                 Element_Count'Min (First + Step - 1, Work.Rows - 1);
+               Tile : constant Element_Count := Element_Count (Mine);
+
+               --  Which part this tile belongs to, and the tile's place
+               --  inside it.
+               Part  : Job := Work;
+               Local : Element_Count;
             begin
-               Take_Share (Work, First, Last);
+               if Tile < One then
+                  Local := Tile;
+               elsif Tile < One + Two then
+                  Local := Tile - One;
+                  Part.Weight := Work.Weight_Two;
+                  Part.Target := Work.Target_Two;
+                  Part.Rows := Work.Rows_Two;
+               else
+                  Local := Tile - One - Two;
+                  Part.Weight := Work.Weight_Three;
+                  Part.Target := Work.Target_Three;
+                  Part.Rows := Work.Rows_Three;
+               end if;
+
+               declare
+                  First : constant Element_Count := Local * Step;
+                  Last  : constant Element_Count :=
+                    Element_Count'Min (First + Step - 1, Part.Rows - 1);
+               begin
+                  Take_Share (Part, First, Last);
+               end;
             end;
          end;
       end loop;
@@ -945,7 +979,8 @@ package body Model_Runner.Backend.CPU is
          Values => null,
          Scales => null,
          Totals => null,
-         Work   => null);
+         Work   => null,
+         others => <>);
 
       if Prepare_Packed (Item, Weight, Vector, 1) then
          Work.Values := Item.Values;
@@ -1016,6 +1051,149 @@ package body Model_Runner.Backend.CPU is
       end if;
    end Mat_Vec;
 
+   -------------------
+   -- Mat_Vec_Group --
+   -------------------
+
+   procedure Mat_Vec_Group
+     (Item    : in out Pool;
+      Weights : T.View_Group;
+      Vector  : T.Real_Array_Access;
+      Into    : T.Target_Group;
+      Status  : out E.Error_Info)
+   is
+      Work        : Job;
+      Accepted    : Boolean;
+      Failed      : Boolean;
+      Mine_Failed : Boolean := False;
+   begin
+      Status := E.Success;
+
+      Open (Item);
+
+      if not Is_Open (Item) then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Work :=
+        (Weight => Weights (Weights'First),
+         Count  => 1,
+         Vector => Vector,
+         Target => Into (Into'First),
+         Rows   => Weights (Weights'First).Rows,
+         Team   => Item.Workers + 1,
+         Values => null,
+         Scales => null,
+         Totals => null,
+         Work   => null,
+         others => <>);
+
+      if Weights'Length >= 2 then
+         Work.Weight_Two := Weights (Weights'First + 1);
+         Work.Target_Two := Into (Into'First + 1);
+         Work.Rows_Two := Weights (Weights'First + 1).Rows;
+      end if;
+
+      if Weights'Length >= 3 then
+         Work.Weight_Three := Weights (Weights'First + 2);
+         Work.Target_Three := Into (Into'First + 2);
+         Work.Rows_Three := Weights (Weights'First + 2).Rows;
+      end if;
+
+      if Prepare_Packed (Item, Work.Weight, Vector, 1) then
+         Work.Values := Item.Values;
+         Work.Scales := Item.Scales;
+         Work.Totals := Item.Totals;
+
+         --  The smaller team, as a single product asks for it and for the
+         --  same reason: the byte path is answered by the memory.
+         Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
+      end if;
+
+      Item.Control.Post (Work, Accepted);
+      if not Accepted then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Announce
+        (Item.Waking'Unchecked_Access,
+         Natural (Share_Count'Min (Share_Count (Item.Workers),
+                                   Work.Team - 1)));
+
+      begin
+         Take_Chunks
+           (Item.Waking'Unchecked_Access, Work,
+            Model_Runner.Quantization.Integers.Row_Tile);
+      exception
+         when others =>
+            Mine_Failed := True;
+      end;
+
+      Settle (Item.Waking'Unchecked_Access);
+      Item.Control.Await (Failed);
+
+      if Failed or else Mine_Failed then
+         Status := E.Make (E.Backend_Worker_Failed);
+         E.Add_Integer (Status, "workers", Long_Long_Integer (Item.Workers));
+      end if;
+   end Mat_Vec_Group;
+
+   --------------------
+   -- Dispatch_Group --
+   --------------------
+
+   procedure Dispatch_Group
+     (Item    : Pool_Reference;
+      Weights : T.View_Group;
+      Vector  : T.Real_Array_Access;
+      Into    : T.Target_Group;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+
+      --  What may be run as one job: at most three matrices, as many
+      --  answers as matrices, and every one of them agreeing on the format
+      --  and the width -- because the activation is quantized once for the
+      --  whole job and what that quantizing does is decided by those two.
+      --  Anything else is what it was, one product at a time.
+      Together : Boolean :=
+        Item /= null
+        and then Weights'Length in 2 .. 3
+        and then Into'Length = Weights'Length;
+   begin
+      Status := E.Success;
+
+      if Together then
+         for Index in Weights'Range loop
+            declare
+               Which : T.View renames Weights (Index);
+            begin
+               if Which.Format /= Weights (Weights'First).Format
+                 or else Which.Columns /= Weights (Weights'First).Columns
+                 or else Which.Rows = 0
+                 or else Into (Into'First + (Index - Weights'First)) = null
+               then
+                  Together := False;
+               end if;
+            end;
+         end loop;
+      end if;
+
+      if Together then
+         Mat_Vec_Group (Item.all, Weights, Vector, Into, Status);
+         return;
+      end if;
+
+      for Index in Weights'Range loop
+         Dispatch
+           (Item, Weights (Index), Vector,
+            Into (Into'First + (Index - Weights'First)), Status);
+         exit when E.Is_Error (Status);
+      end loop;
+   end Dispatch_Group;
+
    ---------------
    -- Dispatch --
    ---------------
@@ -1073,7 +1251,8 @@ package body Model_Runner.Backend.CPU is
          Values => null,
          Scales => null,
          Totals => null,
-         Work   => null);
+         Work   => null,
+         others => <>);
 
       if Prepare_Packed (Item, Weight, Vectors, Count) then
          Work.Values := Item.Values;

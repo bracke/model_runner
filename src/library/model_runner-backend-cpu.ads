@@ -132,6 +132,29 @@ package Model_Runner.Backend.CPU is
       Target : Model_Runner.Tensors.Real_Array_Access;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Several matrix products against one input vector, in one job.
+   --
+   --  The same answers `Dispatch` gives for each of them in turn, to the
+   --  bit: the parts share the chunk counter but not their tiles, so every
+   --  part's rows are partitioned exactly as they would be alone. What is
+   --  saved is the wake and the settle of each product after the first,
+   --  which a generated token pays a hundred and fifty-five times.
+   --
+   --  Up to three matrices; more than that, or matrices that do not agree
+   --  on their format and width, are run one at a time as they were.
+   --
+   --  @param Item Pool to run on.
+   --  @param Weights The matrices, in the order their answers are wanted.
+   --  @param Vector The input every one of them reads.
+   --  @param Into Where each one's answer goes, in the same order.
+   --  @param Status Success, Backend_Closed or Backend_Worker_Failed.
+   procedure Dispatch_Group
+     (Item    : Pool_Reference;
+      Weights : Model_Runner.Tensors.View_Group;
+      Vector  : Model_Runner.Tensors.Real_Array_Access;
+      Into    : Model_Runner.Tensors.Target_Group;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Matrix product against several input vectors at once.
    --
    --  The rows are partitioned across workers exactly as Mat_Vec partitions
@@ -293,6 +316,29 @@ private
       --  share runs it and nothing else, so a job that never carries one
       --  leaves the product's own path exactly as it was.
       Work   : Task_Item_Access := null;
+
+      --  Two further matrices the same input is multiplied by, each with
+      --  its own answer.
+      --
+      --  A layer multiplies one normalized input by three matrices for
+      --  attention -- the queries, the keys and the values -- and by two
+      --  more for the gated middle, and each of those was a job of its own:
+      --  a wake, a chunk counter and a settle apiece, five times a layer
+      --  where two would do. A generated token is a hundred and fifty-five
+      --  products and eighty-nine jobs is what those five become.
+      --
+      --  The rows of the parts are one space the chunk counter walks, and a
+      --  chunk never crosses from one part into the next -- each part's
+      --  tiles begin at a tile boundary of their own. So a part's rows are
+      --  partitioned exactly as they were when it was a job alone, and no
+      --  answer moves.
+      Weight_Two   : Model_Runner.Tensors.View;
+      Target_Two   : Model_Runner.Tensors.Real_Array_Access := null;
+      Rows_Two     : Element_Count := 0;
+
+      Weight_Three : Model_Runner.Tensors.View;
+      Target_Three : Model_Runner.Tensors.Real_Array_Access := null;
+      Rows_Three   : Element_Count := 0;
    end record;
 
    type Generation_Array is array (Worker_Count) of Natural;
