@@ -6531,10 +6531,14 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **296.5 t/s** | 34.8 t/s |
+| model_runner, processor | **333.3 t/s** | 34.8 t/s |
 | llama.cpp, processor | 339.5 t/s | 39.2 t/s |
-| model_runner, device | 1078.4 t/s | **50.6 t/s** |
+| model_runner, device | 1549.3 t/s | **50.6 t/s** |
 | llama.cpp, device | 1647.2 t/s | 55.5 t/s |
+
+**Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
+were measuring a machine that had gone back to sleep -- see `### A prompt too
+short to wake the machine` below.
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
@@ -6578,11 +6582,14 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor's long prompt is **ahead by 1.08** where its short one is 1.15
-behind, and the device is **1.07** behind at 1419 tokens against 1.53 at
-110. Attention grows with the square of the context and it
-is the part of a layer this program is furthest behind on, so a table taken
-at a hundred and ten tokens reads a little kinder than the work deserves.
+The processor's long prompt is **ahead by 1.08** where its short one is 1.02
+behind, and the device is **1.07** behind at 1419 tokens against 1.06 at
+110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
+were the machine's clock rather than the code's; `### A prompt too short to
+wake the machine` is what they were. Attention grows with the square of the
+context and it is the part of a layer this program is furthest behind on, so a
+table taken at a hundred and ten tokens reads a little kinder than the work
+deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
 three runs it is **±1.3 on 269.1 at 1419 tokens against ±25 on 339.5 at
@@ -10636,8 +10643,11 @@ that moved was worth.
 
 ### The short device prompt, and the tile table on the other side
 
-The device's 110-token prompt is 1.53 times behind, the widest ratio in this
-file, and the reason offered was occupancy: a 110-column batch is one column
+The device's 110-token prompt was 1.53 times behind when this was written --
+the widest ratio in the file at the time, and afterwards found to be a clock
+state rather than a gap; `### A prompt too short to wake the machine` is what
+it really was, and the ratio is 1.06. What follows is still a measurement of
+the tile's shape and stands as one. The reason offered was occupancy: a 110-column batch is one column
 tile wide, so a 2048-row product dispatches sixty-four workgroups onto twelve
 compute units. A narrower column tile doubles that.
 
@@ -10995,6 +11005,60 @@ the staged operands, the four-subgroup attention, the narrow column tile and
 the deeper step were all judged against a map that said the matrix row was
 most of the prompt. It is sixty-one per cent of it, and all the kernels
 together are eighty.
+
+
+### A prompt too short to wake the machine
+
+A prompt of 110 tokens is a tenth of a second of work, and `tests speed` takes
+the median of three of them with the host idle in between. The fixture behind
+the short rows is a complete instruction, so the chat model answers it with an
+end of sequence: the run generates nothing, nothing follows the prefill, and
+the parts never leave their low state. Sampling
+`/sys/class/drm/card1/device/pp_dpm_sclk` through both kinds of run:
+
+| | clock while it runs |
+| --- | --- |
+| generates nothing | 800 MHz, reaching 1.1 to 1.8 GHz |
+| generates sixty-four | 800 MHz idle, holding **2.2 GHz**, peak 2.49 |
+
+Same prompt length, half the clock. And it is not only the device -- the
+processor's short row moves by nine per cent for the same reason.
+
+A second fixture, `speed-prompt-110.txt`, is the same prose at the same 110
+tokens in one line rather than eight, so the model continues instead of
+stopping. Alternated against the old one, three rounds, load under 0.70 before
+each:
+
+| | | | |
+| --- | ---: | ---: | ---: |
+| device, generating 64 | 0.071 | 0.072 | 0.068 |
+| device, generating 0 | 0.103 | 0.102 | 0.100 |
+| processor, generating 64 | 0.330 | 0.330 | 0.311 |
+| processor, generating 0 | 0.360 | 0.362 | 0.348 |
+
+Which moves both published rows:
+
+| | was | is | llama.cpp | gap was | gap is |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| device, 110 | 1078.4 | **1549.3 t/s** | 1647.2 | 1.53 | **1.06** |
+| processor, 110 | 296.5 | **333.3 t/s** | 339.5 | 1.15 | **1.02** |
+
+**The widest gap in this file was a clock state.** `llama-bench` warms up and
+then runs its repeats back to back, so its short-prompt figure was taken on
+parts at speed and this one was not; the two rows were never measuring the
+same machine.
+
+The 1419-token rows are not affected, and that was checked rather than
+assumed: that fixture generates twelve tokens and its prompt is eight tenths
+of a second of work, long enough to bring the clock up inside itself. It reads
+0.824 s against the 0.841 published, which is noise.
+
+What this is an instance of is worth keeping. Every figure here is taken by a
+tool that measures a tenth of a second and then stops, and the machine is a
+participant: a run too short to wake it measures the sleeping one. What made
+it visible was not suspicion of the number -- it had stood for weeks -- but
+that runs generating twelve tokens and runs generating none sorted into two
+clean bands with no overlap between them.
 
 
 ### The fifth that is in no kernel, found

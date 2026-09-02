@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Both short-prompt rows were measuring a sleeping machine, and both are
+  corrected.** A 110-token prompt is a tenth of a second, and the fixture
+  behind those rows is a complete instruction the chat model answers with an
+  end of sequence — so the run generates nothing, nothing follows the prefill,
+  and the parts never leave their low clock. Sampling `pp_dpm_sclk`: a run
+  that generates nothing reaches **1.1–1.8 GHz**, one that generates
+  sixty-four holds **2.2**. A second fixture, `speed-prompt-110.txt`, is the
+  same prose at the same 110 tokens in one line so the model continues:
+
+  | | was | is | llama.cpp | gap was | gap is |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | device, 110 | 1078.4 | **1549.3 t/s** | 1647.2 | 1.53 | **1.06** |
+  | processor, 110 | 296.5 | **333.3 t/s** | 339.5 | 1.15 | **1.02** |
+
+  The widest gap in the file was a clock state. The 1419-token rows were
+  checked rather than assumed and are unaffected — that prompt is eight tenths
+  of a second, long enough to wake the machine inside itself.
+
 - **The fifth that is in no kernel, found — and the previous entry's
   comparison withdrawn.** Three builds of one long device prompt: nothing
   changed **0.833 s**, every kernel keeping its stores and losing its work

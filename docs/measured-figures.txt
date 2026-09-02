@@ -6206,6 +6206,61 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, both short-prompt rows were measured on a machine that had gone
+# back to sleep, and both are wrong. A prompt of 110 tokens is a tenth of a
+# second of work, and `tests speed` takes the median of three of them with the
+# host idle in between. What the fixture behind those two rows does is stop
+# the model immediately -- it is a complete instruction and the chat model
+# answers it with an end of sequence -- so the run generates nothing, nothing
+# follows the prefill, and the parts never leave their low state.
+#
+#   Sampling /sys/class/drm/card1/device/pp_dpm_sclk through both:
+#
+#     a run that generates nothing    800 MHz, reaching 1.1 to 1.8 GHz
+#     a run that generates sixty-four 800 MHz idle, holding 2.2, peak 2.49
+#
+#   The same prompt length, half the clock. And it is not only the device: the
+#   processor's short row moves by nine per cent for the same reason.
+#
+#   A second fixture, speed-prompt-110.txt: the same prose, 110 tokens of it,
+#   in one line rather than eight so the model continues rather than stopping.
+#   Alternated against the old one, three rounds, load under 0.70 before each:
+#
+#     device, generating 64   0.071  0.072  0.068
+#     device, generating 0    0.103  0.102  0.100
+#     processor, generating 64 0.330 0.330  0.311
+#     processor, generating 0  0.360 0.362  0.348
+#
+#   Which moves both published rows:
+#
+#                     was        is        llama.cpp   was     is
+#     device 110    1078.4    1549.3 t/s     1647.2    1.53    1.06
+#     processor 110  296.5     333.3         339.5     1.15    1.02
+#
+#   The widest gap in this file was a clock state. llama-bench warms up and
+#   then runs its repeats back to back, so its short-prompt figure was taken
+#   on parts at speed and ours was not; the two rows were never measuring the
+#   same machine.
+#
+#   The 1419-token rows are not affected and were checked rather than assumed:
+#   that fixture generates twelve tokens and its prompt is eight tenths of a
+#   second of work, which is long enough to bring the clock up inside itself.
+#   It reads 0.824 s here against the 0.841 published, which is noise.
+#
+#   What this is an instance of: every figure in this file is taken by a tool
+#   that measures a tenth of a second and then stops. The machine is a
+#   participant, and a run too short to wake it measures the sleeping one. The
+#   fixture that does this has been behind the short rows since they were
+#   first published, and what made it visible was not suspicion of the number
+#   but the fact that runs generating twelve tokens and runs generating none
+#   sorted into two clean bands with no overlap.
+#
+#   No source changed, so no group is restamped. The new fixture is a fixture,
+#   not a source of any figure group.
+#
+#   load:  under 0.70 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
