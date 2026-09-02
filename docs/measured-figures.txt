@@ -5422,6 +5422,51 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the open question above, asked the other way and still no.
+#
+#   The entry above ends with a buffer written by the normalization costing
+#   eleven milliseconds more than a buffer written by nothing else, and
+#   names the memory kind as the thing to try -- this time for the write
+#   rather than the read.
+#
+#   Both ends were tried. Host-cached memory out of the heap that is not the
+#   device's own, which is what the result buffer uses and what was eleven
+#   milliseconds faster to write:
+#
+#     as it is                   0.830 s evaluating the long prompt
+#     the half buffer cached     0.860
+#
+#   Thirty milliseconds worse, because the tile product reads that buffer on
+#   every dispatch and a read out of that heap is what this file already
+#   knew to be slow. Fast to write and slow to read is not a trade a buffer
+#   read far more than it is written can take.
+#
+#   And the other end, the kind that is the device's own and nothing else --
+#   no host bits, so no coherence to keep and nothing forcing a write past a
+#   cache. Four rounds this time rather than three:
+#
+#     host-visible and coherent  0.832, 0.839, 0.829, 0.825 s
+#     the device's own alone     0.819, 0.830, 0.823, 0.836
+#
+#   Half a per cent, with the arms overlapping at both ends. The same answer
+#   the read-side test gave, on four rounds instead of three, and the same
+#   verdict.
+#
+#   So the eleven milliseconds is neither the heap, nor the property bits,
+#   nor the width of the store, nor what is in it. What is left untried is
+#   the one thing the two variants also differ in: the half-precision buffer
+#   is written by the normalization, read by the tile product, written by
+#   the tile product and read by the combining step, all inside one
+#   submission -- so every barrier in a layer is a barrier over that buffer.
+#   The result buffer, in the variant that was faster, was touched by
+#   nothing else in the sequence. That is the next thing to ask, and it is
+#   about barriers rather than about memory.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

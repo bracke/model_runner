@@ -10427,9 +10427,28 @@ anything. The result buffer is host-cached memory out of the heap that is not
 the device's own; the half-precision buffer is the device's own and
 host-coherent. `### The memory kind, and the number the item was ranked on`
 above moved the half buffer to a kind that is the device's own and nothing
-else, and measured nothing -- but it was looking for a faster **read** where
-the cost turns out to be a **write**. That is the open question this leaves,
-and it is a better-posed one than the item that started this.
+else and measured nothing -- but it was looking for a faster **read** where
+the cost turns out to be a **write**.
+
+So both ends were tried again, for the write. **Host-cached, out of the heap
+that is not the device's own** -- the kind that was eleven milliseconds
+faster to write -- reads **0.860 s** against 0.830: thirty worse, because the
+tile product reads that buffer on every dispatch and a read out of that heap
+is what this page already knew to be slow. Fast to write and slow to read is
+not a trade a buffer read far more than it is written can take. And **the
+device's own and nothing else**, with no coherence to keep and nothing
+forcing a write past a cache, reads 0.819, 0.830, 0.823 and 0.836 against
+0.832, 0.839, 0.829 and 0.825 -- half a per cent, arms overlapping at both
+ends, on four rounds rather than three.
+
+So the eleven milliseconds is not the heap, not the property bits, not the
+width of the store and not what is in it. **What is left untried is the one
+other thing those two variants differ in.** The half-precision buffer is
+written by the normalization, read by the tile product, written by the tile
+product and read by the combining step, all inside one submission -- so every
+barrier in a layer is a barrier over that buffer. The result buffer, in the
+variant that was faster, was touched by nothing else in the sequence. That is
+the next question, and it is about barriers rather than about memory.
 
 
 ### The activation quantizer, widened and refused

@@ -24,9 +24,18 @@ Keep a Changelog and the project uses semantic versioning.
   half-precision one, and packing two halves into one four-byte store of the
   same buffer reads 0.838. It is which buffer is written. The result buffer
   is host-cached out of the heap that is not the device's own; the
-  half-precision one is the device's own and host-coherent. An earlier entry
-  moved that buffer to a device-only kind and measured nothing — it was
-  looking for a faster read where the cost is a write.
+  half-precision one is the device's own and host-coherent.
+
+  Both ends were then tried for the *write*, and neither is it. Host-cached
+  out of the other heap reads **0.860 s against 0.830** — thirty worse,
+  because the tile product reads that buffer every dispatch. The device's own
+  kind with no host bits reads half a per cent better over four rounds, arms
+  overlapping. So it is not the heap, not the property bits, not the store
+  width and not the contents. What is left is the one other difference: the
+  half-precision buffer is written by the normalization, read by the tile
+  product, written by it and read by the combining step inside one
+  submission, so every barrier in a layer is a barrier over that buffer — and
+  the faster variant wrote a buffer nothing else in the sequence touched.
 
 - **Where the device's gap is now — and a "bound" that was a bug.** Taken
   again kernel against kernel (ours by removal, llama.cpp's from
