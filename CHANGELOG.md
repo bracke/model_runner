@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The step's depth had already been done, and I walked round the guard that
+  says so.** The previous entry called the tile's depth the one dimension
+  never varied. It was swept on 2026-08-29 — eleven shapes, all answering the
+  same digest, the current one winning by 6% — and the shader says so two
+  lines under the constant I edited. There is even a **repository check that
+  `TILE_R` and `KCH` are thirty-two**, written for exactly this mistake; it
+  did not fire because I ran the shader build and the speed tool and skipped
+  `tests check` for being slow.
+
+  Re-asking is justified by the date: that sweep was taken when the long
+  device prompt was 1.935 s and it is now 0.831. Asked again with a minimal
+  loop over sixteen-value units: **0.831 s without the loop, 0.880 with it at
+  step 32, 0.898 at 64, 0.888 at 128.** The depth is still wrong at both
+  larger values — 2% and 1% against the same loop, a smaller gap than before
+  but the same sign — and the loop costs 4.5% and unlocks nothing, so it is
+  not kept, for the second time and the same reason.
+
 - **The short device prompt: the occupancy premise refuted, and the other
   runtime's tile table read.** Halving the column tile doubles the
   workgroups and changes nothing — **0.103 s against 0.101** at 110 tokens,

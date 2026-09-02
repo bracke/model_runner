@@ -10684,13 +10684,60 @@ it picks the medium, which is *taller* than ours rather than narrower, and
 the taller tile is what `### The tile llama.cpp uses` already measured at
 thirteen per cent worse on the long prompt.
 
-What is left is the one dimension of the tile this program has never varied:
-**the depth.** All three of their shapes take sixty-four or a hundred and
-twenty-eight columns of the shared dimension at a step where this takes
-thirty-two. Set to sixty-four the shader compiles and the run does not
-complete -- the staging is written for a thirty-two-deep chunk and a
-sixty-four-lane workgroup, so it is shader work rather than a constant. That
-is the only untried thing left in this kernel.
+What is left is the depth: all three of their shapes take sixty-four or a
+hundred and twenty-eight columns of the shared dimension at a step where this
+takes thirty-two. **Which had already been tried, and the next section is the
+correction.**
+
+
+### The step's depth, which had been done, and the guard I walked round
+
+The section above calls the depth "the one dimension of the tile this program
+has never varied" and "the only untried thing left in this kernel". Both are
+wrong, and the answer was **two lines under the constant I edited**. The
+shader says, of `TILE_R`, `TILE_V` and `KCH`: *the step is one Q8_0 block
+deep, which is what makes the decode below a whole number of blocks;
+sixty-four and a hundred and twenty-eight were measured and are slower.*
+
+`docs/measured-figures.txt` has it at more length under 2026-08-29. The
+staging was rewritten to take any shape, eleven were swept, every one
+answered `1a26d24d33b8957b`, and the shape already there won by six per cent
+-- step sixty-four read 2.062 s against 1.935 and step a hundred and
+twenty-eight 2.122. The rewrite cost one and a half per cent and was taken
+out, **and a repository check was added that `TILE_R` and `KCH` are
+thirty-two**, so that the next person to turn one gets a failure rather than
+a kernel that runs and answers nothing.
+
+That check exists, it names this exact mistake, and it did not fire because I
+never ran it: the sweep went through the shader build script and the speed
+tool, and the check lives in `tests check`, which I had skipped for being
+slow. The guard was written for precisely this and I walked round it.
+
+**What does justify re-asking is the date.** That sweep was taken when the
+long device prompt was 1.935 seconds and it is now 0.831 -- the shape was
+chosen on a machine doing less than half the work per second it does now. So
+it was asked again with a smaller change than the 2026-08-29 rewrite: the
+staging keeps its straight-line body and gains one loop over sixteen-value
+units, both of whose bounds are compile-time constants, so a step of
+thirty-two turns it once.
+
+| | 1419-token device prompt |
+| --- | ---: |
+| **as it is, no loop** | **0.831 s** |
+| the loop, step thirty-two | 0.880 s |
+| the loop, step sixty-four | 0.898 s |
+| the loop, step a hundred and twenty-eight | 0.888 s |
+
+Two readings come out of that. **The depth is still wrong at both larger
+values** -- two per cent worse at sixty-four and one at a hundred and
+twenty-eight, measured against the same loop -- a smaller gap than the six
+and ten per cent of the old sweep, but the same sign, and the shape stands.
+
+And **the loop costs four and a half per cent** where the earlier, more
+general rewrite cost one and a half. It is a smaller change on a baseline
+that has more than halved, so the absolute cost is about the same and the
+proportion is what moved. Generality that costs four and a half per cent and
+unlocks nothing is not kept, for the second time and for the same reason.
 
 
 ### The activation quantizer, widened and refused

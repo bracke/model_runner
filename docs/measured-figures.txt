@@ -5801,6 +5801,62 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the step's depth -- and a correction: it had been done.
+#
+#   The entry above ends by calling the depth "the one dimension of the tile
+#   this program has never varied" and "the only untried thing left in this
+#   kernel". Both are wrong, and the answer was two lines under the constant
+#   I edited. The shader says, of TILE_R, TILE_V and KCH: "The step is one
+#   Q8_0 block deep, which is what makes the decode below a whole number of
+#   blocks; sixty-four and a hundred and twenty-eight were measured and are
+#   slower."
+#
+#   It is in this file too, under 2026-08-29: the staging was rewritten to
+#   take any shape, eleven of them were swept, every one answered
+#   1a26d24d33b8957b, and the shape that was already there won by six per
+#   cent. Step sixty-four read 2.062 s against 1.935 and step a hundred and
+#   twenty-eight 2.122. The rewrite cost one and a half per cent and was
+#   taken out, and a repository check was added that TILE_R and KCH are
+#   thirty-two so that the next person to turn one gets a failure rather
+#   than a kernel that runs and answers nothing.
+#
+#   That check exists and it names this exact mistake. It did not fire
+#   because I never ran it: the sweep went through the shader build script
+#   and the speed tool, and the repository check lives in `tests check`,
+#   which I skipped for being slow. The guard was right, it was written for
+#   me, and I walked round it.
+#
+#   What the date rule does justify is re-asking, because that sweep was
+#   taken when the long device prompt was 1.935 seconds and it is now 0.831
+#   -- the shape was chosen on a machine doing less than half the work per
+#   second it does now. So it was asked again, with a smaller change than
+#   the 2026-08-29 rewrite: the staging keeps its straight-line body and
+#   gains one loop over sixteen-value units, both of whose bounds are
+#   compile-time constants, so a step of thirty-two turns it once.
+#
+#     as it is, no loop                 0.831 s evaluating the long prompt
+#     the loop, step thirty-two         0.880
+#     the loop, step sixty-four         0.898
+#     the loop, step a hundred and      0.888
+#       twenty-eight
+#
+#   Two readings out of it. The depth is still wrong at both larger values,
+#   by two per cent at sixty-four and one at a hundred and twenty-eight
+#   against the same loop -- a smaller gap than the six and ten per cent of
+#   the old sweep, but the same sign, and the shape stands.
+#
+#   And the loop costs four and a half per cent where the earlier and more
+#   general rewrite cost one and a half. It is a smaller change on a
+#   baseline that has more than halved, so the absolute cost is about the
+#   same and the proportion is what moved. Generality that costs four and a
+#   half per cent and unlocks nothing is not kept, for the second time and
+#   for the same reason.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
