@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The fifth that is in no kernel, found — and the previous entry's
+  comparison withdrawn.** Three builds of one long device prompt: nothing
+  changed **0.833 s**, every kernel keeping its stores and losing its work
+  **0.166**, every kernel voided **0.043**. So the prompt is **667 ms of
+  kernel arithmetic and reads (80%), 123 ms of stores and what they cost
+  (15%), 43 ms of host, submissions and ~800 dispatch launches (5%)** — and
+  the five kernels measured one at a time came to 680 against 667 measured
+  together, so the own-work figures do add.
+
+  The 123 ms is the reads, not the volume stored: writing a megabyte into a
+  region and a kilobyte into it cost the same, and writing nothing is what is
+  cheap.
+
+  **Withdrawn:** the previous entry put our kernels at 680 ms against
+  llama.cpp's 752 and concluded ours are faster. Its logger measures dispatch
+  durations, which contain every memory effect; ours are whole-run
+  differences, which exclude the 123 ms a kernel's output costs elsewhere.
+  Not the same quantity. The whole-prompt figure stands: 0.833 against 0.787.
+
 - **The device budget taken again — and a fifth of a device prompt is in no
   kernel at all.** Retaken with the corrected instrument (keep the stores,
   drop the work), against a 0.841 s long prompt: `matrix_product` **515 ms**

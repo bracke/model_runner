@@ -10981,29 +10981,71 @@ of a device prompt -- is not any kernel's work.** Twenty-one of it is the
 barriers, priced separately under `### What the barriers cost`. The rest is
 between the kernels rather than in them.
 
-Which inverts the comparison this page has been drawing. llama.cpp's logger
-reports kernel durations, which are own-work figures, and at 1419 tokens it
-reads about 575 ms of matrix products, 80 of attention, 61 of the gated middle
-and the joins, 21 of normalization and 15 of rotation:
+These figures were put beside llama.cpp's logger in the first version of this
+section, and **that comparison was a category error and is withdrawn** -- the
+next section says why. Its logger measures a dispatch from timestamp to
+timestamp, so its numbers are durations and contain every memory effect
+inside them; these are differences of whole-run times with a kernel's work
+dropped, so they exclude what a kernel's output costs elsewhere. The two are
+not the same quantity.
 
-| | here | llama.cpp | |
-| --- | ---: | ---: | --- |
-| matrix products | 515 ms | ~575 ms | **ahead** |
-| attention | 106 ms | 80 ms | 1.33 behind |
-| the gated middle and the joins | 39 ms | 61 ms | **ahead** |
-| the normalization | 5 ms | 21 ms | **far ahead** |
-| the rotation | 15 ms | 15 ms | level |
-| **total in kernels** | **680 ms** | **752 ms** | |
-
-**This program's device kernels are faster than the other runtime's, in
-total, and its device prompt is slower.** The difference is the fifth of the
-prompt that belongs to no kernel.
-
-That is a different thing from everything chased on this side. The tall tile,
+What is left standing is a map of this program's own time, and it is still a
+different thing from everything chased on this side. The tall tile,
 the staged operands, the four-subgroup attention, the narrow column tile and
 the deeper step were all judged against a map that said the matrix row was
 most of the prompt. It is sixty-one per cent of it, and all the kernels
 together are eighty.
+
+
+### The fifth that is in no kernel, found
+
+Three builds, one long device prompt:
+
+| | reads |
+| --- | ---: |
+| nothing changed | 0.833 s |
+| every kernel keeps its stores and loses its work | 0.166 s |
+| every kernel voided | 0.043 s |
+
+Which decomposes the prompt with nothing left over:
+
+| | | |
+| --- | ---: | ---: |
+| the kernels' arithmetic and their reads | **667 ms** | 80 % |
+| their stores and what those cost | **123 ms** | 15 % |
+| the host, the submissions and the launches | **43 ms** | 5 % |
+
+The first is also a check on the instrument: the five kernels measured one at
+a time came to six hundred and eighty, and measured all at once they come to
+six hundred and sixty-seven. Two per cent apart, so the own-work figures do
+add.
+
+**The hundred and twenty-three is the fifth**, and it is not one thing that
+can be pointed at. In that build every kernel writes everything it would write
+and computes nothing, so what is left is the stores themselves, the traffic
+they cause, and every downstream read of what they wrote. The
+normalization's three-way measurement says which of those it mostly is:
+writing a megabyte into a region and writing a kilobyte into it cost the same,
+and writing nothing is what is cheap. **It is the reads, not the volume
+stored.**
+
+The forty-three is the floor -- the host, the submissions and about eight
+hundred dispatch launches, fifty microseconds apiece. The same build at 110
+tokens reads eight milliseconds, and a third of the batches is about a third
+of the dispatches.
+
+**And a withdrawal.** The section above put this program's kernels at 680 ms
+against llama.cpp's 752 and concluded ours are faster. That does not stand.
+Its logger measures a dispatch from timestamp to timestamp, so its figures are
+durations and include every memory effect inside them; ours are differences of
+whole-run times with a kernel's work dropped, so they exclude the hundred and
+twenty-three milliseconds a kernel's output costs elsewhere. The two columns
+are not the same quantity and should not have been put beside each other.
+
+What can be said is the whole-prompt figure, which is what this page publishes
+anyway: 0.833 against 0.787, six per cent, a gap of 1.07. The three-way split
+above is a map of this program's own time, and nothing about the other runtime
+follows from it.
 
 
 ### The activation quantizer, widened and refused
