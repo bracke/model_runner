@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The device budget taken again — and a fifth of a device prompt is in no
+  kernel at all.** Retaken with the corrected instrument (keep the stores,
+  drop the work), against a 0.841 s long prompt: `matrix_product` **515 ms**
+  (removal said 595), attention **106** (108), `combine` **39** (71), `norm`
+  **5** (69), `rotate` ≤15 (10). Two of the five are transformed — the
+  normalization was reported at sixty-nine milliseconds and is five.
+
+  The kernels now total **680 ms of 841**, so **160 ms — one fifth — is not
+  any kernel's work**; 21 of it is the barriers, priced separately.
+
+  That inverts the comparison. llama.cpp's logger reports kernel durations,
+  and at 1419 tokens it reads ~575 ms of matrix products, 80 attention, 61
+  gated middle and joins, 21 normalization, 15 rotation — **752 ms against
+  our 680**. This program's device kernels are *faster* in total and its
+  device prompt is slower. The gap is the fifth that belongs to no kernel,
+  which is a different thing from everything chased on that side so far.
+
 - **What a voided kernel really measures — the device budget tables say what
   removing a kernel saves, not what it costs.** Measured three ways instead
   of two: the normalization as it is reads **0.833 s**, with its work thrown

@@ -6088,6 +6088,68 @@
 #   load:  under 1.05 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-02, the device budget taken again with the instrument that
+# measures a kernel, and the map is not what it was.
+#
+#   Every share in the two budget tables was a removal figure, and the entry
+#   above shows a removal figure is the kernel's work plus what its output
+#   costs its readers. So the budget was taken again: each kernel keeps its
+#   stores and loses its work, and the difference from the whole run is the
+#   kernel.
+#
+#   Against a 0.841-second long device prompt:
+#
+#     matrix_product, the product loop not run    0.326 s   515 ms is it
+#     attention, one key tile instead of all      0.735     106
+#     combine, the unit dropped                   0.802      39
+#     norm, the sum dropped                       0.840        1
+#       and its output pass, from the entry above                4
+#     rotate, voided                              0.826      15 at most
+#
+#   Beside what removal used to say -- matrix_product 595, attention 108,
+#   combine 71, norm 69, rotate 10 -- two of the five are transformed. The
+#   normalization is five milliseconds and was reported as sixty-nine. The
+#   combining step is thirty-nine and was seventy-one. Attention is
+#   unchanged at a hundred and six, which is right: its output is written in
+#   both arms, so there was never a reader artefact in it.
+#
+#   And the kernels no longer add up to the prompt. Five hundred and fifteen,
+#   a hundred and six, thirty-nine, five and fifteen is six hundred and
+#   eighty of eight hundred and forty-one. **A hundred and sixty
+#   milliseconds -- one fifth of a device prompt -- is not any kernel's
+#   work.** Twenty-one of it is the barriers, which were priced separately.
+#   The rest is between the kernels rather than in them.
+#
+#   Which inverts the comparison this file has been drawing. llama.cpp's own
+#   logger reports kernel durations, which are own-work figures; at 1419
+#   tokens it reads about 575 milliseconds of matrix products, 80 of
+#   attention, 61 of the gated middle and the joins, 21 of normalization and
+#   15 of rotation. Kernel for kernel:
+#
+#     matrix products     515 here against about 575    ahead
+#     attention           106 against 80                1.33 behind
+#     the gated middle     39 against 61                ahead
+#     the normalization      5 against 21               far ahead
+#     the rotation          15 against 15               level
+#
+#   Six hundred and eighty against seven hundred and fifty-two. **This
+#   program's device kernels are faster than the other runtime's, in total,
+#   and its device prompt is slower.** The difference is the fifth of the
+#   prompt that belongs to no kernel.
+#
+#   That is a different thing from everything this file has chased on the
+#   device side. The tall tile, the staged operands, the four-subgroup
+#   attention, the narrow column tile and the deeper step were all judged
+#   against a map that said the matrix row was most of the prompt. It is
+#   sixty-one per cent of it, and the kernels together are eighty.
+#
+#   Nothing changed, so no figure moves and no group is restamped -- but the
+#   shares in the two budget tables are superseded by this one and the
+#   README says so where they stand.
+#
+#   load:  under 1.05 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

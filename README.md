@@ -10951,6 +10951,61 @@ away the work. It is more trouble than an early return, and it is the only one
 of the two that measures a kernel.
 
 
+### The device budget taken again, and the fifth that is in no kernel
+
+Every share in the two budget tables was a removal figure, and the section
+above shows a removal figure is the kernel's work *plus* what its output costs
+its readers. So the budget was taken again with the instrument that measures a
+kernel: each one keeps its stores and loses its work, and the difference from
+the whole run is the kernel.
+
+Against a 0.841-second long device prompt:
+
+| | the run reads | so the kernel is | removal used to say |
+| --- | ---: | ---: | ---: |
+| `matrix_product`, the product loop not run | 0.326 s | **515 ms** | 595 ms |
+| attention, one key tile instead of all | 0.735 s | **106 ms** | 108 ms |
+| `combine`, the unit dropped | 0.802 s | **39 ms** | 71 ms |
+| `norm`, the sum dropped | 0.840 s | **1 ms** (+4 for its output pass) | 69 ms |
+| `rotate`, voided | 0.826 s | 15 ms at most | 10 ms |
+
+Two of the five are transformed. **The normalization is five milliseconds and
+was reported as sixty-nine.** The combining step is thirty-nine and was
+seventy-one. Attention is unchanged, which is right: its output is written in
+both arms, so there was never a reader artefact in it.
+
+**And the kernels no longer add up to the prompt.** Five hundred and fifteen,
+a hundred and six, thirty-nine, five and fifteen is six hundred and eighty of
+eight hundred and forty-one. **A hundred and sixty milliseconds -- one fifth
+of a device prompt -- is not any kernel's work.** Twenty-one of it is the
+barriers, priced separately under `### What the barriers cost`. The rest is
+between the kernels rather than in them.
+
+Which inverts the comparison this page has been drawing. llama.cpp's logger
+reports kernel durations, which are own-work figures, and at 1419 tokens it
+reads about 575 ms of matrix products, 80 of attention, 61 of the gated middle
+and the joins, 21 of normalization and 15 of rotation:
+
+| | here | llama.cpp | |
+| --- | ---: | ---: | --- |
+| matrix products | 515 ms | ~575 ms | **ahead** |
+| attention | 106 ms | 80 ms | 1.33 behind |
+| the gated middle and the joins | 39 ms | 61 ms | **ahead** |
+| the normalization | 5 ms | 21 ms | **far ahead** |
+| the rotation | 15 ms | 15 ms | level |
+| **total in kernels** | **680 ms** | **752 ms** | |
+
+**This program's device kernels are faster than the other runtime's, in
+total, and its device prompt is slower.** The difference is the fifth of the
+prompt that belongs to no kernel.
+
+That is a different thing from everything chased on this side. The tall tile,
+the staged operands, the four-subgroup attention, the narrow column tile and
+the deeper step were all judged against a map that said the matrix row was
+most of the prompt. It is sixty-one per cent of it, and all the kernels
+together are eighty.
+
+
 ### The activation quantizer, widened and refused
 
 The processor's two small kernels are a different matter and the same
