@@ -11164,6 +11164,55 @@ second against this part's sixteen and a half it is at twenty-three per cent
 of peak, and llama.cpp is at twenty-five -- neither anywhere near it, and the
 difference between them is not the decode.
 
+### What the registers say, and why occupancy is not the answer
+
+The guess this page has been carrying is that what is left on the device rows
+is *occupancy, how much of a cache line a wave uses, how many rows are in
+flight*. `RADV_DEBUG=asm` prints every pipeline this program compiles, and the
+highest vector register each names says what it costs:
+
+| | registers |
+| --- | ---: |
+| the tile product, both format sets | 152 |
+| the row product, one vector a pass | 128 |
+| the row product, eight a pass | 256 |
+| attention by matrix | 128 |
+
+On this part a wave64 at a hundred and twenty-eight registers gets about four
+waves to a SIMD where the file would allow eight -- so the shader that
+generates a token runs at half the occupancy the hardware offers. That is the
+suspicion stated exactly. Here is what it is worth.
+
+**Occupancy is not the limit.** The tile is compiled twice, once for the six
+formats a published model is usually made of and once for the eight others;
+the row product is not, and carries all fifteen in one shader -- and a
+register allocation is made for the worst branch and used by every branch.
+Cut to the four formats this model needs, it goes from 128 registers to
+**29**, four times the waves:
+
+| | 64 tokens |
+| --- | ---: |
+| twenty-nine registers | 1.689 s |
+| **a hundred and twenty-eight** | **1.242 s** |
+
+**Thirty-six per cent slower with four times the occupancy.** The registers
+were not idle: they were holding loads the shader had issued and not yet
+needed, and a wave with fewer of them has fewer reads outstanding. More waves
+each asking for less is worse here than fewer waves each asking for more,
+which is the opposite of the guess.
+
+**Nor is more of it by hand.** Two blocks a turn -- the same blocks in the
+same order, so no digest moves, with the second block's loads not waiting on
+the first's -- reads 1.351 s against 1.237, nine per cent slower. The
+compiler's arrangement at a hundred and twenty-eight registers is a local
+optimum in both directions: it is not improved by giving it fewer registers
+or by writing more parallelism into the source.
+
+So what is left on this row is not reachable from the shader's text. The
+candidates that remain are the two this did not test -- how much of a cache
+line a wave uses, and what the driver's own scheduling makes of a workgroup
+this shape -- and neither of those is a change to this program.
+
 
 ### The jobs that were not worth waking anyone for
 

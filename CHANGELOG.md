@@ -71,6 +71,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What the registers say: occupancy is not the answer.** From
+  `RADV_DEBUG=asm`, the tile product uses **152** vector registers, the row
+  product **128** one vector a pass and **256** eight a pass — so the shader
+  that generates a token runs at about half the occupancy this part offers,
+  which is exactly the suspicion this page had been carrying.
+
+  It is worth nothing. The row product carries all fifteen formats in one
+  shader and its register allocation is made for the worst branch; cut to the
+  four formats this model needs it goes from 128 registers to **29**, four
+  times the waves — and reads **1.689 s against 1.242, thirty-six per cent
+  slower**. The registers were holding loads issued and not yet needed. Nor
+  does writing the parallelism by hand help: two blocks a turn, same order,
+  no digest moved, 1.351 s against 1.237.
+
 - **The split Q8_0 layout: built, measured, reverted.** The previous entry
   said this would cost the zero-copy import; it would not — `Device_Share` is
   False by default, so the device already copies every matrix and rearranging
