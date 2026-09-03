@@ -22,6 +22,22 @@ Keep a Changelog and the project uses semantic versioning.
   **it does not** — none of the above needs a trace file or a tool to read
   one.
 
+- **The share count asked after the stretches too, and the 15% named.** The
+  stretches gave every share a contiguous run, which is the one thing that
+  could have made a sixth or seventh worth having. On a finer grid: **five
+  1.738 s, six 1.736, seven 1.7345, eight 1.753**, with processor time rising
+  in a straight line — 8.94, 10.56, 12.16, 13.92 s. The added workers do work
+  and buy no wall time. Five stands for the fourth time.
+
+  Which names the gap: the part delivers **46.3 GB/s** (two runs at once take
+  it) and one run takes **40.2** however its workers are arranged. Every
+  arrangement inside one process has now been asked. What two processes have
+  is two dependency chains — a token is 155 products in a fixed order and no
+  share starts the next until all have finished this one, so the memory
+  drains and refills at each of 89 job boundaries. The way to the other 15%
+  is a second sequence — another session served at once, or a draft checked
+  beside the target — not a constant or a loop.
+
 - **The ceiling re-measured, and the non-temporal prefetch, which is flat.**
   After the stretches one run moves **40.2 GB/s** and two at once **46.3**,
   where it was 38.6 against 43.1: both moved up and the 15% gap did not close.

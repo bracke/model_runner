@@ -11343,6 +11343,44 @@ stretches it was 38.6 against 43.1. Both moved up and the gap did not close: a
 single run still leaves about fifteen per cent of what the part will deliver,
 and ten threads across two processes still take it where five in one do not.
 
+**The share count, asked after the stretches too.** They gave every share a
+contiguous run of its own, which is the one thing that could have made a
+sixth or a seventh worth having: before them an added share was another
+worker a tile apart from the rest, and after them it is another stream. Three
+alternated rounds on a finer grid than before:
+
+| shares | generating | processor time |
+| --- | ---: | ---: |
+| **five** | 1.738 s | 8.94 s |
+| six | 1.736 s | 10.56 s |
+| seven | 1.7345 s | 12.16 s |
+| eight | 1.753 s | 13.92 s |
+
+Five, six and seven are within two tenths of a per cent of each other and
+eight is nine tenths worse, while the processor time rises in a straight line
+-- one and six tenths of a second a share. **The added workers do work and buy
+no wall time at all**: beyond five an added share consumes the bandwidth
+rather than adding to it, and the stretches did not change that. Five stands
+for the fourth time, now against a grid with no gap in it.
+
+**Which names the fifteen per cent.** The part will deliver 46.3 GB/s -- two
+runs at once take it -- and one run takes 40.2 however its five to eight
+workers are arranged. Every arrangement inside one process has now been asked:
+more shares, more streams a share, a longer run each, the chunks in a
+different order, the small work off the pool, the projections in one job, both
+kinds of prefetch, two rows a turn in the kernel. The ones that paid are in
+the sections above and add to about three per cent.
+
+What two processes have that one does not is **two dependency chains**. A
+token is a hundred and fifty-five products in a fixed order, and a share
+cannot start the next until every share has finished this one, so at each of
+eighty-nine job boundaries the memory system drains and refills. Two processes
+interleave two of those chains and keep it fed. That is not a constant to tune
+or a loop to rewrite: it is what a single sequence of dependent products is
+worth on this part, and the way to have the other fifteen per cent is to have
+a second sequence -- another session served at the same time, or a draft model
+checked beside the target, both of which this program can already hold.
+
 **And the non-temporal prefetch, which is flat.** A generated token reads the
 whole model once and reuses none of it, so every one of those gigabytes evicts
 something that will be wanted. `prefetcht0` was tried earlier and was flat --
