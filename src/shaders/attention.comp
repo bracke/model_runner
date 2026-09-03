@@ -125,7 +125,7 @@ layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
 layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
 
-layout(push_constant) uniform Shape {
+layout(push_constant, std430) uniform Shape {
     uint heads;
     uint head_size;
     uint value_size;
@@ -176,6 +176,18 @@ layout(push_constant) uniform Shape {
     //  is one head of one position and a push constant is the same for all
     //  of them.
     float max_bias;
+
+    //  A round rather than a batch: rows that are different sequences.
+    //
+    //  A batch is one session's own positions, so every row reads the same
+    //  cache and derives its last from where it sits. A round's rows are
+    //  different sessions, each with its own cache and its own position --
+    //  and in a round a row IS a member, so the cache a row reads begins at
+    //  its row number times the stride below and its last is read out of
+    //  the table beside it. Zero for a batch, which is everything this
+    //  kernel did before.
+    uint stride;
+    uint reach[8];
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -320,6 +332,15 @@ void main() {
     uint first_of[QUERIES];
     uint q_of[QUERIES];
 
+    //  Where each row's own cache begins: nothing for a batch, and a
+    //  member's worth for each row of a round. A block of more than one
+    //  query reads a cached key once and dots it into every query of the
+    //  block, which is the whole reason a block exists -- and rows of a
+    //  round do not share a cache, so the caller gives a round the kernel
+    //  whose block is one. That is why the reads below may take held_of[0]
+    //  and be right for both.
+    uint held_of[QUERIES];
+
     uint last_max  = 0u;
     uint first_min = 0xFFFFFFFFu;
 
@@ -332,7 +353,9 @@ void main() {
         //  pushed. Attending both ways, every position shares the one that
         //  was pushed: the end of the text is the end of the text for all
         //  of them.
-        uint last = shape.last + (shape.causal != 0u ? slot : 0u);
+        uint last = shape.stride != 0u
+                  ? shape.reach[slot]
+                  : shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
             first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
@@ -340,6 +363,10 @@ void main() {
 
         last_of[i]  = last;
         first_of[i] = first;
+
+        //  Where this row's own cache begins, which is nothing at all for a
+        //  batch and a member's worth for each row of a round.
+        held_of[i] = shape.stride * (shape.stride != 0u ? slot : 0u);
         q_of[i] = slot * shape.heads * shape.head_size
                   + head * shape.head_size;
 
@@ -383,7 +410,7 @@ void main() {
         }
 
         if (step <= last_max) {
-            uint k_at = shape.k_base + step * shape.kv_width
+            uint k_at = shape.k_base + held_of[0] + step * shape.kv_width
                         + group * shape.head_size;
 
             //  Eight components a turn, so that a query's components are
@@ -519,7 +546,8 @@ void main() {
                 float v[8];
 
                 for (uint e = 0u; e < 8u; e++) {
-                    v[e] = kv[shape.v_base + (base + j + e) * shape.v_width
+                    v[e] = kv[shape.v_base + held_of[0]
+                              + (base + j + e) * shape.v_width
                               + group * shape.value_size + c];
                 }
 
@@ -531,7 +559,8 @@ void main() {
             }
 
             for (uint j = run; j < hi; j++) {
-                float v = kv[shape.v_base + (base + j) * shape.v_width
+                float v = kv[shape.v_base + held_of[0]
+                             + (base + j) * shape.v_width
                              + group * shape.value_size + c];
 
                 for (uint i = 0u; i < QUERIES; i++) {

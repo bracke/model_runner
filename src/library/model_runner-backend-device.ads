@@ -35,6 +35,20 @@ with Model_Runner.Tensors;
 --  makes no attempt to feed it from several.
 package Model_Runner.Backend.Device is
 
+   --  Members a round may attend on a device at once.
+   --
+   --  A round's rows are different sequences, so each row carries its own
+   --  last position rather than deriving one from the batch's first. That
+   --  table travels in the attention kernel's push constants, which are
+   --  small and fixed, and eight of them is what fits.
+   Round_Limit : constant := 8;
+
+   --  Where each member of a round has got to, in the members' order.
+   type Reach_List is array (Positive range <>) of Natural;
+
+   --  A batch: one sequence, one cache, no table.
+   No_Reach : constant Reach_List (1 .. 0) := [others => 0];
+
    --  What this backend can do.
    --
    --  @return The capability record.
@@ -390,6 +404,11 @@ package Model_Runner.Backend.Device is
    --  @param Causal True where a position may see only what precedes it.
    --  @param Max_Bias How steeply a head's attention falls off with
    --    distance, or zero for a model told where a token is otherwise.
+   --  @param Apart A round: how far apart in the cache two members sit.
+   --    Zero for a batch, whose rows share one cache.
+   --  @param Reach A round: how far each member has got, in the members'
+   --    order. Empty for a batch, whose rows are one sequence and whose
+   --    last position follows from the first.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -418,7 +437,9 @@ package Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Lifted      : Boolean := False;
-      Max_Bias    : Model_Runner.Numerics.Real := 0.0);
+      Max_Bias    : Model_Runner.Numerics.Real := 0.0;
+      Apart       : Natural := 0;
+      Reach       : Reach_List := No_Reach);
 
    --  Several products of the same activation, in one submission.
    --

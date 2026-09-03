@@ -145,34 +145,48 @@ print the same mark at every count: a device round says exactly what a
 processor round says. Nothing else in the suite would catch that — the
 conformance sweep runs evaluations, not rounds.
 
-**Three — priced, not built.** A per-row cache on the device, which lets it
-run a round's attention as well as its products.
+**Three — done.** A per-row cache on the device, which lets it run a
+round's attention as well as its products.
 
-What it is worth: at a context of seventy-one positions, nothing at two and
-four members and ten per cent at eight. At fourteen hundred positions, **16,
-34 and 50 per cent** — so at eight members and a long context half the round
-is host attention, and stage three would take eight members from 82.1 tokens
-a second to about 163. Attention grows with the square of the context and the
-products do not grow at all, which is why the same arrangement is free at one
-end and costs half at the other.
+What it is worth, alternated with the arrangement it replaces, medians of
+three each way on the device: at a context of fourteen hundred positions
+**1.29× at two members, 1.48× at four and 2.02× at eight**; at seventy-one,
+1.11×, 1.20× and 1.40×. Eight members at fourteen hundred positions read
+91.4 tokens a second against 45.2. The removal below priced eight members at
+a long context at fifty per cent of the round, and taking that away doubled
+it — a price named before the work and met by it. Two and four were priced
+at sixteen and thirty-four per cent and pay twenty-nine and forty-eight, so
+the prediction was right where it mattered and low where it did not.
 
-What it has to be, which the measurement settled:
+How it is built, which is what the pricing said it had to be:
 
-- **One shader, not two.** A decode round never reaches the matrix attention
-  shader: that one wants sixteen rows and a round has as many rows as
-  members. `attention.comp` in its three compilations is the whole of it.
-- **One table, not three.** In a decode round the row *is* the member, so a
-  row's cache base is its row number times a stride; and the window's start
-  derives from the last position and the window's width. Only the last
-  position is genuinely per row.
-- **Room in the push constants.** The attention block is sixty-four bytes and
-  every device offers a hundred and twenty-eight, so a stride and eight
-  last-positions fit. That caps a device round's attention at eight members,
-  which is where the win is; more members than that keep attention on the
-  host as stage two left it.
-- **The device's cache.** It is reserved for one session's keys and values.
-  A round needs it reserved for the members and written with a member's
-  offset — that, and `Attend_And_Feed`'s interface, are the work.
+- **One shader.** `attention.comp` in its three compilations. A round takes
+  the compilation whose block is one query, because a block of more reads a
+  cached key once and dots it into every query of the block — and rows of a
+  round do not share a cache.
+- **Two things pushed.** A block width and a table of eight last positions.
+  The kernel's push block went from sixty-four bytes to a hundred and
+  twenty-eight and the pipeline layout's declared range with it, which is
+  what makes it safe: widening that block once corrupted this device's
+  answers while the declared range stayed where it was.
+- **The device's cache, dealt out in blocks.** It held one session's keys and
+  values. It is handed out in blocks of one session's worth now, and row *i*
+  of a round reads block *i* — which is all the kernel needs to be told,
+  since it multiplies a row's number by the block width. A session takes a
+  block and keeps it, so the same members round after round pay for it once;
+  a session that takes a block another one holds turns that one out, which
+  costs the turned-out session a copy and nothing else, because what the host
+  holds is the copy of record.
+- **Eight members.** What fits in the push block. More than eight keep
+  attention on the host, as stage two left it.
+
+Two things came out of the building that this design did not name. The blocks
+are asked for furthest-first, because a wider cache buffer is a new and empty
+one, and asking for the most first means the growing happens before anything
+is seated rather than under the rows already seated — getting that wrong cost
+each member a re-upload of its whole cache every round and read a third
+slower. And two sessions on one device used to write over each other's keys,
+which nothing did and nothing caught; blocks are the answer to that as well.
 
 ## How it will be checked
 

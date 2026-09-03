@@ -3158,6 +3158,145 @@ package body Model_Runner.Llama is
       end;
    end Blend_Exact;
 
+   --  The device's cache, dealt out in blocks.
+   --
+   --  A device holds one cache buffer, and until a round there was one
+   --  session reading it: it wrote from the start and read from the start.
+   --  A round's rows are different sessions attending side by side, so the
+   --  buffer is dealt out in blocks of one session's worth and row i of a
+   --  round reads block i -- which is the whole of what the kernel needs to
+   --  be told, since it multiplies the row number by the block width.
+   --
+   --  A block is remembered between calls, so the same members round after
+   --  round pay for this once. Taking a block another session holds turns
+   --  that session out; what the host holds is the copy of record, always,
+   --  so the one turned out loses a copy and nothing else, and takes a
+   --  block again by writing its cache into it when it next runs.
+   --
+   --  One device, one engine, one buffer: this state is the buffer's and is
+   --  as concurrent as the engine, which is to say that two tasks
+   --  evaluating on the same device at once was never a thing this program
+   --  did.
+   Block_Span   : Element_Count := 0;
+   Block_Taken  : Element_Count := 0;
+   Block_Holder : array (0 .. Model_Runner.Backend.Device.Round_Limit - 1)
+     of Session_Access := [others => null];
+
+   --  Give a session a block of the device's cache, and put its keys and
+   --  values there where the block does not already hold them.
+   --
+   --  @param Item The session.
+   --  @param Seat Which block, which for a round is the row's number.
+   --  @param Ok True when the block is the session's and holds its cache.
+   procedure Take_Block
+     (Item : Session_Access;
+      Seat : Natural;
+      Ok   : out Boolean);
+
+   procedure Take_Block
+     (Item : Session_Access;
+      Seat : Natural;
+      Ok   : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Ok := False;
+
+      if Item = null
+        or else Item.Owner = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else Item.Held /= Exact
+        or else Item.Keys = null
+        or else Item.Values = null
+        or else Seat >= Model_Runner.Backend.Device.Round_Limit
+      then
+         return;
+      end if;
+
+      declare
+         Span : constant Element_Count :=
+           Item.Keys.all'Length + Item.Values.all'Length;
+
+         Wanted : constant Element_Count := Element_Count (Seat + 1) * Span;
+         Base   : constant Element_Count := Element_Count (Seat) * Span;
+
+         Written : Boolean := True;
+      begin
+         --  Every session sharing the buffer must agree on how wide a block
+         --  is. One that does not -- another model, or the same one with
+         --  another context -- is refused the device's cache and attends on
+         --  the host, which is the answer it would have got there anyway.
+         if Block_Span = 0 then
+            Block_Span := Span;
+         elsif Block_Span /= Span then
+            return;
+         end if;
+
+         Model_Runner.Backend.Device.Reserve_Cache (Wanted, Ok);
+         if not Ok then
+            return;
+         end if;
+
+         --  A wider buffer is a new one, and a new one is empty: every
+         --  block that held a cache has lost it. Said here rather than
+         --  discovered later, because a session reading a block that was
+         --  zeroed under it would read zeroes and call them attention.
+         if Wanted > Block_Taken then
+            for Holder of Block_Holder loop
+               if Holder /= null then
+                  Holder.Seat := -1;
+               end if;
+               Holder := null;
+            end loop;
+
+            Block_Taken := Wanted;
+         end if;
+
+         if Item.Seat = Seat and then Block_Holder (Seat) = Item then
+            Ok := True;
+            return;
+         end if;
+
+         --  What the host holds, into the block: a session's whole cache in
+         --  two writes, and only where it has committed something. A
+         --  session with nothing committed has nothing to preserve, and the
+         --  buffer it is taking a block of was zeroed when it was made.
+         if Item.Committed > 0 then
+            Model_Runner.Backend.Device.Put_Cache
+              (Base, Item.Keys.all, Written);
+
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Base + Item.Keys.all'Length, Item.Values.all, Written);
+            end if;
+         end if;
+
+         if not Written then
+            Ok := False;
+            return;
+         end if;
+
+         if Block_Holder (Seat) /= null then
+            Block_Holder (Seat).Seat := -1;
+         end if;
+
+         if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
+            Block_Holder (Item.Seat) := null;
+         end if;
+
+         Item.Seat := Seat;
+         Block_Holder (Seat) := Item;
+         Ok := True;
+      end;
+   end Take_Block;
+
+   --  Where a session's cache begins in the device's buffer.
+   function Block_Base (Item : Session) return Element_Count
+   is (if Item.Seat <= 0 or else Item.Keys = null or else Item.Values = null
+       then 0
+       else Element_Count (Item.Seat)
+            * (Item.Keys.all'Length + Item.Values.all'Length));
+
    --  Put one position's keys and values where a device can read them.
    --
    --  Said by both evaluators, because a model must attend the same way
@@ -3170,13 +3309,17 @@ package body Model_Runner.Llama is
    --  run rather than a refused one.
    --
    --  @param Item Session whose cache this is.
+   --  @param Seat Which block of the device's cache is that session's,
+   --    which for a row of a round is the row's number and is zero for
+   --    every session evaluating on its own.
    --  @param At_Key Where this position's keys go among the keys.
    --  @param Key_Row The keys, rotated.
    --  @param At_Value Where its values go among the values.
    --  @param Value_Row The values.
    --  @param Resident True when both reached the device.
    procedure Put_Position
-     (Item      : Session;
+     (Item      : Session_Access;
+      Seat      : Natural;
       At_Key    : Element_Count;
       Key_Row   : Real_Array;
       At_Value  : Element_Count;
@@ -3187,28 +3330,35 @@ package body Model_Runner.Llama is
    begin
       Resident := False;
 
-      if Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+      if Item = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
         or else Item.Held /= Exact
       then
          return;
       end if;
 
-      --  Said every position and done once: the room is the whole cache,
-      --  both halves, and asking again for what is there returns at once.
-      Model_Runner.Backend.Device.Reserve_Cache
-        (Item.Keys.all'Length + Item.Values.all'Length, Resident);
+      --  Said every position and done once: the block is asked for and,
+      --  where it is already this session's, granted without a copy.
+      Take_Block (Item, Seat, Resident);
 
-      if Resident then
-         Model_Runner.Backend.Device.Put_Cache (At_Key, Key_Row, Resident);
+      if not Resident then
+         return;
       end if;
 
-      if Resident then
-         --  The values follow the keys in the device's copy, which is one
-         --  buffer because attention wants four arrays and the pipeline
-         --  layout carries three.
+      declare
+         Base : constant Element_Count := Block_Base (Item.all);
+      begin
          Model_Runner.Backend.Device.Put_Cache
-           (Item.Keys.all'Length + At_Value, Value_Row, Resident);
-      end if;
+           (Base + At_Key, Key_Row, Resident);
+
+         if Resident then
+            --  The values follow the keys in the device's copy, which is one
+            --  buffer because attention wants four arrays and the pipeline
+            --  layout carries three.
+            Model_Runner.Backend.Device.Put_Cache
+              (Base + Item.Keys.all'Length + At_Value, Value_Row, Resident);
+         end if;
+      end;
    end Put_Position;
 
    --  One position attending, on the device, to the cache it already holds.
@@ -5128,6 +5278,19 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
+      --  The block of the device's cache this session held, given back. Not
+      --  cleared: what is in it is a closed session's keys, and the next
+      --  session to take the block writes its own over them or has nothing
+      --  committed to write.
+      if Item.Seat >= 0
+        and then Item.Seat <= Block_Holder'Last
+        and then Block_Holder (Item.Seat) = Item'Unchecked_Access
+      then
+         Block_Holder (Item.Seat) := null;
+      end if;
+
+      Item.Seat := -1;
+
       T.Free (Item.Keys);
       T.Free (Item.Values);
       B.Free (Item.Byte_Keys);
@@ -5709,8 +5872,7 @@ package body Model_Runner.Llama is
                          (Item.Owner.Able.Kind,
                           Model_Runner.Backend.Backend_Device)
             then
-               Model_Runner.Backend.Device.Reserve_Cache
-                 (Item.Keys.all'Length + Item.Values.all'Length, Resident);
+               Take_Block (Item'Unchecked_Access, 0, Resident);
 
                if Resident then
                   K.Rotary_Table
@@ -5883,7 +6045,8 @@ package body Model_Runner.Llama is
                --  The host copy stays in step because everything else reads
                --  it: the snapshot, the eviction, the other two precisions.
                Put_Position
-                 (Item, Slot, Item.Key_Row.all (0 .. KV_Width - 1),
+                 (Item'Unchecked_Access, 0,
+                  Slot, Item.Key_Row.all (0 .. KV_Width - 1),
                   V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
             else
                for Offset in 0 .. KV_Width - 1 loop
@@ -6317,6 +6480,11 @@ package body Model_Runner.Llama is
       --  a round is a different answer rather than a different procedure.
       Rounding  : constant Boolean := Beside'Length > 0;
 
+      --  Whether every row of a round found a block of the device's cache.
+      --  False for a batch, which reads the cache from its start as it
+      --  always did.
+      Seated    : Boolean := False;
+
       --  The session row Which belongs to. Row nought is always the one the
       --  call was made on.
       function Held_By (Which : Element_Count) return Session_Access
@@ -6649,6 +6817,45 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
+      --  A round's rows in their own blocks of the device's cache, settled
+      --  before the first layer.
+      --
+      --  Row i reads block i, which is all the kernel is told and all it
+      --  needs: it multiplies a row's number by the block width to find
+      --  where that row's keys and values begin. A member already in its
+      --  block pays nothing, which is the case round after round; one that
+      --  is not has its cache written there once.
+      --
+      --  Settled here rather than as the positions are written because a
+      --  row that could not be seated sends the whole round to the host,
+      --  and the layer has to know that before it starts rather than after
+      --  it has written half a round's positions to a device.
+      if Rounding
+        and then Item.Held = Exact
+        and then Count <= Element_Count (Model_Runner.Backend.Device
+                                           .Round_Limit)
+        and then Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind,
+                    Model_Runner.Backend.Backend_Device)
+      then
+         Seated := True;
+
+         --  The last row first, because that is the one whose block lies
+         --  furthest along and so the one that asks for the whole round's
+         --  room. A buffer that grows is a new one and an empty one, which
+         --  turns every seated row out of its block; asking for the most
+         --  first means the growing happens before anything is seated
+         --  rather than under the rows already seated.
+         for Which in reverse 0 .. Count - 1 loop
+            declare
+               Took : Boolean;
+            begin
+               Take_Block (Held_By (Which), Natural (Which), Took);
+               Seated := Seated and Took;
+            end;
+         end loop;
+      end if;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  Nothing was committed, so the cache still describes exactly
@@ -6669,8 +6876,9 @@ package body Model_Runner.Llama is
 
             --  Whether this batch's positions reached the device's cache.
             --  Set as they are written and read where they are attended to,
-            --  which is a loop later.
-            Resident : Boolean := False;
+            --  which is a loop later. A round starts from whether its rows
+            --  found blocks and takes away any row that did not reach one.
+            Resident : Boolean := Rounding and then Seated;
 
             --  Whether a device took the normalization and the three
             --  matrices that read it as one sequence, and whether it turned
@@ -6991,9 +7199,7 @@ package body Model_Runner.Llama is
                                (Item.Owner.Able.Kind,
                                 Model_Runner.Backend.Backend_Device)
                   then
-                     Model_Runner.Backend.Device.Reserve_Cache
-                       (Item.Keys.all'Length + Item.Values.all'Length,
-                        Resident);
+                     Take_Block (Item'Unchecked_Access, 0, Resident);
                   end if;
 
                   --  The whole layer as one submission, where the device
@@ -7231,18 +7437,29 @@ package body Model_Runner.Llama is
                      --
                      --  Written already where the layer went over whole:
                      --  the sequence put them there before it attended.
-                     --  And not for a round either: the device keeps one
-                     --  cache laid out as one session's, so a second
-                     --  member's position would be written over the first
-                     --  member's. A round attends on the host, where each
-                     --  row has its own.
-                     if not Cached and then not Rounding then
-                        Put_Position
-                          (Item, Place,
-                           Keys.all (KV_At .. KV_At + KV_Width - 1),
-                           V_Place,
-                           Values.all (V_At .. V_At + V_Width - 1),
-                           Resident);
+                     --
+                     --  A round writes each row into the row's own block of
+                     --  that cache, which is what the kernel below reads
+                     --  and is why a member's position does not land on
+                     --  another member's.
+                     if not Cached then
+                        declare
+                           Placed : Boolean;
+                        begin
+                           Put_Position
+                             (Held_By (Which),
+                              (if Rounding then Natural (Which) else 0),
+                              Place,
+                              Keys.all (KV_At .. KV_At + KV_Width - 1),
+                              V_Place,
+                              Values.all (V_At .. V_At + V_Width - 1),
+                              Placed);
+
+                           Resident :=
+                             (if Rounding
+                              then Resident and Placed
+                              else Placed);
+                        end;
                      end if;
                   else
                      for Offset in 0 .. KV_Width - 1 loop
@@ -7296,6 +7513,23 @@ package body Model_Runner.Llama is
                      then Reserved
                      else Reserved + Count - 1);
 
+                  --  A round says the same two things a row at a time: how
+                  --  far apart two members' caches lie, and where each
+                  --  member has got to. Neither follows from the batch's
+                  --  first position, because a round's rows do not sit one
+                  --  after another in one sequence.
+                  Apart : constant Natural :=
+                    (if Rounding
+                     then Natural (Item.Keys.all'Length
+                                   + Item.Values.all'Length)
+                     else 0);
+
+                  Reach : constant Model_Runner.Backend.Device.Reach_List :=
+                    (if Rounding
+                     then [for Row in 1 .. Natural (Count) =>
+                             Natural (Sits_At (Element_Count (Row) - 1))]
+                     else Model_Runner.Backend.Device.No_Reach);
+
                   Usable : Boolean;
                begin
                   --  The whole of the layer's second half as one sequence,
@@ -7335,7 +7569,9 @@ package body Model_Runner.Llama is
                         Window    => Window_Here,
                         Causal    => Settings.Causal,
                         Lifted    => Lifted_Norms (Source),
-                        Max_Bias  => Settings.Max_Bias);
+                        Max_Bias  => Settings.Max_Bias,
+                        Apart     => Apart,
+                        Reach     => Reach);
                   end if;
 
                   if Fused then

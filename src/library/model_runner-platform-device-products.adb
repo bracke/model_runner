@@ -320,10 +320,13 @@ package body Model_Runner.Platform.Device.Products is
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
-      Value_Size : Natural) return Address
-   is (if Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+      Value_Size : Natural;
+      Rounding   : Boolean := False) return Address
+   is (if not Rounding
+         and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then Item.Matrix_Attend
-       elsif Item.Tile_Line /= Null_Handle
+       elsif not Rounding
+         and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
        elsif Item.Group_Line /= Null_Handle
@@ -338,10 +341,13 @@ package body Model_Runner.Platform.Device.Products is
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
-      Value_Size : Natural) return C.unsigned
-   is (if Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+      Value_Size : Natural;
+      Rounding   : Boolean := False) return C.unsigned
+   is (if not Rounding
+         and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then C.unsigned ((Positions + Matrix_Queries - 1) / Matrix_Queries)
-       elsif Item.Tile_Line /= Null_Handle
+       elsif not Rounding
+         and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then C.unsigned ((Positions + Query_Block - 1) / Query_Block)
        else C.unsigned (Positions));
@@ -413,7 +419,7 @@ package body Model_Runner.Platform.Device.Products is
    --  validation layer was running to say so. Two numbers a word apart is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
-   Attention_Bytes : constant := 64;
+   Attention_Bytes : constant := 128;
    Shape_Bytes     : constant := Attention_Bytes;
    Product_Bytes   : constant := 28;
 
@@ -515,6 +521,13 @@ package body Model_Runner.Platform.Device.Products is
    --  What the attention kernel is told. Fifteen words, against the six the
    --  matrix kernels take, pushed into the same range. Well inside the
    --  hundred and twenty-eight bytes every device that runs Vulkan offers.
+   --  Room for a round's per-row positions in the push constants. Eight,
+   --  because the block is sixty-four bytes before them and every device
+   --  offers a hundred and twenty-eight: a round of more than eight members
+   --  attends on the host, which is where every round attended before.
+   type Reach_Words is array (0 .. Round_Limit - 1) of C.unsigned
+     with Convention => C;
+
    type Attention_Constants is record
       Heads      : C.unsigned := 0;
       Head_Size  : C.unsigned := 0;
@@ -545,6 +558,15 @@ package body Model_Runner.Platform.Device.Products is
       --  than by a rotation or a learned row. Zero for every other, which is
       --  no fall-off at all and the branch the shader skips.
       Max_Bias   : C.C_float := 0.0;
+
+      --  A round rather than a batch. Zero is a batch, which is one
+      --  session's own positions sharing one cache; anything else is how
+      --  far apart two members' caches are, and the row is the member, so
+      --  a row reads from its row number times this. The reach beside it is
+      --  where each of those rows has got to, which a batch derives from
+      --  where a row sits and a round cannot.
+      Stride     : C.unsigned := 0;
+      Reach      : Reach_Words := [others => 0];
    end record
      with Convention => C;
 
@@ -3692,7 +3714,12 @@ package body Model_Runner.Platform.Device.Products is
             Positions  => C.unsigned (Slots),
             Window     => C.unsigned (Window),
             Causal     => (if Causal then 1 else 0),
-            Max_Bias   => C.C_float (Max_Bias));
+            Max_Bias   => C.C_float (Max_Bias),
+
+            --  Never a round: this is the single call, one session's own
+            --  positions.
+            Stride     => 0,
+            Reach      => [others => 0]);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -4173,6 +4200,34 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Norm;
 
+   --  A round's positions as a step keeps them, and as the push constants
+   --  take them.
+   function Held_Reach (Of_Round : Reach_List) return Round_Reach;
+
+   function Held_Reach (Of_Round : Reach_List) return Round_Reach is
+      Made : Round_Reach := [others => 0];
+   begin
+      for Index in Of_Round'Range loop
+         exit when Index - Of_Round'First >= Round_Limit;
+
+         Made (Index - Of_Round'First) := Of_Round (Index);
+      end loop;
+
+      return Made;
+   end Held_Reach;
+
+   function Pushed_Reach (Of_Step : Round_Reach) return Reach_Words;
+
+   function Pushed_Reach (Of_Step : Round_Reach) return Reach_Words is
+      Made : Reach_Words := [others => 0];
+   begin
+      for Index in Of_Step'Range loop
+         Made (Index) := C.unsigned (Of_Step (Index));
+      end loop;
+
+      return Made;
+   end Pushed_Reach;
+
    -------------------
    -- Add_Attention --
    -------------------
@@ -4197,7 +4252,9 @@ package body Model_Runner.Platform.Device.Products is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
-      From_Step  : Natural := 0) is
+      From_Step  : Natural := 0;
+      Stride     : Natural := 0;
+      Reach      : Reach_List := No_Reach) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -4239,7 +4296,8 @@ package body Model_Runner.Platform.Device.Products is
          Group_Size => Group_Size, First => First, Last => Last,
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
-         Causal => Causal, Max_Bias => Max_Bias, others => <>);
+         Causal => Causal, Max_Bias => Max_Bias,
+         Apart => Stride, Reach => Held_Reach (Reach), others => <>);
       Added := True;
    end Add_Attention;
 
@@ -5320,10 +5378,15 @@ package body Model_Runner.Platform.Device.Products is
                if This.Attends then
                   --  The attention kernel, and back again afterwards, as
                   --  the combining step does.
+                  --  A round takes the kernel whose block is one query. A
+                  --  block of more reads a cached key once and dots it into
+                  --  every query of the block, and rows of a round do not
+                  --  share a cache.
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
                      Attend_Kernel (Item, Count, This.Head_Size,
-                                    This.Value_Size));
+                                    This.Value_Size,
+                                    Rounding => This.Apart > 0));
 
                   declare
                      Shape : aliased Attention_Constants :=
@@ -5371,7 +5434,9 @@ package body Model_Runner.Platform.Device.Products is
                             ((if This.Causal then 1 else 0)
                              + (if Halved (Index)
                                 then 2 * Whole_Tiles (Count) else 0)),
-                        Max_Bias   => C.C_float (This.Max_Bias));
+                        Max_Bias   => C.C_float (This.Max_Bias),
+                        Stride     => C.unsigned (This.Apart),
+                        Reach      => Pushed_Reach (This.Reach));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
@@ -5381,7 +5446,8 @@ package body Model_Runner.Platform.Device.Products is
                           (Item,
                            (if Halved (Index) then Whole_Tiles (Count)
                             else Count),
-                           This.Head_Size, This.Value_Size), 1);
+                           This.Head_Size, This.Value_Size,
+                           Rounding => This.Apart > 0), 1);
                   end;
 
                   if Halved (Index) then

@@ -722,8 +722,13 @@ package body Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Lifted      : Boolean := False;
-      Max_Bias    : Model_Runner.Numerics.Real := 0.0)
+      Max_Bias    : Model_Runner.Numerics.Real := 0.0;
+      Apart       : Natural := 0;
+      Reach       : Reach_List := No_Reach)
    is
+      Held  : constant Products.Reach_List (Reach'Range) :=
+        [for Which in Reach'Range => Reach (Which)];
+
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
 
@@ -808,7 +813,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False);
+         Kept => False, Stride => Apart, Reach => Held);
       if not Added then
          return;
       end if;

@@ -60,6 +60,26 @@ package Model_Runner.Platform.Device.Products is
    --  dispatch asks for and that one decides how many each does.
    Query_Block : constant := 8;
 
+   --  Members a round may attend on a device at once.
+   --
+   --  Each of them needs its own position pushed, and the attention block is
+   --  sixty-four bytes before those: eight more words takes it to a hundred,
+   --  where every device offers a hundred and twenty-eight. A round with
+   --  more members than this attends on the host, which is where every round
+   --  attended before there was a table at all.
+   Round_Limit : constant := 8;
+
+   --  Where each member of a round has got to, in the members' order.
+   type Reach_List is array (Positive range <>) of Natural;
+
+   --  A batch: one sequence, one cache, and no table to read a position out
+   --  of, because the batch's first position says where all of them are.
+   No_Reach : constant Reach_List (1 .. 0) := [others => 0];
+
+   --  The same, as a step keeps it: a fixed table, because a step is one
+   --  record of a fixed array and cannot hold a list of its own.
+   type Round_Reach is array (0 .. Round_Limit - 1) of Natural;
+
    --  And how many the matrix kernel answers, which is what its tile is
    --  tall. Below this a block is mostly rows the batch does not have.
    --
@@ -602,6 +622,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
+   --  @param Stride How far apart two members of a round lie in the cache,
+   --    which is one session's worth. Zero for a batch, whose rows share one
+   --    cache and read it from its start.
+   --  @param Reach Where each member of a round has got to, in the members'
+   --    order. Empty for a batch, whose last position follows from its
+   --    first. Longer than Round_Limit is refused, as a shape is.
    --  @param From_Step Which step the queries come from, or zero for the
    --    step before this one. A layer named whole rotates them several
    --    steps before it attends with them.
@@ -625,7 +651,9 @@ package Model_Runner.Platform.Device.Products is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
-      From_Step  : Natural := 0);
+      From_Step  : Natural := 0;
+      Stride     : Natural := 0;
+      Reach      : Reach_List := No_Reach);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -1391,6 +1419,11 @@ private
       Scale      : Model_Runner.Numerics.Real := 1.0;
       Cap        : Model_Runner.Numerics.Real := 0.0;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+
+      --  A round: how far apart two members' caches are, and where each of
+      --  them has got to. Zero and empty for a batch.
+      Apart      : Natural := 0;
+      Reach      : Round_Reach := [others => 0];
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

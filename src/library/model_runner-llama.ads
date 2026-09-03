@@ -1368,6 +1368,17 @@ private
       Owner      : access Model'Class := null;
       Context    : Natural := 0;
       Committed  : Natural := 0;
+
+      --  Which block of the device's cache holds this session's keys and
+      --  values, or minus one where none does.
+      --
+      --  The device keeps one cache buffer. A session used to have it to
+      --  itself; a round's rows are different sessions reading it side by
+      --  side, so it is dealt out in blocks of one session's worth and a
+      --  row of a round reads the block its row number names. What the
+      --  host holds is the copy of record either way, so a session turned
+      --  out of its block loses nothing but the copy.
+      Seat       : Integer := -1;
       --  The committed keys and values, in one precision or the other.
       --  Exactly one pair is allocated; the other stays null, which is what
       --  the reads below test rather than carrying a converted copy.

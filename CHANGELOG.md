@@ -5,6 +5,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A round's attention on the device, which doubles eight members at a long
+  context.** Stage three of `docs/serving-several-sequences.md`. The device
+  holds one cache buffer, laid out as one session's keys and values; it is
+  dealt out in blocks of one session's worth now, and row *i* of a round
+  reads block *i*. The attention kernel is told the block width and where
+  each member has got to, in a push block that went from 64 bytes to 128
+  along with the pipeline layout's declared range; a round takes the
+  compilation whose block is one query, because a block of more reads a
+  cached key once for every query in it and rows of a round do not share a
+  cache. Eight members is what fits; more than eight keep attention on the
+  host as stage two left it.
+
+  Alternated with the arrangement it replaces, medians of three each way on
+  the device: at 1419 positions **1.29× at two members, 1.48× at four and
+  2.02× at eight** — 91.4 tokens a second against 45.2; at 71 positions
+  1.11×, 1.20× and 1.40×. The removal below priced eight members at a long
+  context at 50% of the round and taking that away doubled it. Every
+  member's every token is digested and the digest is the same before and
+  after at every count and on both backends.
+
+  Two sessions on one device used to write over each other's keys in that
+  buffer, which nothing did and nothing caught. Blocks are the answer to that
+  as well: a session takes one and keeps it, and a session turned out of its
+  block loses a copy and nothing else, because what the host holds is the
+  copy of record.
+
 ### Measured
 
 - **What stage three is worth, and a long-context qualification of stages one
