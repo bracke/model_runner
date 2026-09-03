@@ -71,6 +71,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A generated token on the device is one shader.** By removal over
+  sixty-four tokens: void `row_product` and 1.211 s becomes **0.129** —
+  89.3% of it — while voiding attention, the normalization, the gated middle
+  or the rotation changes nothing. The host, submissions and launches are
+  7.8% together, and overlapped rather than additive.
+
+  Four roads closed by measurement, none kept: **the fence spin** (removing
+  it cuts ioctls from 60,909 to 7,075, 86% of them failed waits, and the run
+  gets *slower*, 1.249 s against 1.219); **throttling the spin** (28,126
+  ioctls, 1.214 s against 1.228 — noise); **the shader's width** (four lanes
+  1.330 s, eight 1.140, sixteen 1.137 — the constant was already right);
+  and **its arithmetic** (a quarter of it, every load kept, buys 2.2% — the
+  shader is memory-bound and three quarters of what it computes is free).
+
+  What is left is 7% on how the bytes reach that shader, not on what it does
+  with them. The device's 110-token prompt, ranked alongside this at 1.06
+  behind, read *ahead* in the same sitting and is closed by measurement.
+
 - **Both short-prompt rows were measuring a sleeping machine, and both are
   corrected.** A 110-token prompt is a tenth of a second, and the fixture
   behind those rows is a complete instruction the chat model answers with an

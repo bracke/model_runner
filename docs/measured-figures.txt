@@ -6625,6 +6625,91 @@
 #   load:  under 0.90 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-03, where a generated token goes on the device, and four roads that
+# are closed. Nothing in the program changed; this is a measurement and the
+# reasons not to make four changes.
+#
+#   THE PREMISE WAS WRONG. The ranking said a generated token on the device
+#   is mostly dispatch launches -- sixteen steps a layer, twenty-two layers,
+#   about three hundred and fifty launches at the nine microseconds the
+#   prompt's floor measurement gives. It is not.
+#
+#   The floor, every shader returning at once:
+#
+#     nothing changed      1.211 s for 64 tokens
+#     every kernel voided  0.094
+#
+#   Seven and eight tenths per cent is the host, the submissions and the
+#   launches -- and that is an upper bound on what they cost rather than
+#   what they cost, because the host is only twenty-seven per cent busy
+#   during a real run and its work overlaps the device's. The experiment
+#   below settles which.
+#
+#   THE BUDGET, by removal, sixty-four generated tokens:
+#
+#     nothing changed          1.211 s
+#     row_product voided       0.129      so the row product is 89.3 %
+#     attention voided         1.221      nothing
+#     norm voided              1.208      nothing
+#     combine voided           1.210      nothing
+#     rotate voided            1.211      nothing
+#
+#   A generated token on this device is one shader and a rounding error.
+#   Everything the ranking proposed cutting -- the cache writes, the
+#   rotations, the normalizations -- is inside the eleven per cent that is
+#   not the row product, and most of that eleven is the floor.
+#
+#   FOUR ROADS, all closed by measurement.
+#
+#   One, the fence. The wait asks vkGetFenceStatus up to a thousand times
+#   before it blocks, and on this driver every one of those is a system
+#   call: strace counts 60,909 ioctls for sixty-four generated tokens, 86
+#   per cent of them failed waits, which is 894 a token. Removing the spin
+#   entirely takes that to 7,075 with none failing -- and the run gets
+#   SLOWER, 1.249 s against 1.219. The spin is buying latency and paying for
+#   it in system calls, and the trade is the right way round.
+#
+#   Two, throttling the spin. Two thousand and forty-eight pause
+#   instructions between one asking and the next takes the ioctls from
+#   60,909 to 28,126, and the run reads 1.214 s against 1.228 -- inside the
+#   noise. Which is the same lesson twice: the system calls are not what the
+#   waiting costs.
+#
+#   Three, the row shader's width. Eight lanes to a row is a constant with
+#   an Ada twin, and neither had been swept:
+#
+#     four lanes    1.330 s
+#     eight         1.140
+#     sixteen       1.137
+#
+#   Eight and sixteen are level and four is much worse. The constant was
+#   already right, and now it has been asked.
+#
+#   Four, the arithmetic in that shader. Keeping every load and doing a
+#   quarter of the arithmetic -- one of the four bytes of each word decoded
+#   and multiplied instead of all four -- reads 1.185 s against 1.212, two
+#   and two tenths per cent. THE SHADER IS MEMORY-BOUND: three quarters of
+#   what it computes is free. So an integer dot product, a wider fused
+#   multiply-add, a cheaper decode -- none of them has anything to win.
+#
+#   WHAT IS LEFT. The row product moves 1.09 GiB a token in about seventeen
+#   milliseconds, and llama.cpp does the same bytes in about fifteen and a
+#   half. Seven per cent, on a shader that is waiting for memory, is not
+#   about what it computes but about how the bytes reach it -- occupancy,
+#   how much of a cache line a wave uses, how many rows are in flight. That
+#   is a project rather than a constant, and it is the only thing left on
+#   this row.
+#
+#   AND THE OTHER ITEM THIS SITTING WAS FOR. The device's 110-token prompt
+#   was ranked at 1.06 behind and read ahead in the sitting of 2026-09-03 --
+#   1617.6 against 1583.3. It is closed by measurement rather than by work,
+#   and the honest reading is the one the README already carries: that row
+#   swings between afternoons on both sides and what it says is that the two
+#   are close.
+#
+#   load:  under 0.80 before every reading
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

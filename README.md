@@ -11032,6 +11032,71 @@ most of the prompt. It is sixty-one per cent of it, and all the kernels
 together are eighty.
 
 
+### A generated token on the device is one shader
+
+The ranking that led here said a generated token on the device is mostly
+dispatch launches -- sixteen steps a layer, twenty-two layers, about three
+hundred and fifty launches at the nine microseconds the prompt's floor gives.
+It is not.
+
+| | 64 tokens |
+| --- | ---: |
+| nothing changed | 1.211 s |
+| every kernel voided | 0.094 s |
+| **row_product voided** | **0.129 s** |
+| attention voided | 1.221 s |
+| norm voided | 1.208 s |
+| combine voided | 1.210 s |
+| rotate voided | 1.211 s |
+
+**The row product is 89.3 per cent of it and everything else is a rounding
+error.** The host, the submissions and the launches are seven and eight
+tenths per cent together -- and that is an upper bound rather than a cost,
+because the host is only twenty-seven per cent busy during a real run and its
+work overlaps the device's.
+
+**Four roads, all closed by measurement.**
+
+**The fence.** The wait asks `vkGetFenceStatus` up to a thousand times before
+it blocks, and on this driver every one of those is a system call: `strace`
+counts 60,909 ioctls for sixty-four generated tokens, **86 per cent of them
+failed waits**, which is 894 a token. Removing the spin takes that to 7,075
+with none failing -- and the run gets *slower*, 1.249 s against 1.219. The
+spin is buying latency and paying for it in system calls, and the trade is
+the right way round.
+
+**Throttling the spin.** Two thousand and forty-eight `pause` instructions
+between one asking and the next takes the ioctls to 28,126, and the run reads
+1.214 s against 1.228 -- inside the noise. The same lesson twice: the system
+calls are not what the waiting costs.
+
+**The shader's width.** Eight lanes to a row is a constant with an Ada twin,
+and neither had ever been swept:
+
+| lanes a row | 64 tokens |
+| --- | ---: |
+| four | 1.330 s |
+| **eight** | **1.140 s** |
+| sixteen | 1.137 s |
+
+Eight and sixteen are level and four is much worse. The constant was already
+right, and now it has been asked.
+
+**The arithmetic in that shader.** Keeping every load and doing a quarter of
+the arithmetic -- one of the four bytes of each word decoded and multiplied
+instead of all four -- reads 1.185 s against 1.212, two and two tenths per
+cent. **The shader is memory-bound: three quarters of what it computes is
+free.** So an integer dot product, a wider fused multiply-add, a cheaper
+decode: none of them has anything to win here.
+
+What is left is that the row product moves 1.09 GiB a token in about
+seventeen milliseconds where llama.cpp does the same bytes in about fifteen
+and a half. Seven per cent, on a shader waiting for memory, is not about what
+it computes but about how the bytes reach it -- occupancy, how much of a
+cache line a wave uses, how many rows are in flight. That is a project rather
+than a constant, and it is the only thing left on this row.
+
+
 ### The jobs that were not worth waking anyone for
 
 **The premise was half wrong, and that is the part worth keeping.** The
