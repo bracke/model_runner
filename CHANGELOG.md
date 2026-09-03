@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The chunk grain re-asked after the stretches, and it stands.** That change
+  gave the grain a second meaning — before it, every worker was a tile apart
+  and the run each walked was one tile whatever the grain said; after it the
+  grain decides how long a worker's contiguous run is. Alternated: **32 rows
+  1.741 s generating and 4.848 s on the long prompt, 64 rows 1.743 and 5.066,
+  128 rows 1.771 and 5.465.** Level generating, and 32 wins the prompt
+  outright — the longer run is worth less than the balance it costs, most of
+  all where a batch keeps every worker.
+
+  One reading at 64 came out 4% below its own arm's others; it is a window and
+  not a figure, and it is written down because this project has taken one of
+  those before.
+
+  The grain now has a name (`Chunk_Grain`) instead of being the row tile read
+  at four call sites — a rename and a comment that moves six fingerprint
+  groups without moving anything a figure could see. Checked rather than
+  asserted: both binaries disassemble to 1,523,805 instructions and, with
+  addresses normalised, every instruction and operand is identical. Restamped
+  rather than re-measured.
+
 ### Faster
 
 - **A stretch of the job a share.** The correction first: the previous entry

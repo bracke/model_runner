@@ -10655,6 +10655,41 @@ row's tile takes and move the answers at different worker counts. The
 constant is right, and the reason it is right is not the reason it was
 chosen.
 
+**Asked again after `### A stretch of the job a share`**, because that change
+gave the grain a second meaning. Before it, every worker was a tile apart
+from every other and the run each of them walked was one tile whatever this
+said; after it the grain also decides how long a worker's contiguous run is,
+which is the quantity the memory turned out to care about. Alternated,
+medians of three:
+
+| grain | 64 generated | 1419-token prompt |
+| --- | ---: | ---: |
+| **one tile, 32 rows** | **1.741 s** | **4.848 s** |
+| two tiles, 64 | 1.743 s | 5.066 s |
+| four tiles, 128 | 1.771 s | 5.465 s |
+
+Thirty-two and sixty-four are level generating, and thirty-two wins the
+prompt outright -- four and a half per cent at sixty-four, thirteen at a
+hundred and twenty-eight. The longer run is worth less than the balance it
+costs, and it costs most where there are most shares: a batch keeps every
+worker, so a coarse chunk leaves the last of eight holding a tenth of the
+job.
+
+One reading of the three at sixty-four came out at 1.672 s, four per cent
+below both of its own arm's others and below everything else measured that
+afternoon. **It is a window and not a figure**, and it is written down
+because this page has taken one of those before and published it.
+
+The grain now has a name of its own -- `Chunk_Grain` -- rather than being the
+row tile read at four call sites. The two are still the same number and have
+to remain a multiple of each other, and naming it is what keeps somebody
+changing the tiling from silently changing the grain. That is a rename and a
+comment, and it moves six fingerprint groups without moving anything a figure
+could see: the two binaries disassemble to 1,523,805 instructions each, and
+with addresses normalised every instruction and every operand is identical.
+So those groups were restamped rather than re-measured, which is the second
+of the two things this file's rule allows.
+
 **The two thresholds that gate the pool.** A batch below sixteen positions
 keeps its elementwise loops on the calling task, which was measured when
 three such loops went to the pool and there are five now. Swept over one,
