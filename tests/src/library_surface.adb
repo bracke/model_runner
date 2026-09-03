@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 28) of Text_Access :=
+   Held : constant array (1 .. 29) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -54,7 +54,15 @@ package body Library_Surface is
       --  engine has no other way to find out. `tests speed --budget` is the
       --  caller this was written for, and a library caller tuning against
       --  its own model is the one it is kept for.
-      new String'("Time_Spent")];
+      new String'("Time_Spent"),
+
+      --  Several sequences in one pass over the weights. The command serves
+      --  one caller and has no reason to ask for it; a program serving
+      --  several has every reason, and the figures that say what it is worth
+      --  are in docs/serving-several-sequences.md -- a second caller is
+      --  nearly free where a second run is not. `tests speed --round N` is
+      --  what measures it here.
+      new String'("Evaluate_Round")];
 
    ---------------
    -- Is_Listed --

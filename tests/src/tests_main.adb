@@ -1606,6 +1606,23 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Option ("--arith", "int8") = "int8");
 
+         --  Several sequences in one pass rather than one, which is a
+         --  different measurement and takes a different loop: a round has
+         --  no draft, no sampler beyond the greedy one and no repeats,
+         --  because what it answers is what a token costs a member.
+         if Option ("--round", "") /= "" then
+            Speed_Run.Round
+              (Path        => Option ("--model", ""),
+               Prompt_Path =>
+                 Option ("--prompt-file",
+                         "../tests/fixtures/speed-prompt-short.txt"),
+               Tokens      => Number ("--max-tokens", 12),
+               Threads     => Number ("--threads",
+                                      Model_Runner.Platform.Core_Count - 1),
+               Members     => Number ("--round", 1));
+            return;
+         end if;
+
          Speed_Run.Run
            (Path        => Option ("--model", ""),
             Prompt_Path =>

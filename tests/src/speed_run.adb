@@ -14,7 +14,9 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Output;
 with Model_Runner.Stops;
+with Model_Runner.Tensors;
 with Model_Runner.Text;
+with Model_Runner.Tokenizer;
 
 with Project_Tools.Files;
 
@@ -28,6 +30,14 @@ package body Speed_Run is
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
    package T renames Model_Runner.Text;
+   package N renames Model_Runner.Numerics;
+   package Vocab renames Model_Runner.Tokenizer;
+   package Room_Of renames Model_Runner.Tensors;
+
+   use type N.Element_Count;
+   use type CPU.Pool_Reference;
+   use type N.Real;
+   use type Vocab.Token_Id;
 
    use type Ada.Real_Time.Time;
    use type Interfaces.Unsigned_64;
@@ -558,5 +568,223 @@ package body Speed_Run is
         & "; load " & T.Image (Item.Load_Before, 2)
         & " to " & T.Image (Item.Load_After, 2);
    end Summary;
+
+   -----------
+   -- Round --
+   -----------
+
+   procedure Round
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Members     : Positive)
+   is
+      Source    : aliased Files.File_Source;
+      Container : Containers.Container;
+      Engine    : aliased L.Model;
+      Status    : E.Error_Info;
+
+      function Said (Value : Duration) return String
+      is (T.Image (Long_Float (Value), 3) & " s");
+
+      procedure Say (Text : String);
+
+      procedure Say (Text : String) is
+      begin
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Text);
+      end Say;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         Say ("no model at that path; nothing measured");
+         return;
+      end if;
+
+      Files.Open (Source, Path, Status => Status);
+      if E.Is_Error (Status) then
+         Say ("the model would not open");
+         return;
+      end if;
+
+      Containers.Reader.Parse (Container, Source, Status => Status);
+      if E.Is_Error (Status) then
+         Files.Close (Source);
+         Say ("the model would not parse");
+         return;
+      end if;
+
+      L.Prepare
+        (Engine, Container, Source, Threads => Threads, Status => Status);
+      if E.Is_Error (Status) then
+         Containers.Close (Container);
+         Files.Close (Source);
+         Say ("the model would not prepare");
+         return;
+      end if;
+
+      declare
+         Settings : constant L.Configuration := L.Config (Engine);
+         Width    : constant N.Element_Count :=
+           N.Element_Count (Settings.Vocabulary);
+
+         Text : constant String :=
+           (if Prompt_Path = "" then "The capital of France is"
+            else Project_Tools.Files.Read_Raw_File (Prompt_Path));
+
+         Held  : Vocab.Token_Array (1 .. 4096);
+         Last  : Natural;
+
+         type Session_Room is
+           array (1 .. Members) of aliased L.Session;
+
+         Live  : Session_Room;
+         Group : L.Session_Group (1 .. Members);
+
+         Step_Tokens : Vocab.Token_Array (1 .. Members);
+         Rows        : Room_Of.Real_Array_Access := null;
+         Aside       : Room_Of.Real_Array_Access := null;
+
+         Started  : Ada.Real_Time.Time;
+         Spent    : Duration := 0.0;
+         Produced : Natural := 0;
+         Stopped  : Boolean := False;
+
+         --  The pool the members share, as the single-sequence measurement
+         --  makes one: a session opened without it does its products on the
+         --  calling task, and a round measured that way is measuring the
+         --  serial path rather than the round.
+         Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
+         Where : constant CPU.Pool_Reference :=
+           (if Threads = 1 then null else Team'Unchecked_Access);
+      begin
+         Vocab.Encode
+           (L.Vocabulary (Engine).all, Text,
+            Add_Beginning => True, Add_End => False,
+            Target => Held, Last => Last, Status => Status);
+
+         if E.Is_Error (Status) or else Last = 0 then
+            Say ("the prompt would not encode");
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Files.Close (Source);
+            return;
+         end if;
+
+         Room_Of.Allocate
+           (N.Element_Count (Members) * Width, Rows);
+         Room_Of.Allocate (Width, Aside);
+
+         --  Each member opened and given the whole prompt on its own, which
+         --  is prefill as it stands: a member's prompt is its own rows.
+         for Index in Live'Range loop
+            L.Open (Live (Index), Engine, Workers => Where,
+                    Status => Status);
+            exit when E.Is_Error (Status);
+
+            Group (Index) := Live (Index)'Unchecked_Access;
+
+            L.Evaluate_Batch
+              (Live (Index), Engine, Held (1 .. Last), Aside.all,
+               Status => Status);
+            exit when E.Is_Error (Status);
+         end loop;
+
+         if E.Is_Error (Status) then
+            Say ("a member would not read the prompt: "
+                 & E.Error_Code'Image (Status.Code));
+         else
+            --  The first token every member will say, taken from the
+            --  prompt's own last distribution: greedy, so they agree.
+            declare
+               Best : N.Element_Count := 0;
+            begin
+               for Index in 1 .. Width - 1 loop
+                  if Aside.all (Index) > Aside.all (Best) then
+                     Best := Index;
+                  end if;
+               end loop;
+
+               Step_Tokens := [others => Vocab.Token_Id (Best)];
+            end;
+
+            Started := Ada.Real_Time.Clock;
+
+            for Step in 1 .. Tokens loop
+               L.Evaluate_Round
+                 (Members => Group, Source => Engine,
+                  Tokens => Step_Tokens, Logits => Rows, Status => Status);
+
+               exit when E.Is_Error (Status);
+               Produced := Produced + 1;
+
+               --  Greedy for each member, and a check on the way: with the
+               --  same prompt and the same rule every member must choose
+               --  the same token, so one that does not has read another's
+               --  attention.
+               for Which in 1 .. Members loop
+                  declare
+                     Base : constant N.Element_Count :=
+                       N.Element_Count (Which - 1) * Width;
+                     Best : N.Element_Count := 0;
+                  begin
+                     for Index in 1 .. Width - 1 loop
+                        if Rows.all (Base + Index) > Rows.all (Base + Best)
+                        then
+                           Best := Index;
+                        end if;
+                     end loop;
+
+                     if Which > 1
+                       and then Vocab.Token_Id (Best) /= Step_Tokens (1)
+                     then
+                        Stopped := True;
+                     end if;
+
+                     Step_Tokens (Which) := Vocab.Token_Id (Best);
+                  end;
+               end loop;
+            end loop;
+
+            Spent :=
+              Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+         end if;
+
+         if E.Is_Error (Status) then
+            Say ("a round failed: " & E.Error_Code'Image (Status.Code));
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "members" & Integer'Image (Members)
+               & ", prompt" & Integer'Image (Last)
+               & " tokens, " & Integer'Image (Produced)
+               & " rounds in " & Said (Spent) & " --"
+               & Integer'Image (Produced * Members) & " tokens, "
+               & Said (Spent / Duration (Produced * Members))
+               & " a token"
+               & (if Stopped
+                  then "; MEMBERS DISAGREED, which is a collision"
+                  else ""));
+         end if;
+
+         for Index in Live'Range loop
+            L.Close (Live (Index));
+         end loop;
+
+         --  And the workers told to stop, which nothing else will do: a
+         --  pool whose members have gone still has its tasks waiting for a
+         --  job that is not coming, and the block cannot finish while they
+         --  wait.
+         if Where /= null then
+            CPU.Close (Team);
+         end if;
+
+         Room_Of.Free (Rows);
+         Room_Of.Free (Aside);
+      end;
+
+      L.Close (Engine, Status);
+      Containers.Close (Container);
+      Files.Close (Source);
+   end Round;
 
 end Speed_Run;

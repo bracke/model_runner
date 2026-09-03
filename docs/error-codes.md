@@ -219,8 +219,8 @@ ordinal is never reused, not because they might appear.
 | `MR-LIFE-0001` | `error.lifecycle.invalid_state` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0002` | `error.lifecycle.model_not_ready` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0003` | `error.lifecycle.session_active` | recovery_terminal | 8 | raised |
-| `MR-LIFE-0004` | `error.lifecycle.session_closed` | recovery_terminal | 8 | reserved |
-| `MR-LIFE-0005` | `error.lifecycle.session_failed` | recovery_terminal | 8 | reserved |
+| `MR-LIFE-0004` | `error.lifecycle.session_closed` | recovery_terminal | 8 | raised |
+| `MR-LIFE-0005` | `error.lifecycle.session_failed` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0006` | `error.lifecycle.already_closed` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0007` | `error.lifecycle.mapping_unavailable` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0008` | `error.lifecycle.mapping_required` | recovery_resource_limited | 5 | raised |
@@ -237,7 +237,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GEN-0004` | `error.generation.cancelled` | recovery_none | 7 | raised |
 | `MR-GEN-0005` | `error.generation.output_closed` | recovery_none | 0 | reserved |
 | `MR-GEN-0006` | `error.generation.no_logits` | recovery_none | 8 | reserved |
-| `MR-GEN-0007` | `error.generation.batch_too_large` | recovery_none | 2 | reserved |
+| `MR-GEN-0007` | `error.generation.batch_too_large` | recovery_none | 2 | raised |
 | `MR-GEN-0008` | `error.generation.empty_prompt` | recovery_none | 2 | raised |
 
 ## SAMPLE

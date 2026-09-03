@@ -11,6 +11,11 @@ package body Reserved_Codes is
       --  Named rather than listed as text, so a code that is renamed or
       --  removed fails to compile here instead of quietly falling off the
       --  list.
+      --
+      --  Three came off it when a round arrived: a round refuses a member
+      --  that is closed or failed, and refuses more members than a batch may
+      --  hold, so the three codes that said those things and had never been
+      --  raised are raised now.
       case Code is
          when E.CLI_Invalid_Locale
             | E.CLI_Invalid_Mapping_Mode
@@ -29,13 +34,10 @@ package body Reserved_Codes is
             | E.Backend_Queue_Full
             | E.Backend_Invalid_Worker_Count
             | E.Memory_Invalid_Limit
-            | E.Lifecycle_Session_Closed
-            | E.Lifecycle_Session_Failed
             | E.Lifecycle_Already_Closed
             | E.Lifecycle_Mapping_Unavailable
             | E.Generation_Output_Closed
             | E.Generation_No_Logits
-            | E.Generation_Batch_Too_Large
             | E.Conversation_Invalid_Role
             | E.Conversation_System_Unsupported
             | E.Internal_Not_Implemented

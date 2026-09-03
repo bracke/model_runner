@@ -41,6 +41,35 @@ with Model_Runner.Numerics;
 
 package Speed_Run is
 
+   --  What several sequences cost when they are served in one pass.
+   --
+   --  A generated token reads every weight once, so two tokens out of one
+   --  reading cost barely more than one. This opens Members sessions on one
+   --  prepared model, gives each the same prompt, and then generates by
+   --  rounds -- one token from each member a pass -- reporting what a token
+   --  cost a member. Against the same command with one member it is what a
+   --  second caller is worth, and the figure it should approach is in
+   --  docs/serving-several-sequences.md.
+   --
+   --  Greedy, so every member says the same thing and any member differing
+   --  from another is a collision rather than a sampler.
+   --
+   --  Task safety: run from one task.
+   --
+   --  @param Path Model file to serve.
+   --  @param Prompt_Path File holding the prompt every member is given, or
+   --    the empty string for a short one built in.
+   --  @param Tokens Rounds to generate, which is tokens a member.
+   --  @param Threads Workers the members share.
+   --  @param Members How many sequences are served at once.
+   procedure Round
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Members     : Positive);
+
+
    --  What one set of repetitions measured. Times are seconds.
    type Report is record
       Ran       : Boolean := False;

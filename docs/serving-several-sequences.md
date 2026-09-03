@@ -119,10 +119,15 @@ win from it is smaller than the win from decode rounds.
 
 ## Staging
 
-**One.** `Evaluate_Round` on the processor, the four substitutions above, and
-a scheduler good enough to serve a fixed set of sessions. Checked against the
-figure that justifies it: two members should read about 17.8 ms a token each
-where one reads 27.7.
+**One — done.** `Evaluate_Round` on the processor, the four substitutions
+above, and `tests speed --round N` to serve a fixed set of sessions. It was
+checked against the figure that justifies it and beat it: two members read
+17.4 ms a token where one reads 29.3, and four read 8.7. Six read 9.3 --
+slower a token than four -- which is the strip-of-four kink turning up in the
+round exactly where this page said a scheduler should gather in fours. One
+thing was added that this design did not name: the final projection over the
+vocabulary is done for all rows at once, because a row at a time there gives
+back a fifteenth of what the layers just saved.
 
 **Two.** The device. `Dispatch_Batch` already takes a batch, but the sequence
 builder's attention step names one cache base and one range of positions for

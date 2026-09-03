@@ -6283,6 +6283,7 @@ package body Model_Runner.Llama is
       States : T.Real_Array_Access := null;
       Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Beside : Session_Group := Alone;
       Status : out E.Error_Info)
    is
       Settings  : constant Configuration := Source.Settings;
@@ -6305,6 +6306,29 @@ package body Model_Runner.Llama is
       Blend     : constant Element_Count := Heads * Value_Size;
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
       Count     : constant Element_Count := Element_Count (Tokens'Length);
+
+      --  Whether the rows of this pass belong to different sequences.
+      --
+      --  A batch is one session's own positions, consecutive after what it
+      --  had committed; a round is one token each from several sessions,
+      --  each at its own. The two differ in exactly two answers -- which
+      --  cache a row attends and where in it the row sits -- and everything
+      --  below is written through the two functions that give them, so that
+      --  a round is a different answer rather than a different procedure.
+      Rounding  : constant Boolean := Beside'Length > 0;
+
+      --  The session row Which belongs to. Row nought is always the one the
+      --  call was made on.
+      function Held_By (Which : Element_Count) return Session_Access
+      is (if Which = 0 or else not Rounding
+          then Item'Unchecked_Access
+          else Beside (Beside'First + Natural (Which) - 1));
+
+      --  Where row Which sits in that session's cache.
+      function Sits_At (Which : Element_Count) return Element_Count
+      is (if Rounding
+          then Element_Count (Held_By (Which).Committed)
+          else Reserved + Which);
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
 
@@ -6499,13 +6523,21 @@ package body Model_Runner.Llama is
          end if;
       end loop;
 
-      if Reserved + Count > Element_Count (Item.Context) then
-         Status := E.Make (E.Generation_Context_Exhausted);
-         E.Add_Integer
-           (Status, "capacity", Long_Long_Integer (Item.Context),
-            E.Param_Tokens);
-         return;
-      end if;
+      --  Room for what this pass will add. A batch adds its whole length to
+      --  one session; a round adds one position to each of its members, and
+      --  a member with no room left is the round refused rather than that
+      --  member quietly writing past its cache.
+      for Which in 0 .. Count - 1 loop
+         if Sits_At (Which) + (if Rounding then 1 else Count - Which)
+              > Element_Count (Held_By (Which).Context)
+         then
+            Status := E.Make (E.Generation_Context_Exhausted);
+            E.Add_Integer
+              (Status, "capacity",
+               Long_Long_Integer (Held_By (Which).Context), E.Param_Tokens);
+            return;
+         end if;
+      end loop;
 
       --  What a caller may ask a headless model for is states. A
       --  distribution is refused by name, and an empty Logits is how a
@@ -6920,7 +6952,7 @@ package body Model_Runner.Llama is
                         begin
                            K.Rotary_Table
                              (Element_Count (Settings.Rotary),
-                              Item.Committed + Natural (Which),
+                              Natural (Sits_At (Which)),
                               Turn_Base (Settings, Natural (Index)),
                               Settings.Scaling, Turns (Source),
                               Cosines => Cosines, Sines => Sines);
@@ -7111,9 +7143,9 @@ package body Model_Runner.Llama is
                   KV_At : constant Element_Count := Slot (Which, KV_Width);
                   V_At  : constant Element_Count := Slot (Which, V_Width);
                   Place : constant Element_Count :=
-                    Base + (Reserved + Which) * KV_Width;
+                    Base + Sits_At (Which) * KV_Width;
                   V_Place : constant Element_Count :=
-                    V_Base + (Reserved + Which) * V_Width;
+                    V_Base + Sits_At (Which) * V_Width;
                begin
                   --  The same bias as the single-token path adds, on each
                   --  token of the batch. A batch that skipped it would
@@ -7151,7 +7183,7 @@ package body Model_Runner.Llama is
                        (Query.all (Q_At .. Q_At + Wide - 1), Heads,
                         Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
                         Head_Size, Element_Count (Settings.Rotary),
-                        Item.Committed + Natural (Which),
+                        Natural (Sits_At (Which)),
                         Turn_Base (Settings, Natural (Index)),
                         Settings.Scaling, Turns (Source),
                         Settings.Pairing);
@@ -7160,19 +7192,22 @@ package body Model_Runner.Llama is
                   if Item.Held = Eighth then
                      Pack_Row
                        (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        Item.Byte_Keys.all, B.Byte_Count (Place),
-                        Item.Key_Scales.all (Rows_Base + Reserved + Which));
+                        Held_By (Which).Byte_Keys.all, B.Byte_Count (Place),
+                        Held_By (Which).Key_Scales.all
+                          (Rows_Base + Sits_At (Which)));
                      Pack_Row
                        (Values.all (V_At .. V_At + V_Width - 1),
-                        Item.Byte_Values.all, B.Byte_Count (V_Place),
-                        Item.Value_Scales.all (Rows_Base + Reserved + Which));
+                        Held_By (Which).Byte_Values.all,
+                        B.Byte_Count (V_Place),
+                        Held_By (Which).Value_Scales.all
+                          (Rows_Base + Sits_At (Which)));
                   elsif Item.Held = Exact then
                      for Offset in 0 .. KV_Width - 1 loop
-                        Item.Keys.all (Place + Offset) :=
+                        Held_By (Which).Keys.all (Place + Offset) :=
                           Keys.all (KV_At + Offset);
                      end loop;
                      for Offset in 0 .. V_Width - 1 loop
-                        Item.Values.all (V_Place + Offset) :=
+                        Held_By (Which).Values.all (V_Place + Offset) :=
                           Values.all (V_At + Offset);
                      end loop;
 
@@ -7195,11 +7230,11 @@ package body Model_Runner.Llama is
                      end if;
                   else
                      for Offset in 0 .. KV_Width - 1 loop
-                        Item.Half_Keys.all (Place + Offset) :=
+                        Held_By (Which).Half_Keys.all (Place + Offset) :=
                           N.To_Half (Keys.all (KV_At + Offset));
                      end loop;
                      for Offset in 0 .. V_Width - 1 loop
-                        Item.Half_Values.all (V_Place + Offset) :=
+                        Held_By (Which).Half_Values.all (V_Place + Offset) :=
                           N.To_Half (Values.all (V_At + Offset));
                      end loop;
                   end if;
@@ -7345,8 +7380,8 @@ package body Model_Runner.Llama is
                      for Which in 0 .. Count - 1 loop
                         declare
                            Last_Step : constant Element_Count :=
-                             (if Settings.Causal
-                              then Reserved + Which
+                             (if Rounding or else Settings.Causal
+                              then Sits_At (Which)
                               else Reserved + Count - 1);
                            First_Step : constant Element_Count :=
                              Earliest (Settings, Last_Step, Natural (Index));
@@ -7359,40 +7394,44 @@ package body Model_Runner.Llama is
                            if Item.Held = Eighth then
                               Blend_Eighth
                                 (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Item.Byte_Keys.all, Item.Byte_Values.all,
-                                 Item.Key_Scales.all, Item.Value_Scales.all,
+                                 Held_By (Which).Byte_Keys.all,
+                                 Held_By (Which).Byte_Values.all,
+                                 Held_By (Which).Key_Scales.all,
+                                 Held_By (Which).Value_Scales.all,
                                  Base, V_Base, Rows_Base, KV_Width, V_Width,
                                  Heads, Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Reserved + Which,
+                                 Sits_At (Which),
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
                            elsif Item.Held = Exact then
                               Blend_Exact
                                 (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Item.Keys.all, Item.Values.all,
+                                 Held_By (Which).Keys.all,
+                                 Held_By (Which).Values.all,
                                  Base, V_Base, KV_Width, V_Width, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Reserved + Which,
+                                 Sits_At (Which),
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
                            else
                               Blend_Halved
                                 (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Item.Half_Keys.all, Item.Half_Values.all,
+                                 Held_By (Which).Half_Keys.all,
+                                 Held_By (Which).Half_Values.all,
                                  Base, V_Base, KV_Width, V_Width, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Reserved + Which,
+                                 Sits_At (Which),
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -7660,7 +7699,79 @@ package body Model_Runner.Llama is
       --  Every position's logits, for a caller checking what another model
       --  proposed. The output projection once per position, which is the
       --  largest matrix here: asked for and never given away.
-      if Every /= null
+      --  A round asks for every row's logits and there are as many rows as
+      --  members, so the projection that is the largest matrix in the model
+      --  is done for all of them at once rather than one at a time. That is
+      --  the same saving the round exists for, applied to the last product
+      --  of the pass: a row at a time here would give back a fifteenth of
+      --  what the layers just saved.
+      if Rounding and then Every /= null
+        and then Every.all'Length
+                 >= Count * Element_Count (Settings.Vocabulary)
+      then
+         declare
+            Wide_Logits : T.Real_Array_Access := null;
+            Vocabulary  : constant Element_Count :=
+              Element_Count (Settings.Vocabulary);
+         begin
+            T.Allocate (Count * Vocabulary, Wide_Logits);
+
+            if Wide_Logits = null then
+               Release;
+               Status := E.Make (E.Memory_Allocation_Failed);
+               E.Add_Text
+                 (Status, "category", "round_logits", E.Param_Identifier);
+               return;
+            end if;
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Width);
+               begin
+                  Final_State
+                    (Source, Acts.all (Origin .. Origin + Width - 1),
+                     Norm.all (Origin .. Origin + Width - 1));
+               end;
+            end loop;
+
+            Product_Batch
+              (Item, Source.Output, Norm, Count, Wide_Logits, Status);
+
+            if E.Is_Error (Status) then
+               T.Free (Wide_Logits);
+               Release;
+               Item.Current := Failed;
+               return;
+            end if;
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Into : constant Element_Count := Which * Vocabulary;
+               begin
+                  Finish_Logits
+                    (Source,
+                     Wide_Logits.all (Into .. Into + Vocabulary - 1));
+
+                  Every.all (Every.all'First + Into
+                             .. Every.all'First + Into + Vocabulary - 1) :=
+                    Wide_Logits.all (Into .. Into + Vocabulary - 1);
+               end;
+            end loop;
+
+            --  The caller's single row is the last member's, so that a
+            --  round answers the same shape a batch does and the block
+            --  below has nothing left to compute.
+            if Settings.Has_Head then
+               Logits :=
+                 Wide_Logits.all
+                   ((Count - 1) * Vocabulary
+                    .. (Count - 1) * Vocabulary + Vocabulary - 1);
+            end if;
+
+            T.Free (Wide_Logits);
+         end;
+
+      elsif Every /= null
         and then Every.all'Length
                  >= Count * Element_Count (Settings.Vocabulary)
       then
@@ -7696,7 +7807,7 @@ package body Model_Runner.Llama is
       --  prompt in order to continue it. A headless model has none and was
       --  refused the ask on the way in, so there is nothing to compute and
       --  nothing to hand back.
-      if Settings.Has_Head then
+      if Settings.Has_Head and then not Rounding then
          declare
             Origin : constant Element_Count := Slot (Count - 1, Width);
          begin
@@ -7722,12 +7833,21 @@ package body Model_Runner.Llama is
          Finish_Logits (Source, Logits);
       end if;
 
-      --  Commit every position of the batch, or none of them.
+      --  Commit every position of the batch, or none of them -- and for a
+      --  round, one position in each member, which is the same rule said
+      --  once a row.
       for Which in 0 .. Count - 1 loop
-         Item.History.all (Item.Committed + Natural (Which)) :=
+         Held_By (Which).History.all (Natural (Sits_At (Which))) :=
            Tokens (Tokens'First + Natural (Which));
       end loop;
-      Item.Committed := Item.Committed + Natural (Count);
+
+      if Rounding then
+         for Which in 0 .. Count - 1 loop
+            Held_By (Which).Committed := Held_By (Which).Committed + 1;
+         end loop;
+      else
+         Item.Committed := Item.Committed + Natural (Count);
+      end if;
       Status := E.Success;
       Charge (Item, Reading_Out, Mark);
       Release;
@@ -7740,5 +7860,124 @@ package body Model_Runner.Llama is
          E.Add_Frame
            (Status, Ada.Exceptions.Exception_Name (Occurrence));
    end Evaluate_Batch;
+
+   --------------------
+   -- Evaluate_Round --
+   --------------------
+
+   procedure Evaluate_Round
+     (Members : Session_Group;
+      Source  : Model'Class;
+      Tokens  : Model_Runner.Tokenizer.Token_Array;
+      Logits  : T.Real_Array_Access;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+
+      Settings   : constant Configuration := Source.Settings;
+      Vocabulary : constant Element_Count :=
+        Element_Count (Settings.Vocabulary);
+
+      Aside : T.Real_Array_Access := null;
+   begin
+      Status := E.Success;
+
+      if Members'Length = 0
+        or else Element_Count (Members'Length) > Element_Count (Max_Batch)
+        or else Tokens'Length /= Members'Length
+      then
+         Status := E.Make (E.Generation_Batch_Too_Large);
+         E.Add_Integer
+           (Status, "members", Long_Long_Integer (Members'Length),
+            E.Param_Tokens);
+         return;
+      end if;
+
+      if Logits = null
+        or else Logits.all'Length
+                < Element_Count (Members'Length) * Vocabulary
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer
+           (Status, "output",
+            (if Logits = null then 0
+             else Long_Long_Integer (Logits.all'Length)));
+         return;
+      end if;
+
+      --  What the members have to agree about, which is what the kernels
+      --  cannot vary a row at a time: the model, the arithmetic the cache is
+      --  held in, and how much of it there is -- the last because a layer's
+      --  place in the cache is the layer's number times the capacity, and
+      --  one number cannot be two.
+      for Index in Members'Range loop
+         declare
+            Which : constant Session_Access := Members (Index);
+         begin
+            if Which = null or else Which.Current = Closed then
+               Status := E.Make (E.Lifecycle_Session_Closed);
+               return;
+            end if;
+
+            if Which.Current = Failed then
+               Status := E.Make (E.Lifecycle_Session_Failed);
+               return;
+            end if;
+
+            if Which.Owner /= Members (Members'First).Owner
+              or else Which.Held /= Members (Members'First).Held
+              or else Which.Context /= Members (Members'First).Context
+            then
+               --  Named rather than guessed at: a round that ran anyway
+               --  would give one member another's attention.
+               Status := E.Make (E.Generation_Invalid_Request);
+               E.Add_Text
+                 (Status, "field", "round_members", E.Param_Identifier);
+               E.Add_Integer
+                 (Status, "member",
+                  Long_Long_Integer (Index - Members'First + 1),
+                  E.Param_Tokens);
+               return;
+            end if;
+         end;
+      end loop;
+
+      --  Not on a device yet. The sequence a device layer is built from
+      --  names one cache and one range of positions for the whole batch, so
+      --  a round would have every row attend the first member's history.
+      --  Refused by name rather than answered wrongly; the second stage of
+      --  docs/serving-several-sequences.md is what lifts it.
+      if Members (Members'First).Owner /= null
+        and then Members (Members'First).Owner.Able.Kind
+                 = Model_Runner.Backend.Backend_Device
+      then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "round", E.Param_Identifier);
+         return;
+      end if;
+
+      --  The single row Evaluate_Batch also answers with, which a round has
+      --  no use for: its rows come back through Logits.
+      T.Allocate (Vocabulary, Aside);
+
+      if Aside = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "round_row", E.Param_Identifier);
+         return;
+      end if;
+
+      Evaluate_Batch
+        (Item   => Members (Members'First).all,
+         Source => Source,
+         Tokens => Tokens,
+         Logits => Aside.all,
+         Every  => Logits,
+         Cancel => Cancel,
+         Beside => Members (Members'First + 1 .. Members'Last),
+         Status => Status);
+
+      T.Free (Aside);
+   end Evaluate_Round;
 
 end Model_Runner.Llama;

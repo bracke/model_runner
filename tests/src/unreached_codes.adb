@@ -11,10 +11,20 @@ package body Unreached_Codes is
       --  Named rather than listed as text, so a code that is renamed or
       --  removed fails to compile here instead of quietly falling off.
       case Code is
+         --  A member of a round whose session has already failed. A session
+         --  fails when an evaluation of it fails, and an evaluation is made
+         --  to fail here by handing it a malformed request -- which is
+         --  refused before the session is entered, so it does not fail. What
+         --  would reach this is a failure part way through a forward pass,
+         --  and nothing in the suite can arrange one without a fault
+         --  injection this program does not have. The line beside it, a
+         --  member that is closed, is reached and named by a test.
+         when E.Lifecycle_Session_Failed
+
          --  Reached only from a host call failing. The environment cannot
          --  be made to refuse a read from inside the suite without breaking
          --  the process it runs in.
-         when E.CLI_Invalid_Environment_Value
+            | E.CLI_Invalid_Environment_Value
 
          --  A prompt file larger than the input bound. Writing one costs
          --  more disk and time than the refusal is worth checking that way;

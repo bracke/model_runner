@@ -5,6 +5,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Several sequences in one pass — `Evaluate_Round`, and `tests speed
+  --round N` to measure it.** Stage one of
+  `docs/serving-several-sequences.md`, on the processor. Sixty-four rounds
+  from a seven-token prompt:
+
+  | members | a token | tokens a second | against one |
+  | ---: | ---: | ---: | ---: |
+  | 1 | 29.3 ms | 34.1 | 1.00× |
+  | **2** | **17.4 ms** | **57.3** | **1.68×** |
+  | **4** | **8.7 ms** | **114.7** | **3.36×** |
+  | 6 | 9.3 ms | 107.3 | 3.14× |
+  | 8 | 5.4 ms | 185.0 | 5.42× |
+
+  Priced at 1.56× for two and 3.23× for four; it pays 1.68 and 3.36. **Six
+  members are slower than four** — the strip kernel takes vectors in fours,
+  predicted from the batch-size sweep before the round existed and now
+  measured in the round itself.
+
+  The primitive is `Evaluate_Batch` with two answers made per row instead of
+  once: which cache a row attends, and where in it the row sits. Everything
+  else in that procedure is untouched. **Every member produces, bit for bit,
+  the logits it would have produced alone** — a registered test steps two
+  differing sequences together and compares each against itself run alone.
+  Refused by name on a device, which is stage two.
+
+  Three codes came off the reserved list: a round refuses a closed member, a
+  failed member and a shape whose tokens and members disagree.
+
 ### Documented
 
 - **A design for serving several sequences in one pass**, in

@@ -690,6 +690,17 @@ package Model_Runner.Llama is
    --  committed position.
    type Session is tagged limited private;
 
+   --  A session named rather than passed, so that a round can hold several.
+   type Session_Access is access all Session;
+
+   --  The sessions a round's rows belong to after the first, which is the
+   --  one the call is made on. Empty is a batch: one session's own
+   --  consecutive positions, which is what evaluation has always been.
+   type Session_Group is array (Positive range <>) of Session_Access;
+
+   --  No others, which is every call that is not a round.
+   Alone : constant Session_Group (1 .. 0) := [others => null];
+
    --  Ask a session to keep account of where its time goes, or to stop.
    --
    --  Off by default, and worth saying why it is a switch rather than
@@ -948,6 +959,14 @@ package Model_Runner.Llama is
    --    them should not ask. A caller checking what another model proposed
    --    does need them, because the answer at each position is the whole
    --    question.
+   --  @param Beside The sessions rows one and up belong to, where this is a
+   --    round of several sequences rather than a batch of one sequence's
+   --    positions. Empty for a batch. A round takes one token a member and
+   --    each row sits at its own session's committed position, so Tokens is
+   --    one longer than Beside; every other row of the pass -- the
+   --    normalizations, the rotation, the gated middle, the joins -- was
+   --    already a row at a time, and the products were already over the
+   --    whole batch. See docs/serving-several-sequences.md.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
@@ -956,7 +975,40 @@ package Model_Runner.Llama is
       States : Model_Runner.Tensors.Real_Array_Access := null;
       Every  : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Beside : Session_Group := Alone;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  One token from each of several sessions, in one pass over the weights.
+   --
+   --  What it is for is the measurement in docs/serving-several-sequences.md:
+   --  a generated token reads every weight once and multiplies each of them
+   --  once, so two tokens out of one reading cost barely more than one. Two
+   --  callers served this way get tokens at about one and a half times the
+   --  rate of two served in turn, and four at three and a quarter.
+   --
+   --  Every member gets, bit for bit, the logits it would have got alone.
+   --  The products do not care how many rows they are given -- the same
+   --  digest comes out at every batch size -- and each row reads and writes
+   --  only its own session's cache.
+   --
+   --  Members must agree about the things the kernels cannot vary a row at
+   --  a time: the same prepared model, the same cache precision and the same
+   --  context capacity. They need not agree about anything else -- different
+   --  prompts, lengths, positions and sliding windows are ordinary.
+   --
+   --  @param Members The sessions taking part, one a row.
+   --  @param Source The model they all belong to.
+   --  @param Tokens One token a member, in the members' order.
+   --  @param Logits Receives Vocabulary logits a member, in that order.
+   --  @param Cancel Stops between layers, as evaluation does everywhere.
+   --  @param Status Success, or the first refusal.
+   procedure Evaluate_Round
+     (Members : Session_Group;
+      Source  : Model'Class;
+      Tokens  : Model_Runner.Tokenizer.Token_Array;
+      Logits  : Model_Runner.Tensors.Real_Array_Access;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out Model_Runner.Errors.Error_Info);
 
    --  What a session has committed, as bytes.
    --
