@@ -6710,6 +6710,64 @@
 #   load:  under 0.80 before every reading
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-03, the row shader's lane sweep finished, and three ways of not
+# paying for a misaligned block. Nothing in the program changed.
+#
+#   THE SWEEP, which stopped at sixteen last time and is now complete.
+#   Sixty-four generated tokens on the device, alternated:
+#
+#     four lanes a row     1.330 s
+#     eight                1.140 / 1.239
+#     sixteen              1.137
+#     thirty-two           1.257
+#     sixty-four           1.262
+#
+#   The idea behind asking the wide end was that at sixty-four lanes a wave
+#   holds exactly one row -- two thousand and forty-eight elements is
+#   sixty-four blocks, so each lane takes one thirty-four-byte block and the
+#   wave reads the row's 2176 bytes as one contiguous run. It is not faster.
+#   Eight and sixteen are the plateau, four is much worse, and the wide end
+#   is one to two per cent behind: what a wave asks for in one instruction is
+#   the same set of addresses either way, and what changes is the reduction
+#   at the end of the row and how many workgroups there are.
+#
+#   THE MISALIGNMENT IS REAL AND WORTH FIVE PER CENT. A Q8_0 block is
+#   thirty-four bytes, so half the blocks of a row begin two bytes into a
+#   word and the eight words each of those wants are made of two words each.
+#   Pretending every block is word-aligned -- wrong answers, right shape --
+#   reads 1.170 s against 1.235, five and three tenths per cent. That is most
+#   of the seven per cent this row is behind llama.cpp.
+#
+#   THREE WAYS OF COLLECTING IT, all measured, none kept.
+#
+#   Carrying the word across the loop. The word a turn takes second is the
+#   one the next turn takes first, so eight words should cost nine loads and
+#   not sixteen. Written explicitly, five alternated rounds read 1.260 s
+#   against 1.253 -- level. The compiler was already doing it, which is what
+#   this measurement was for.
+#
+#   Deciding the alignment once a lane rather than once a block. A lane takes
+#   every eighth block and thirty-four times eight is a whole number of
+#   words, so every block a lane touches begins at the same offset into its
+#   word: the alternation is between lanes and not along a lane. Hoisted into
+#   two specialized loops it reads 1.533 s against 1.236 -- a quarter slower.
+#   The body is eight accumulations a word where the batch reads eight
+#   vectors, and two copies of it cost more in what the shader will hold than
+#   the test costs to make. Left as one loop with the test invariant, it is
+#   level.
+#
+#   So the five per cent is the ninth load and the shifting together, and
+#   neither can be taken out of the shader without changing what it reads.
+#   What would take it out is a layout: the device copies every matrix on
+#   upload anyway, and a copy that put a row's scales in one run and its
+#   quants in another would give the same bytes with every word aligned. That
+#   is the next thing on this row, and it is a change to the upload and to
+#   both shaders rather than a constant.
+#
+#   load:  under 1.20 before every reading, alternated with every reading of
+#          one arm beside the other
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

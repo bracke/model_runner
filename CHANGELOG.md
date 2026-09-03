@@ -71,6 +71,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The row shader's lane sweep finished, and the seven per cent named.**
+  The sweep stopped at sixteen last time; the wide end is worse — four 1.330
+  s, eight 1.140, sixteen 1.137, thirty-two 1.257, sixty-four 1.262 — so the
+  constant stands. What the gap actually is: a Q8_0 block is 34 bytes, so
+  half the blocks of a row begin two bytes into a word. **Pretending every
+  block is word-aligned reads 1.170 s against 1.235 — 5.3%**, most of the
+  gap.
+
+  Three ways of collecting it, none kept: carrying the word across the loop
+  is level (the compiler already did it); deciding the alignment once a lane
+  and specializing two loops is a quarter *slower* (the body is too big to
+  duplicate); the same as one loop with the test invariant is level. The five
+  per cent is the ninth load and the shifting together, and it comes out only
+  with a layout change — the device copies every matrix on upload, and a copy
+  that put a row's scales in one run and its quants in another would give the
+  same bytes with every word aligned.
+
 - **A generated token on the device is one shader.** By removal over
   sixty-four tokens: void `row_product` and 1.211 s becomes **0.129** —
   89.3% of it — while voiding attention, the normalization, the gated middle

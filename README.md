@@ -11078,9 +11078,17 @@ and neither had ever been swept:
 | four | 1.330 s |
 | **eight** | **1.140 s** |
 | sixteen | 1.137 s |
+| thirty-two | 1.257 s |
+| sixty-four | 1.262 s |
 
-Eight and sixteen are level and four is much worse. The constant was already
-right, and now it has been asked.
+Eight and sixteen are the plateau, four is much worse, and the wide end is
+one to two per cent behind. The wide end was worth asking because at
+sixty-four lanes a wave holds exactly one row -- 2048 elements is sixty-four
+blocks, so each lane takes one thirty-four-byte block and the wave reads the
+row's 2176 bytes as one contiguous run. It is not faster: what a wave asks
+for in one instruction is the same set of addresses either way, and what
+changes is the reduction at the end of the row and how many workgroups there
+are. The constant was already right, and now it has been asked.
 
 **The arithmetic in that shader.** Keeping every load and doing a quarter of
 the arithmetic -- one of the four bytes of each word decoded and multiplied
@@ -11089,12 +11097,36 @@ cent. **The shader is memory-bound: three quarters of what it computes is
 free.** So an integer dot product, a wider fused multiply-add, a cheaper
 decode: none of them has anything to win here.
 
-What is left is that the row product moves 1.09 GiB a token in about
-seventeen milliseconds where llama.cpp does the same bytes in about fifteen
-and a half. Seven per cent, on a shader waiting for memory, is not about what
-it computes but about how the bytes reach it -- occupancy, how much of a
-cache line a wave uses, how many rows are in flight. That is a project rather
-than a constant, and it is the only thing left on this row.
+**And what the seven per cent actually is.** A Q8_0 block is thirty-four
+bytes, so half the blocks of a row begin two bytes into a word and each of
+the eight words such a block wants is made of two of them. Pretending every
+block is word-aligned -- wrong answers, right shape -- reads **1.170 s
+against 1.235, five and three tenths per cent**. That is most of the gap, and
+it is not about what the shader computes but about how the bytes reach it.
+
+Three ways of collecting it, all measured, none kept:
+
+| | 64 tokens | |
+| --- | ---: | --- |
+| carrying the word across the loop | 1.260 s | level with 1.253 |
+| two loops, the alignment decided once a lane | 1.533 s | a quarter slower |
+| the same as one loop, test invariant | 1.236 s | level |
+
+The word a turn takes second is the one the next turn takes first, so eight
+words should cost nine loads rather than sixteen -- and written explicitly it
+is level over five alternated rounds, because the compiler was already doing
+it. A lane takes every eighth block and thirty-four times eight is a whole
+number of words, so every block a lane touches has the same alignment and the
+test could come out of the loop entirely -- but two copies of a body that is
+eight accumulations a word cost more in what the shader will hold than the
+test costs to make.
+
+So the five per cent is the ninth load and the shifting together, and neither
+comes out of the shader without changing what it reads. What would take it
+out is a **layout**: the device copies every matrix on upload anyway, and a
+copy that put a row's scales in one run and its quants in another would give
+the same bytes with every word aligned. That is the next thing on this row,
+and it is a change to the upload and to both shaders rather than a constant.
 
 
 ### The jobs that were not worth waking anyone for
