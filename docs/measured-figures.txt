@@ -6878,6 +6878,50 @@
 #          minute
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-03, the share count asked a third time, on a pool that has changed
+# twice since it was chosen. Nothing in the program changed.
+#
+#   Two structural things have landed since the sweep that picked five: a
+#   layer's projections became one job of the pool rather than one each, and
+#   the small work below a floor stopped being posted at all. Both change
+#   what a job looks like, so the constant beside them is a measurement with
+#   a date and the date had passed.
+#
+#   Sixty-four generated tokens, three alternated rounds, medians of three:
+#
+#     shares   generating   processor time
+#     five        1.748 s      9.0 s
+#     six         1.739       10.6
+#     eight       1.750       13.9
+#
+#   Against the sweep of the day before, on the pool as it was:
+#
+#     five        1.812 s      9.35 s
+#     six         1.794       10.88
+#     eight       1.790       14.08
+#
+#   So six was one per cent better than five and is now half of one; eight
+#   was one and two tenths better and is now a tenth WORSE. Five today reads
+#   better than eight did yesterday, for two thirds of the processor time
+#   eight wanted.
+#
+#   What took it is the grouped job. A job is three matrices where it was
+#   one, so the chunk counter has three times the tiles to hand out and the
+#   straggler at the end of a job is a smaller share of what the job was.
+#   That is what the sixth and the seventh and the eighth share were buying,
+#   and it is now bought once for everybody.
+#
+#   Five stands, and the reason it stands is better than it was: it is no
+#   longer seven eighths of what there is to take, it is nearly all of it.
+#
+#   The prompt is the control and is untouched, as it has to be -- the share
+#   count caps the single-vector path only, and a batch keeps every share.
+#   4.900 s at five against 4.805 at eight, which is the load moving rather
+#   than the pool.
+#
+#   load:  under 1.10 before every reading, alternated
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

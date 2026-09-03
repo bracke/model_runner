@@ -10584,12 +10584,31 @@ how many jobs a token posts and so could have changed what a job wants:
 **five reads 1.782 s against four's 1.830 -- two and six tenths per cent** --
 for 9.25 seconds of processor time against 7.79, three alternated rounds with
 every reading of one arm below every reading of the other. The same answer
-and the same size. The sweep's other rows were not retaken, and the reason is
-an argument rather than a shrug: the grouped job is three matrices where it
-was one, so a job is larger and the counter has more tiles to hand out, which
-can only make more shares easier to use rather than harder. A retake that
-moved three, six or eight would have to move them upward, and five is chosen
-against six.
+and the same size.
+
+**And asked a third time with the wide end included**, after that change and
+`### The jobs that were not worth waking anyone for` had both landed:
+
+| shares | generating | processor time | before those two changes |
+| --- | ---: | ---: | --- |
+| **five** | **1.748 s** | 9.0 s | 1.812 s, 9.35 s |
+| six | 1.739 s | 10.6 s | 1.794 s, 10.88 s |
+| eight | 1.750 s | 13.9 s | 1.790 s, 14.08 s |
+
+Six was one per cent better than five and is now half of one; eight was one
+and two tenths better and is now a tenth *worse*. **Five today reads better
+than eight did before**, for two thirds of the processor time eight wanted.
+
+What took it is the grouped job: a job is three matrices where it was one, so
+the counter has three times the tiles to hand out and the straggler at the end
+of a job is a smaller share of what the job was. That is what the sixth and
+the seventh and the eighth share were buying, and it is now bought once for
+everybody. Five stands, and the reason it stands is better than it was -- it
+is no longer seven eighths of what there is to take, it is nearly all of it.
+
+The prompt is the control and is untouched, as it has to be: the share count
+caps the single-vector path only and a batch keeps every share. 4.900 s at
+five against 4.805 at eight, which is the load moving rather than the pool.
 
 **Five is the one to take.** It has seven eighths of what there is to take
 for less than half of what six spends on it, and eight spends fifty per cent

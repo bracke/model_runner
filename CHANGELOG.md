@@ -71,6 +71,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The share count asked a third time, and the trade is better than it was.**
+  Two structural changes have landed since five was chosen — the grouped job
+  and the inline floor — so the constant beside them was a measurement whose
+  date had passed. On the pool that exists now: **five 1.748 s for 9.0 s of
+  processor time, six 1.739 for 10.6, eight 1.750 for 13.9**. Six was 1.0%
+  better than five before and is now 0.5%; eight was 1.2% better and is now a
+  tenth *worse*. **Five today reads better than eight did before**, for two
+  thirds of the processor time. The grouped job hands the counter three times
+  the tiles, so the straggler at the end of a job is a smaller share of it —
+  which is what the sixth, seventh and eighth share were buying.
+
 - **What the registers say: occupancy is not the answer.** From
   `RADV_DEBUG=asm`, the tile product uses **152** vector registers, the row
   product **128** one vector a pass and **256** eight a pass — so the shader
