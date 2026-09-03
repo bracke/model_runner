@@ -5,6 +5,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Documented
+
+- **A design for serving several sequences in one pass**, in
+  `docs/serving-several-sequences.md`. Nothing is built yet. The shape is
+  smaller than it looks: `Evaluate_Batch` already allocates every buffer for
+  the call and does its per-position work in loops over rows, touching the
+  session for four things only — the cache, the committed position, the
+  attention scratch and the token history. So the primitive is that procedure
+  with four substitutions, all of them "per row" where today there is one:
+  which cache a row attends, and where in it the row sits.
+
+  The correctness gate is the existing two-session test generalised — every
+  member of a round must produce, bit for bit, the logits it would have
+  produced alone — and the batch-size table already shows the products do not
+  care how many rows they are given. Staged: processor first, then the device
+  with attention per member, then a per-row cache table so the device's fused
+  half-layer can be used again.
+
 ### Measured
 
 - **What a second sequence is actually worth — not 15%, but half again.** The

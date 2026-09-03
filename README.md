@@ -11336,6 +11336,16 @@ different positions, and a sampler run per row -- none of it a constant to
 tune, and all of it worth more than everything measured in the sections below
 put together.
 
+**That design is drafted** in
+[docs/serving-several-sequences.md](docs/serving-several-sequences.md), and
+the shape of it is smaller than it looks: the batched evaluation already
+allocates every buffer it uses for the call and does its per-position work in
+loops over the rows. It touches the session for four things only -- the cache,
+the committed position, the attention scratch and the token history -- so what
+has to be lifted is one restriction, *which cache a row attends and where in
+it the row sits*, and nothing else in that procedure changes. Nothing is built
+yet.
+
 
 ### A stretch of the job a share
 
