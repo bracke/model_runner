@@ -11219,24 +11219,30 @@ second against this part's sixteen and a half it is at twenty-three per cent
 of peak, and llama.cpp is at twenty-five -- neither anywhere near it, and the
 difference between them is not the decode.
 
-### What the registers say, and why occupancy is not the answer
+### What the driver says, and why occupancy is not the answer
 
 The guess this page has been carrying is that what is left on the device rows
 is *occupancy, how much of a cache line a wave uses, how many rows are in
-flight*. `RADV_DEBUG=asm` prints every pipeline this program compiles, and the
-highest vector register each names says what it costs:
+flight*. **`RADV_DEBUG=shaderstats` answers the first of those outright** --
+the driver reports, for every pipeline this program builds, what an earlier
+version of this section tried to work out by hand:
 
-| | registers |
-| --- | ---: |
-| the tile product, both format sets | 152 |
-| the row product, one vector a pass | 128 |
-| the row product, eight a pass | 256 |
-| attention by matrix | 128 |
+| | registers | waves a SIMD | LDS | VMEM clauses |
+| --- | ---: | ---: | ---: | ---: |
+| the row product, one vector a pass | 128 | **8** | 1024 | 540 |
+| the row product, eight a pass | 256 | 4 | 8192 | 308 |
+| attention by matrix | 128 | **8** | 8192 | 72 |
+| the two tile products | 168 | 6 | 3072 | 89, 104 |
+| the small kernels | 8–80 | 12–32 | 0–3072 | 2–20 |
 
-On this part a wave64 at a hundred and twenty-eight registers gets about four
-waves to a SIMD where the file would allow eight -- so the shader that
-generates a token runs at half the occupancy the hardware offers. That is the
-suspicion stated exactly. Here is what it is worth.
+Nothing spills anywhere. **The shader that generates a token is at eight
+subgroups to a SIMD, which is as many as one will hold** -- and an earlier
+version of this section said it was at half of that, from arithmetic of mine
+on the highest register a disassembly names. That was wrong, and the driver
+was willing to be asked the whole time.
+
+The experiment below is unaffected and its conclusion stands, but the reason
+moves, and it gets simpler.
 
 **Occupancy is not the limit.** The tile is compiled twice, once for the six
 formats a published model is usually made of and once for the eight others;
@@ -11250,11 +11256,10 @@ Cut to the four formats this model needs, it goes from 128 registers to
 | twenty-nine registers | 1.689 s |
 | **a hundred and twenty-eight** | **1.242 s** |
 
-**Thirty-six per cent slower with four times the occupancy.** The registers
-were not idle: they were holding loads the shader had issued and not yet
-needed, and a wave with fewer of them has fewer reads outstanding. More waves
-each asking for less is worse here than fewer waves each asking for more,
-which is the opposite of the guess.
+**Thirty-six per cent slower.** It bought *no waves at all* -- there were
+already as many as a SIMD will hold -- and it spent registers that were
+holding loads the shader had issued and not yet needed. Occupancy was never
+the thing to buy here, and the registers were not idle.
 
 **Nor is more of it by hand.** Two blocks a turn -- the same blocks in the
 same order, so no digest moves, with the second block's loads not waiting on
@@ -11267,6 +11272,17 @@ So what is left on this row is not reachable from the shader's text. The
 candidates that remain are the two this did not test -- how much of a cache
 line a wave uses, and what the driver's own scheduling makes of a workgroup
 this shape -- and neither of those is a change to this program.
+
+The one place occupancy is still worth something is the **tile products at
+six waves of eight**: sixteen registers fewer would buy a seventh. That is
+the only occupancy left on this device, and it is worth about a twelfth of
+the shader's waves.
+
+And this is the answer to the item that said the device needs a profiling
+capture. **It does not.** The driver reports the occupancy, the register and
+memory pressure, the instruction mix, the memory clauses and an estimated
+latency and inverse throughput a wave, and none of that needs a trace file or
+a tool to read one.
 
 
 ### A stretch of the job a share
@@ -11320,6 +11336,23 @@ Two stretches a worker rather than one -- `Runs` twice the share count, so a
 worker alternates between two -- is level, 1.743 s against 1.740. One stretch
 is the answer, which is what the two-process reading predicted: what the
 memory wants is a stream a core, not more streams than cores.
+
+**The ceiling, asked again afterwards.** One run alone moves **40.2 GB/s** of
+the model and two runs at once **46.3 GB/s** between them, where before the
+stretches it was 38.6 against 43.1. Both moved up and the gap did not close: a
+single run still leaves about fifteen per cent of what the part will deliver,
+and ten threads across two processes still take it where five in one do not.
+
+**And the non-temporal prefetch, which is flat.** A generated token reads the
+whole model once and reuses none of it, so every one of those gigabytes evicts
+something that will be wanted. `prefetcht0` was tried earlier and was flat --
+but that instruction fills every level, where `prefetchnta` asks for the line
+and asks for it not to be kept, which is a different question rather than the
+same one again. Five hundred and twelve bytes ahead of the cursor, four
+alternated rounds: **1.7405 s against 1.741 generating and 4.851 against 4.839
+on the long prompt**, level both ways. So the prefetch question is closed from
+both sides: this loop is not short of lines, it is short of somewhere to put
+the ones it has already asked for. Not kept.
 
 
 ### The jobs that were not worth waking anyone for

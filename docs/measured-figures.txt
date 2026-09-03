@@ -7087,6 +7087,83 @@
 #   load:  under 1.10 before every reading, alternated
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-03, the ceiling re-measured and the non-temporal prefetch, which is
+# flat. Nothing in the program changed.
+#
+#   THE CEILING, asked again after a share began walking its own stretch:
+#
+#     one run alone      1.733 s for 64 tokens, 40.2 GB/s of the model
+#     two runs at once   3.013 s each, 46.3 GB/s between them
+#
+#   It was 38.6 against 43.1 before the stretches. Both moved up and the gap
+#   between them did not close: a single run still leaves about fifteen per
+#   cent of what the part will deliver, and ten threads across two processes
+#   still take it where five in one do not.
+#
+#   THE PREFETCH. A generated token reads the whole model once and reuses
+#   none of it, so every one of those gigabytes evicts something that will be
+#   wanted -- the activations, the cache of keys and values, the scales built
+#   a moment ago. prefetcht0 was tried and was flat, and that instruction
+#   fills every level; prefetchnta asks for the line and asks for it not to
+#   be kept, which is a different question rather than the same one again.
+#
+#   Four alternated rounds, five hundred and twelve bytes ahead of the
+#   cursor:
+#
+#     generating   1.7405 s against 1.741   level
+#     1419 prompt  4.851   against 4.839    level
+#
+#   Flat both ways, so the prefetch question is closed from both sides: this
+#   loop is not short of lines, it is short of somewhere to put the ones it
+#   has asked for. Not kept.
+#
+#   load:  under 1.10 before every reading, alternated
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-03, the driver will say what the occupancy is, and the claim in the
+# entry two above is wrong.
+#
+#   RADV_DEBUG=shaderstats prints, for every pipeline this program builds,
+#   what the entry two above tried to work out by hand from the highest
+#   register a disassembly names. It refused to print the first time it was
+#   asked and the reason was a wrong working directory, not the driver.
+#
+#     shader                      VGPRs  waves a SIMD  LDS   VMEM clauses
+#     row product, eight a pass     256       4        8192      308
+#     row product, one a pass       128       8        1024      540
+#     attention by matrix           128       8        8192       72
+#     the two tile products         168       6        3072    89, 104
+#     the small kernels            8-80     12-32    0-3072     2-20
+#
+#   Nothing spills anywhere.
+#
+#   THE CORRECTION. That entry said "a wave64 at a hundred and twenty-eight
+#   registers gets about four waves to a SIMD where the file would allow
+#   eight, so the shader that generates a token runs at half the occupancy
+#   the hardware offers". It runs at EIGHT of eight. The arithmetic was mine
+#   and it was wrong, and the driver was willing to be asked the whole time.
+#
+#   What that entry measured is unaffected and its conclusion is unchanged,
+#   but the reason moves. Cutting the row shader to four formats took it from
+#   a hundred and twenty-eight registers to twenty-nine and made it
+#   thirty-six per cent slower; the entry read that as "more waves each
+#   asking for less is worse than fewer waves each asking for more". It is
+#   simpler than that: it bought NO waves at all, because there were already
+#   as many as a SIMD will hold, and it spent registers that were holding
+#   loads. Occupancy was never the thing to buy, which is the same
+#   conclusion by a shorter road.
+#
+#   And the tile products sit at six of eight, which is the one place a
+#   register saved could still buy a wave. Sixteen registers fewer would do
+#   it. That is the only occupancy left on this device and it is worth
+#   something like a twelfth of the shader's waves.
+#
+#   This is also the answer to the item that said the device needs a
+#   profiling capture. It does not: the driver reports the occupancy, the
+#   register and memory pressure, the instruction mix, the memory clauses and
+#   an estimated latency and throughput a wave, and none of that needs a
+#   trace file or a tool to read one.
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

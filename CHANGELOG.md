@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The driver reports the occupancy, and a claim two entries back was
+  wrong.** `RADV_DEBUG=shaderstats` prints, per pipeline: registers, **waves
+  per SIMD**, LDS, spills, instruction mix, memory clauses, estimated latency
+  and throughput. The generating row product is at **8 subgroups per SIMD —
+  the maximum** — not the half this project published from arithmetic of its
+  own on a disassembly. The register-cutting experiment stands and its reason
+  gets simpler: cutting to 29 registers bought *no* waves, because there were
+  already as many as a SIMD holds, and spent registers that were holding
+  loads.
+
+  The tile products sit at 6 of 8, the only occupancy left on this device.
+  And this answers the item that said the device needs a profiling capture:
+  **it does not** — none of the above needs a trace file or a tool to read
+  one.
+
+- **The ceiling re-measured, and the non-temporal prefetch, which is flat.**
+  After the stretches one run moves **40.2 GB/s** and two at once **46.3**,
+  where it was 38.6 against 43.1: both moved up and the 15% gap did not close.
+  `prefetchnta` — a different instruction from the `prefetcht0` tried earlier,
+  filling L1 only — is level on both rows (1.7405 s against 1.741 generating,
+  4.851 against 4.839 on the prompt). Not kept. The prefetch question is now
+  closed from both sides.
+
 - **The chunk grain re-asked after the stretches, and it stands.** That change
   gave the grain a second meaning — before it, every worker was a tile apart
   and the run each walked was one tile whatever the grain said; after it the
