@@ -145,8 +145,34 @@ print the same mark at every count: a device round says exactly what a
 processor round says. Nothing else in the suite would catch that — the
 conformance sweep runs evaluations, not rounds.
 
-**Three.** A per-row cache table in the attention step, which lets the device
-run a round the way it runs a batch, and lets the fused path come back.
+**Three — priced, not built.** A per-row cache on the device, which lets it
+run a round's attention as well as its products.
+
+What it is worth: at a context of seventy-one positions, nothing at two and
+four members and ten per cent at eight. At fourteen hundred positions, **16,
+34 and 50 per cent** — so at eight members and a long context half the round
+is host attention, and stage three would take eight members from 82.1 tokens
+a second to about 163. Attention grows with the square of the context and the
+products do not grow at all, which is why the same arrangement is free at one
+end and costs half at the other.
+
+What it has to be, which the measurement settled:
+
+- **One shader, not two.** A decode round never reaches the matrix attention
+  shader: that one wants sixteen rows and a round has as many rows as
+  members. `attention.comp` in its three compilations is the whole of it.
+- **One table, not three.** In a decode round the row *is* the member, so a
+  row's cache base is its row number times a stride; and the window's start
+  derives from the last position and the window's width. Only the last
+  position is genuinely per row.
+- **Room in the push constants.** The attention block is sixty-four bytes and
+  every device offers a hundred and twenty-eight, so a stride and eight
+  last-positions fit. That caps a device round's attention at eight members,
+  which is where the win is; more members than that keep attention on the
+  host as stage two left it.
+- **The device's cache.** It is reserved for one session's keys and values.
+  A round needs it reserved for the members and written with a member's
+  offset — that, and `Attend_And_Feed`'s interface, are the work.
 
 ## How it will be checked
 

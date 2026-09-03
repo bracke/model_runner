@@ -11366,9 +11366,50 @@ count measured. A device round says exactly what a processor round says, which
 nothing else in the suite would have caught: the conformance sweep runs
 evaluations, not rounds.
 
-Stage three is the per-row cache table in the attention step, which would let
-the fused half-layer come back and take the host out of a device round
-entirely. See
+**All of the figures above are at a context of seventy-one positions**, and a
+round looks different at fourteen hundred. Thirty-two rounds after a
+1419-token prompt, on the device:
+
+| members | a token | tokens a second | against one |
+| ---: | ---: | ---: | ---: |
+| 1 | 21.9 ms | 45.7 | 1.00× |
+| 2 | 20.6 ms | 48.6 | 1.06× |
+| 4 | 14.5 ms | 69.0 | 1.51× |
+| 8 | 12.2 ms | 82.1 | **1.80×** |
+
+against 1.17×, 2.10× and 4.02× at seventy-one. The advantage more than
+halves, and the reason is the arrangement stage two chose: a device round runs
+its products on the device and its attention on the host, and **attention
+grows with the square of the context while the products do not grow at all**.
+
+Priced by removal -- a round's attention made to do nothing, wrong answers and
+right shape, at the same long context:
+
+| members | as it is | attention voided | attention's share |
+| ---: | ---: | ---: | ---: |
+| 2 | 1.316 s | 1.105 s | 16 % |
+| 4 | 1.855 s | 1.230 s | 34 % |
+| 8 | 3.117 s | 1.567 s | **50 %** |
+
+**At eight members and a long context, half the round is host attention.**
+That is stage three's ceiling: eight members would go from 82.1 tokens a
+second to about 163. At the short context the same measurement reads nothing,
+nothing and ten per cent -- so stage two's arrangement is free where the
+context is short and costs half where it is long.
+
+**And the measurement settled what stage three has to be.** A decode round
+never reaches the matrix attention shader -- that one wants sixteen rows and a
+round has as many rows as members -- so it is one shader in its three
+compilations, not two. The per-row numbers are three and two of them derive:
+in a decode round the row *is* the member, so a row's cache base is its row
+number times a stride, and the window's start derives from the last position;
+only the last position is genuinely a table. There is room for it in the push
+constants -- the attention block is sixty-four bytes where every device offers
+a hundred and twenty-eight -- which caps a device round's attention at eight
+members, and eight is where the win is. What is left is the device's cache,
+reserved for one session's keys and values today and needing a member's worth
+each. That and `Attend_And_Feed`'s interface are the whole of the work, and it
+is not built. See
 [docs/serving-several-sequences.md](docs/serving-several-sequences.md).
 
 

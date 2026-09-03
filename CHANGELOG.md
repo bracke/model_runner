@@ -5,6 +5,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **What stage three is worth, and a long-context qualification of stages one
+  and two.** Every round figure so far was taken at a context of 71
+  positions. At 1450 the device round reads **1.06× at two members, 1.51× at
+  four and 1.80× at eight**, against 1.17×, 2.10× and 4.02× at 71 — the
+  advantage more than halves, because a device round runs its attention on the
+  host and attention grows with the square of the context while the products
+  do not grow at all.
+
+  Priced by removal at the long context: attention is **16% of a round at two
+  members, 34% at four and 50% at eight** (at the short context: nothing,
+  nothing, 10%). So stage three's ceiling is about 2× at eight members with a
+  long context — 82.1 tokens a second to about 163.
+
+  The measurement also settled what stage three has to be: **one shader**
+  (a decode round never reaches the matrix attention, which wants sixteen
+  rows), **one table** (the row *is* the member, so the cache base is
+  `row × stride` and the window start derives from the last position), with
+  room in the push constants for eight members. What is left is the device's
+  cache, reserved for one session today. Not built.
+
+- **A round with a long prompt was refused.** The round driver handed a whole
+  prompt to one `Evaluate_Batch`, past `Max_Batch`; it reads it in batches of
+  128 now, as generation does. No published figure used it — every round
+  figure before this one had a seven-token prompt.
+
 ### Added
 
 - **A round runs on a device too — stage two.** The fused half-layer names one

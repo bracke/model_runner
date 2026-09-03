@@ -708,9 +708,26 @@ package body Speed_Run is
 
             Group (Index) := Live (Index)'Unchecked_Access;
 
-            L.Evaluate_Batch
-              (Live (Index), Engine, Held (1 .. Last), Aside.all,
-               Status => Status);
+            --  In batches, as generation reads a prompt: one call takes at
+            --  most what the engine will evaluate at once, and handing it a
+            --  whole long prompt is asking for a shape it never promised.
+            declare
+               At_Token : Natural := 1;
+            begin
+               while At_Token <= Last loop
+                  declare
+                     Upto : constant Natural :=
+                       Natural'Min (At_Token + 127, Last);
+                  begin
+                     L.Evaluate_Batch
+                       (Live (Index), Engine, Held (At_Token .. Upto),
+                        Aside.all, Status => Status);
+                     exit when E.Is_Error (Status);
+                     At_Token := Upto + 1;
+                  end;
+               end loop;
+            end;
+
             exit when E.Is_Error (Status);
          end loop;
 
