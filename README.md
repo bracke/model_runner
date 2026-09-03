@@ -1530,10 +1530,10 @@ tests speed --model MODEL --backend reference --max-tokens 4
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.052 s evaluating the prompt and
-0.108 s generating; `reference` spends 5.957 s and 3.925 s. That is
-**sixty-two times** the work in total, a hundred and eleven times on the
-prompt and thirty-six times on the generation, and the two print the same
+`cpu` spends 0.053 s evaluating the prompt and
+0.107 s generating; `reference` spends 5.951 s and 3.929 s. That is
+**sixty-one times** the work in total, a hundred and twelve times on the
+prompt and thirty-seven times on the generation, and the two print the same
 digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
@@ -1578,12 +1578,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.371 s | **0.281 s** |
-| -- evaluating the prompt | 0.051 s | 0.032 s |
-| -- generating | 0.320 s | **0.244 s** |
-| -- processor time | 1.96 s | **0.08 s** |
-| 110-token prompt, nothing generated | 0.359 s | **0.100 s** |
-| -- processor time | 2.77 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.384 s | **0.262 s** |
+| -- evaluating the prompt | 0.059 s | 0.034 s |
+| -- generating | 0.323 s | **0.229 s** |
+| -- processor time | 1.97 s | **0.08 s** |
+| 110-token prompt, nothing generated | 0.357 s | **0.097 s** |
+| -- processor time | 2.72 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-09-03, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
@@ -6537,10 +6537,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 342.7 t/s | 36.6 t/s |
-| llama.cpp, processor | 351.6 t/s | 39.3 t/s |
-| model_runner, device | 1594.2 t/s | 51.8 t/s |
-| llama.cpp, device | 1647.1 t/s | 56.3 t/s |
+| model_runner, processor | **358.3 t/s** | 36.3 t/s |
+| llama.cpp, processor | 332.6 t/s | 39.6 t/s |
+| model_runner, device | 1506.8 t/s | 53.2 t/s |
+| llama.cpp, device | 1660.3 t/s | 56.9 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6551,17 +6551,16 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **276.6 t/s** | 36.6 t/s |
-| llama.cpp, processor | 263.4 t/s | 39.4 t/s |
-| model_runner, device | 1741.1 t/s | 51.8 t/s |
-| llama.cpp, device | 1803.7 t/s | 56.7 t/s |
+| model_runner, processor | **279.9 t/s** | 36.3 t/s |
+| llama.cpp, processor | 262.3 t/s | 38.9 t/s |
+| model_runner, device | 1736.8 t/s | 53.2 t/s |
+| llama.cpp, device | 1824.1 t/s | 56.9 t/s |
 
-**The processor's long prompt is ahead of llama.cpp -- 276.6 tokens a second
-against 263.4 -- and its short one is within three per cent, 342.7 against
-351.6.** The long row read 294.6 in the sitting before this one, and the
-reading behind this one carried a load that rose to 1.77 during the run where
-that one settled at 0.72; it is a window rather than the round, which touches
-nothing a batch of one session's positions does. Read the short rows knowing the spread on both sides: llama-bench's
+**Both of the processor's prompt rows are ahead of llama.cpp -- 279.9 tokens a
+second against 262.3 at 1419 and 358.3 against 332.6 at 110.** The short row
+has now been ahead in two of five sittings and behind in three, with
+llama-bench's own spread on it thirty tokens a second; the rows that repeat
+are the long prompt and the two generating ones. Read the short rows knowing the spread on both sides: llama-bench's
 pp110 has read 346.8 ± 34.5, 339.4 ± 27.2, 341.3 ± 25.0 and 342.4 ± 25.6
 across four sittings, and its device pp110 1579.1, 1640.8, 1583.3 and 1654.0,
 against this program's 1571.4, 1549.3, 1617.6 and 1486.5. The claim those rows
@@ -6597,10 +6596,9 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor is **ahead at 1419 tokens by 1.05** and 1.03 behind at 110, and
-the device is 1.04 behind at 1419 tokens and 1.03 at 110 -- the closest every
-row has been, and the short rows are inside the spread the section above
-quotes. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
+The processor is **ahead at both prompt lengths** -- 1.07 at 1419 tokens and
+1.08 at 110 -- and the device is 1.05 behind at 1419 and 1.10 at 110, the
+short rows inside the spread the section above quotes. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
 were the machine's clock rather than the code's; `### A prompt too short to
 wake the machine` is what they were. Attention grows with the square of the
 context and it is the part of a layer this program is furthest behind on, so a
@@ -6714,8 +6712,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.321 s
-and 64 in 1.747 s on the processor, 0.069 s and 1.235 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.307 s
+and 64 in 1.761 s on the processor, 0.073 s and 1.202 s on the device,
 medians of three as everywhere else here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -6730,8 +6728,8 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 741.1 t/s rather
-than 351.6 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 730.3 t/s rather
+than 332.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
@@ -6802,9 +6800,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.373 s | 31 ms a token |
-| the same model at two bits | 1.486 s | 124 ms a token |
-| the first, drafted by the second | 3.138 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.376 s | 31 ms a token |
+| the same model at two bits | 1.496 s | 125 ms a token |
+| the first, drafted by the second | 3.152 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -11335,10 +11333,43 @@ layers just saved.
 have produced alone -- two sequences that differ, stepped together, compared
 step for step against themselves run alone. It is a registered test.
 
-Not on a device yet: the sequence a device layer is built from names one cache
-and one range of positions for the whole batch, so a round there would have
-every row attend the first member's history. Refused by name. That is stage
-two of [docs/serving-several-sequences.md](docs/serving-several-sequences.md).
+**And on a device it runs its products and not its attention**, which is stage
+two. The fused half-layer -- the one that normalizes, projects, rotates,
+writes the cache and attends in a single submission -- names one cache and one
+run of positions for the whole batch, so a round taking it would have every
+row attend the first member's history. A round takes the unfused path there
+instead: every product goes to the device, the device's own copy of the cache
+is not written, and attention runs on the host where each row already has its
+own.
+
+| members | processor | | device | |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 29.4 ms | 34.1 t/s | 20.2 ms | 49.5 t/s |
+| 2 | 17.6 ms | 56.9 | 17.2 ms | 58.0 |
+| 3 | 13.4 ms | 74.9 | 12.0 ms | 83.4 |
+| 4 | 8.4 ms | 119.1 | 9.6 ms | 103.9 |
+| 6 | 8.9 ms | 111.9 | 7.7 ms | 130.1 |
+| 8 | 5.4 ms | 183.6 | **5.0 ms** | **198.8** |
+
+The device is ahead at every count and gains less from each added member --
+four times over one at eight members against the processor's five and a half
+-- which is what putting attention on the host costs: a device round pays it
+once a member, and the more members there are the more of the round it is. A
+single member on the device reads 20.2 ms a token where the fused path reads
+19.3, so the unfused arrangement costs about five per cent for one sequence
+and two members pay for it twice over.
+
+**The check that matters here is a new one.** The round driver digests every
+token every member chose, in order; greedy from the same prompt is the same
+text, so the two backends must print the same mark -- and they do at every
+count measured. A device round says exactly what a processor round says, which
+nothing else in the suite would have caught: the conformance sweep runs
+evaluations, not rounds.
+
+Stage three is the per-row cache table in the attention step, which would let
+the fused half-layer come back and take the host out of a device round
+entirely. See
+[docs/serving-several-sequences.md](docs/serving-several-sequences.md).
 
 
 ### What a second sequence is actually worth

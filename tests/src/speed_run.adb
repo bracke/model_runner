@@ -578,8 +578,11 @@ package body Speed_Run is
       Prompt_Path : String;
       Tokens      : Positive;
       Threads     : Positive;
-      Members     : Positive)
+      Members     : Positive;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU)
    is
+      use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Files.File_Source;
       Container : Containers.Container;
       Engine    : aliased L.Model;
@@ -613,8 +616,23 @@ package body Speed_Run is
          return;
       end if;
 
+      if Backend = Model_Runner.Backend.Backend_Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            if not Ready then
+               Containers.Close (Container);
+               Files.Close (Source);
+               Say ("no device answered");
+               return;
+            end if;
+         end;
+      end if;
+
       L.Prepare
-        (Engine, Container, Source, Threads => Threads, Status => Status);
+        (Engine, Container, Source, Backend => Backend,
+         Threads => Threads, Status => Status);
       if E.Is_Error (Status) then
          Containers.Close (Container);
          Files.Close (Source);
@@ -648,6 +666,13 @@ package body Speed_Run is
          Spent    : Duration := 0.0;
          Produced : Natural := 0;
          Stopped  : Boolean := False;
+
+         --  A digest of every token every member chose, in order, so that
+         --  two backends can be held against each other: greedy from the
+         --  same prompt is the same text, and a round that ran on a device
+         --  saying something else is the device path wrong rather than the
+         --  device being faster.
+         Mark : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
 
          --  The pool the members share, as the single-sequence measurement
          --  makes one: a session opened without it does its products on the
@@ -741,6 +766,10 @@ package body Speed_Run is
                      end if;
 
                      Step_Tokens (Which) := Vocab.Token_Id (Best);
+
+                     Mark :=
+                       (Mark xor Interfaces.Unsigned_64 (Best))
+                       * 16#0000_0100_0000_01B3#;
                   end;
                end loop;
             end loop;
@@ -760,7 +789,8 @@ package body Speed_Run is
                & " rounds in " & Said (Spent) & " --"
                & Integer'Image (Produced * Members) & " tokens, "
                & Said (Spent / Duration (Produced * Members))
-               & " a token"
+               & " a token, mark "
+               & Shown (Mark)
                & (if Stopped
                   then "; MEMBERS DISAGREED, which is a collision"
                   else ""));

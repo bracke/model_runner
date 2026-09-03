@@ -129,12 +129,21 @@ thing was added that this design did not name: the final projection over the
 vocabulary is done for all rows at once, because a row at a time there gives
 back a fifteenth of what the layers just saved.
 
-**Two.** The device. `Dispatch_Batch` already takes a batch, but the sequence
-builder's attention step names one cache base and one range of positions for
-the whole batch, so the fused half-layer cannot be used for a round as it
-stands. The first cut runs the products on the device and attention per
-member — attention is three per cent of a generated token, so this keeps most
-of the win.
+**Two — done.** The device. The fused half-layer names one cache base and one
+range of positions for the whole batch, so a round takes the unfused path
+there: every product to the device, the device's own copy of the cache not
+written, attention on the host where each row already has its own. The device
+is ahead of the processor at every member count — 198.8 tokens a second at
+eight members against 183.6 — and gains less from each added member, four
+times over one against the processor's five and a half, which is what putting
+attention on the host costs. A single member reads 20.2 ms a token where the
+fused path reads 19.3, so the arrangement costs about five per cent for one
+sequence and two members pay for it twice over.
+
+The round driver digests every token every member chose, and the two backends
+print the same mark at every count: a device round says exactly what a
+processor round says. Nothing else in the suite would catch that — the
+conformance sweep runs evaluations, not rounds.
 
 **Three.** A per-row cache table in the attention step, which lets the device
 run a round the way it runs a batch, and lets the fused path come back.

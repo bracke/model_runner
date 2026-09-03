@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A round runs on a device too — stage two.** The fused half-layer names one
+  cache and one run of positions for the whole batch, so a round takes the
+  unfused path there: every product to the device, the device's copy of the
+  cache not written, attention on the host where each row already has its own.
+
+  | members | processor | device |
+  | ---: | ---: | ---: |
+  | 1 | 34.1 t/s | 49.5 t/s |
+  | 2 | 56.9 | 58.0 |
+  | 4 | 119.1 | 103.9 |
+  | 8 | 183.6 | **198.8** |
+
+  The device is ahead at every count and gains less from each added member —
+  4.0× over one at eight members against the processor's 5.4× — which is what
+  attention on the host costs. One member reads 20.2 ms a token where the
+  fused path reads 19.3, so the arrangement costs ~5% for one sequence and
+  two members pay for it twice over.
+
+  **The round driver now digests every token every member chose**, and the two
+  backends print the same mark at every count: a device round says exactly
+  what a processor round says. Nothing else in the suite would catch that —
+  the conformance sweep runs evaluations, not rounds.
+
 - **Several sequences in one pass — `Evaluate_Round`, and `tests speed
   --round N` to measure it.** Stage one of
   `docs/serving-several-sequences.md`, on the processor. Sixty-four rounds

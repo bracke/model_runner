@@ -6902,7 +6902,18 @@ package body Model_Runner.Llama is
             --  the queries, the keys and the values.
             Projected := False;
 
-            if Model_Runner.Backend."="
+            --  Not for a round. What this path fuses is the half of a
+            --  layer that ends in attention, and the sequence it builds
+            --  names one cache and one run of positions for the whole
+            --  batch -- so a round taking it would have every row attend
+            --  the first member's history. The products below still go to
+            --  the device, which is where the round's saving is; what stays
+            --  on the host is attention, and attention is three per cent of
+            --  a generated token. Stage three of
+            --  docs/serving-several-sequences.md is the per-row cache table
+            --  that lets this come back.
+            if not Rounding
+              and then Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
               and then Current.Attention_Norm /= null
@@ -7220,7 +7231,12 @@ package body Model_Runner.Llama is
                      --
                      --  Written already where the layer went over whole:
                      --  the sequence put them there before it attended.
-                     if not Cached then
+                     --  And not for a round either: the device keeps one
+                     --  cache laid out as one session's, so a second
+                     --  member's position would be written over the first
+                     --  member's. A round attends on the host, where each
+                     --  row has its own.
+                     if not Cached and then not Rounding then
                         Put_Position
                           (Item, Place,
                            Keys.all (KV_At .. KV_At + KV_Width - 1),
@@ -7873,8 +7889,6 @@ package body Model_Runner.Llama is
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Status  : out E.Error_Info)
    is
-      use type Model_Runner.Backend.Backend_Kind;
-
       Settings   : constant Configuration := Source.Settings;
       Vocabulary : constant Element_Count :=
         Element_Count (Settings.Vocabulary);
@@ -7943,19 +7957,14 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
-      --  Not on a device yet. The sequence a device layer is built from
-      --  names one cache and one range of positions for the whole batch, so
-      --  a round would have every row attend the first member's history.
-      --  Refused by name rather than answered wrongly; the second stage of
-      --  docs/serving-several-sequences.md is what lifts it.
-      if Members (Members'First).Owner /= null
-        and then Members (Members'First).Owner.Able.Kind
-                 = Model_Runner.Backend.Backend_Device
-      then
-         Status := E.Make (E.Backend_Capability_Missing);
-         E.Add_Text (Status, "capability", "round", E.Param_Identifier);
-         return;
-      end if;
+      --  A device runs a round's products and not its attention. The
+      --  sequence a device layer is built from names one cache and one run
+      --  of positions for the whole batch, so the fused half-layer would
+      --  have every row attend the first member's history; the pass takes
+      --  the unfused path there instead, which sends every product to the
+      --  device and keeps attention on the host. Attention is three per
+      --  cent of a generated token, so most of the round's saving survives
+      --  the arrangement.
 
       --  The single row Evaluate_Batch also answers with, which a round has
       --  no use for: its rows come back through Logits.

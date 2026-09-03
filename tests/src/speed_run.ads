@@ -62,12 +62,16 @@ package Speed_Run is
    --  @param Tokens Rounds to generate, which is tokens a member.
    --  @param Threads Workers the members share.
    --  @param Members How many sequences are served at once.
+   --  @param Backend Which backend runs the products. A device runs a
+   --    round's products and not its attention, which stays on the host.
    procedure Round
      (Path        : String;
       Prompt_Path : String;
       Tokens      : Positive;
       Threads     : Positive;
-      Members     : Positive);
+      Members     : Positive;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU);
 
 
    --  What one set of repetitions measured. Times are seconds.
