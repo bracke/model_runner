@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What a second sequence is actually worth — not 15%, but half again.** The
+  previous entry said the way to the remaining 15% was a second sequence. A
+  second sequence in the same pass doesn't use the bandwidth better, it needs
+  less of it: two tokens from one reading of the weights. Measured with
+  `--batch-size` on the 110-token prompt, where a batch of one reads 27.7 ms a
+  token — the generating figure to a tenth:
+
+  | batch | processor | device |
+  | ---: | ---: | ---: |
+  | 1 | 27.7 ms/token | 18.8 ms/token |
+  | **2** | **17.8 — 1.56×** | **13.6 — 1.38×** |
+  | 4 | 8.6 — 3.23× | 7.6 — 2.48× |
+  | 8 | 5.8 — 4.79× | 3.8 — 4.92× |
+  | 128 | 3.0 — 9.30× | 0.65 — 29.2× |
+
+  A batch of three costs nearly what four does and six costs *more in total*
+  than four — the strip kernel takes vectors in fours, so a scheduler should
+  gather sequences in fours. Every batch size prints the same digest
+  (`8ca534de63ff96ac`), nine sizes on the processor and six on the device.
+
+  The engine can already hold any number of sessions on one model; what
+  nothing does is put two sessions' next tokens into one pass. That is the
+  feature these figures price.
+
 - **The driver reports the occupancy, and a claim two entries back was
   wrong.** `RADV_DEBUG=shaderstats` prints, per pipeline: registers, **waves
   per SIMD**, LDS, spills, instruction mix, memory clauses, estimated latency

@@ -11285,6 +11285,58 @@ latency and inverse throughput a wave, and none of that needs a trace file or
 a tool to read one.
 
 
+### What a second sequence is actually worth
+
+The section below ends by saying the way to the remaining fifteen per cent is
+a second sequence. **It is not fifteen per cent.** A second sequence in the
+same pass does not use the bandwidth better -- it needs less of it, because
+two tokens come out of one reading of the weights.
+
+`--batch-size` is a real option of the command and of the speed tool, so the
+question is directly measurable. On the 110-token prompt, so that a batch of
+one is affordable -- and a batch of one is a token at a time, reading 27.7 ms
+a token, which is the generating figure to a tenth:
+
+| batch | processor | | device | |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 27.7 ms a token | 1.00× | 18.8 ms a token | 1.00× |
+| **2** | **17.8** | **1.56×** | **13.6** | **1.38×** |
+| 3 | 13.5 | 2.06× | | |
+| 4 | 8.6 | 3.23× | 7.6 | 2.48× |
+| 6 | 8.9 | 3.10× | | |
+| 8 | 5.8 | 4.79× | 3.8 | 4.92× |
+| 16 | 4.1 | 6.75× | | |
+| 32 | 3.6 | 7.63× | 2.1 | 9.02× |
+| 128 | 3.0 | 9.30× | 0.65 | 29.2× |
+
+**Two sequences served in one pass produce tokens at one and a half times the
+rate of two served in turn**, and four at three and a quarter. On the device
+four are two and a half times and eight nearly five.
+
+**The kink at three and six** is worth keeping. A batch of three costs nearly
+what four does, and a batch of six costs *more in total* than four -- 0.984 s
+against 0.944. The strip kernel takes vectors in fours, so a batch that is not
+a multiple of four leaves lanes idle for the whole pass: six is one full strip
+and a half-empty one where four is one full strip. A scheduler that gathers
+sequences should gather them in fours.
+
+Every one of these prints the same digest, `8ca534de63ff96ac`, at nine batch
+sizes on the processor and six on the device. **Batching changes no answer** --
+a claim this page has made for a long time on one comparison, now shown across
+fifteen.
+
+**What the program has and what it lacks.** It can hold any number of sessions
+on one prepared model: a model carries no per-evaluation state, and a test
+interleaves two sessions a token at a time and checks each gets what it would
+have got alone. What nothing does is put two sessions' next tokens into one
+pass. That is the feature these figures price, and they price it at half again
+as many tokens a second for two callers and three and a quarter times for
+four. It wants a scheduler, a batch whose rows come from different sessions at
+different positions, and a sampler run per row -- none of it a constant to
+tune, and all of it worth more than everything measured in the sections below
+put together.
+
+
 ### A stretch of the job a share
 
 **A correction first.** The section before this one ended by naming the
