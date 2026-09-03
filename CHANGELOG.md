@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Faster
 
+- **A stretch of the job a share.** The correction first: the previous entry
+  named the processor's gap as the barrier-per-product structure, without
+  measuring it. With every product's share doing nothing, a generated token
+  reads **0.112 s against 1.754** and the long prompt **1.268 against 4.994**
+  — and the phase account accounts for nearly all of both, so **the pool's own
+  structure is about one per cent** of a token. A redesign would buy that and
+  no more.
+
+  So the counter's *order* is what was left. It handed out tiles in sequence,
+  so every worker started at the front of a job and walked it a tile apart —
+  one narrow stream for the memory. Tile numbering is now
+  `(v mod Runs) * Per + v / Runs`, so worker *w* walks a contiguous stretch of
+  its own while the counter still balances. Bit-exact; every digest holds.
+  **Generating 1.7365 s against 1.747 (0.6%)**, the long prompt level — and
+  **the twelve-token run at fifteen threads 0.401 s against 0.464**, fourteen
+  per cent of the case this program has always been worst at.
+
+  Two stretches a worker is level (1.743 against 1.740): what the memory wants
+  is a stream a core, not more streams than cores.
+
 - **The pool is not woken for a job smaller than waking it.** The premise was
   half wrong and that is the useful half: four of the five pieces of small
   work a generated token does were already inline, because the layer takes

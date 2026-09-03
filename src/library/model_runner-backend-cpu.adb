@@ -770,6 +770,27 @@ package body Model_Runner.Backend.CPU is
       Three : constant Element_Count := (Work.Rows_Three + Step - 1) / Step;
 
       Tiles : constant Element_Count := One + Two + Three;
+
+      --  A run of tiles a share, taken in an order that keeps each share
+      --  walking its own stretch of the job.
+      --
+      --  The counter hands out tile numbers in order, so the first workers
+      --  to arrive all start at the front of the job and walk it a tile
+      --  apart. That is one narrow stream of reads for the memory to serve.
+      --  Numbered as below, worker w takes counter values w, w + Runs,
+      --  w + 2 Runs, which are tiles Per w, Per w + 1, Per w + 2 -- so each
+      --  worker walks a contiguous stretch of its own and the memory sees
+      --  as many streams as there are workers, while the counter still
+      --  balances: a worker that finishes its stretch takes whatever is
+      --  left wherever it is.
+      --
+      --  Nothing about a value changes. A chunk computes the same rows from
+      --  the same weights whenever it is taken, and no chunk is taken
+      --  twice.
+      Runs  : constant Element_Count :=
+        Element_Count'Max (1, Element_Count (Work.Team));
+      Per   : constant Element_Count := (Tiles + Runs - 1) / Runs;
+      Whole : constant Element_Count := Runs * Per;
    begin
       if Waking = null or else Work.Rows = 0
         or else Work.Vector = null or else Work.Target = null
@@ -783,10 +804,12 @@ package body Model_Runner.Backend.CPU is
               Chunks.Atomic_Fetch_And_Add (Waking.Chunk, 1);
          begin
             exit when Mine < 0
-              or else Element_Count (Mine) >= Tiles;
+              or else Element_Count (Mine) >= Whole;
 
             declare
-               Tile : constant Element_Count := Element_Count (Mine);
+               Tile : constant Element_Count :=
+                 (Element_Count (Mine) mod Runs) * Per
+                 + Element_Count (Mine) / Runs;
 
                --  Which part this tile belongs to, and the tile's place
                --  inside it.
@@ -807,13 +830,18 @@ package body Model_Runner.Backend.CPU is
                   Part.Rows := Work.Rows_Three;
                end if;
 
-               declare
-                  First : constant Element_Count := Local * Step;
-                  Last  : constant Element_Count :=
-                    Element_Count'Min (First + Step - 1, Part.Rows - 1);
-               begin
-                  Take_Share (Part, First, Last);
-               end;
+               --  A number the rounding invented: the runs cover a little
+               --  more than the job where the tiles do not divide evenly,
+               --  and what lies past the end belongs to nobody.
+               if Tile < Tiles then
+                  declare
+                     First : constant Element_Count := Local * Step;
+                     Last  : constant Element_Count :=
+                       Element_Count'Min (First + Step - 1, Part.Rows - 1);
+                  begin
+                     Take_Share (Part, First, Last);
+                  end;
+               end if;
             end;
          end;
       end loop;
