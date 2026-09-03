@@ -11122,11 +11122,47 @@ eight accumulations a word cost more in what the shader will hold than the
 test costs to make.
 
 So the five per cent is the ninth load and the shifting together, and neither
-comes out of the shader without changing what it reads. What would take it
-out is a **layout**: the device copies every matrix on upload anyway, and a
-copy that put a row's scales in one run and its quants in another would give
-the same bytes with every word aligned. That is the next thing on this row,
-and it is a change to the upload and to both shaders rather than a constant.
+comes out of the shader without changing what it reads.
+
+**The layout that would take it out was built, measured and reverted.** Per
+row rather than per tensor, which is what keeps it small: a row's scales in
+front of its quants, two bytes a block and then thirty-two. Where the block
+count is even the scales take a whole number of words, so the row is the same
+length it was and nothing about how much room a matrix needs changes -- and
+every quant word begins on a word. A push constant tells the shaders which
+arrangement they have, so a matrix the device is reading where it lies still
+gets the file's own. About a hundred lines across the engine and both
+shaders, every digest held, and four alternated rounds each:
+
+| | split | as it was | |
+| --- | ---: | ---: | --- |
+| generating, 64 tokens | **1.202 s** | 1.226 s | 2.0 % faster |
+| 1419-token prompt | 0.860 s | **0.836 s** | 2.9 % slower |
+
+Two per cent of the five on the row shader, and a larger loss on the tile.
+Net worse, and worse on the row that is further behind, so it went back.
+
+**Why the five per cent does not arrive** is the useful part. The probe that
+promised it -- read every block as though it were word-aligned -- removed a
+load and added nothing. The layout removes that load and adds another: the
+scale is no longer in the same thirty-four bytes as the quants it belongs to,
+so every block touches two streams instead of one. On the row shader the two
+roughly cancel. On the tile shader there was nothing to win in the first
+place -- pretending the misalignment away there reads 0.843 s against 0.814,
+which is to say the aligned version is *slower* -- and the second stream is a
+straight cost.
+
+The thirty-four-byte block costs what it costs, and moving the scale does not
+recover it. What would is a scale that need not be read separately at all,
+which is a different quantization rather than a different arrangement of this
+one.
+
+**And the tile shader, asked the other question:** keeping every load and
+doing a sixteenth of the decode reads 0.786 s against 0.813, three and three
+tenths per cent. It is not arithmetic-bound either. At 3.85 teraflops a
+second against this part's sixteen and a half it is at twenty-three per cent
+of peak, and llama.cpp is at twenty-five -- neither anywhere near it, and the
+difference between them is not the decode.
 
 
 ### The jobs that were not worth waking anyone for

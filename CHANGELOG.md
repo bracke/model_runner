@@ -71,6 +71,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The split Q8_0 layout: built, measured, reverted.** The previous entry
+  said this would cost the zero-copy import; it would not — `Device_Share` is
+  False by default, so the device already copies every matrix and rearranging
+  during that copy is free. Built per row (a row's scales in front of its
+  quants, the row the same length, a push constant telling the shaders which
+  arrangement they have, every digest held): **generating 1.202 s against
+  1.226 — 2.0% faster — and the 1419-token prompt 0.860 against 0.836 — 2.9%
+  slower.** Net worse, and worse on the row further behind.
+
+  Why the 5.3% doesn't arrive: the probe removed a load and added nothing;
+  the layout removes that load and adds another, since the scale is no longer
+  in the same 34 bytes as its quants, so every block touches two streams. On
+  the tile shader there was nothing to win — pretending the misalignment away
+  reads 0.843 s against 0.814, *slower* — so the second stream is pure cost
+  there. The tile is not arithmetic-bound either: a sixteenth of the decode
+  buys 3.3%.
+
 - **The row shader's lane sweep finished, and the seven per cent named.**
   The sweep stopped at sixteen last time; the wide end is worse — four 1.330
   s, eight 1.140, sixteen 1.137, thirty-two 1.257, sixty-four 1.262 — so the

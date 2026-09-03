@@ -6768,6 +6768,63 @@
 #          one arm beside the other
 #   model: TinyLlama-1.1B-Chat Q8_0
 #
+# 2026-09-03, the split layout built, measured and reverted. The five per
+# cent the alignment probe promised is not collectable, and this is why.
+#
+#   THE CORRECTION THAT MADE IT WORTH BUILDING. The entry before this one
+#   said the layout change would cost the zero-copy import -- reading the
+#   weights where the file has them. It would not: Device_Share is False by
+#   default and sharing is opt-in, documented as slower and there for a
+#   machine that cannot hold the model twice. By default the device copies
+#   every matrix it uses, so rearranging during that copy is free of memory
+#   and nearly free of time.
+#
+#   WHAT WAS BUILT. Per row rather than per tensor, which is what keeps it
+#   small: a row's scales in front of its quants, two bytes a block and then
+#   thirty-two. Where the block count is even the scales take a whole number
+#   of words, so the row is the same length it was and nothing about how much
+#   room a matrix needs changes -- and every quant word begins on a word. A
+#   push constant tells the shaders which arrangement they have, so a shared
+#   matrix still reads the file's own. About a hundred lines across the
+#   engine and both shaders, and every digest held: 448c2ed68ec342ee
+#   generating, 1a26d24d33b8957b and cbf29ce484222325 on the prompts.
+#
+#   WHAT IT MEASURED. Four alternated rounds each, medians of three:
+#
+#     generating 64   split 1.202 s   as it was 1.226   2.0 per cent faster
+#     1419 prompt     split 0.860     as it was 0.836   2.9 per cent slower
+#
+#   Two per cent of the five on the row shader, and a loss on the tile that
+#   is larger. Net worse, and worse on the row that is further behind, so it
+#   goes back.
+#
+#   WHY THE FIVE PER CENT DOES NOT ARRIVE. The probe that promised it -- read
+#   every block as though it were word-aligned -- removed a load and added
+#   nothing. The layout removes that load and adds another: the scale is no
+#   longer in the same thirty-four bytes as the quants it belongs to, so
+#   every block now touches two streams instead of one. On the row shader the
+#   two roughly cancel and two per cent is what is left. On the tile shader
+#   there was nothing to win in the first place -- it was measured at
+#   0.843 s against 0.814 with the misalignment pretended away, which is to
+#   say the aligned version is SLOWER there -- and the second stream is a
+#   straight cost.
+#
+#   So the thirty-four-byte block costs what it costs and the cost is not
+#   recoverable by moving the scale. What would recover it is a scale that
+#   does not have to be read separately at all, which is a different
+#   quantization rather than a different arrangement of this one.
+#
+#   AND THE TILE SHADER, ASKED THE OTHER QUESTION. Keeping every load and
+#   doing a sixteenth of the decode reads 0.786 s against 0.813, three and
+#   three tenths per cent. So the tile is not arithmetic-bound either: at
+#   3.85 teraflops a second against the part's sixteen and a half it is at
+#   twenty-three per cent of peak, and llama.cpp is at twenty-five, so
+#   neither is anywhere near it and the difference between them is not the
+#   decode.
+#
+#   load:  under 1.10 before every reading, alternated
+#   model: TinyLlama-1.1B-Chat Q8_0
+#
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
