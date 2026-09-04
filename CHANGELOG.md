@@ -5,6 +5,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The first comparison of several sequences at once**, which every figure
+  against llama.cpp so far has been missing: `llama-batched-bench -npl B` is
+  the counterpart to `tests speed --round N`, and both report generated
+  tokens over decode time.
+
+  **The processor holds up and the device does not.** On the processor this
+  program is 1.03 to 1.28 behind and **ahead at sixteen sequences with a long
+  context** — 142.5 t/s against 128.7. On the device it is 1.2 behind at one
+  sequence, 1.4 to 1.5 at two and four, 1.03 to 1.24 at eight, and **2.3 to
+  2.5 at sixteen**.
+
+  The shape is the finding rather than the average: ours stops scaling
+  between eight and sixteen where llama.cpp's roughly doubles. Sixteen rows
+  is also where a batch here switches to the matrix attention kernel, which a
+  round is excluded from — so the kernel is lost at exactly the count where
+  the comparison worsens most.
+
 ### Changed
 
 - **A round takes the fused whole layer.** The bug was one line of my own: a

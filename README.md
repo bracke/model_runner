@@ -6804,6 +6804,65 @@ prompt, because only a prompt has rows enough at once for it to matter. The
 fourth is a default: the batch a prompt is read in went to the engine's cap,
 which the device cared about far more than the processor did.
 
+### Against llama.cpp, several sequences at once
+
+The table above is one sequence against one sequence, and it is not what most
+of this work has been about. `llama-batched-bench` is the counterpart to
+`tests speed --round N`: `-npl B` decodes B sequences together, each with its
+own prompt, and reports generated tokens over decode time -- the same
+quantity, measured the same way. One sitting, load under 0.60 before it,
+TinyLlama-1.1B-Chat Q8_0 on both sides, llama.cpp at `95b8e33e1`.
+
+**Generating, tokens a second, after a 1419-token prompt each:**
+
+| sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 31.1 | 33.8 | 45.2 | 55.1 |
+| 2 | 47.8 | 57.5 | 64.3 | 98.1 |
+| 4 | 89.5 | 92.8 | 111.2 | 155.9 |
+| 8 | 116.6 | 119.9 | 175.3 | 217.5 |
+| 16 | **142.5** | 128.7 | 182.0 | **445.6** |
+
+**And after a seven-token prompt each, sixty-four generated:**
+
+| sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 34.0 | 39.5 | 49.8 | 57.6 |
+| 2 | 55.6 | 71.1 | 71.1 | 108.0 |
+| 4 | 112.8 | 135.9 | 136.4 | 196.8 |
+| 8 | 172.7 | 221.9 | 250.6 | 259.1 |
+| 16 | 216.6 | 242.1 | 266.7 | **613.9** |
+
+**The processor holds up and the device does not.** On the processor this
+program is between 1.03 and 1.28 behind and **ahead at sixteen sequences with
+a long context** -- 142.5 against 128.7, where llama.cpp's own curve turns
+down. On the device it is behind everywhere and the gap is not a constant:
+1.2 at one sequence, **1.4 to 1.5 at two and four**, 1.03 to 1.24 at eight,
+and **2.3 to 2.5 at sixteen**.
+
+**That shape is the finding, not the average.** A curve that is worse at two,
+level at eight and twice as bad at sixteen is not a slower program; it is a
+program whose scaling has thresholds in different places. Ours stops scaling
+between eight and sixteen -- 250.6 to 266.7 at a short context, 175.3 to
+182.0 at a long one -- while llama.cpp's roughly doubles across the same
+step. Two things are worth naming and neither is measured yet:
+
+- **Sixteen rows is where a batch switches to the matrix attention kernel
+  here, and a round is excluded from it.** We lose the kernel at exactly the
+  count where the comparison worsens most.
+- **llama.cpp's own step from eight to sixteen is 2.37×**, which is more than
+  the rows: its decode time barely moves between the two (1.177 s to 1.149 at
+  1419 positions). Something switches on their side too, and knowing what it
+  is would say whether the target is a kernel or an arrangement.
+
+**What is fair and what is not.** Each side gives every sequence its own
+prompt, both decode with a full cache behind them, and both report the decode
+alone. Ours staggers the members' prompts by a token each so they sit at
+different positions, which llama.cpp's does not -- a difference in work too
+small to see. Prompt-reading is not compared here: llama.cpp reads sixteen
+prompts at the same rate it reads one, and so does this program, and both
+numbers are in the table above this one.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what
