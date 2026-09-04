@@ -181,13 +181,18 @@ layout(push_constant, std430) uniform Shape {
     //
     //  A batch is one session's own positions, so every row reads the same
     //  cache and derives its last from where it sits. A round's rows are
-    //  different sessions, each with its own cache and its own position --
-    //  and in a round a row IS a member, so the cache a row reads begins at
-    //  its row number times the stride below and its last is read out of
-    //  the table beside it. Zero for a batch, which is everything this
-    //  kernel did before.
-    uint stride;
-    uint reach[8];
+    //  different sessions, each with its own cache and its own position,
+    //  and neither follows from anything the batch knows. Both are read out
+    //  of a table at the end of the cache -- two words a row, this being
+    //  where it begins, counted in elements. Zero for a batch, which is
+    //  everything this kernel did before.
+    //
+    //  In the cache rather than in this block because a push block is a
+    //  hundred and twenty-eight bytes on every device and a table of two
+    //  words a row would cap a round at eight members. The cache is a
+    //  buffer this kernel has bound already, so the table costs a read
+    //  where it was going to cost a limit.
+    uint table_at;
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -332,8 +337,8 @@ void main() {
     uint first_of[QUERIES];
     uint q_of[QUERIES];
 
-    //  Where each row's own cache begins: nothing for a batch, and a
-    //  member's worth for each row of a round. A block of more than one
+    //  Where each row's own cache begins: nothing for a batch, and that
+    //  row's own block for each row of a round. A block of more than one
     //  query reads a cached key once and dots it into every query of the
     //  block, which is the whole reason a block exists -- and rows of a
     //  round do not share a cache, so the caller gives a round the kernel
@@ -353,8 +358,8 @@ void main() {
         //  pushed. Attending both ways, every position shares the one that
         //  was pushed: the end of the text is the end of the text for all
         //  of them.
-        uint last = shape.stride != 0u
-                  ? shape.reach[slot]
+        uint last = shape.table_at != 0u
+                  ? floatBitsToUint (kv[shape.table_at + slot * 2u])
                   : shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
@@ -366,7 +371,9 @@ void main() {
 
         //  Where this row's own cache begins, which is nothing at all for a
         //  batch and a member's worth for each row of a round.
-        held_of[i] = shape.stride * (shape.stride != 0u ? slot : 0u);
+        held_of[i] = shape.table_at != 0u
+                   ? floatBitsToUint (kv[shape.table_at + slot * 2u + 1u])
+                   : 0u;
         q_of[i] = slot * shape.heads * shape.head_size
                   + head * shape.head_size;
 

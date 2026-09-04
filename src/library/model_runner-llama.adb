@@ -3179,26 +3179,26 @@ package body Model_Runner.Llama is
    --  did.
    Block_Span   : Element_Count := 0;
    Block_Taken  : Element_Count := 0;
-   Block_Holder : array (0 .. Model_Runner.Backend.Device.Round_Limit - 1)
+   Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
-   --  Give a session a block of the device's cache, and put its keys and
-   --  values there where the block does not already hold them.
+   --  Give a session a block of the device's cache, and keep it there.
+   --
+   --  A session takes the lowest free block the first time it writes to the
+   --  device's cache and holds it until it closes. Nothing moves afterwards
+   --  -- not when a round forms, not when its members change -- which is
+   --  what makes a round free to form: its rows read the blocks their
+   --  sessions were already in.
    --
    --  @param Item The session.
-   --  @param Seat Which block, which for a round is the row's number.
    --  @param Ok True when the block is the session's and holds its cache.
-   procedure Take_Block
-     (Item : Session_Access;
-      Seat : Natural;
-      Ok   : out Boolean);
+   procedure Take_Block (Item : Session_Access; Ok : out Boolean);
 
-   procedure Take_Block
-     (Item : Session_Access;
-      Seat : Natural;
-      Ok   : out Boolean)
+   procedure Take_Block (Item : Session_Access; Ok : out Boolean)
    is
       use type Model_Runner.Backend.Backend_Kind;
+
+      Seat : Natural := 0;
    begin
       Ok := False;
 
@@ -3208,8 +3208,28 @@ package body Model_Runner.Llama is
         or else Item.Held /= Exact
         or else Item.Keys = null
         or else Item.Values = null
-        or else Seat >= Model_Runner.Backend.Device.Round_Limit
       then
+         return;
+      end if;
+
+      --  Already this session's, which is every call after the first: the
+      --  block was granted once and nothing turns a session out of one, so
+      --  there is nothing to ask the device and nothing to write.
+      if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
+         Ok := True;
+         return;
+      end if;
+
+      --  The lowest free one. A closed session gives its block back, so
+      --  what a long-running server deals out is the sessions it has open
+      --  rather than the sessions it has ever opened.
+      while Seat < Block_Holder'Length
+        and then Block_Holder (Seat) /= null
+      loop
+         Seat := Seat + 1;
+      end loop;
+
+      if Seat >= Block_Holder'Length then
          return;
       end if;
 
@@ -3217,8 +3237,13 @@ package body Model_Runner.Llama is
          Span : constant Element_Count :=
            Item.Keys.all'Length + Item.Values.all'Length;
 
-         Wanted : constant Element_Count := Element_Count (Seat + 1) * Span;
-         Base   : constant Element_Count := Element_Count (Seat) * Span;
+         --  Room for the blocks dealt out so far and for the table a round
+         --  reads at the end of them.
+         Wanted : constant Element_Count :=
+           Element_Count (Seat + 1) * Span
+           + Element_Count (Model_Runner.Backend.Device.Table_Room);
+
+         Base : constant Element_Count := Element_Count (Seat) * Span;
 
          Written : Boolean := True;
       begin
@@ -3237,24 +3262,12 @@ package body Model_Runner.Llama is
             return;
          end if;
 
-         --  A wider buffer is a new one, and a new one is empty: every
-         --  block that held a cache has lost it. Said here rather than
-         --  discovered later, because a session reading a block that was
-         --  zeroed under it would read zeroes and call them attention.
+         --  A wider buffer carries over what the narrower one held, so no
+         --  session is turned out of its block by another one arriving.
+         --  What has to be remembered is where the table sits now, which is
+         --  past every block dealt out so far.
          if Wanted > Block_Taken then
-            for Holder of Block_Holder loop
-               if Holder /= null then
-                  Holder.Seat := -1;
-               end if;
-               Holder := null;
-            end loop;
-
             Block_Taken := Wanted;
-         end if;
-
-         if Item.Seat = Seat and then Block_Holder (Seat) = Item then
-            Ok := True;
-            return;
          end if;
 
          --  What the host holds, into the block: a session's whole cache in
@@ -3276,19 +3289,20 @@ package body Model_Runner.Llama is
             return;
          end if;
 
-         if Block_Holder (Seat) /= null then
-            Block_Holder (Seat).Seat := -1;
-         end if;
-
-         if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
-            Block_Holder (Item.Seat) := null;
-         end if;
-
          Item.Seat := Seat;
          Block_Holder (Seat) := Item;
          Ok := True;
       end;
    end Take_Block;
+
+   --  Where a round's per-row table sits, in elements: past every block the
+   --  cache has been dealt into. Zero where it holds no block yet, which is
+   --  also what tells the kernel a call is not a round.
+   function Table_At return Element_Count
+   is (if Block_Taken > Element_Count (Model_Runner.Backend.Device.Table_Room)
+       then Block_Taken
+            - Element_Count (Model_Runner.Backend.Device.Table_Room)
+       else 0);
 
    --  Where a session's cache begins in the device's buffer.
    function Block_Base (Item : Session) return Element_Count
@@ -3309,9 +3323,6 @@ package body Model_Runner.Llama is
    --  run rather than a refused one.
    --
    --  @param Item Session whose cache this is.
-   --  @param Seat Which block of the device's cache is that session's,
-   --    which for a row of a round is the row's number and is zero for
-   --    every session evaluating on its own.
    --  @param At_Key Where this position's keys go among the keys.
    --  @param Key_Row The keys, rotated.
    --  @param At_Value Where its values go among the values.
@@ -3319,7 +3330,6 @@ package body Model_Runner.Llama is
    --  @param Resident True when both reached the device.
    procedure Put_Position
      (Item      : Session_Access;
-      Seat      : Natural;
       At_Key    : Element_Count;
       Key_Row   : Real_Array;
       At_Value  : Element_Count;
@@ -3339,7 +3349,7 @@ package body Model_Runner.Llama is
 
       --  Said every position and done once: the block is asked for and,
       --  where it is already this session's, granted without a copy.
-      Take_Block (Item, Seat, Resident);
+      Take_Block (Item, Resident);
 
       if not Resident then
          return;
@@ -3422,7 +3432,8 @@ package body Model_Runner.Llama is
       Model_Runner.Backend.Device.Attend
         (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
          Source.Settings.Group_Size, Natural (First), Natural (Last),
-         Natural (K_Base), Natural (Item.Keys.all'Length + V_Base),
+         Natural (Block_Base (Item) + K_Base),
+         Natural (Block_Base (Item) + Item.Keys.all'Length + V_Base),
          Natural (KV_Width), Natural (V_Width),
          Scale, Source.Settings.Attention_Cap, Target, Took,
          Positions => Natural (Positions), Window => Window,
@@ -5872,7 +5883,7 @@ package body Model_Runner.Llama is
                          (Item.Owner.Able.Kind,
                           Model_Runner.Backend.Backend_Device)
             then
-               Take_Block (Item'Unchecked_Access, 0, Resident);
+               Take_Block (Item'Unchecked_Access, Resident);
 
                if Resident then
                   K.Rotary_Table
@@ -5893,13 +5904,16 @@ package body Model_Runner.Llama is
                      Current.Query, Current.Key, Current.Value,
                      Angles, Natural (Head_Size), Settings.Rotary,
                      K."=" (Settings.Pairing, K.Split),
-                     Natural (Slot), Natural (Item.Keys.all'Length + V_Slot),
+                     Natural (Block_Base (Item) + Slot),
+                     Natural (Block_Base (Item)
+                              + Item.Keys.all'Length + V_Slot),
                      Natural (Heads), Natural (Value_Size),
                      Settings.Group_Size,
                      Natural (Earliest (Settings, Reserved,
                                         Natural (Index))),
-                     Natural (Reserved), Natural (Base),
-                     Natural (Item.Keys.all'Length + V_Base),
+                     Natural (Reserved), Natural (Block_Base (Item) + Base),
+                     Natural (Block_Base (Item)
+                              + Item.Keys.all'Length + V_Base),
                      Natural (KV_Width), Natural (V_Width),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
@@ -6045,7 +6059,7 @@ package body Model_Runner.Llama is
                --  The host copy stays in step because everything else reads
                --  it: the snapshot, the eviction, the other two precisions.
                Put_Position
-                 (Item'Unchecked_Access, 0,
+                 (Item'Unchecked_Access,
                   Slot, Item.Key_Row.all (0 .. KV_Width - 1),
                   V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
             else
@@ -6185,8 +6199,10 @@ package body Model_Runner.Llama is
                     (Item.Query.all, Item.Activation.all,
                      Natural (Heads), Natural (Head_Size),
                      Natural (Value_Size), Settings.Group_Size,
-                     Natural (First), Natural (Reserved), Natural (Base),
-                     Natural (Item.Keys.all'Length + V_Base),
+                     Natural (First), Natural (Reserved),
+                     Natural (Block_Base (Item) + Base),
+                     Natural (Block_Base (Item)
+                              + Item.Keys.all'Length + V_Base),
                      Natural (KV_Width), Natural (V_Width), Scale,
                      Settings.Attention_Cap, Current.Attention_Out,
                      Current.Feed_Norm.all, Settings.Epsilon,
@@ -6382,12 +6398,12 @@ package body Model_Runner.Llama is
                Read : Boolean;
             begin
                Model_Runner.Backend.Device.Get_Cache
-                 (At_Key,
+                 (Block_Base (Item) + At_Key,
                   Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
 
                if Read then
                   Model_Runner.Backend.Device.Get_Cache
-                    (Item.Keys.all'Length + At_Val,
+                    (Block_Base (Item) + Item.Keys.all'Length + At_Val,
                      Item.Values.all (At_Val .. At_Val + V_Width - 1), Read);
                end if;
 
@@ -6817,14 +6833,13 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
-      --  A round's rows in their own blocks of the device's cache, settled
-      --  before the first layer.
+      --  A round's rows, each reading the block its own session holds.
       --
-      --  Row i reads block i, which is all the kernel is told and all it
-      --  needs: it multiplies a row's number by the block width to find
-      --  where that row's keys and values begin. A member already in its
-      --  block pays nothing, which is the case round after round; one that
-      --  is not has its cache written there once.
+      --  Every member has a block already, or takes one here and keeps it;
+      --  nothing of a member's cache is written for a round to form, which
+      --  is what a round forming has to be cheap enough to do. What the
+      --  kernel is told is a table at the end of the cache: where each row
+      --  has got to, and where its block begins.
       --
       --  Settled here rather than as the positions are written because a
       --  row that could not be seated sends the whole round to the host,
@@ -6833,27 +6848,40 @@ package body Model_Runner.Llama is
       if Rounding
         and then Item.Held = Exact
         and then Count <= Element_Count (Model_Runner.Backend.Device
-                                           .Round_Limit)
+                                           .Block_Limit)
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
       then
          Seated := True;
 
-         --  The last row first, because that is the one whose block lies
-         --  furthest along and so the one that asks for the whole round's
-         --  room. A buffer that grows is a new one and an empty one, which
-         --  turns every seated row out of its block; asking for the most
-         --  first means the growing happens before anything is seated
-         --  rather than under the rows already seated.
-         for Which in reverse 0 .. Count - 1 loop
+         for Which in 0 .. Count - 1 loop
             declare
                Took : Boolean;
             begin
-               Take_Block (Held_By (Which), Natural (Which), Took);
+               Take_Block (Held_By (Which), Took);
                Seated := Seated and Took;
             end;
          end loop;
+
+         if Seated then
+            declare
+               Table : Model_Runner.Backend.Device.Word_List
+                         (1 .. 2 * Natural (Count));
+               Ok    : Boolean;
+            begin
+               for Which in 0 .. Count - 1 loop
+                  Table (2 * Natural (Which) + 1) :=
+                    Natural (Sits_At (Which));
+                  Table (2 * Natural (Which) + 2) :=
+                    Natural'Max (Held_By (Which).Seat, 0)
+                    * Natural (Block_Span);
+               end loop;
+
+               Model_Runner.Backend.Device.Put_Table (Table_At, Table, Ok);
+               Seated := Ok;
+            end;
+         end if;
       end if;
 
       for Index in Source.Layers.all'Range loop
@@ -7199,7 +7227,7 @@ package body Model_Runner.Llama is
                                (Item.Owner.Able.Kind,
                                 Model_Runner.Backend.Backend_Device)
                   then
-                     Take_Block (Item'Unchecked_Access, 0, Resident);
+                     Take_Block (Item'Unchecked_Access, Resident);
                   end if;
 
                   --  The whole layer as one submission, where the device
@@ -7220,17 +7248,19 @@ package body Model_Runner.Llama is
                         Angles.all (0 .. Count * Pairs * 2 - 1),
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
-                        Natural (Base + Reserved * KV_Width),
-                        Natural (Item.Keys.all'Length + V_Base
-                                 + Reserved * V_Width),
+                        Natural (Block_Base (Item) + Base
+                                 + Reserved * KV_Width),
+                        Natural (Block_Base (Item) + Item.Keys.all'Length
+                                 + V_Base + Reserved * V_Width),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         Natural (Earliest (Settings, Reserved,
                                            Natural (Index))),
                         Natural (if Settings.Causal
                                  then Reserved else Reserved + Count - 1),
-                        Natural (Base),
-                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (Block_Base (Item) + Base),
+                        Natural (Block_Base (Item)
+                                 + Item.Keys.all'Length + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -7448,7 +7478,6 @@ package body Model_Runner.Llama is
                         begin
                            Put_Position
                              (Held_By (Which),
-                              (if Rounding then Natural (Which) else 0),
                               Place,
                               Keys.all (KV_At .. KV_At + KV_Width - 1),
                               V_Place,
@@ -7513,22 +7542,20 @@ package body Model_Runner.Llama is
                      then Reserved
                      else Reserved + Count - 1);
 
-                  --  A round says the same two things a row at a time: how
-                  --  far apart two members' caches lie, and where each
-                  --  member has got to. Neither follows from the batch's
-                  --  first position, because a round's rows do not sit one
-                  --  after another in one sequence.
-                  Apart : constant Natural :=
-                    (if Rounding
-                     then Natural (Item.Keys.all'Length
-                                   + Item.Values.all'Length)
-                     else 0);
+                  --  A round reads its per-row table out of the cache: a
+                  --  row's last position and the block it reads, neither of
+                  --  which follows from the batch's first position, because
+                  --  a round's rows do not sit one after another in one
+                  --  sequence.
+                  Table : constant Natural :=
+                    (if Rounding then Natural (Table_At) else 0);
 
-                  Reach : constant Model_Runner.Backend.Device.Reach_List :=
-                    (if Rounding
-                     then [for Row in 1 .. Natural (Count) =>
-                             Natural (Sits_At (Element_Count (Row) - 1))]
-                     else Model_Runner.Backend.Device.No_Reach);
+                  --  Where this session's own block begins, for a batch. A
+                  --  round says nothing here: the kernel adds each row's
+                  --  own block out of the table, and a base added twice
+                  --  would read past the cache.
+                  Seat_At : constant Element_Count :=
+                    (if Rounding then 0 else Block_Base (Item));
 
                   Usable : Boolean;
                begin
@@ -7558,8 +7585,8 @@ package body Model_Runner.Llama is
                         Natural (Heads), Natural (Head_Size),
                         Natural (Value_Size), Settings.Group_Size,
                         Natural (First_Step), Natural (Last_Step),
-                        Natural (Base),
-                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (Seat_At + Base),
+                        Natural (Seat_At + Item.Keys.all'Length + V_Base),
                         Natural (KV_Width), Natural (V_Width), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Current.Feed_Norm.all, Settings.Epsilon,
@@ -7570,8 +7597,7 @@ package body Model_Runner.Llama is
                         Causal    => Settings.Causal,
                         Lifted    => Lifted_Norms (Source),
                         Max_Bias  => Settings.Max_Bias,
-                        Apart     => Apart,
-                        Reach     => Reach);
+                        Table_At  => Table);
                   end if;
 
                   if Fused then
@@ -7901,12 +7927,12 @@ package body Model_Runner.Llama is
                Read : Boolean;
             begin
                Model_Runner.Backend.Device.Get_Cache
-                 (Base,
+                 (Block_Base (Item) + Base,
                   Item.Keys.all (Base .. Base + Count * KV_Width - 1), Read);
 
                if Read then
                   Model_Runner.Backend.Device.Get_Cache
-                    (Item.Keys.all'Length + V_At,
+                    (Block_Base (Item) + Item.Keys.all'Length + V_At,
                      Item.Values.all (V_At .. V_At + Count * V_Width - 1),
                      Read);
                end if;

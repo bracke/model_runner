@@ -60,25 +60,13 @@ package Model_Runner.Platform.Device.Products is
    --  dispatch asks for and that one decides how many each does.
    Query_Block : constant := 8;
 
-   --  Members a round may attend on a device at once.
-   --
-   --  Each of them needs its own position pushed, and the attention block is
-   --  sixty-four bytes before those: eight more words takes it to a hundred,
-   --  where every device offers a hundred and twenty-eight. A round with
-   --  more members than this attends on the host, which is where every round
-   --  attended before there was a table at all.
-   Round_Limit : constant := 8;
-
-   --  Where each member of a round has got to, in the members' order.
-   type Reach_List is array (Positive range <>) of Natural;
-
-   --  A batch: one sequence, one cache, and no table to read a position out
-   --  of, because the batch's first position says where all of them are.
-   No_Reach : constant Reach_List (1 .. 0) := [others => 0];
-
-   --  The same, as a step keeps it: a fixed table, because a step is one
-   --  record of a fixed array and cannot hold a list of its own.
-   type Round_Reach is array (0 .. Round_Limit - 1) of Natural;
+   --  Whole numbers written into the cache buffer for a kernel to read
+   --  back with floatBitsToUint. A round's per-row table is two of them a
+   --  row -- where the row has got to and where its cache begins -- and it
+   --  lives at the end of the cache rather than in the push constants,
+   --  which is what lets a round have more rows than a push block has room
+   --  for words.
+   type Word_List is array (Positive range <>) of Natural;
 
    --  And how many the matrix kernel answers, which is what its tile is
    --  tall. Below this a block is mostly rows the batch does not have.
@@ -622,12 +610,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
-   --  @param Stride How far apart two members of a round lie in the cache,
-   --    which is one session's worth. Zero for a batch, whose rows share one
-   --    cache and read it from its start.
-   --  @param Reach Where each member of a round has got to, in the members'
-   --    order. Empty for a batch, whose last position follows from its
-   --    first. Longer than Round_Limit is refused, as a shape is.
+   --  @param Table_At Where in the cache a round's per-row table begins,
+   --    counted in elements, or zero for a batch. The table is two words a
+   --    row: where that row has got to, and where its cache begins. A batch
+   --    needs neither -- its rows are one sequence, so the last position
+   --    follows from the batch's first and every row reads the cache from
+   --    its start.
    --  @param From_Step Which step the queries come from, or zero for the
    --    step before this one. A layer named whole rotates them several
    --    steps before it attends with them.
@@ -652,8 +640,7 @@ package Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Stride     : Natural := 0;
-      Reach      : Reach_List := No_Reach);
+      Table_At   : Natural := 0);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -780,6 +767,23 @@ package Model_Runner.Platform.Device.Products is
    procedure Reserve
      (Item     : in out Engine;
       Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Write whole numbers into that cache.
+   --
+   --  A round's per-row table, which a kernel reads back with
+   --  floatBitsToUint. It goes in the cache because the cache is a buffer
+   --  attention already has bound, and a table of two words a row does not
+   --  earn a fourth buffer and a descriptor a step.
+   --
+   --  @param Item Ready engine.
+   --  @param At_Value Where in the cache the table begins, in elements.
+   --  @param Words What to write.
+   --  @param Ok True when it was written.
+   procedure Put_Words
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Words    : Word_List;
       Ok       : out Boolean);
 
    --  Write a run of values into that cache.
@@ -1420,10 +1424,9 @@ private
       Cap        : Model_Runner.Numerics.Real := 0.0;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
 
-      --  A round: how far apart two members' caches are, and where each of
-      --  them has got to. Zero and empty for a batch.
-      Apart      : Natural := 0;
-      Reach      : Round_Reach := [others => 0];
+      --  A round: where in the cache the per-row table begins, in
+      --  elements. Zero for a batch, which needs no table.
+      Table      : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

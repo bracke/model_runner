@@ -149,14 +149,22 @@ conformance sweep runs evaluations, not rounds.
 round's attention as well as its products.
 
 What it is worth, alternated with the arrangement it replaces, medians of
-three each way on the device: at a context of fourteen hundred positions
-**1.29× at two members, 1.48× at four and 2.02× at eight**; at seventy-one,
-1.11×, 1.20× and 1.40×. Eight members at fourteen hundred positions read
-91.4 tokens a second against 45.2. The removal below priced eight members at
-a long context at fifty per cent of the round, and taking that away doubled
-it — a price named before the work and met by it. Two and four were priced
-at sixteen and thirty-four per cent and pay twenty-nine and forty-eight, so
-the prediction was right where it mattered and low where it did not.
+three each way on the device at a context of fourteen hundred positions:
+
+| | attention on the host | on the device, pushed | in blocks |
+| --- | ---: | ---: | ---: |
+| 2 members | 2.024 s | 1.587 s | **1.292 s** |
+| 4 members | 2.915 s | 1.965 s | **1.477 s** |
+| 8 members | 5.658 s | 2.777 s | **1.783 s** |
+| 16 members | — | 8.115 s | **3.444 s** |
+
+Eight members read **143.6 tokens a second against 45.2**, and sixteen read
+148.7 where the pushed table read 62.8 — that last row being the cap the
+push block imposed: a round of more than eight attended on the host and was
+slower than the same device at eight. The removal below priced eight members
+at a long context at fifty per cent of the round; taking it away more than
+doubled the round, which is the rarest kind of entry here — a price named
+before the work and met by it.
 
 How it is built, which is what the pricing said it had to be:
 
@@ -164,29 +172,35 @@ How it is built, which is what the pricing said it had to be:
   the compilation whose block is one query, because a block of more reads a
   cached key once and dots it into every query of the block — and rows of a
   round do not share a cache.
-- **Two things pushed.** A block width and a table of eight last positions.
-  The kernel's push block went from sixty-four bytes to a hundred and
-  twenty-eight and the pipeline layout's declared range with it, which is
-  what makes it safe: widening that block once corrupted this device's
-  answers while the declared range stayed where it was.
+- **One table, at the end of the cache.** Two words a row: where the row has
+  got to, and where its block begins. It was pushed at first, which held
+  eight rows and capped a round there; the cache is a buffer the kernel has
+  bound already, so what was a limit became a read of two words a row.
 - **The device's cache, dealt out in blocks.** It held one session's keys and
-  values. It is handed out in blocks of one session's worth now, and row *i*
-  of a round reads block *i* — which is all the kernel needs to be told,
-  since it multiplies a row's number by the block width. A session takes a
-  block and keeps it, so the same members round after round pay for it once;
-  a session that takes a block another one holds turns that one out, which
-  costs the turned-out session a copy and nothing else, because what the host
-  holds is the copy of record.
-- **Eight members.** What fits in the push block. More than eight keep
-  attention on the host, as stage two left it.
+  values. It is handed out in blocks of one session's worth now, and a
+  session takes one the first time it writes to that cache and keeps it until
+  it closes. A round's rows read the blocks their sessions were already in,
+  so forming a round writes the table and nothing else.
+- **Sixteen members.** What memory bounds rather than what a push block
+  holds: sixteen blocks of this model at two thousand positions is two
+  gigabytes. More than that keeps attention on the host, as stage two left
+  it, and says the same thing.
 
-Two things came out of the building that this design did not name. The blocks
-are asked for furthest-first, because a wider cache buffer is a new and empty
-one, and asking for the most first means the growing happens before anything
-is seated rather than under the rows already seated — getting that wrong cost
-each member a re-upload of its whole cache every round and read a third
-slower. And two sessions on one device used to write over each other's keys,
-which nothing did and nothing caught; blocks are the answer to that as well.
+Three things came out of the building that this design did not name.
+
+A round of eight at a long context spent a third of a thirty-two-round
+measurement writing every member's cache into the block its row number named
+— a member prefills alone and was then moved. Blocks a session keeps for its
+life remove that, and the phase clock is what found it: the whole of the cost
+fell between the last layer of one round and the first of the next, and did
+not grow with the round count.
+
+A wider cache buffer used to come up empty and turn every seated session out
+of its block. It carries its contents over now, values and half-precision
+copy alike.
+
+And two sessions on one device used to write over each other's keys, which
+nothing did and nothing caught; blocks are the answer to that as well.
 
 ## How it will be checked
 

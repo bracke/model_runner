@@ -580,7 +580,8 @@ package body Speed_Run is
       Threads     : Positive;
       Members     : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU)
+        Model_Runner.Backend.Backend_CPU;
+      Budget      : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Files.File_Source;
@@ -590,6 +591,11 @@ package body Speed_Run is
 
       function Said (Value : Duration) return String
       is (T.Image (Long_Float (Value), 3) & " s");
+
+      --  A phase's name in a fixed width, so the columns line up.
+      function Pad (Text : String) return String
+      is (if Text'Length >= 14 then Text (Text'First .. Text'First + 13)
+          else Text & [1 .. 14 - Text'Length => ' ']);
 
       procedure Say (Text : String);
 
@@ -706,6 +712,13 @@ package body Speed_Run is
                     Status => Status);
             exit when E.Is_Error (Status);
 
+            --  The phase clock, on the member the round is made on: a round
+            --  charges its phases to the session the call names, so that is
+            --  the one to ask afterwards.
+            if Budget and then Index = Live'First then
+               L.Account (Live (Index), True);
+            end if;
+
             Group (Index) := Live (Index)'Unchecked_Access;
 
             --  In batches, as generation reads a prompt: one call takes at
@@ -748,6 +761,16 @@ package body Speed_Run is
 
                Step_Tokens := [others => Vocab.Token_Id (Best)];
             end;
+
+            --  The phase clock, on the member the round is made on: a
+            --  round charges its phases to the session the call names, so
+            --  that is the one to ask afterwards. Started here rather than
+            --  at Open, because what it is asked about is the rounds and
+            --  the prompt each member read on its own would be nine tenths
+            --  of the answer.
+            if Budget then
+               L.Account (Live (Live'First), True);
+            end if;
 
             Started := Ada.Real_Time.Clock;
 
@@ -797,6 +820,9 @@ package body Speed_Run is
 
          if E.Is_Error (Status) then
             Say ("a round failed: " & E.Error_Code'Image (Status.Code));
+            for Frame in 1 .. Status.Frame_Total loop
+               Say ("  " & Model_Runner.Text.To_String (Status.Frames (Frame)));
+            end loop;
          else
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
@@ -811,6 +837,41 @@ package body Speed_Run is
                & (if Stopped
                   then "; MEMBERS DISAGREED, which is a collision"
                   else ""));
+
+            --  And where the round's time went. Charged to the first
+            --  member's session, which is the one every round was made on
+            --  and so the one the whole round's phases are counted against;
+            --  the prompt each member read on its own is in there too, and
+            --  is the same for every backend.
+            if Budget then
+               declare
+                  Times : constant L.Phase_Times :=
+                    L.Time_Spent (Live (Live'First));
+                  Total : Duration := 0.0;
+               begin
+                  for Phase in L.Phase loop
+                     Total := Total + Times (Phase);
+                  end loop;
+
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "  where the round's time goes");
+
+                  for Phase in L.Phase loop
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "    " & Pad (L.Phase'Image (Phase))
+                        & T.Image (Long_Float (Times (Phase)), 3)
+                        & " s   "
+                        & (if Total > 0.0
+                           then T.Image
+                                  (Long_Float (Times (Phase))
+                                   / Long_Float (Total) * 100.0, 1)
+                           else "-")
+                        & " per cent of what is accounted for");
+                  end loop;
+               end;
+            end if;
          end if;
 
          for Index in Live'Range loop

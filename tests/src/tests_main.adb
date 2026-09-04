@@ -1620,7 +1620,8 @@ begin
                Threads     => Number ("--threads",
                                       Model_Runner.Platform.Core_Count - 1),
                Members     => Number ("--round", 1),
-               Backend     => Backend_Of (Option ("--backend", "cpu")));
+               Backend     => Backend_Of (Option ("--backend", "cpu")),
+               Budget      => Given ("--budget"));
             return;
          end if;
 

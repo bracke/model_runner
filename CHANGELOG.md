@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A session keeps a block of the device's cache, and a round's table moved
+  out of the push constants.** The per-row table — where each row has got to
+  and where its cache begins — lives at the end of the cache buffer now
+  rather than in the attention kernel's push block, which held eight rows
+  and capped a round there. What bounds a round is memory instead: sixteen
+  blocks, two gigabytes for this model at two thousand positions. And a
+  session takes its block the first time it writes to that cache and keeps
+  it until it closes, so **forming a round writes a table of two words a row
+  and nothing else**.
+
+  On the device at 1419 positions, 32 rounds, alternated, medians of three:
+  two members 1.587 → **1.292 s**, four 1.965 → **1.477**, eight 2.777 →
+  **1.783**, sixteen 8.115 → **3.444**. Eight members read 143.6 tokens a
+  second where attention on the host read 45.2. The marks are unchanged on
+  both backends at every count from one to twenty-four.
+
+  What that removed was a one-off nobody had priced: a round of eight spent
+  0.98 s of a 2.75-second measurement writing every member's whole cache into
+  the block its row number named, because a member prefills alone and was
+  then moved. The phase clock found it — the cost did not grow with the round
+  count and was still 0.98 s at 128 rounds.
+
+  Two repairs came with it. A wider cache buffer used to come up empty and
+  turn every seated session out of its block; it carries its contents over
+  now. And every place that addresses the device's cache for a session adds
+  that session's block — the fused whole layer, the fused half layer, the
+  single-call attention, the readback — which a cache with one tenant did not
+  need.
+
 - **A round's attention on the device, which doubles eight members at a long
   context.** Stage three of `docs/serving-several-sequences.md`. The device
   holds one cache buffer, laid out as one session's keys and values; it is

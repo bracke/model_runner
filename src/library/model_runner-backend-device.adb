@@ -513,6 +513,26 @@ package body Model_Runner.Backend.Device is
    end Reserve_Cache;
 
    ---------------
+   -- Put_Table --
+   ---------------
+
+   procedure Put_Table
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Words    : Word_List;
+      Ok       : out Boolean)
+   is
+      Held : constant Products.Word_List (Words'Range) :=
+        [for Index in Words'Range => Words (Index)];
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Put_Words (Engine, At_Value, Held, Ok);
+   end Put_Table;
+
+   ---------------
    -- Put_Cache --
    ---------------
 
@@ -723,12 +743,8 @@ package body Model_Runner.Backend.Device is
       Causal      : Boolean := True;
       Lifted      : Boolean := False;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Apart       : Natural := 0;
-      Reach       : Reach_List := No_Reach)
+      Table_At    : Natural := 0)
    is
-      Held  : constant Products.Reach_List (Reach'Range) :=
-        [for Which in Reach'Range => Reach (Which)];
-
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
 
@@ -813,7 +829,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Stride => Apart, Reach => Held);
+         Kept => False, Table_At => Table_At);
       if not Added then
          return;
       end if;

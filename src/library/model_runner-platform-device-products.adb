@@ -419,7 +419,7 @@ package body Model_Runner.Platform.Device.Products is
    --  validation layer was running to say so. Two numbers a word apart is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
-   Attention_Bytes : constant := 128;
+   Attention_Bytes : constant := 68;
    Shape_Bytes     : constant := Attention_Bytes;
    Product_Bytes   : constant := 28;
 
@@ -521,13 +521,6 @@ package body Model_Runner.Platform.Device.Products is
    --  What the attention kernel is told. Fifteen words, against the six the
    --  matrix kernels take, pushed into the same range. Well inside the
    --  hundred and twenty-eight bytes every device that runs Vulkan offers.
-   --  Room for a round's per-row positions in the push constants. Eight,
-   --  because the block is sixty-four bytes before them and every device
-   --  offers a hundred and twenty-eight: a round of more than eight members
-   --  attends on the host, which is where every round attended before.
-   type Reach_Words is array (0 .. Round_Limit - 1) of C.unsigned
-     with Convention => C;
-
    type Attention_Constants is record
       Heads      : C.unsigned := 0;
       Head_Size  : C.unsigned := 0;
@@ -559,14 +552,13 @@ package body Model_Runner.Platform.Device.Products is
       --  no fall-off at all and the branch the shader skips.
       Max_Bias   : C.C_float := 0.0;
 
-      --  A round rather than a batch. Zero is a batch, which is one
-      --  session's own positions sharing one cache; anything else is how
-      --  far apart two members' caches are, and the row is the member, so
-      --  a row reads from its row number times this. The reach beside it is
-      --  where each of those rows has got to, which a batch derives from
-      --  where a row sits and a round cannot.
-      Stride     : C.unsigned := 0;
-      Reach      : Reach_Words := [others => 0];
+      --  A round rather than a batch: where in the cache the per-row table
+      --  begins, in elements, and zero for a batch. Two words a row --
+      --  where the row has got to, and where its cache begins -- read back
+      --  out of the cache buffer, which the kernel has bound already. They
+      --  were pushed until a round wanted more rows than a push block has
+      --  room for words.
+      Table_At   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -3343,6 +3335,14 @@ package body Model_Runner.Platform.Device.Products is
       --  reads and are loaded straight out of memory.
       Wanted : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Elements) * 6;
+
+      --  What the buffer being replaced held, kept until the new one has
+      --  been made and mapped.
+      Carry_Over     : Boolean := False;
+      Carried_At     : Address := Null_Handle;
+      Carried        : Interfaces.Unsigned_64 := 0;
+      Carried_Buffer : Address := Null_Handle;
+      Carried_Memory : Address := Null_Handle;
    begin
       Ok := False;
 
@@ -3357,26 +3357,43 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  The old one is kept until the new one holds what it held. A cache
+      --  is dealt out in blocks a session apiece, and a session's block is
+      --  its keys and values as they stand, so a wider buffer that came up
+      --  empty would make every session write its whole cache over again --
+      --  which it did, and cost a third of a round of eight members the
+      --  first time that round formed.
       declare
+         Was_Buffer   : Address := Item.Cache_Buffer;
+         Was_Memory   : Address := Item.Cache_Memory;
+         Was_At       : constant Address := Item.Cache_At;
+         Was_Elements : constant Interfaces.Unsigned_64 :=
+           Item.Cache_Elements;
+
          Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
       begin
-         if Item.Cache_At /= Null_Handle
-           and then Unmap /= null
-           and then Item.Cache_Memory /= Null_Handle
-         then
-            Unmap (Item.Logical, Item.Cache_Memory);
+         Item.Cache_Buffer := Null_Handle;
+         Item.Cache_Memory := Null_Handle;
+         Item.Cache_At := Null_Handle;
+
+         Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
+         if not Ok then
+            if Was_At /= Null_Handle and then Unmap /= null then
+               Unmap (Item.Logical, Was_Memory);
+            end if;
+
+            Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+            Item.Cache_Bytes := 0;
+            Item.Cache_Elements := 0;
+            return;
          end if;
 
-         Item.Cache_At := Null_Handle;
+         Carry_Over := Was_At /= Null_Handle and then Was_Elements > 0;
+         Carried_At := Was_At;
+         Carried := Was_Elements;
+         Carried_Buffer := Was_Buffer;
+         Carried_Memory := Was_Memory;
       end;
-
-      Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
-      Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
-      if not Ok then
-         Item.Cache_Bytes := 0;
-         Item.Cache_Elements := 0;
-         return;
-      end if;
 
       --  Mapped here and left mapped. The kind this came from is
       --  host-coherent by the rule that chose it, so a write through this
@@ -3410,6 +3427,52 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Room := [others => 0];
       end;
+
+      --  And what the old buffer held, into the new one: the values where
+      --  they were, and the half-precision copy of them where it now
+      --  begins, which is further along because there are more values in
+      --  front of it.
+      if Carry_Over then
+         declare
+            use type System.Storage_Elements.Integer_Address;
+
+            function Along
+              (Base : Address; By : Interfaces.Unsigned_64) return Address
+            is (System.Storage_Elements.To_Address
+                  (System.Storage_Elements.To_Integer (Base)
+                   + System.Storage_Elements.Integer_Address (By)));
+
+            Was_Values : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
+              with Import, Address => Carried_At;
+
+            Now_Values : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
+              with Import, Address => Item.Cache_At;
+
+            Was_Halves : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
+              with Import, Address => Along (Carried_At, Carried * 4);
+
+            Now_Halves : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
+              with Import,
+                   Address =>
+                     Along (Item.Cache_At,
+                            Interfaces.Unsigned_64 (Elements) * 4);
+
+            Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+         begin
+            Now_Values := Was_Values;
+            Now_Halves := Was_Halves;
+
+            if Unmap /= null then
+               Unmap (Item.Logical, Carried_Memory);
+            end if;
+         end;
+
+         Give_Back_Buffer (Item, Carried_Buffer, Carried_Memory);
+      end if;
 
       Item.Cache_Bytes := Wanted;
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
@@ -3487,6 +3550,58 @@ package body Model_Runner.Platform.Device.Products is
 
       Ok := True;
    end Put_Cache;
+
+   ---------------
+   -- Put_Words --
+   ---------------
+
+   procedure Put_Words
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Words    : Word_List;
+      Ok       : out Boolean)
+   is
+      type Table_Words is array (Words'Range) of C.unsigned
+        with Convention => C;
+
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Words'Length) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_At = Null_Handle
+        or else Words'Length = 0
+        or else At_Byte + Span > Item.Cache_Bytes
+      then
+         return;
+      end if;
+
+      --  Whole numbers where the buffer holds binary32, read back by the
+      --  kernel with floatBitsToUint. The alternative was a fourth buffer
+      --  and a descriptor a step to go with it, for a table of two words a
+      --  row; this is the same memory the kernel already has bound.
+      declare
+         Room : Table_Words
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         for Index in Words'Range loop
+            Room (Index) := C.unsigned (Words (Index));
+         end loop;
+      end;
+
+      Ok := True;
+   end Put_Words;
 
    ---------------
    -- Get_Cache --
@@ -3718,8 +3833,7 @@ package body Model_Runner.Platform.Device.Products is
 
             --  Never a round: this is the single call, one session's own
             --  positions.
-            Stride     => 0,
-            Reach      => [others => 0]);
+            Table_At   => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -4202,32 +4316,6 @@ package body Model_Runner.Platform.Device.Products is
 
    --  A round's positions as a step keeps them, and as the push constants
    --  take them.
-   function Held_Reach (Of_Round : Reach_List) return Round_Reach;
-
-   function Held_Reach (Of_Round : Reach_List) return Round_Reach is
-      Made : Round_Reach := [others => 0];
-   begin
-      for Index in Of_Round'Range loop
-         exit when Index - Of_Round'First >= Round_Limit;
-
-         Made (Index - Of_Round'First) := Of_Round (Index);
-      end loop;
-
-      return Made;
-   end Held_Reach;
-
-   function Pushed_Reach (Of_Step : Round_Reach) return Reach_Words;
-
-   function Pushed_Reach (Of_Step : Round_Reach) return Reach_Words is
-      Made : Reach_Words := [others => 0];
-   begin
-      for Index in Of_Step'Range loop
-         Made (Index) := C.unsigned (Of_Step (Index));
-      end loop;
-
-      return Made;
-   end Pushed_Reach;
-
    -------------------
    -- Add_Attention --
    -------------------
@@ -4253,8 +4341,7 @@ package body Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Stride     : Natural := 0;
-      Reach      : Reach_List := No_Reach) is
+      Table_At   : Natural := 0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -4297,7 +4384,7 @@ package body Model_Runner.Platform.Device.Products is
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
          Causal => Causal, Max_Bias => Max_Bias,
-         Apart => Stride, Reach => Held_Reach (Reach), others => <>);
+         Table => Table_At, others => <>);
       Added := True;
    end Add_Attention;
 
@@ -5218,8 +5305,11 @@ package body Model_Runner.Platform.Device.Products is
                   --  Attention only where the tile kernel is the one that
                   --  will run: the scalar one writes the blend the way it
                   --  always has, and the engine picks between them by the
-                  --  same test.
+                  --  same test. A round is never the tile kernel, however
+                  --  many rows it has, because its rows do not share a
+                  --  cache -- so it is never halved either.
                   or else (Steps.Items (Which).Attends
+                           and then Steps.Items (Which).Table = 0
                            and then Attends_By_Matrix
                                       (Item, Count,
                                        Steps.Items (Which).Head_Size,
@@ -5386,7 +5476,7 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute,
                      Attend_Kernel (Item, Count, This.Head_Size,
                                     This.Value_Size,
-                                    Rounding => This.Apart > 0));
+                                    Rounding => This.Table > 0));
 
                   declare
                      Shape : aliased Attention_Constants :=
@@ -5396,21 +5486,33 @@ package body Model_Runner.Platform.Device.Products is
                         Group_Size => C.unsigned (This.Group_Size),
                         First      => C.unsigned (This.First),
                         Last       => C.unsigned (This.Last),
+                        --  The half-precision copy of the cache where the
+                        --  matrix kernel is the one that will run, and the
+                        --  cache proper otherwise. A round is never that
+                        --  kernel however many rows it has, so it reads the
+                        --  cache proper as it always did.
+                        --  Added in sixty-four bits and narrowed once. A
+                        --  cache dealt into blocks is larger than one
+                        --  session's, and a base past two thousand million
+                        --  is a number this addition can reach and Natural
+                        --  cannot hold.
                         K_Base     =>
                           C.unsigned
-                            (This.K_Base
-                             + (if Attends_By_Matrix
+                            (Interfaces.Unsigned_64 (This.K_Base)
+                             + (if This.Table = 0
+                                  and then Attends_By_Matrix
                                      (Item, Count, This.Head_Size,
                                       This.Value_Size)
-                                then Natural (Item.Cache_Elements * 2)
+                                then Item.Cache_Elements * 2
                                 else 0)),
                         V_Base     =>
                           C.unsigned
-                            (This.V_Base
-                             + (if Attends_By_Matrix
+                            (Interfaces.Unsigned_64 (This.V_Base)
+                             + (if This.Table = 0
+                                  and then Attends_By_Matrix
                                      (Item, Count, This.Head_Size,
                                       This.Value_Size)
-                                then Natural (Item.Cache_Elements * 2)
+                                then Item.Cache_Elements * 2
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
                         V_Width    => C.unsigned (This.V_Width),
@@ -5435,8 +5537,7 @@ package body Model_Runner.Platform.Device.Products is
                              + (if Halved (Index)
                                 then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
-                        Stride     => C.unsigned (This.Apart),
-                        Reach      => Pushed_Reach (This.Reach));
+                        Table_At   => C.unsigned (This.Table));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
@@ -5447,7 +5548,7 @@ package body Model_Runner.Platform.Device.Products is
                            (if Halved (Index) then Whole_Tiles (Count)
                             else Count),
                            This.Head_Size, This.Value_Size,
-                           Rounding => This.Apart > 0), 1);
+                           Rounding => This.Table > 0), 1);
                   end;
 
                   if Halved (Index) then

@@ -58,6 +58,8 @@ package body Untested_Surface is
          | "Plan_For"
          | "Power"
          | "Product_Batch"
+         | "Put_Table"
+         | "Put_Words"
          | "Put_Data_Field"
          | "Put_Statistics"
          | "Record_Conversion"

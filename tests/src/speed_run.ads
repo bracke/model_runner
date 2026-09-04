@@ -63,7 +63,12 @@ package Speed_Run is
    --  @param Threads Workers the members share.
    --  @param Members How many sequences are served at once.
    --  @param Backend Which backend runs the products. A device runs a
-   --    round's products and not its attention, which stays on the host.
+   --    round's attention as well, up to the member count its push
+   --    constants hold; past that a round attends on the host.
+   --  @param Budget True to report where the round's time went, phase by
+   --    phase, as the single-sequence measurement does. The phases are
+   --    charged to the first member's session, which for a round is where
+   --    the whole round's work is counted.
    procedure Round
      (Path        : String;
       Prompt_Path : String;
@@ -71,7 +76,8 @@ package Speed_Run is
       Threads     : Positive;
       Members     : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU);
+        Model_Runner.Backend.Backend_CPU;
+      Budget      : Boolean := False);
 
 
    --  What one set of repetitions measured. Times are seconds.

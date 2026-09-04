@@ -35,19 +35,27 @@ with Model_Runner.Tensors;
 --  makes no attempt to feed it from several.
 package Model_Runner.Backend.Device is
 
-   --  Members a round may attend on a device at once.
+   --  Blocks the device's cache is dealt out in.
    --
-   --  A round's rows are different sequences, so each row carries its own
-   --  last position rather than deriving one from the batch's first. That
-   --  table travels in the attention kernel's push constants, which are
-   --  small and fixed, and eight of them is what fits.
-   Round_Limit : constant := 8;
+   --  One session's keys and values apiece. A session takes one and keeps
+   --  it for its life; a round's rows read the blocks their sessions hold.
+   --
+   --  What bounds this is memory rather than any kernel, which is the whole
+   --  point of a table the kernel reads out of the cache rather than out of
+   --  its push constants -- those held eight. Sixteen blocks of a
+   --  1.1-billion-parameter model at two thousand positions is two
+   --  gigabytes, which is what an integrated part will give; a round with
+   --  more members than this attends on the host, as every round did
+   --  before.
+   Block_Limit : constant := 16;
 
-   --  Where each member of a round has got to, in the members' order.
-   type Reach_List is array (Positive range <>) of Natural;
+   --  Words a round's per-row table holds: two a row, and room for as many
+   --  rows as there are blocks.
+   Table_Room : constant := 2 * Block_Limit;
 
-   --  A batch: one sequence, one cache, no table.
-   No_Reach : constant Reach_List (1 .. 0) := [others => 0];
+   --  A round's per-row table: where each row has got to and where its
+   --  cache begins, a row at a time in the rows' order.
+   type Word_List is array (Positive range <>) of Natural;
 
    --  What this backend can do.
    --
@@ -213,6 +221,17 @@ package Model_Runner.Backend.Device is
    --  @param Ok True when the room is there.
    procedure Reserve_Cache
      (Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Write a round's per-row table into that cache.
+   --
+   --  @param At_Value Where the table begins, in elements.
+   --  @param Words Two a row: where the row has got to, and where its
+   --    cache begins.
+   --  @param Ok True when it was written.
+   procedure Put_Table
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Words    : Word_List;
       Ok       : out Boolean);
 
    --  Write one position's keys or values into that cache.
@@ -404,11 +423,8 @@ package Model_Runner.Backend.Device is
    --  @param Causal True where a position may see only what precedes it.
    --  @param Max_Bias How steeply a head's attention falls off with
    --    distance, or zero for a model told where a token is otherwise.
-   --  @param Apart A round: how far apart in the cache two members sit.
-   --    Zero for a batch, whose rows share one cache.
-   --  @param Reach A round: how far each member has got, in the members'
-   --    order. Empty for a batch, whose rows are one sequence and whose
-   --    last position follows from the first.
+   --  @param Table_At A round: where in the cache its per-row table
+   --    begins, counted in elements. Zero for a batch, which needs none.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -438,8 +454,7 @@ package Model_Runner.Backend.Device is
       Causal      : Boolean := True;
       Lifted      : Boolean := False;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Apart       : Natural := 0;
-      Reach       : Reach_List := No_Reach);
+      Table_At    : Natural := 0);
 
    --  Several products of the same activation, in one submission.
    --
