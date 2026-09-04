@@ -7,6 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`matrix_product.comp` is compiled twice more with `NARROW`**, which sets
+  its tile to thirty-two vectors instead of a hundred and twenty-eight, and
+  the engine gives a batch of nine to sixty-four one of those. A tile costs
+  what its width costs whether the batch fills it or not, so seventeen
+  vectors through the wide tile paid for a hundred and eleven vectors of
+  zeros — and so did thirty-two.
+
+  Alternated three rounds each on the device: a round of 9, 16, 32 and 64
+  sequences is **1.41, 1.46, 1.99 and 1.21** times faster, and 1.29, 1.25,
+  1.80 and 1.19 with a 1419-token context. **A round of sixteen generates
+  491.6 tokens a second where it generated 266.7 this morning.**
+
+  Both boundaries were measured rather than chosen. `Tile_Least` is
+  `Batch_Group + 1` because from two to eight the row product measures the
+  same and is exact where the tile is half precision; `Narrow_Limit` is
+  sixty-four because several narrow tiles beat one wide tile at 33, 48 and
+  64 and lose at 128. Conformance is 0 outside tolerance.
+
+  This leaves the wide row kernel of the previous entry unreachable on a
+  device with the matrix instruction. It stays for devices without one.
+
+### Measured
+
+- **Two planned items closed without building them.** Half-precision
+  activations for the wide row kernel would speed up a kernel this host no
+  longer reaches. And the processor's round path has no defect of its own:
+  one sequence reads 33.9 t/s against llama.cpp's 39.5 and sixteen read
+  218.7 against 242.1, so sixteen amortize **6.4 times here and 6.1 there**
+  — it amortizes better and starts further back. A profile puts 52.8 per
+  cent of a round in the strip kernel and **20.9 in the setup around it**,
+  which is the next processor question and is not about rounds.
+
 - **`Tile_Least` is `Wide_Group + 1` rather than thirty-two**, so a batch
   between seventeen and thirty-one vectors goes to the matrix product
   instead of two dispatches of the row product. **Seventeen sequences cost

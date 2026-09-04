@@ -1127,6 +1127,15 @@ private
       --  were and does not disturb the six.
       Extra      : System.Address := System.Null_Address;
 
+      --  And the same two again with a tile a quarter as wide, for a batch
+      --  too small to fill the one above. A tile costs what its width
+      --  costs whether the batch fills it or not, so a round of seventeen
+      --  sequences through a hundred-and-twenty-eight-wide tile pays for a
+      --  hundred and eleven vectors of zeros. Null if the device refused
+      --  them, which leaves those counts on the wide tile.
+      Narrow     : System.Address := System.Null_Address;
+      Narrow_More : System.Address := System.Null_Address;
+
       --  And the normalization, which is here for the submission it saves
       --  rather than for itself: a layer normalizes twice and the host
       --  doing it is the host needing the products back.
@@ -1142,6 +1151,8 @@ private
       Matrix_Line : System.Address := System.Null_Address;
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
+      Narrow_Line : System.Address := System.Null_Address;
+      Narrow_More_Line : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;
       Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;

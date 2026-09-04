@@ -112,12 +112,32 @@ package body Model_Runner.Platform.Device.Products is
    Tile_Rows    : constant := 32;
    Tile_Vectors : constant := 128;
 
+   --  And the narrow tile's width, which the same source compiled with
+   --  NARROW declares. A tile costs what its width costs whether the batch
+   --  fills it or not, so a batch this size or smaller is given one of
+   --  these instead of paying for the wide one's invented zeros.
+   Narrow_Vectors : constant := 32;
+
+   --  And the batch size at or below which it is the one to take, which is
+   --  a separate question from how wide it is: above the narrow tile's own
+   --  width a batch is several narrow tiles, and whether that beats one
+   --  wide tile is a measurement rather than arithmetic.
+   Narrow_Limit : constant := 64;
+
+   --  Which of the two a batch of this size takes.
+   function Narrowed (Count : Natural) return Boolean
+   is (Count <= Narrow_Limit);
+
+   function Tile_Width (Count : Natural) return Positive
+   is (if Narrowed (Count) then Narrow_Vectors else Tile_Vectors);
+
    --  The batch, rounded up to a whole tile. The shader has no test for a
    --  tile that is not full, on purpose and at a fifth of its speed if it
    --  had; what the rounding invents is zeroed by the copying kernel and
    --  written to room the result buffer is given for it.
    function Whole_Tiles (Count : Natural) return Natural
-   is ((Count + Tile_Vectors - 1) / Tile_Vectors * Tile_Vectors);
+   is ((Count + Tile_Width (Count) - 1) / Tile_Width (Count)
+       * Tile_Width (Count));
 
    --  Below this the row product is the better shape and the matrix one is
    --  a tile mostly full of the zeros the rounding invented. A generated
@@ -132,7 +152,7 @@ package body Model_Runner.Platform.Device.Products is
    --  matrix way, and at seventeen 5.39 against 4.16. Sixteen is untouched,
    --  which is what the boundary being Wide_Group + 1 rather than a round
    --  number is for.
-   Tile_Least : constant := Wide_Group + 1;
+   Tile_Least : constant := Batch_Group + 1;
 
    ---------------------------------------------------------------------------
    --  Structures
@@ -378,6 +398,18 @@ package body Model_Runner.Platform.Device.Products is
        then Wide_Group
        else Batch_Group);
 
+   --  Which of the four tiles answers this format at this width. Null when
+   --  the device refused the one this batch would need.
+   function Tile_Pipeline
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural) return Address
+   is (if Narrowed (Count)
+       then (if On_Extra (Packing)
+             then Item.Narrow_More_Line else Item.Narrow_Line)
+       else (if On_Extra (Packing)
+             then Item.Extra_Line else Item.Matrix_Line));
+
    function Uses_Matrix
      (Item    : Engine;
       Packing : Weight_Packing;
@@ -388,8 +420,13 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Matrix_Line /= Null_Handle
        and then Rows mod Tile_Rows = 0
        and then Count >= Tile_Least
-       and then (not On_Extra (Packing)
-                 or else Item.Extra_Line /= Null_Handle)
+
+       --  The tile this width and this format has to exist, not merely
+       --  some tile: the room the batch is rounded into is decided by the
+       --  width before the pipeline is bound, so a device that took the
+       --  wide tile and refused the narrow one must not be given a batch
+       --  the narrow one would have answered.
+       and then Tile_Pipeline (Item, Packing, Count) /= Null_Handle
        and then ((Packing in Values_F16 | Values_BF16
                   and then Columns mod 32 = 0)
                  or else (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0
@@ -1435,6 +1472,10 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Half_Batch;
             More   : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Matrix_Extra;
+            Thin   : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Narrow;
+            Thin_More : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Narrow_Extra;
             Request : aliased Shader_Create_Info;
          begin
             if Create = null then
@@ -1478,6 +1519,27 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Extra := Made;
+                  end if;
+
+                  --  And the two narrow tiles, on the same terms: refused,
+                  --  they leave a small batch on the wide tile.
+                  Request.Size := Interfaces.C.size_t (Thin'Length * 4);
+                  Request.Code := Thin'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Narrow := Made;
+                  end if;
+
+                  Request.Size :=
+                    Interfaces.C.size_t (Thin_More'Length * 4);
+                  Request.Code := Thin_More'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Narrow_More := Made;
                   end if;
                end if;
             end if;
@@ -1773,6 +1835,28 @@ package body Model_Runner.Platform.Device.Products is
                                 Made'Access) = 0
                      then
                         Item.Extra_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Narrow /= Null_Handle then
+                     Request.Stage.Module := Item.Narrow;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Narrow_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Narrow_More /= Null_Handle then
+                     Request.Stage.Module := Item.Narrow_More;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Narrow_More_Line := Made;
                      end if;
                   end if;
                end if;
@@ -2172,6 +2256,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
+      Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
+      Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
@@ -2182,6 +2268,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Single, "vkDestroyShaderModule");
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
+      Give_Back (Item.Narrow, "vkDestroyShaderModule");
+      Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
@@ -2956,10 +3044,13 @@ package body Model_Runner.Platform.Device.Products is
          0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
       end if;
 
-      --  Whichever of the two tiles decodes this format.
+      --  Whichever of the four tiles decodes this format at this width.
+      --  A narrow tile that the device refused leaves the batch on the wide
+      --  one, which is what Whole_Tiles has to agree about -- so the width
+      --  below is asked of the same function the room was rounded with.
       Bind_Pipeline
         (Item.Buffer, Bind_Point_Compute,
-         (if On_Extra (Packing) then Item.Extra_Line else Item.Matrix_Line));
+         Tile_Pipeline (Item, Packing, Count));
 
       declare
          Shape : aliased Shape_Constants :=
@@ -2976,7 +3067,7 @@ package body Model_Runner.Platform.Device.Products is
          Dispatch
            (Item.Buffer,
             C.unsigned (Rows / Tile_Rows),
-            C.unsigned (Room / Tile_Vectors), 1);
+            C.unsigned (Room / Tile_Width (Count)), 1);
       end;
 
       Bind_Pipeline

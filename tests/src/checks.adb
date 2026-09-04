@@ -5574,13 +5574,16 @@ package body Checks is
               Contents
                 ("src/library/model_runner-platform-device-products.adb");
 
+            --  Skip says how many earlier matches to pass over, which
+            --  the tile width needs: the shader states TILE_V twice, once
+            --  under NARROW and once not, and the two answer to two
+            --  different constants in the engine.
             function Number_After
-              (Text : String; Marker : String) return Natural;
-
-            function Number_After
-              (Text : String; Marker : String) return Natural
+              (Text : String; Marker : String; Skip : Natural := 0)
+               return Natural
             is
                Found : Natural := 0;
+               Past  : Natural := 0;
             begin
                if Marker'Length > Text'Length then
                   return 0;
@@ -5588,13 +5591,17 @@ package body Checks is
 
                for Index in Text'First .. Text'Last - Marker'Length + 1 loop
                   if Text (Index .. Index + Marker'Length - 1) = Marker then
-                     for Digit in Index + Marker'Length .. Text'Last loop
-                        exit when Text (Digit) not in '0' .. '9';
-                        Found := Found * 10
-                                 + Character'Pos (Text (Digit))
-                                 - Character'Pos ('0');
-                     end loop;
-                     return Found;
+                     if Past < Skip then
+                        Past := Past + 1;
+                     else
+                        for Digit in Index + Marker'Length .. Text'Last loop
+                           exit when Text (Digit) not in '0' .. '9';
+                           Found := Found * 10
+                                    + Character'Pos (Text (Digit))
+                                    - Character'Pos ('0');
+                        end loop;
+                        return Found;
+                     end if;
                   end if;
                end loop;
 
@@ -5603,12 +5610,16 @@ package body Checks is
 
             Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ");
-            Vecs_Said : constant Natural :=
+            Thin_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ");
+            Vecs_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ", Skip => 1);
             Rows_Asked : constant Natural :=
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
               Number_After (Engine, "Tile_Vectors : constant := ");
+            Thin_Asked : constant Natural :=
+              Number_After (Engine, "Narrow_Vectors : constant := ");
 
             --  And the step, which nothing outside the shader reads and
             --  which the staging is written to by hand.
@@ -5619,17 +5630,22 @@ package body Checks is
 
             if Rows_Said = 0 or else Vecs_Said = 0
               or else Rows_Asked = 0 or else Vecs_Asked = 0
+              or else Thin_Said = 0 or else Thin_Asked = 0
             then
                Fail ("one of the matrix tile's four numbers could not be "
                      & "read: the shader states TILE_R and TILE_V and the "
                      & "engine states Tile_Rows and Tile_Vectors, and this "
                      & "check reads all four as text");
-            elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked then
+            elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked
+              or else Thin_Said /= Thin_Asked
+            then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
                      & Natural'Image (Rows_Said) & " rows by"
-                     & Natural'Image (Vecs_Said) & " vectors and the engine "
-                     & "dispatches for" & Natural'Image (Rows_Asked) & " by"
-                     & Natural'Image (Vecs_Asked)
+                     & Natural'Image (Vecs_Said) & " vectors, or"
+                     & Natural'Image (Thin_Said) & " under NARROW, and the "
+                     & "engine dispatches for" & Natural'Image (Rows_Asked)
+                     & " by" & Natural'Image (Vecs_Asked) & " or"
+                     & Natural'Image (Thin_Asked)
                      & "; whatever a workgroup does not reach is left "
                      & "uncomputed, which is noise and not an error");
             end if;
@@ -5714,6 +5730,31 @@ package body Checks is
                   & " is older than the source; compile it twice, the second"
                   & " with -DMORE_FORMATS to matrix_extra.spv, and run "
                   & "'tests shader' again with every shader named");
+         end if;
+
+         --  And the two narrow tiles, which are the same source again with
+         --  NARROW and with NARROW beside MORE_FORMATS.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Narrow_Digest
+         then
+            Fail ("the narrow compilation of src/shaders/matrix_product.comp"
+                  & " is older than the source; compile it with -DNARROW to"
+                  & " matrix_narrow.spv, and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Narrow_Extra_Digest
+         then
+            Fail ("the narrow compilation of src/shaders/matrix_product.comp"
+                  & " for the other eight formats is older than the source; "
+                  & "compile it with -DNARROW -DMORE_FORMATS to "
+                  & "matrix_narrow_extra.spv, and run 'tests shader' again "
+                  & "with every shader named");
          end if;
       end;
 

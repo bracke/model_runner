@@ -127,7 +127,20 @@ layout(push_constant) uniform Shape {
 //  is what makes the decode below a whole number of blocks; sixty-four and
 //  a hundred and twenty-eight were measured and are slower.
 const uint TILE_R = 32u;
+
+//  A tile is as wide as it is whether the batch filling it is a hundred and
+//  twenty-eight vectors or nine, and what the rounding invents is zeros the
+//  instruction multiplies anyway. At a hundred and twenty-eight that is the
+//  right shape for a prompt; for a round of nine to thirty-two sequences it
+//  is seven eighths waste, and this source is compiled again with NARROW to
+//  give those a tile their own size. The weight tile is the same either way
+//  -- it is the vector side that shrinks.
+#ifdef NARROW
+const uint TILE_V = 32u;
+#else
 const uint TILE_V = 128u;
+#endif
+
 const uint KCH    = 32u;
 
 //  Which is two matrices of weights and eight of vectors, so sixteen
