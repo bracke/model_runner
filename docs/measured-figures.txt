@@ -8974,6 +8974,88 @@
 #   load:  0.73 for the tile sweep, 1.42 for the word alternation
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-04, four heads to a workgroup. attention.comp compiled a fifth
+# time with GROUPED.
+#
+#   THE REDUNDANCY. This model has 32 attention heads and 4 key-value heads,
+#   so eight query heads share one group of keys and values, and
+#   attention.comp dispatched one workgroup per query head. Each of the
+#   eight read that group's slice of the cache for itself.
+#
+#   HOW MUCH IT WAS COSTING, MEASURED BY TAKING AWAY WHAT HID IT. The
+#   workgroups of a group are neighbours down the dispatch's first axis, so
+#   a cache serves them. Dispatching heads down the second axis instead --
+#   one line in the shader, one in the engine, and the same change in
+#   attention_matrix.comp so the prompt stays right -- took a round of
+#   sixteen from 1.75 s to 8.9, and the mark was unchanged. A factor of five
+#   from nothing but where the workgroups sat.
+#
+#   THE CHANGE. HEADS is four under GROUPED; the loops that were over the
+#   block's queries are over the bundle's heads as well, so a key component
+#   crosses the bus once and does QUERIES times HEADS multiply-adds, and a
+#   value likewise. Attend_Heads gives the first axis one workgroup a bundle
+#   rather than one a head, and the two are one decision as the second axis
+#   already was.
+#
+#     glslangValidator -V --target-env vulkan1.1 -DSUBGROUPS -DWIDE \
+#       -DHALVED -DGROUPED src/shaders/attention.comp attention_bundled.spv
+#
+#   THE BARRIERS ARE WHAT A BUNDLE WOULD OTHERWISE COST. A workgroup's
+#   running maximum and running sum are reductions across its invocations,
+#   and four heads reduced one at a time pay for four pairs of barriers.
+#   whole_max_all and whole_sum_all reduce the bundle together: one pair of
+#   barriers and four subgroup operations, which are not barriers. Written
+#   the naive way this change would have lost.
+#
+#   WHAT IT IS WORTH, alternated three rounds each, 1419-token prompts,
+#   32 generated:
+#
+#      8 seqs  before 1.375, 1.385, 1.388 s  after 1.217, 1.213, 1.225  1.14
+#     16 seqs  before 1.755, 1.733, 1.810    after 1.430, 1.424, 1.429  1.23
+#
+#   And a short context gains a little where the entry before this gained
+#   nothing -- 2.151 and 2.321 s against 2.071 and 2.070 at sixteen --
+#   because a bundle saves reads of a cache of any length. A round of one is
+#   a wash: 1.316 and 1.326 against 1.314 and 1.347.
+#
+#   Marks unchanged: 1eebfd0a51979065 at eight, e7c8984445611f65 at sixteen.
+#   Conformance 0 outside tolerance.
+#
+#   FOUR RATHER THAN EIGHT WAS MEASURED. Eight matches this model's group
+#   exactly and reads the same -- 1.192, 1.207 s against 1.220, 1.222 at
+#   eight sequences and 1.411, 1.401 against 1.397, 1.433 at sixteen -- so
+#   four is chosen because it also serves a model whose group is four, which
+#   is the commoner shape. The engine binds this only where the group
+#   divides by the bundle.
+#
+#   THE ROUND TABLE'S DEVICE COLUMN, re-measured whole, tokens a second:
+#
+#     seqs   short, was    is      long, was    is
+#        1        49.4    49.8          44.7   44.8
+#        2        70.8    70.9          66.3   68.6
+#        4       137.8   137.9         115.7  124.3
+#        8       254.1   254.2         189.8  209.2
+#       16       490.4   480.1         295.4  359.8
+#
+#   A round of sixteen is now 1.24 behind llama.cpp at a long context and
+#   1.28 at a short one, where this morning it was 2.45 and 2.30. The two
+#   are level for the first time.
+#
+#   THE TWO FINGERPRINT GROUPS: NOT RE-MEASURED, AND WHY. As the entry
+#   before this. The kernel is bound only when Rounding and every figure in
+#   both groups is a single sequence, which was checked rather than argued:
+#
+#     6-token, 12 generated   before 0.236, 0.231 s   after 0.232, 0.229
+#     1419-token prompt       before 1.175, 1.171     after 1.162, 1.165
+#
+#   The part sat at 1675 to 1762 MHz through this window against the 1900
+#   and better it holds when it has been kept busy, which is the same band
+#   the note above describes, so the absolute figures published stand from
+#   the sitting that was properly gated.
+#
+#   load:  0.92 to 1.87 for the A/B, 0.39 to 1.15 for the alternation
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
@@ -12687,7 +12769,7 @@ reference E50C9CDC1C2298CE src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device 2323C17B1BB83A15 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 68043D25EE22F77A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -15611,7 +15693,7 @@ tokenizer 4CA182703733E5A2 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside 2323C17B1BB83A15 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 68043D25EE22F77A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #

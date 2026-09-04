@@ -6843,43 +6843,45 @@ TinyLlama-1.1B-Chat Q8_0 on both sides, llama.cpp at `95b8e33e1`.
 
 | sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 31.1 | 33.8 | 44.7 | 55.1 |
-| 2 | 47.8 | 57.5 | 66.3 | 98.1 |
-| 4 | 89.5 | 92.8 | 115.7 | 155.9 |
-| 8 | 116.6 | 119.9 | 189.8 | 217.5 |
-| 16 | **142.5** | 128.7 | **295.4** | 445.6 |
+| 1 | 31.1 | 33.8 | 44.8 | 55.1 |
+| 2 | 47.8 | 57.5 | 68.6 | 98.1 |
+| 4 | 89.5 | 92.8 | 124.3 | 155.9 |
+| 8 | 116.6 | 119.9 | 209.2 | 217.5 |
+| 16 | **142.5** | 128.7 | **359.8** | 445.6 |
 
 **And after a seven-token prompt each, sixty-four generated:**
 
 | sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 34.0 | 39.5 | 49.4 | 57.6 |
-| 2 | 55.6 | 71.1 | 70.8 | 108.0 |
-| 4 | 112.8 | 135.9 | 137.8 | 196.8 |
-| 8 | 172.7 | 221.9 | 254.1 | 259.1 |
-| 16 | 216.6 | 242.1 | **490.4** | 613.9 |
+| 1 | 34.0 | 39.5 | 49.8 | 57.6 |
+| 2 | 55.6 | 71.1 | 70.9 | 108.0 |
+| 4 | 112.8 | 135.9 | 137.9 | 196.8 |
+| 8 | 172.7 | 221.9 | 254.2 | 259.1 |
+| 16 | 216.6 | 242.1 | **480.1** | 613.9 |
 
-**The device column at sixteen has moved three times since this table was
+**The device column at sixteen has moved four times since this table was
 first taken** -- 266.7, then 332.9 with `### The pass over the weights a
 tenth row cost`, then 491.6 with `### A tile the size of the batch`, and
-182.0 to 208.9 to 255.1 to 295.4 at a long context, where `### The cache a
-round reads twice the size of` took the last step. The counts below nine are
-the same code throughout and read the same, and the processor column is
-untouched by all three.
+182.0 to 208.9 to 255.1 to 295.4 to 359.8 at a long context, where `### The
+cache a round reads twice the size of` and `### Four heads to a workgroup`
+took the last two steps. The counts below nine are the same code throughout,
+and the processor column is untouched by all four.
 
-**The two contexts moved for different reasons and that is the useful
-part.** The short one moved because of the products, which is what the first
-two changes were about; the long one moved again after that because of the
-cache, which the third is. A round of sixteen at a long context is now 1.51
-behind llama.cpp where it was 2.45 this morning, and at a short one 1.25
-where it was 2.30.
+**The contexts moved for different reasons and that is the useful part.**
+The short one moved because of the products, which is what the first two
+changes were about; the long one moved again after that because of the
+cache, which the last two are. **A round of sixteen at a long context is now
+1.24 behind llama.cpp where it was 2.45 this morning, and at a short one
+1.28 where it was 2.30** -- the two are level for the first time, which is
+what it looks like when a curve stops having a particular thing wrong with
+it.
 
 **The processor holds up and the device does not.** On the processor this
 program is between 1.03 and 1.28 behind and **ahead at sixteen sequences with
 a long context** -- 142.5 against 128.7, where llama.cpp's own curve turns
 down. On the device it is behind everywhere and the gap is not a constant:
-1.2 at one sequence, **1.4 to 1.5 at two and four**, 1.02 to 1.15 at eight,
-and 1.25 to 1.51 at sixteen.
+1.2 at one sequence, **1.4 to 1.5 at two and four**, 1.02 to 1.04 at eight,
+and 1.24 to 1.28 at sixteen.
 
 **That shape is the finding, not the average.** A curve that is worse at two
 and level at eight is not a slower program; it is a program whose scaling
@@ -7257,6 +7259,50 @@ once and would not have to hope.
 
 That is the next thing to build, and it is a kernel change rather than a
 constant.
+
+### Four heads to a workgroup
+
+This model has thirty-two attention heads and **four key-value heads**, so
+eight query heads share one group of keys and values. `attention.comp`
+dispatched **one workgroup per query head**, and each of the eight read that
+group's slice of the cache for itself.
+
+**How much that was already costing was measured by taking away what hid
+it.** The workgroups of a group are neighbours down the first axis of the
+dispatch, so a cache serves the eight of them; dispatching the heads down the
+second axis instead makes them strangers. A round of sixteen sequences went
+from 1.75 s to **8.9** -- a factor of five, from nothing but where the
+workgroups sat. So the sharing was real, it was carrying eight times what the
+answer needs, and it was being asked to.
+
+The kernel now answers a bundle of heads. `HEADS` is four, and the loops that
+were over the block's queries are over the bundle's heads as well: a key
+component crosses the bus once and does `QUERIES` times `HEADS` multiply-adds,
+and a value likewise. Alternated, three rounds each, 1419-token prompts:
+
+| sequences | before | after | |
+| ---: | ---: | ---: | ---: |
+| 8 | 1.385 s | **1.217 s** | 1.14 |
+| 16 | 1.755 s | **1.429 s** | 1.23 |
+
+and a short context gains a little too -- 2.24 s to 2.07 at sixteen -- where
+the previous change gained nothing, because a bundle saves reads of a cache
+of any length. **A round of sixteen at a long context now generates 359.8
+tokens a second, and the answers do not move**: the marks are what they were.
+
+**The barriers are what a bundle would otherwise cost**, and they are why the
+reductions are batched. A workgroup's running maximum and running sum are
+reductions across its invocations, and four heads reduced one at a time pay
+for four pairs of barriers where the bundle pays for one pair and four
+subgroup operations. Written the naive way this change would have lost.
+
+**Four rather than eight was measured, not assumed.** Eight would match this
+model's group exactly and reads the same -- 1.192 and 1.207 s against 1.220
+and 1.222 at eight sequences, 1.411 and 1.401 against 1.397 and 1.433 at
+sixteen -- so four is chosen because it also serves a model whose group is
+four, which is the commoner shape. The engine binds this kernel only where
+the group divides by the bundle; a model that gives every head its own keys
+is left on the kernel it was on.
 
 ### Drafting
 

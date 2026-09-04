@@ -67,6 +67,14 @@ package Model_Runner.Platform.Device.Products is
    --  dispatch asks for and that one decides how many each does.
    Query_Block : constant := 8;
 
+   --  Heads one workgroup of the bundled attending kernel answers.
+   --  attention.comp declares the same number as HEADS under GROUPED and
+   --  the two have to agree: this decides how many workgroups the dispatch
+   --  asks for down the first axis and that one decides how many heads each
+   --  reads. Four rather than eight so that a model whose group is four is
+   --  served as well as one whose group is eight.
+   Head_Bundle : constant := 4;
+
    --  Whole numbers written into the cache buffer for a kernel to read
    --  back with floatBitsToUint. A round's per-row table is two of them a
    --  row -- where the row has got to and where its cache begins -- and it
@@ -1139,6 +1147,12 @@ private
       --  until now a round read a cache twice the size it needed to.
       Halver_Attend : System.Address := System.Null_Address;
 
+      --  And once more with GROUPED, where a workgroup answers a bundle of
+      --  heads rather than one. A model with grouped queries gives several
+      --  heads one group of keys and values, and a workgroup a head reads
+      --  that group's slice once for each head that wants it.
+      Bundled_Attend : System.Address := System.Null_Address;
+
       Narrow     : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
 
@@ -1158,6 +1172,7 @@ private
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
       Halved_Line : System.Address := System.Null_Address;
+      Bundle_Line : System.Address := System.Null_Address;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;

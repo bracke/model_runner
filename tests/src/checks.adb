@@ -5706,6 +5706,60 @@ package body Checks is
                   & "attention_halved.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
+
+         --  And the fifth, with GROUPED beside it: a bundle of heads to a
+         --  workgroup.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Attention_Bundled_Digest
+         then
+            Fail ("the fifth compilation of src/shaders/attention.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DHALVED -DGROUPED to "
+                  & "attention_bundled.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
+      end;
+
+      --  And the bundle's width, which the shader states and the engine
+      --  dispatches for. They have to agree for the same reason the query
+      --  block's does: a workgroup that answers four heads where the
+      --  dispatch asked for bundles of eight leaves four heads of every
+      --  bundle written by nobody, and a sweep whose models all have one
+      --  key-value head per query head would never bind this kernel at all.
+      declare
+         Text : constant String := Contents ("src/shaders/attention.comp");
+
+         Named : constant String := "const uint HEADS = ";
+
+         Said : Natural := 0;
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         for Index in Text'First .. Text'Last - Named'Length + 1 loop
+            if Text (Index .. Index + Named'Length - 1) = Named then
+               for Digit in Index + Named'Length .. Text'Last loop
+                  exit when Text (Digit) not in '0' .. '9';
+                  Said := Said * 10
+                          + Character'Pos (Text (Digit))
+                          - Character'Pos ('0');
+               end loop;
+               exit;
+            end if;
+         end loop;
+
+         if Said
+            /= Model_Runner.Platform.Device.Products.Head_Bundle
+         then
+            Fail ("src/shaders/attention.comp answers"
+                  & Natural'Image (Said) & " heads a workgroup under "
+                  & "GROUPED and the engine dispatches for bundles of"
+                  & Natural'Image
+                    (Model_Runner.Platform.Device.Products.Head_Bundle)
+                  & "; the heads a bundle does not reach would be written "
+                  & "by nobody");
+         end if;
       end;
 
       --  And the fourth, which only some devices run: the matrix product.

@@ -5,6 +5,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **`attention.comp` is compiled a fifth time with `GROUPED`**, where a
+  workgroup answers a bundle of four heads rather than one. This model has 32
+  attention heads and 4 key-value heads, so eight query heads share one group
+  — and the kernel dispatched one workgroup per query head, each reading that
+  group's slice of the cache for itself.
+
+  **How much that was already costing was measured by taking away what hid
+  it**: the workgroups of a group are neighbours down the dispatch's first
+  axis, and dispatching the heads down the second instead took a round of
+  sixteen from 1.75 s to **8.9**.
+
+  Alternated three rounds each with 1419-token prompts, a round of 8 and 16
+  reads **1.14 and 1.23** times faster, and a short context gains a little
+  too where the previous change gained nothing. **A round of sixteen at a
+  long context now generates 359.8 t/s** and is 1.24 behind llama.cpp, level
+  with the short context's 1.28 for the first time. Marks unchanged.
+
+  The barriers are what a bundle would otherwise cost, so the reductions are
+  batched: one pair of barriers for the bundle rather than a pair each.
+  Four rather than eight was measured — eight reads the same and serves fewer
+  models.
+
 ### Measured
 
 - **Two more ways of narrowing, both measured and neither kept.** A tile of

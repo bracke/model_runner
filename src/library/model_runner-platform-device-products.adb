@@ -351,6 +351,7 @@ package body Model_Runner.Platform.Device.Products is
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural;
+      Group_Size : Natural := 1;
       Rounding   : Boolean := False) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
@@ -359,6 +360,10 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
+       elsif Rounding
+         and then Item.Bundle_Line /= Null_Handle
+         and then Group_Size mod Head_Bundle = 0
+       then Item.Bundle_Line
        elsif Rounding and then Item.Halved_Line /= Null_Handle
        then Item.Halved_Line
        elsif Item.Group_Line /= Null_Handle
@@ -384,6 +389,20 @@ package body Model_Runner.Platform.Device.Products is
    --  per query position, or one per block of them where the tiled kernel
    --  answers a block at a time. The two have to be decided together, which
    --  is why neither is written out at a call site.
+   --  And how many workgroups the first axis wants, which is one a head
+   --  except where the bundled kernel is bound and it is one a bundle. The
+   --  two are one decision with the kernel above, as the second axis is.
+   function Attend_Heads
+     (Item       : Engine;
+      Heads      : Natural;
+      Group_Size : Natural;
+      Rounding   : Boolean := False) return C.unsigned
+   is (if Rounding
+         and then Item.Bundle_Line /= Null_Handle
+         and then Group_Size mod Head_Bundle = 0
+       then C.unsigned ((Heads + Head_Bundle - 1) / Head_Bundle)
+       else C.unsigned (Heads));
+
    function Attend_Groups
      (Item       : Engine;
       Positions  : Natural;
@@ -1463,6 +1482,28 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Halver_Attend := Made;
                   end if;
                end;
+
+               --  And a fifth with GROUPED beside it, a bundle of heads to
+               --  a workgroup. Made only where the fourth was: it is the
+               --  same kernel with the same cache and the fourth is what a
+               --  round falls back to.
+               if Item.Halver_Attend /= Null_Handle then
+                  declare
+                     Bundled : aliased constant
+                       Model_Runner.Shaders.Word_Array :=
+                         Model_Runner.Shaders.Attention_Bundled;
+                  begin
+                     Request.Size :=
+                       Interfaces.C.size_t (Bundled'Length * 4);
+                     Request.Code := Bundled'Address;
+
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Bundled_Attend := Made;
+                     end if;
+                  end;
+               end if;
             end if;
          end if;
       end;
@@ -1819,6 +1860,18 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Halved_Line := Made;
+            end if;
+         end if;
+
+         if Item.Halved_Line /= Null_Handle
+           and then Item.Bundled_Attend /= Null_Handle
+         then
+            Request.Stage.Module := Item.Bundled_Attend;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Bundle_Line := Made;
             end if;
          end if;
 
@@ -2305,6 +2358,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
+      Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -2318,6 +2372,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
@@ -5673,7 +5728,7 @@ package body Model_Runner.Platform.Device.Products is
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
                      Attend_Kernel (Item, Count, This.Head_Size,
-                                    This.Value_Size,
+                                    This.Value_Size, This.Group_Size,
                                     Rounding => This.Table > 0));
 
                   declare
@@ -5744,7 +5799,10 @@ package body Model_Runner.Platform.Device.Products is
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
                      Dispatch
-                       (Item.Buffer, C.unsigned (This.Heads),
+                       (Item.Buffer,
+                        Attend_Heads
+                          (Item, This.Heads, This.Group_Size,
+                           Rounding => This.Table > 0),
                         Attend_Groups
                           (Item,
                            (if Halved (Index) then Whole_Tiles (Count)
