@@ -355,7 +355,18 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Line (Item : Engine; Count : Natural) return Address
    is (if Count = 1 and then Item.Single_Line /= Null_Handle
        then Item.Single_Line
+       elsif Count > Batch_Group and then Item.Wide_Line /= Null_Handle
+       then Item.Wide_Line
        else Item.Pipeline);
+
+   --  And how many vectors that kernel carries, which is how far the
+   --  dispatch loop steps. The two are one decision: a loop that steps
+   --  eight while the bound kernel accumulates sixteen would ask the second
+   --  dispatch to start halfway through what the first already wrote.
+   function Row_Group (Item : Engine; Count : Natural) return Positive
+   is (if Count > Batch_Group and then Item.Wide_Line /= Null_Handle
+       then Wide_Group
+       else Batch_Group);
 
    function Uses_Matrix
      (Item    : Engine;
@@ -1214,6 +1225,23 @@ package body Model_Runner.Platform.Device.Products is
                Item.Single := Made;
             end if;
          end;
+
+         --  And a third time for a batch between the two, allowed to fail
+         --  on its own for the same reason: without it those counts run
+         --  two dispatches of eight, which is what they did until now.
+         declare
+            Wider : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Wide;
+         begin
+            Request.Size := Interfaces.C.size_t (Wider'Length * 4);
+            Request.Code := Wider'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Wider := Made;
+            end if;
+         end;
       end;
 
       --  The second kernel's module.
@@ -1540,6 +1568,17 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Single_Line := Made;
+            end if;
+         end if;
+
+         --  And the wider one, on the same terms.
+         if Item.Wider /= Null_Handle then
+            Request.Stage.Module := Item.Wider;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Wide_Line := Made;
             end if;
          end if;
 
@@ -2121,6 +2160,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
@@ -2130,6 +2170,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
       Give_Back (Item.Single, "vkDestroyShaderModule");
+      Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
@@ -3183,8 +3224,8 @@ package body Model_Runner.Platform.Device.Products is
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
-      --  declares a group to be, and one dispatch per Batch_Group vectors,
-      --  which is what an invocation carries. All of them in the one command
+      --  declares a group to be, and one dispatch per Row_Group vectors,
+      --  which is what an invocation of the bound kernel carries. All of them in the one command
       --  buffer: they write disjoint parts of the result and wait for
       --  nothing, so what a longer batch costs is a dispatch and not a
       --  submission.
@@ -3272,7 +3313,7 @@ package body Model_Runner.Platform.Device.Products is
                                     / Group_Size), 1, 1);
                   end;
 
-                  First := First + Batch_Group;
+                  First := First + Row_Group (Item, Count);
                end loop;
             end;
          end if;
@@ -5821,7 +5862,7 @@ package body Model_Runner.Platform.Device.Products is
                                     / Group_Size), 1, 1);
                   end;
 
-                  First := First + Batch_Group;
+                  First := First + Row_Group (Item, Count);
                end loop;
 
                <<Next_Dispatch>>

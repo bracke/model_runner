@@ -54,6 +54,13 @@ package Model_Runner.Platform.Device.Products is
    --  command buffer, not several submissions.
    Batch_Group : constant := 8;
 
+   --  And what the wider compilation carries. Between Batch_Group and
+   --  Tile_Least a batch is served by neither of the other two well: too
+   --  many vectors for one dispatch of eight, too few to fill a tile of a
+   --  hundred and twenty-eight. Sixteen halves the passes over the weights
+   --  there.
+   Wide_Group : constant := 16;
+
    --  Query positions one workgroup of the tiled attention kernel answers.
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
    --  and the two have to agree: this decides how many workgroups the
@@ -1102,6 +1109,14 @@ private
       --  wide kernel exactly as before.
       Single     : System.Address := System.Null_Address;
 
+      --  And a third time with WIDER, which sets its group to sixteen. A
+      --  round of nine to thirty-one sequences is two dispatches on the
+      --  eight-wide kernel and therefore two passes over every weight in
+      --  the model, which is what made a round of nine cost what a round of
+      --  sixteen costs. Null if the device refused it, which puts those
+      --  counts back on two passes and changes nothing else.
+      Wider      : System.Address := System.Null_Address;
+
       --  And the sixth: the same tile, compiled from the same source with
       --  MORE_FORMATS, decoding the eight formats the fourth leaves out.
       --  Two pipelines rather than one that decodes them all, because a
@@ -1128,6 +1143,7 @@ private
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;
+      Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;

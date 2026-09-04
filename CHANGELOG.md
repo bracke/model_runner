@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **`row_product.comp` is compiled a third time, with `GROUP` at sixteen**,
+  and the engine binds it when a batch is between nine and thirty-one
+  vectors. `GROUP` is how many vectors an invocation carries and therefore
+  how many a dispatch covers, so at eight a round of nine sequences went down
+  as two dispatches and **the second read every weight in the model again**.
+
+  The cost was a step and not a slope: eight rows 2.005 s, nine 3.557, ten
+  3.614, sixteen 3.830. Alternated three rounds each, a round of sixteen on
+  the device is **1.26 times faster with 7-token prompts and 1.15 with
+  1419-token ones**, and a round of nine 1.28 and 1.19.
+
+  The step at nine is smaller and still there — a sixteen-wide pass does
+  sixteen multiply-adds a weight and holds sixteen kilobytes of shared
+  memory, which halves occupancy. Nothing outside a round moves: a generated
+  token is one vector and takes the narrow kernel, a prompt is read a hundred
+  and twenty-eight at a time and takes the matrix one, and both digests are
+  unchanged.
+
 ### Measured
 
 - **The first comparison of several sequences at once**, which every figure

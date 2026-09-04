@@ -5358,6 +5358,19 @@ package body Checks is
                   & "with -DSINGLE to row_single.spv, and run 'tests shader' "
                   & "again with every shader named");
          end if;
+
+         --  And a third, with WIDER, which is the one a round of nine to
+         --  thirty-one sequences runs on.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Row_Wide_Digest
+         then
+            Fail ("the third compilation of src/shaders/row_product.comp "
+                  & "is older than the source; compile it with -DWIDER to "
+                  & "row_wide.spv, and run 'tests shader' again with every "
+                  & "shader named");
+         end if;
       end;
 
       --  And the second shader, asked the same way. Every shader the engine

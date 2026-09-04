@@ -864,126 +864,126 @@ package body Tests.Backend_Cases is
             Tall  : constant N.Element_Count := Chosen.Tall;
             Batch : constant Positive := Chosen.Batch;
          begin
-         for Which in Case_Kind loop
-            declare
-               Name : constant String := G.Type_Name (Format_Of (Which));
-
-               Values : N.Real_Array (0 .. Wide * Tall - 1);
-
-               Storage : B.Byte_Array_Access;
-               Weight  : T.View;
-
-               Vectors : T.Real_Array_Access;
-               There   : T.Real_Array_Access;
-               Here    : T.Real_Array_Access;
-            begin
-               --  A ramp that turns over rather than a constant: a constant
-               --  matrix comes out right under a decoder that reads the same
-               --  wrong byte for every element, which is the fixture that
-               --  cannot fail.
-               for Index in Values'Range loop
-                  Values (Index) :=
-                    N.Real (Integer (Index) mod 61) * 0.031 - 0.9;
-               end loop;
-
+            for Which in Case_Kind loop
                declare
-                  Bytes : constant B.Byte_Array := Encoded (Which, Values);
+                  Name : constant String := G.Type_Name (Format_Of (Which));
+
+                  Values : N.Real_Array (0 .. Wide * Tall - 1);
+
+                  Storage : B.Byte_Array_Access;
+                  Weight  : T.View;
+
+                  Vectors : T.Real_Array_Access;
+                  There   : T.Real_Array_Access;
+                  Here    : T.Real_Array_Access;
                begin
-                  B.Allocate (Bytes'Length, Storage);
-                  Storage.all := Bytes;
-               end;
+                  --  A ramp that turns over rather than a constant: a constant
+                  --  matrix comes out right under a decoder that reads the same
+                  --  wrong byte for every element, which is the fixture that
+                  --  cannot fail.
+                  for Index in Values'Range loop
+                     Values (Index) :=
+                       N.Real (Integer (Index) mod 61) * 0.031 - 0.9;
+                  end loop;
 
-               T.Make (Format_Of (Which), Tall, Wide, Storage, 0, Weight,
-                       Status);
-               Assert (E.Is_Ok (Status),
-                       "a weight view in " & Name & " could not be built");
-
-               T.Allocate (Wide * N.Element_Count (Batch), Vectors);
-               T.Allocate (Tall * N.Element_Count (Batch), There);
-               T.Allocate (Tall * N.Element_Count (Batch), Here);
-
-               for Index in Vectors.all'Range loop
-                  Vectors.all (Index) :=
-                    N.Real (Integer (Index) mod 29) * 0.07 - 1.0;
-               end loop;
-
-               --  One vector, then the whole batch, on each backend.
-               for Count in 1 .. 2 loop
                   declare
-                     Many : constant Positive :=
-                       (if Count = 1 then 1 else Batch);
-                     Room : constant N.Element_Count :=
-                       Tall * N.Element_Count (Many);
-
-                     --  Only where the matrix product could have run: a
-                     --  shape it refuses is the row product whichever
-                     --  device this is. Between its two pipelines the tile
-                     --  now decodes every format but binary32, which it
-                     --  refuses on purpose -- the operand it multiplies by
-                     --  is half precision.
-                     Bound : constant N.Real :=
-                       (if Chosen.Tiled
-                          and then Format_Of (Which) not in G.Type_F32
-                        then Tiled_Bound else Row_Bound);
+                     Bytes : constant B.Byte_Array := Encoded (Which, Values);
                   begin
-                     if Many = 1 then
-                        Model_Runner.Backend.Device.Dispatch
-                          (Weight, Vectors, There, Status);
-                        Assert (E.Is_Ok (Status),
-                                "the device refused " & Name & ": "
-                                & E.Error_Code'Image (Status.Code));
-                        Model_Runner.Backend.CPU.Dispatch
-                          (null, Weight, Vectors, Here, Status);
-                     else
-                        Model_Runner.Backend.Device.Dispatch_Batch
-                          (Weight, Vectors, N.Element_Count (Many), There,
-                           Status);
-                        Assert (E.Is_Ok (Status),
-                                "the device refused a batch of " & Name & ": "
-                                & E.Error_Code'Image (Status.Code));
-                        Model_Runner.Backend.CPU.Dispatch_Batch
-                          (null, Weight, Vectors,
-                           N.Element_Count (Many), Here, Status);
-                     end if;
-
-                     Assert (E.Is_Ok (Status),
-                             "the processor refused " & Name & ": "
-                             & E.Error_Code'Image (Status.Code));
-
-                     for Index in 0 .. Room - 1 loop
-                        --  The device accumulates in binary32 and the
-                        --  processor in binary64, so the two are held to a
-                        --  tolerance
-                        --  rather than to each other's bits. The gap this
-                        --  catches is a misread layout, which is not small.
-                        --
-                        --  Both in the floating-point arithmetic: the device
-                        --  shader multiplies in binary32 and has no integer
-                        --  path, so comparing it against a processor that
-                        --  quantized its activations would compare two
-                        --  arithmetics and call the difference a misread
-                        --  layout. Set where the processor side is dispatched,
-                        --  above.
-                        Assert (abs (There.all (Index) - Here.all (Index))
-                                < Bound,
-                                "the device decoded " & Name
-                                & " differently from the processor at "
-                                & N.Element_Count'Image (Index)
-                                & " with" & Positive'Image (Many)
-                                & " vectors:"
-                                & N.Real'Image (There.all (Index))
-                                & " against"
-                                & N.Real'Image (Here.all (Index)));
-                     end loop;
+                     B.Allocate (Bytes'Length, Storage);
+                     Storage.all := Bytes;
                   end;
-               end loop;
 
-               T.Free (Vectors);
-               T.Free (There);
-               T.Free (Here);
-               B.Free (Storage);
-            end;
-         end loop;
+                  T.Make (Format_Of (Which), Tall, Wide, Storage, 0, Weight,
+                          Status);
+                  Assert (E.Is_Ok (Status),
+                          "a weight view in " & Name & " could not be built");
+
+                  T.Allocate (Wide * N.Element_Count (Batch), Vectors);
+                  T.Allocate (Tall * N.Element_Count (Batch), There);
+                  T.Allocate (Tall * N.Element_Count (Batch), Here);
+
+                  for Index in Vectors.all'Range loop
+                     Vectors.all (Index) :=
+                       N.Real (Integer (Index) mod 29) * 0.07 - 1.0;
+                  end loop;
+
+                  --  One vector, then the whole batch, on each backend.
+                  for Count in 1 .. 2 loop
+                     declare
+                        Many : constant Positive :=
+                          (if Count = 1 then 1 else Batch);
+                        Room : constant N.Element_Count :=
+                          Tall * N.Element_Count (Many);
+
+                        --  Only where the matrix product could have run: a
+                        --  shape it refuses is the row product whichever
+                        --  device this is. Between its two pipelines the tile
+                        --  now decodes every format but binary32, which it
+                        --  refuses on purpose -- the operand it multiplies by
+                        --  is half precision.
+                        Bound : constant N.Real :=
+                          (if Chosen.Tiled
+                             and then Format_Of (Which) not in G.Type_F32
+                           then Tiled_Bound else Row_Bound);
+                     begin
+                        if Many = 1 then
+                           Model_Runner.Backend.Device.Dispatch
+                             (Weight, Vectors, There, Status);
+                           Assert (E.Is_Ok (Status),
+                                   "the device refused " & Name & ": "
+                                   & E.Error_Code'Image (Status.Code));
+                           Model_Runner.Backend.CPU.Dispatch
+                             (null, Weight, Vectors, Here, Status);
+                        else
+                           Model_Runner.Backend.Device.Dispatch_Batch
+                             (Weight, Vectors, N.Element_Count (Many), There,
+                              Status);
+                           Assert (E.Is_Ok (Status),
+                                   "the device refused a batch of " & Name & ": "
+                                   & E.Error_Code'Image (Status.Code));
+                           Model_Runner.Backend.CPU.Dispatch_Batch
+                             (null, Weight, Vectors,
+                              N.Element_Count (Many), Here, Status);
+                        end if;
+
+                        Assert (E.Is_Ok (Status),
+                                "the processor refused " & Name & ": "
+                                & E.Error_Code'Image (Status.Code));
+
+                        for Index in 0 .. Room - 1 loop
+                           --  The device accumulates in binary32 and the
+                           --  processor in binary64, so the two are held to a
+                           --  tolerance
+                           --  rather than to each other's bits. The gap this
+                           --  catches is a misread layout, which is not small.
+                           --
+                           --  Both in the floating-point arithmetic: the device
+                           --  shader multiplies in binary32 and has no integer
+                           --  path, so comparing it against a processor that
+                           --  quantized its activations would compare two
+                           --  arithmetics and call the difference a misread
+                           --  layout. Set where the processor side is dispatched,
+                           --  above.
+                           Assert (abs (There.all (Index) - Here.all (Index))
+                                   < Bound,
+                                   "the device decoded " & Name
+                                   & " differently from the processor at "
+                                   & N.Element_Count'Image (Index)
+                                   & " with" & Positive'Image (Many)
+                                   & " vectors:"
+                                   & N.Real'Image (There.all (Index))
+                                   & " against"
+                                   & N.Real'Image (Here.all (Index)));
+                        end loop;
+                     end;
+                  end loop;
+
+                  T.Free (Vectors);
+                  T.Free (There);
+                  T.Free (Here);
+                  B.Free (Storage);
+               end;
+            end loop;
          end;
       end loop;
 
@@ -2684,7 +2684,6 @@ package body Tests.Backend_Cases is
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T_Case);
-
 
       Heads     : constant N.Element_Count := 4;
       Head_Size : constant N.Element_Count := 8;

@@ -113,7 +113,6 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False);
 
-
    --  What one set of repetitions measured. Times are seconds.
    type Report is record
       Ran       : Boolean := False;

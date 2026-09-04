@@ -11,7 +11,9 @@
 //  once for all of them, which is the saving a batch exists to make: the
 //  weights are what a product spends its time on, and reading them once for
 //  eight vectors is eight times less of it. A batch longer than GROUP is
-//  several dispatches, each told which vector it starts at.
+//  several dispatches, each told which vector it starts at -- and each of
+//  those dispatches reads the whole model again, which is why GROUP is the
+//  count a round of several sequences runs into first.
 //
 //  A format. A weight is either a floating-point value or a block of packed
 //  bits with a scale, and unpacking is a handful of arithmetic where reading
@@ -97,16 +99,27 @@ const uint FMT_IQ4_XS = 14u;
 //  over it unroll and the accumulators stay in registers; making it the
 //  batch length instead would put them in memory and give back what the
 //  batching just bought.
-//  This source is compiled twice, and the second compilation defines
-//  SINGLE. A generated token is one vector against every matrix in the
-//  model, and with GROUP at eight it carries eight accumulators, reads
+//  This source is compiled three times, and two of those compilations
+//  define a width. A generated token is one vector against every matrix in
+//  the model, and with GROUP at eight it carries eight accumulators, reads
 //  eight offsets and reserves eight kilobytes of shared memory for a
 //  reduction seven eighths of which is thrown away. The engine binds the
 //  narrow pipeline when the batch is one and the wide one otherwise, so
 //  neither pays for the other -- the same trade matrix_product.comp makes
 //  between its two compilations, and for the same measured reason.
+//
+//  WIDER carries sixteen, for the case the other two leave badly served: a
+//  round of nine to thirty-one sequences, which is two dispatches at eight
+//  and therefore two passes over every weight in the model, and which the
+//  matrix product does not take either because a tile is a hundred and
+//  twenty-eight vectors wide and would be mostly the zeros the rounding
+//  invented. Sixteen accumulators and sixteen kilobytes of shared memory
+//  buy one pass instead of two. That is a trade of occupancy against
+//  bandwidth and the measurement is what settles it, not the arithmetic.
 #ifdef SINGLE
 const uint GROUP = 1u;
+#elif defined(WIDER)
+const uint GROUP = 16u;
 #else
 const uint GROUP = 8u;
 #endif

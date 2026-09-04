@@ -149,38 +149,37 @@ package body Tests.Inference_Cases is
             Logits   : N.Real_Array
               (0 .. N.Element_Count (Settings.Vocabulary) - 1);
          begin
+            --  Not asked: every phase stays zero.
+            L.Evaluate_Batch
+              (Live, Under.Ready, Tokens, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the unaccounted batch failed");
 
-         --  Not asked: every phase stays zero.
-         L.Evaluate_Batch
-           (Live, Under.Ready, Tokens, Logits, Status => Status);
-         Assert (E.Is_Ok (Status), "the unaccounted batch failed");
+            for Phase in L.Phase loop
+               Assert (L.Time_Spent (Live) (Phase) = 0.0,
+                       "a session nobody asked reported time in "
+                       & L.Phase'Image (Phase));
+            end loop;
 
-         for Phase in L.Phase loop
-            Assert (L.Time_Spent (Live) (Phase) = 0.0,
-                    "a session nobody asked reported time in "
-                    & L.Phase'Image (Phase));
-         end loop;
+            --  Asked: the phases hold something.
+            L.Account (Live, True);
+            L.Evaluate_Batch
+              (Live, Under.Ready, Tokens, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the accounted batch failed");
 
-         --  Asked: the phases hold something.
-         L.Account (Live, True);
-         L.Evaluate_Batch
-           (Live, Under.Ready, Tokens, Logits, Status => Status);
-         Assert (E.Is_Ok (Status), "the accounted batch failed");
+            for Phase in L.Phase loop
+               Total := Total + L.Time_Spent (Live) (Phase);
+            end loop;
 
-         for Phase in L.Phase loop
-            Total := Total + L.Time_Spent (Live) (Phase);
-         end loop;
+            Assert (Total > 0.0, "a budget was asked for and came back empty");
 
-         Assert (Total > 0.0, "a budget was asked for and came back empty");
-
-         --  And turning it off clears what was there, so the next run is
-         --  measured rather than added to.
-         L.Account (Live, False);
-         for Phase in L.Phase loop
-            Assert (L.Time_Spent (Live) (Phase) = 0.0,
-                    "turning a budget off left "
-                    & L.Phase'Image (Phase) & " behind");
-         end loop;
+            --  And turning it off clears what was there, so the next run is
+            --  measured rather than added to.
+            L.Account (Live, False);
+            for Phase in L.Phase loop
+               Assert (L.Time_Spent (Live) (Phase) = 0.0,
+                       "turning a budget off left "
+                       & L.Phase'Image (Phase) & " behind");
+            end loop;
          end;
 
          L.Close (Live);
@@ -6257,7 +6256,6 @@ package body Tests.Inference_Cases is
 
       package MK renames Model_Runner.Kernels;
       package MB renames Model_Runner.Bytes;
-
 
       Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
 
