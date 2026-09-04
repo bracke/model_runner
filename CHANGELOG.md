@@ -5,6 +5,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The matrix attention kernel for a round: built, measured, not kept.** A
+  member's own rows are one sequence and one cache — a batch in everything
+  but name — so a round dispatched a member at a time can have the kernel a
+  batch has, the one that answers sixteen query positions at once. Built: a
+  row base in both attention shaders, and a per-member list on the attention
+  step giving each member its own push, its own cache base and its own row
+  count.
+
+  Device, eight seats and thirty-two callers: 110-token prompts read in
+  rounds went 9.2 → **8.9 s**, against **8.70 s** for reading them on their
+  own; and 7-token prompts, which never reach the kernel's tile, went
+  6.860 → **6.961** — worse, because all it adds there is eight dispatches
+  where there was one.
+
+  **Why it loses is the part worth keeping.** That kernel was not the whole
+  reason a lone prompt is fast: a prompt read on its own takes `Whole_Layer`
+  — the entire layer in one submission, the cache write included — and a
+  round cannot, because that sequence names one cache and one run of
+  positions. So the next thing is `Whole_Layer` for a round, and the
+  per-member dispatch is about a third of it. Reverted: a path nothing
+  reaches is a path nothing checks.
+
 ### Added
 
 - **`tests speed --serve --budget` says where a server's time went**, phase by

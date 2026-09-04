@@ -8070,6 +8070,60 @@
 #   load:  under 1.10
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-04, the matrix attention kernel for a round: built, measured, not
+# kept -- and what it found instead.
+#
+#   THE IDEA. A device answers sixteen query positions at once out of one
+#   cache, and a round's rows do not share a cache, so a stretch of sixteen
+#   positions or more is read on its own. But a MEMBER's own rows do share
+#   one: they are one sequence, one cache and consecutive positions, which
+#   is a batch in everything but name. Dispatch a round a member at a time
+#   and each dispatch can have the kernel a batch has.
+#
+#   WHAT WAS BUILT. A row base in both attention shaders, so a dispatch can
+#   answer a slice of the rows the caller laid out rather than all of them.
+#   A per-member list on the attention step: one push and one dispatch a
+#   member, each with its own cache base, its own first and last position
+#   and its own row count. The kernel choice then falls out of the row count
+#   as it does for a batch -- sixteen rows or more and the matrix kernel
+#   runs. A round whose rows are one apiece keeps the table and its single
+#   dispatch, because a push and a dispatch a member would cost more than
+#   the kernel could save on one row.
+#
+#   WHAT IT MEASURED, device, eight seats and thirty-two callers:
+#
+#     110-token prompts, read in rounds, before   9.2 s
+#     110-token prompts, read in rounds, after    8.9
+#     110-token prompts, read on their own        8.70
+#
+#     7-token prompts, in rounds, without it      6.860
+#     7-token prompts, in rounds, with it         6.961
+#
+#   It is better than it was and still behind reading alone, and on short
+#   prompts it is worse than not having it: eight rows a member never reach
+#   the tile the matrix kernel wants, so all the change adds there is eight
+#   pushes and eight dispatches where there was one.
+#
+#   WHY IT LOSES, WHICH IS THE PART TO KEEP. The matrix kernel was not the
+#   whole reason a lone prompt is fast on a device. A prompt read on its own
+#   takes Whole_Layer -- the entire layer in one submission, the cache write
+#   included -- and a round cannot, because that sequence names one cache
+#   and one run of positions for every row. So the spread hands a round the
+#   attention kernel and leaves it paying normalize-and-project, a rotation
+#   on the host, a cache write on the host and a fused second half: four
+#   submissions a layer against one.
+#
+#   THE NEXT THING IS THEREFORE NOT THIS. It is Whole_Layer for a round --
+#   per-member cache writes and per-member attention inside one sequence --
+#   and the per-member dispatch above is about a third of it. Reverted
+#   rather than kept, because a path nothing reaches is a path nothing
+#   checks, and the measurement is worth more than the code.
+#
+#   load:  under 1.10; device 1519 to 1677 MHz mean of 2700 across the
+#     alternated sets, which is what says the two sides were compared at the
+#     same clock.
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

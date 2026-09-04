@@ -11557,16 +11557,29 @@ eight seats and thirty-two callers, each held to about thirty-two tokens:
 hundred and thirteen**, and what is left of it is a copy of the prompt into
 the seat.
 
-**One stretch is still read on its own, and the reason is a kernel.** A
-device has a second attention kernel that answers sixteen query positions at
-once out of one cache, and it is most of why a prompt on a device is fast. A
-round's rows do not share a cache, so a round cannot use it -- which costs
-nothing while the stretches are shorter than its tile and a quarter of the
-prompt once they are longer. So the rule is that kernel's own threshold:
+**One stretch is still read on its own, and the reason turned out not to be
+the kernel.** A device has a second attention kernel that answers sixteen
+query positions at once out of one cache; a round's rows do not share a
+cache, so a round cannot use it. The rule is that kernel's own threshold:
 **a stretch of sixteen positions or more is read on its own where that kernel
 exists, and anything smaller rides the round.** On a processor there is no
-such kernel and nothing is read alone. Teaching the matrix kernel to take one
-tile per member is what would remove the exception; it is not built.
+such kernel and nothing is read alone.
+
+Giving a round that kernel was built and measured and is not kept. A
+*member's* own rows do share a cache -- they are one sequence at consecutive
+positions, a batch in everything but name -- so a round dispatched a member
+at a time can have it. That took the in-round reading from 9.2 s to 8.9
+against 8.70 for reading alone: better, still behind. And on stretches
+shorter than the kernel's tile it is worse than not having it, because all it
+adds there is a dispatch a member where there was one.
+
+**What the lone path really wins with is `Whole_Layer`** -- the entire layer
+in one submission, the cache write included -- and a round cannot use that
+one either, because it names one cache and one run of positions for every
+row. Four submissions a layer against one is the gap, and the attention
+kernel was a third of it. So the next thing is `Whole_Layer` for a round; the
+per-member dispatch is written up in `docs/measured-figures.txt` and
+reverted, because a path nothing reaches is a path nothing checks.
 
 **Where a serving run's time goes**, which `tests speed --serve N --callers M
 --budget` now says: the phases are summed across the seats, because a round

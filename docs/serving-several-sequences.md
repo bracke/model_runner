@@ -127,12 +127,23 @@ Alternated, medians of three, eight seats and thirty-two callers: the
 processor reads **1.29×** at a seven-token prompt and **1.21×** at a hundred
 and ten; the device **1.27×** and **1.16×**.
 
-**One exception, and it is a kernel.** A device has a second attention kernel
-that answers sixteen query positions at once out of one cache, and a round's
-rows do not share a cache. A stretch of sixteen positions or more is read on
-its own where that kernel exists; anything smaller rides the round. Teaching
-that kernel to take one tile per member is what would remove the exception,
-and it is now the thing this design has left.
+**One exception, and it is not the kernel it looked like.** A device has a
+second attention kernel that answers sixteen query positions at once out of
+one cache, and a round's rows do not share a cache. A stretch of sixteen
+positions or more is read on its own where that kernel exists; anything
+smaller rides the round.
+
+Giving a round that kernel was built — a *member's* own rows do share a
+cache, so a round dispatched a member at a time can have it — and measured,
+and reverted: 9.2 s to 8.9 for the in-round reading against 8.70 for reading
+alone, and worse than nothing on stretches below the kernel's tile.
+
+**What a lone prompt really wins with is `Whole_Layer`**, the entire layer in
+one submission with the cache write in it, which a round cannot use either:
+it names one cache and one run of positions for every row. Four submissions a
+layer against one is the gap and the attention kernel was a third of it. So
+what this design has left is `Whole_Layer` for a round — per-member cache
+writes and per-member attention inside one sequence.
 
 ## Staging
 
