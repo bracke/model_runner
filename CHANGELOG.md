@@ -5,6 +5,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`Model_Runner.Serving`: several callers from one model, a round at a
+  time.** The policy over `Evaluate_Round` that
+  `docs/serving-several-sequences.md` names — a queue of callers, a round
+  taken from the front of it, and a seat given back when a member finishes.
+  Each member brings its own sampler, its own stop tokens and its own token
+  limit; what is shared is the model, the worker pool and the pass. A member
+  joins by reading its prompt on its own, and the first token it contributes
+  is the one that prompt produced.
+
+  `tests speed --serve N --callers M` exercises it: N served at once out of M
+  in all, each held to a limit a little below the last so they end at
+  different rounds and the server has to re-form. Sixteen callers through
+  eight seats from a 110-token prompt read 13 ms a token on the device
+  against the processor's 22.
+
+  A registered test holds the part that is new: a member gets, token for
+  token, what it would have generated alone, ends on its own limit, and its
+  seat is taken by the next caller.
+
 ### Changed
 
 - **A session keeps a block of the device's cache, and a round's table moved

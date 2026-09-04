@@ -79,6 +79,35 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False);
 
+   --  Serve several callers from one model, arriving and leaving.
+   --
+   --  What Round measures is the primitive: a fixed set of members stepped
+   --  together for a fixed number of tokens. What this measures is the
+   --  policy over it -- members with different limits, so they finish at
+   --  different times and the rounds shrink, and a member admitted for every
+   --  one that leaves, so the server is asked to re-form rather than to run
+   --  a set it was handed.
+   --
+   --  @param Path The model file.
+   --  @param Prompt_Path The prompt every member starts from, or the empty
+   --    string for a short one built in.
+   --  @param Tokens Most tokens a member may produce. The members are given
+   --    limits below it as well, so that they end at different rounds.
+   --  @param Threads Workers the members share.
+   --  @param Members How many are served at once.
+   --  @param Arrivals How many callers in all, so that Members of them are
+   --    being served and the rest are waiting to take a seat.
+   --  @param Backend Which backend the model runs on.
+   procedure Serve
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Members     : Positive;
+      Arrivals    : Positive;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU);
+
 
    --  What one set of repetitions measured. Times are seconds.
    type Report is record

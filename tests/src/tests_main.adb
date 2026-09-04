@@ -1610,6 +1610,24 @@ begin
          --  different measurement and takes a different loop: a round has
          --  no draft, no sampler beyond the greedy one and no repeats,
          --  because what it answers is what a token costs a member.
+         --  Several callers arriving and leaving, which is the policy over
+         --  the round rather than the round itself: members with different
+         --  limits, and a caller admitted for every one that finishes.
+         if Option ("--serve", "") /= "" then
+            Speed_Run.Serve
+              (Path        => Option ("--model", ""),
+               Prompt_Path =>
+                 Option ("--prompt-file",
+                         "../tests/fixtures/speed-prompt-short.txt"),
+               Tokens      => Number ("--max-tokens", 12),
+               Threads     => Number ("--threads",
+                                      Model_Runner.Platform.Core_Count - 1),
+               Members     => Number ("--serve", 1),
+               Arrivals    => Number ("--callers", Number ("--serve", 1)),
+               Backend     => Backend_Of (Option ("--backend", "cpu")));
+            return;
+         end if;
+
          if Option ("--round", "") /= "" then
             Speed_Run.Round
               (Path        => Option ("--model", ""),

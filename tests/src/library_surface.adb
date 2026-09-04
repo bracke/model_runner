@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 29) of Text_Access :=
+   Held : constant array (1 .. 31) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -56,13 +56,19 @@ package body Library_Surface is
       --  its own model is the one it is kept for.
       new String'("Time_Spent"),
 
-      --  Several sequences in one pass over the weights. The command serves
-      --  one caller and has no reason to ask for it; a program serving
+      --  Serving several callers from one model. The command serves one
+      --  caller and has no reason to ask for any of this; a program serving
       --  several has every reason, and the figures that say what it is worth
       --  are in docs/serving-several-sequences.md -- a second caller is
-      --  nearly free where a second run is not. `tests speed --round N` is
-      --  what measures it here.
-      new String'("Evaluate_Round")];
+      --  nearly free where a second run is not.
+      --
+      --  Admit is how a caller joins, Retire is how one leaves before it has
+      --  finished, and Gathered is how many were in the last round -- which
+      --  is what tells a scheduler its queue is emptying. `tests speed
+      --  --serve N` is what exercises them here.
+      new String'("Admit"),
+      new String'("Retire"),
+      new String'("Gathered")];
 
    ---------------
    -- Is_Listed --

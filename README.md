@@ -11481,6 +11481,53 @@ nothing, wrong answers and right shape, at the same long context:
 | 4 | 1.855 s | 1.230 s | 34 % |
 | 8 | 3.117 s | 1.567 s | **50 %** |
 
+### Serving several callers, which is the policy over the round
+
+`Model_Runner.Serving` is the scheduler the design above names: a queue of
+callers, a round taken from the front of it, a sampler and a stop and a limit
+per member, and a seat given back when one finishes. `tests speed --serve N
+--callers M` is what exercises it -- N served at once out of M in all, each
+with a limit a little below the last so they end at different rounds and the
+server has to re-form.
+
+What a member brings with it is its own. The temperature, the filters, the
+penalties, the seed, the stop tokens and the token limit are one per member;
+what is shared is the model, the worker pool, and the pass. A member joins by
+reading its prompt on its own -- which is prefill exactly as it stands -- and
+the first token it contributes to a round is the one its own prompt produced,
+so it arrives with something to say rather than with reading to catch up on.
+
+Sixteen callers, eight served at once, each from the 110-token prompt and
+held to about thirty-two tokens:
+
+| | processor | device |
+| --- | ---: | ---: |
+| 4 served, 8 callers | 22 ms a token | **15 ms** |
+| 8 served, 16 callers | 22 ms | **13 ms** |
+| 16 served, 32 callers | 23 ms | **15 ms** |
+
+**The processor's row is flat and the device's is not**, and the reason is
+the arriving: a caller's prompt is read on its own, so a server whose members
+turn over spends part of every round's worth of time on prefill that no round
+divides. Eight members steady on the device read 7.0 ms a token in the table
+above; eight members turning over read 13. **That gap is what mixing prefill
+rows into a round would close**, and it is the largest thing left in this
+part of the program -- see the end of
+[docs/serving-several-sequences.md](docs/serving-several-sequences.md).
+
+With a seven-token prompt the two backends swap: the processor is ahead at
+every count, because a round that short is per-call cost on the device and
+the arriving is nearly free on both. A server is worth putting on a device
+when its callers have something to say.
+
+The check is the same one the round has. Every token every member is handed
+is digested in the order it was handed out, and the digest repeats run to run
+on a backend. Between backends it repeats for one member and diverges after
+twenty or thirty tokens for two or more, which is the products' own drift at
+two rows against one and not the serving: the same divergence is in
+`tests speed --round` at the same lengths, and the conformance sweep's
+tolerance is what bounds it.
+
 See [docs/serving-several-sequences.md](docs/serving-several-sequences.md).
 
 

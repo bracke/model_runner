@@ -13,6 +13,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Output;
+with Model_Runner.Serving;
 with Model_Runner.Stops;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
@@ -29,6 +30,7 @@ package body Speed_Run is
    package Files renames Model_Runner.Byte_Sources.Files;
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
+   package Serving renames Model_Runner.Serving;
    package T renames Model_Runner.Text;
    package N renames Model_Runner.Numerics;
    package Vocab renames Model_Runner.Tokenizer;
@@ -572,6 +574,230 @@ package body Speed_Run is
    -----------
    -- Round --
    -----------
+
+   procedure Serve
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Members     : Positive;
+      Arrivals    : Positive;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+      use type Serving.Member_Id;
+
+      Source    : aliased Files.File_Source;
+      Container : Containers.Container;
+      Engine    : aliased L.Model;
+      Status    : E.Error_Info;
+
+      function Said (Value : Duration) return String
+      is (T.Image (Long_Float (Value), 3) & " s");
+
+      procedure Say (Text : String);
+
+      procedure Say (Text : String) is
+      begin
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Text);
+      end Say;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         Say ("no model at that path; nothing measured");
+         return;
+      end if;
+
+      Files.Open (Source, Path, Status => Status);
+      if E.Is_Error (Status) then
+         Say ("the model would not open");
+         return;
+      end if;
+
+      Containers.Reader.Parse (Container, Source, Status => Status);
+      if E.Is_Error (Status) then
+         Files.Close (Source);
+         Say ("the model would not parse");
+         return;
+      end if;
+
+      if Backend = Model_Runner.Backend.Backend_Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            if not Ready then
+               Containers.Close (Container);
+               Files.Close (Source);
+               Say ("no device answered");
+               return;
+            end if;
+         end;
+      end if;
+
+      L.Prepare
+        (Engine, Container, Source, Backend => Backend,
+         Threads => Threads, Status => Status);
+      if E.Is_Error (Status) then
+         Containers.Close (Container);
+         Files.Close (Source);
+         Say ("the model would not prepare");
+         return;
+      end if;
+
+      declare
+         Text : constant String :=
+           (if Prompt_Path = "" then "The capital of France is"
+            else Project_Tools.Files.Read_Raw_File (Prompt_Path));
+
+         Held : Vocab.Token_Array (1 .. 4096);
+         Last : Natural;
+
+         Serve : Serving.Server (Capacity => Members);
+
+         --  Every caller that will arrive, and which of them are in.
+         Who   : array (1 .. Arrivals) of Serving.Member_Id :=
+           [others => Serving.No_Member];
+         Sent  : Natural := 0;
+
+         Terms : Serving.Terms;
+
+         Started  : Ada.Real_Time.Time;
+         Spent    : Duration := 0.0;
+         Produced : Natural := 0;
+         Rounds   : Natural := 0;
+         Smallest : Natural := Natural'Last;
+
+         --  A digest of every token every member was handed, in the order
+         --  they were handed out, so that two backends can be held against
+         --  each other as the round driver holds them.
+         Mark : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+
+         Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
+         Where : constant CPU.Pool_Reference :=
+           (if Threads = 1 then null else Team'Unchecked_Access);
+
+         --  Take what a member has said, digest it, and let it go when it
+         --  has finished. A seat given back is a seat the next caller in
+         --  the queue takes, which is the whole of the policy being
+         --  measured.
+         procedure Collect (Slot : Positive);
+
+         procedure Collect (Slot : Positive) is
+            Got  : Vocab.Token_Array (1 .. 64);
+            Made : Natural;
+            Done : Boolean;
+         begin
+            Serving.Take (Serve, Who (Slot), Got, Made, Done);
+
+            for Index in 1 .. Made loop
+               Mark := Mark xor Interfaces.Unsigned_64 (Got (Index));
+               Mark := Mark * 16#0000_0100_0000_01B3#;
+            end loop;
+
+            Produced := Produced + Made;
+
+            if Done then
+               Serving.Retire (Serve, Who (Slot));
+               Who (Slot) := Serving.No_Member;
+            end if;
+         end Collect;
+      begin
+         Vocab.Encode
+           (L.Vocabulary (Engine).all, Text,
+            Add_Beginning => True, Add_End => False,
+            Target => Held, Last => Last, Status => Status);
+
+         if E.Is_Error (Status) or else Last = 0 then
+            Say ("the prompt would not encode");
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Files.Close (Source);
+            return;
+         end if;
+
+         --  Greedy, so that what a member says is a text and two backends
+         --  can be compared by it.
+         Terms.Sampling.Temperature := 0.0;
+         Terms.Sampling.Repeat_Penalty := 1.0;
+
+         Serving.Open
+           (Serve, Engine, Workers => Where, Gather => Members,
+            Status => Status);
+
+         if E.Is_Error (Status) then
+            Say ("the server would not open: "
+                 & E.Error_Code'Image (Status.Code));
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Files.Close (Source);
+            return;
+         end if;
+
+         Started := Ada.Real_Time.Clock;
+
+         --  Everything that fits, admitted; then one more for every one
+         --  that leaves. Limits below the asked-for count as well, so the
+         --  members end at different rounds and the server has to re-form.
+         loop
+            while Sent < Arrivals
+              and then Serving.Serving (Serve) < Members
+            loop
+               Sent := Sent + 1;
+               Terms.Limit :=
+                 Natural'Max (1, Tokens - (Sent - 1) mod Members);
+
+               Serving.Admit
+                 (Serve, Held (1 .. Last), Terms, Who (Sent),
+                  Status => Status);
+
+               exit when E.Is_Error (Status);
+            end loop;
+
+            exit when E.Is_Error (Status);
+            exit when Serving.Serving (Serve) = 0;
+
+            Serving.Step (Serve, Status => Status);
+            exit when E.Is_Error (Status);
+
+            Rounds := Rounds + 1;
+            Smallest := Natural'Min (Smallest, Serving.Gathered (Serve));
+
+            for Slot in 1 .. Sent loop
+               if Who (Slot) /= Serving.No_Member then
+                  Collect (Slot);
+               end if;
+            end loop;
+         end loop;
+
+         Spent :=
+           Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+
+         if E.Is_Error (Status) then
+            Say ("serving failed: " & E.Error_Code'Image (Status.Code));
+         else
+            Say ("members" & Natural'Image (Members)
+                 & ", callers" & Natural'Image (Arrivals)
+                 & ", prompt" & Natural'Image (Last) & " tokens,"
+                 & Natural'Image (Rounds) & " rounds in " & Said (Spent)
+                 & " --" & Natural'Image (Produced) & " tokens, "
+                 & Said (Spent / Duration (Natural'Max (Produced, 1)))
+                 & " a token, smallest round"
+                 & Natural'Image (Smallest)
+                 & ", mark " & Shown (Mark));
+         end if;
+
+         Serving.Close (Serve);
+
+         if Where /= null then
+            CPU.Close (Team);
+         end if;
+      end;
+
+      L.Close (Engine, Status);
+      Containers.Close (Container);
+      Files.Close (Source);
+   end Serve;
 
    procedure Round
      (Path        : String;

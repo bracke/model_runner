@@ -98,7 +98,7 @@ different positions, different sliding windows are all ordinary.
 
 ## What the scheduler does
 
-Above the primitive, policy:
+Above the primitive, policy — **built**, as `Model_Runner.Serving`:
 
 1. Sessions that are ready to generate wait in a queue.
 2. A round takes up to *K* of them. **Gather in fours**: a batch of three
@@ -112,10 +112,21 @@ Above the primitive, policy:
 6. Re-form and step again.
 
 A session joining with a prompt prefills on its own first, which is the
-batched path exactly as it is today — its rows are its own tokens. Mixing
-prefill rows and decode rows in one round is a later thing and is not in this
-design: it needs a per-row token count as well as a per-row position, and the
-win from it is smaller than the win from decode rounds.
+batched path exactly as it is today — its rows are its own tokens.
+
+**What that costs, now that the rest is built.** Eight members steady on the
+device read 7.0 ms a token; eight members turning over — sixteen callers
+through eight seats, each from a 110-token prompt — read 13. The arriving is
+the difference, and it is the largest thing left here: a caller's prompt is
+read on its own, so a server whose members turn over spends part of every
+round's worth of time on prefill that no round divides.
+
+Mixing prefill rows and decode rows in one round is what closes it, and it
+needs a per-row token count as well as a per-row position. It was called a
+later thing when this was written, on the ground that the win from it is
+smaller than the win from decode rounds. That was right about the order and
+wrong about the size: with decode rounds built, **it is the bigger of the
+two remaining**.
 
 ## Staging
 
