@@ -7227,18 +7227,17 @@ package body Model_Runner.Llama is
             --  the queries, the keys and the values.
             Projected := False;
 
-            --  Not for a round. What this path fuses is the half of a
-            --  layer that ends in attention, and the sequence it builds
-            --  names one cache and one run of positions for the whole
-            --  batch -- so a round taking it would have every row attend
-            --  the first member's history. The products below still go to
-            --  the device, which is where the round's saving is; what stays
-            --  on the host is attention, and attention is three per cent of
-            --  a generated token. Stage three of
-            --  docs/serving-several-sequences.md is the per-row cache table
-            --  that lets this come back.
-            if not Rounding
-              and then Model_Runner.Backend."="
+            --  The normalization and the three matrices that read it, as
+            --  one sequence. A round takes this: it names no cache and no
+            --  run of positions -- it reads the layer's input, normalizes
+            --  each row, multiplies the batch by three matrices and turns
+            --  the queries and keys by angles the caller tabulates a row at
+            --  a time. Every one of those is already a row at a time.
+            --
+            --  What a round does not take is Whole_Layer below, which does
+            --  name a cache and a run of positions, and is refused a round
+            --  where it is chosen rather than here.
+            if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
               and then Current.Attention_Norm /= null
@@ -7323,7 +7322,14 @@ package body Model_Runner.Llama is
                   --  holds the cache: with the turning a step and the cache
                   --  write a step, there is nothing left for the host to do
                   --  between the two halves.
-                  if Turnable
+                  --  Not for a round: this one names one cache and one
+                  --  run of positions for the whole batch, so a round
+                  --  taking it would have every row attend the first
+                  --  member's history and write over the first member's
+                  --  cache. The sequence below it takes rounds and is
+                  --  where a round's projections go.
+                  if not Rounding
+                    and then Turnable
                     and then Resident
                     and then Item.Held = Exact
                     and then Settings.Experts = 0

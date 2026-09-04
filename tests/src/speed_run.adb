@@ -599,7 +599,8 @@ package body Speed_Run is
       Members     : Positive;
       Arrivals    : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU)
+        Model_Runner.Backend.Backend_CPU;
+      Budget      : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       use type Serving.Member_Id;
@@ -611,6 +612,11 @@ package body Speed_Run is
 
       function Said (Value : Duration) return String
       is (T.Image (Long_Float (Value), 3) & " s");
+
+      --  A phase's name in a fixed width, so the columns line up.
+      function Pad (Text : String) return String
+      is (if Text'Length >= 14 then Text (Text'First .. Text'First + 13)
+          else Text & [1 .. 14 - Text'Length => ' ']);
 
       procedure Say (Text : String);
 
@@ -756,7 +762,7 @@ package body Speed_Run is
 
          Serving.Open
            (Serve, Engine, Workers => Where, Gather => Members,
-            Status => Status);
+            Budget => Budget, Status => Status);
 
          if E.Is_Error (Status) then
             Say ("the server would not open: "
@@ -840,6 +846,38 @@ package body Speed_Run is
                       / Long_Float (Natural'Max (Joined, 1)) * 1000.0, 1)
                  & " ms each; mark " & Shown (Mark)
                  & Device_Clock.Shown (Clock));
+
+            --  And where it went. Summed across the seats, because a round
+            --  charges its phases to the session the call was made on and
+            --  which seat that is changes with who is in the round.
+            if Budget then
+               declare
+                  Times : constant L.Phase_Times :=
+                    Serving.Time_Taken (Serve);
+                  Total : Duration := 0.0;
+               begin
+                  for Phase in L.Phase loop
+                     Total := Total + Times (Phase);
+                  end loop;
+
+                  Say ("  where the server's time goes");
+
+                  for Phase in L.Phase loop
+                     Say ("    " & Pad (L.Phase'Image (Phase))
+                          & T.Image (Long_Float (Times (Phase)), 3)
+                          & " s   "
+                          & (if Total > 0.0
+                             then T.Image
+                                    (Long_Float (Times (Phase))
+                                     / Long_Float (Total) * 100.0, 1)
+                             else "-")
+                          & " per cent of what is accounted for");
+                  end loop;
+
+                  Say ("    " & Pad ("ACCOUNTED") & T.Image (Long_Float (Total), 3)
+                       & " s of " & Said (Spent));
+               end;
+            end if;
          end if;
 
          Serving.Close (Serve);

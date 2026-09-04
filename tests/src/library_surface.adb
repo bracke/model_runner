@@ -48,14 +48,6 @@ package body Library_Surface is
       new String'("To_Natural"),
       new String'("Wide_Bits"),
 
-      --  Where a run's time went, phase by phase. Here for the same reason
-      --  Hidden_State is: the program itself never asks -- a run reports
-      --  what it took, not what it spent it on -- and a caller measuring an
-      --  engine has no other way to find out. `tests speed --budget` is the
-      --  caller this was written for, and a library caller tuning against
-      --  its own model is the one it is kept for.
-      new String'("Time_Spent"),
-
       --  Serving several callers from one model. The command serves one
       --  caller and has no reason to ask for any of this; a program serving
       --  several has every reason, and the figures that say what it is worth
@@ -68,7 +60,15 @@ package body Library_Surface is
       --  --serve N` is what exercises them here.
       new String'("Admit"),
       new String'("Retire"),
-      new String'("Gathered")];
+      new String'("Gathered"),
+
+      --  And where a server's time went. Where a run's own phases --
+      --  Llama.Time_Spent -- were on this list until the server started
+      --  summing them, which is what took that one off it: a library
+      --  operation the library itself calls is not surface nobody reaches.
+      --  Named apart from it because the two answer about different things
+      --  and a list of names cannot tell them apart.
+      new String'("Time_Taken")];
 
    ---------------
    -- Is_Listed --

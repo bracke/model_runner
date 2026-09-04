@@ -100,6 +100,8 @@ package Speed_Run is
    --  @param Arrivals How many callers in all, so that Members of them are
    --    being served and the rest are waiting to take a seat.
    --  @param Backend Which backend the model runs on.
+   --  @param Budget True to report where the server's time went, phase by
+   --    phase, summed across the seats.
    procedure Serve
      (Path        : String;
       Prompt_Path : String;
@@ -108,7 +110,8 @@ package Speed_Run is
       Members     : Positive;
       Arrivals    : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU);
+        Model_Runner.Backend.Backend_CPU;
+      Budget      : Boolean := False);
 
 
    --  What one set of repetitions measured. Times are seconds.

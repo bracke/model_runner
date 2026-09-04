@@ -1624,7 +1624,8 @@ begin
                                       Model_Runner.Platform.Core_Count - 1),
                Members     => Number ("--serve", 1),
                Arrivals    => Number ("--callers", Number ("--serve", 1)),
-               Backend     => Backend_Of (Option ("--backend", "cpu")));
+               Backend     => Backend_Of (Option ("--backend", "cpu")),
+               Budget      => Given ("--budget"));
             return;
          end if;
 

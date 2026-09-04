@@ -114,6 +114,10 @@ package Model_Runner.Serving is
    --    the pass is what the pool divides.
    --  @param Context Positions a member may hold, or zero for the model's.
    --  @param Gather Members a round takes at most.
+   --  @param Budget True to keep the phase clock on every seat, so that
+   --    Time_Spent can say where a server's time went. Off by default,
+   --    because it reads the clock at every phase boundary of every pass
+   --    and a server is not a measurement.
    --  @param Status Success or the first refusal.
    procedure Open
      (Item    : in out Server;
@@ -121,7 +125,22 @@ package Model_Runner.Serving is
       Workers : Model_Runner.Backend.CPU.Pool_Reference := null;
       Context : Natural := 0;
       Gather  : Positive := Default_Gather;
+      Budget  : Boolean := False;
       Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Where the server's time went, phase by phase.
+   --
+   --  Summed across the seats, because a round charges its phases to the
+   --  session the call was made on and which seat that is changes with who
+   --  is in the round. A seat keeps its session for the server's life, so
+   --  the sum is the whole of it however many callers passed through.
+   --
+   --  Zero everywhere unless the server was opened with Budget.
+   --
+   --  @param Item The server.
+   --  @return The phases, summed.
+   function Time_Taken
+     (Item : Server) return Model_Runner.Llama.Phase_Times;
 
    --  Close it, and every member with it. Idempotent.
    --
@@ -284,6 +303,7 @@ private
       Workers   : Model_Runner.Backend.CPU.Pool_Reference := null;
       Context   : Natural := 0;
       Gather    : Positive := Default_Gather;
+      Budget    : Boolean := False;
       Open_Now  : Boolean := False;
 
       --  Room for one round's logits, a row a member, allocated once.

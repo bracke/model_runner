@@ -11568,6 +11568,35 @@ exists, and anything smaller rides the round.** On a processor there is no
 such kernel and nothing is read alone. Teaching the matrix kernel to take one
 tile per member is what would remove the exception; it is not built.
 
+**Where a serving run's time goes**, which `tests speed --serve N --callers M
+--budget` now says: the phases are summed across the seats, because a round
+charges them to the session the call was made on and which seat that is
+changes with who is in the round. Eight seats, thirty-two callers, the
+110-token prompt:
+
+| | processor | device |
+| --- | ---: | ---: |
+| the feed-forward | 10.268 s | -- |
+| the three matrices before attention | 3.095 | 4.829 |
+| attention and the half-layer with it | 0.517 | 3.153 |
+| everything else | 1.402 | 0.750 |
+
+The device's two rows are what they are because its whole second half is one
+submission and is counted under attention; the processor's are separate
+calls. **What the device's first row said is that a round was still doing its
+three matrices one call at a time**, on a path a batch of one sequence had
+not used since `### A layer's first half in one submission`. It names no
+cache and no run of positions -- it normalizes each row, multiplies the batch
+by three matrices, and turns the queries and keys by angles the caller
+tabulates a row at a time, every one of which is already a row at a time --
+so the exclusion was over-broad. Only `Whole_Layer` below it, which does name
+a cache, has to refuse a round.
+
+Alternated, medians of three: a round of eight at 1419 positions reads
+**1.656 s against 1.775**, sixteen **3.192 against 3.428**, and the server
+above **8.777 against 9.328**. Six to seven per cent, and every digest and
+every mark unmoved.
+
 The check is the same one the round has. Every token every member is handed
 is digested in the order it was handed out, and the digest repeats run to run
 on a backend. Between backends it repeats for one member and diverges after

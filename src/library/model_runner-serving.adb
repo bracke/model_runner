@@ -41,6 +41,7 @@ package body Model_Runner.Serving is
       Workers : Model_Runner.Backend.CPU.Pool_Reference := null;
       Context : Natural := 0;
       Gather  : Positive := Default_Gather;
+      Budget  : Boolean := False;
       Status  : out Model_Runner.Errors.Error_Info)
    is
       Settings : constant L.Configuration := L.Config (Source);
@@ -55,6 +56,7 @@ package body Model_Runner.Serving is
       Item.Workers := Workers;
       Item.Context := Context;
       Item.Gather := Positive'Min (Gather, Item.Capacity);
+      Item.Budget := Budget;
       Item.Width := N.Element_Count (Settings.Vocabulary);
 
       --  One round's logits, a row a member, taken once. A server that
@@ -224,6 +226,13 @@ package body Model_Runner.Serving is
             end if;
 
             Seat_Here.Seated := True;
+
+            --  Once, where the session is made: Account clears what it has
+            --  counted, and a seat that cleared it for every caller would
+            --  report the last one rather than the server.
+            if Item.Budget then
+               L.Account (Seat_Here.Session, True);
+            end if;
          end if;
 
          --  The sampler is the caller's rather than the seat's: two callers
@@ -603,6 +612,27 @@ package body Model_Runner.Serving is
 
       return Count;
    end Serving;
+
+   function Time_Taken
+     (Item : Server) return Model_Runner.Llama.Phase_Times
+   is
+      Whole : Model_Runner.Llama.Phase_Times := [others => 0.0];
+   begin
+      for Here of Item.Seats loop
+         if Here.Seated then
+            declare
+               Its : constant Model_Runner.Llama.Phase_Times :=
+                 L.Time_Spent (Here.Session);
+            begin
+               for Phase in Model_Runner.Llama.Phase loop
+                  Whole (Phase) := Whole (Phase) + Its (Phase);
+               end loop;
+            end;
+         end if;
+      end loop;
+
+      return Whole;
+   end Time_Taken;
 
    function Rounds (Item : Server) return Natural is (Item.Rounds_Made);
    function Gathered (Item : Server) return Natural is (Item.Last_Round);

@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests speed --serve --budget` says where a server's time went**, phase by
+  phase, summed across the seats — `Model_Runner.Serving.Time_Taken`. The
+  round has had that since the day it was built and the server had not.
+
+### Changed
+
+- **A round takes the fused first half of a layer.** The normalization and
+  the three matrices that read it went over as one sequence for a batch and
+  as four separate calls for a round, and the budget above said the device
+  was spending **fifty-five per cent** of a serving run there. The exclusion
+  was over-broad: that sequence names no cache and no run of positions — it
+  normalizes each row, multiplies the batch by three matrices and turns the
+  queries and keys by angles the caller tabulates a row at a time, all of
+  which were already a row at a time. Only `Whole_Layer` below it, which does
+  name a cache and a run of positions, has to refuse a round, and it does.
+
+  Alternated, medians of three, on the device: a round of eight at 1419
+  positions 1.775 → **1.656 s**, sixteen 3.428 → **3.192**, and a server of
+  eight seats and thirty-two callers 9.328 → **8.777**. Every digest and
+  every mark unmoved.
+
 - **A device figure carries what the device was clocked at.** `tests speed`
   samples the part's clock and power every twentieth of a second through the
   region the wall time is taken around, and reports the mean, the range and
