@@ -122,7 +122,17 @@ package body Model_Runner.Platform.Device.Products is
    --  Below this the row product is the better shape and the matrix one is
    --  a tile mostly full of the zeros the rounding invented. A generated
    --  token is one vector and is the case this is really keeping out.
-   Tile_Least : constant := 32;
+   --
+   --  It was thirty-two, and above Wide_Group that was the wrong side of
+   --  the trade. A tile is a hundred and twenty-eight vectors wide whether
+   --  it is given seventeen or thirty-two, so the matrix product costs the
+   --  same across that whole span -- while the row product above sixteen
+   --  vectors is two dispatches and two passes over every weight. Measured
+   --  on a round of thirty-one sequences: 5.95 s the row way and 4.53 the
+   --  matrix way, and at seventeen 5.39 against 4.16. Sixteen is untouched,
+   --  which is what the boundary being Wide_Group + 1 rather than a round
+   --  number is for.
+   Tile_Least : constant := Wide_Group + 1;
 
    ---------------------------------------------------------------------------
    --  Structures

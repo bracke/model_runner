@@ -1605,32 +1605,33 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.373 s | **0.263 s** |
-| -- evaluating the prompt | 0.051 s | 0.034 s |
-| -- generating | 0.322 s | **0.229 s** |
-| -- processor time | 1.95 s | **0.08 s** |
-| 110-token prompt, nothing generated | 0.367 s | **0.122 s** |
-| -- processor time | 2.75 s | **0.03 s** |
+| 6-token prompt, 12 generated | 0.378 s | **0.260 s** |
+| -- evaluating the prompt | 0.054 s | 0.034 s |
+| -- generating | 0.323 s | **0.228 s** |
+| -- processor time | 1.98 s | **0.08 s** |
+| 110-token prompt, nothing generated | 0.362 s | **0.100 s** |
+| -- processor time | 2.79 s | **0.01 s** |
 
 All six cells were taken in one sitting on 2026-09-04, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
 version of this table before last.
 
-**The device's 110-token cell read 0.098 s in the sitting before this one
-and reads 0.122 here, and the code did not move.** That is the row
-`### A prompt too short to wake the machine` below is about: a tenth of a
-second of work never brings the part above about 1.5 GHz, and where inside
-its low band the clock happens to sit decides the cell. The binary from
-before the change alternated against the one after it reads 0.123, 0.123,
-0.123 and 0.122 in this same sitting, which is what says the difference is
-the machine. The generating row is where the last
+**That cell read 0.098 s, then 0.122, then the 0.100 above, across three
+sittings in one day with the code unmoved between the second and third.**
+It is the row `### A prompt too short to wake the machine` below is about: a
+tenth of a second of work never brings the part above about 1.5 GHz, and
+where inside its low band the clock happens to sit decides the cell. The
+middle sitting was the odd one -- alternated binaries read 0.123 and 0.122
+there and 0.100 here -- and the lesson is the one this file keeps
+relearning: a median of three inside one window is not a defence against a
+window that is itself unusual. The generating row is where the last
 change landed: it read 0.378 s until `### The batch that was not there`
 below, and 0.242 s until `### A generated token carried too` further down
 gave a generated token the carry a batched one already had.
 
 Read the device's generating cell knowing its spread. Over three sittings
 in three days it has read 0.214, 0.217, 0.227, 0.227, 0.227, 0.227, 0.228, 0.228, 0.231,
-0.229, 0.233, 0.233, 0.234, 0.236, 0.237 and 0.240 s, and at sixty-four tokens rather than twelve 1.266, 1.266,
+0.228, 0.229, 0.233, 0.233, 0.234, 0.236, 0.237 and 0.240 s, and at sixty-four tokens rather than twelve 1.266, 1.266,
 1.269, 1.283, 1.319, 1.340, 1.363, 1.364 and 1.373 -- a run-to-run range as wide as most of the
 changes that have moved it. What settles a change of that size is not
 this cell but the alternated pairs under `### A generated token carried
@@ -1638,7 +1639,7 @@ too`, which is why they are there.
 
 **The device wins both runs now, and spends a twentieth of the processor's
 time doing it** on the short run and a hundredth on the long one. Its
-110-token prompt has gone from 1.951 s to 0.122 s. Six changes took the
+110-token prompt has gone from 1.951 s to 0.100 s. Six changes took the
 first two thirds of that, to 0.280 s -- the default batch, the results a
 product reads back, the activation it writes, the kind of memory those
 results are read out of, the width of a workgroup, and -- last and largest -- the batch computed as a
@@ -6573,59 +6574,59 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 353.7 t/s | 36.8 t/s |
-| llama.cpp, processor | 369.3 t/s | 39.6 t/s |
-| model_runner, device | 1182.8 t/s | 49.5 t/s |
-| llama.cpp, device | 1543.3 t/s | 55.8 t/s |
+| model_runner, processor | 347.0 t/s | 36.6 t/s |
+| llama.cpp, processor | 375.3 t/s | 39.5 t/s |
+| model_runner, device | 1506.8 t/s | 50.3 t/s |
+| llama.cpp, device | 1560.0 t/s | 55.5 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
 short to wake the machine` below.
 
-**The device's short prompt has read 1571.4 in three sittings running and
-reads 1182.8 here**, with llama-bench on the same row reading 1543.3 where
-it read 1645.5. Neither side is a change to the code: the device row of both
-tables is what `### Serving several sequences in one pass` and the change
-this sitting restamps for both left alone, and the paragraph under the
-1419-token table has the alternated readings that say so. What this row has
-spent nine sittings saying is that it is inside the spread; this sitting is
-the widest that spread has been.
+**The device's short prompt read 1571.4 in three sittings running, 1182.8
+in one, and 1506.8 here**, with llama-bench on the same row reading 1560.0
+against 1543.3 and 1645.5. Neither side is a change to the code, and the
+paragraph under the 1419-token table has the alternated readings that say
+so. What this row has spent ten sittings saying is that it is inside the
+spread, and the one reading that fell outside it turned out to be the
+window rather than the row.
 
 **And the same four rows against a prompt of 1419 tokens**, which is the one
 every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **281.9 t/s** | 36.8 t/s |
-| llama.cpp, processor | 259.4 t/s | 39.3 t/s |
-| model_runner, device | 1211.8 t/s | 49.5 t/s |
-| llama.cpp, device | 1747.3 t/s | 55.5 t/s |
+| model_runner, processor | **277.0 t/s** | 36.6 t/s |
+| llama.cpp, processor | 255.4 t/s | 39.2 t/s |
+| model_runner, device | 1648.1 t/s | 50.3 t/s |
+| llama.cpp, device | 1734.7 t/s | 55.7 t/s |
 
-**Both device prompt rows fell in this sitting and no device code changed.**
-They read 1571.4 and 1711.7 in the sitting before, and the change this
-sitting restamps for is a shader compiled a third time for a batch of nine
-to thirty-one, which neither of these runs reaches -- a prompt is read a
-hundred and twenty-eight tokens at a time and goes to the matrix kernel.
-That was checked and not assumed: the binary from before the change and the
-one after it, alternated three rounds on the 1419-token device prompt, read
-1.162, 1.176 and 1.164 s against 1.173, 1.176 and 1.186 -- the same figure.
-What moved is the part's clock, which this sitting sampled at a mean of 1755
-of 2700 MHz where earlier sittings on this row have held nearer two
-thousand. The same binary has read 0.829 s and 1.155 s on this row six hours
-apart. It is the same lesson as `### A prompt too short to wake the
-machine`, one band up.
+**The device prompt rows read 1182.8 and 1211.8 for one commit, and that was
+a slow window rather than the code.** The commit before this one published
+them, said in this paragraph that no device code had changed and that the
+part's clock was the reason, and left them standing as measured. Three hours
+later the same two binaries -- alternated, four readings each -- read 0.812
+to 0.841 s on the 1419-token device prompt where that sitting read 1.162 to
+1.186, with the part at 1889 to 1944 MHz rather than 1755. The rows above
+are the second reading and the ratios are back where eight sittings have
+had them. Both readings are kept here because the pair is the finding: the
+same binary, the same host, the same command, **1.41 times apart on the
+strength of a clock state**, and only the second sitting looks like the
+history. A median of three inside one window is not a defence against a
+window that is itself unusual, which is the second time this section has had
+to say that in one day.
 
-**The processor's long prompt is ahead of llama.cpp -- 281.9 tokens a
-second against 259.4 at 1419 -- and its short one is behind, 353.7 against
-369.3 at 110.** The short row
+**The processor's long prompt is ahead of llama.cpp -- 277.0 tokens a
+second against 255.4 at 1419 -- and its short one is behind, 347.0 against
+375.3 at 110.** The short row
 has now been ahead in two of seven sittings and behind in five, with
 llama-bench's own spread on it thirty tokens a second; the rows that repeat
 are the long prompt and the two generating ones. Read the short rows knowing the spread on both sides: llama-bench's
-pp110 has read 369.3 ± 11.1, 340.4 ± 24.4, 371.3 ± 16.6, 346.8 ± 34.5,
-339.4 ± 27.2, 341.3 ± 25.0 and 342.4 ± 25.6 across seven sittings, and its
-device pp110 1543.3, 1645.5, 1538.3, 1579.1, 1640.8, 1583.3 and 1654.0,
-against this program's 1182.8, 1571.4, 1571.4, 1571.4, 1549.3, 1617.6 and
-1486.5. The claim those rows
+pp110 has read 375.3 ± 3.8, 369.3 ± 11.1, 340.4 ± 24.4, 371.3 ± 16.6,
+346.8 ± 34.5, 339.4 ± 27.2, 341.3 ± 25.0 and 342.4 ± 25.6 across eight
+sittings, and its device pp110 1560.0, 1543.3, 1645.5, 1538.3, 1579.1,
+1640.8, 1583.3 and 1654.0, against this program's 1506.8, 1182.8, 1571.4,
+1571.4, 1571.4, 1549.3, 1617.6 and 1486.5. The claim those rows
 carry is that the short prompt is close, not which side of close it lands on
 in a given afternoon. What moved the long one is `### A share a worker, decided
 before any of them started`, below -- eleven per cent of a prompt lost to
@@ -6640,8 +6641,8 @@ Both tables are one sitting, taken with `llama-bench` on the same
 pass, and the machine was gated to a load under 0.6 and a settled part before
 the first of them rather than only cooled. The rule an earlier entry
 added still holds and is what the reading is checked against: the long-prompt
-figure here, 5.034 s, sits beside the 4.972 a second window of the same
-sitting read, so it is a sitting and not a window.
+figure here, 5.123 s, sits beside the 5.034 and 4.972 two other windows of
+the same day read, so it is a sitting and not a window.
 
 **The 1419-token processor row published before this one was wrong, and the
 way it went wrong is the same trap this file keeps setting for itself.** It
@@ -6658,10 +6659,9 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor is **ahead at the longer prompt** -- 1.09 at 1419 tokens --
-and 1.04 behind at 110; the device is 1.44 behind at 1419 and 1.30 behind at
-110, both of them a clock state rather than a code change, as the paragraph
-under the second table says. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
+The processor is **ahead at the longer prompt** -- 1.08 at 1419 tokens --
+and 1.08 behind at 110; the device is 1.05 behind at 1419 and 1.04 behind at
+110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
 were the machine's clock rather than the code's; `### A prompt too short to
 wake the machine` is what they were. Attention grows with the square of the
 context and it is the part of a layer this program is furthest behind on, so a
@@ -6669,8 +6669,8 @@ table taken at a hundred and ten tokens reads a little kinder than the work
 deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±4.7 on 259.4 at 1419 tokens against ±11.1 on 369.3 at
-110** -- under two per cent against three -- and the same 1419 figure read 224.9 ±20 half an hour earlier on a
+three runs it is **±3.9 on 255.4 at 1419 tokens against ±49.2 on 1560.0 at
+110 on the device** -- one and a half per cent against three -- and the same 1419 figure read 224.9 ±20 half an hour earlier on a
 machine that was not quiet -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6682,12 +6682,12 @@ section were taken on and dropping it would throw that away, and a reader
 comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
-On the processor at 110 tokens: **1.1 times slower generating and 1.0 times
-slower reading a prompt** -- the generating figure has read 1.1 three times, 1.2 eight times, 1.3 and 1.4 across sittings, the first four of them
+On the processor at 110 tokens: **1.1 times slower generating and 1.1 times
+slower reading a prompt** -- the generating figure has read 1.1 four times, 1.2 eight times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
-reading of this table said 3.3 and 16. On the device, **1.1** and **1.3**,
-where the sittings before this one said 1.1 and 1.5, then 1.1 and 1.4, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
+reading of this table said 3.3 and 16. On the device, **1.1** and **1.0**,
+where the sittings before this one said 1.1 and 1.3, then 1.1 and 1.5, then 1.1 and 1.4, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.5, then 1.1 and 1.6, then 1.1 and 1.5, then 1.2 and 1.4, then 1.2 and 1.7, then 1.2 and 1.6, then 1.2 and 1.6, then 1.2 and 1.7, then 1.3 and 1.7, then 1.2 and 2.1, then 1.3 and 2.1, then 1.3 and 2.3, then 1.2 and 2.4, then 1.3 and 2.5, then 1.3 and 2.7, then 1.4 and 2.7, then 1.4 and 2.6, then 1.4 and 2.7, then 1.4 and 2.9, then 1.4 and 2.3, then 1.4 and 2.1, then 1.4 and 2.5, then 1.4 and 2.5, then 1.4 and 2.2, then 1.4 and 2.5, then 1.4 and 2.3, then 1.4 and 2.5, then 1.4 and 2.4, then
 1.4 and 2.6, then 1.4 and 2.5, then 1.4 and 3.0, then 1.4 and 3.6, then 1.4 and 3.8, then 1.4
 and 3.9, then 1.4 and 4.0, then 2.0 and 4.0, and the first said 3.8 and
 10.1. Both device rows have moved for a named reason:
@@ -6775,8 +6775,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.311 s
-and 64 in 1.741 s on the processor, 0.093 s and 1.292 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.317 s
+and 64 in 1.748 s on the processor, 0.073 s and 1.273 s on the device,
 medians of three as everywhere else here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -6791,13 +6791,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 759.1 t/s rather
-than 369.3 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 724.2 t/s rather
+than 375.3 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 49.5 t/s
-now, against 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 50.3 t/s
+now, against 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -6959,6 +6959,87 @@ read a hundred and twenty-eight tokens at a time and goes to the matrix one.
 The two binaries alternated on the 1419-token device prompt read 1.162, 1.176
 and 1.164 s against 1.173, 1.176 and 1.186, and on the 110-token one 0.123
 and 0.123 against 0.123 and 0.122. Both runs' digests are what they were.
+
+### Where a round of seventeen belongs
+
+The change above left a band behind it. Between `Wide_Group` and
+`Tile_Least` a batch was served by neither kernel well -- too many vectors
+for one dispatch of the sixteen-wide row product, too few to be let into the
+matrix product -- and a round there cost more than a round of twice the size:
+
+| sequences in a round | before | after |
+| ---: | ---: | ---: |
+| 16 | 3.153 s | 3.112 s |
+| 17 | 5.431 s | **4.155 s** |
+| 24 | 5.704 s | **4.336 s** |
+| 31 | 5.982 s | **4.482 s** |
+| 32 | 4.348 s | 4.348 s |
+
+**Seventeen sequences cost more than thirty-two.** `Tile_Least` was
+thirty-two, so seventeen went down as two dispatches of the row product --
+two passes over every weight in the model -- while thirty-two went to the
+matrix product, whose tile is a hundred and twenty-eight vectors wide
+whether it is handed seventeen or thirty-two. The matrix product costs the
+same thing across that whole span. So the boundary belongs immediately above
+the row product's group and not at a round number, and it is now written
+`Wide_Group + 1` so the two cannot drift apart.
+
+With a 1419-token context the same three rows read 2.849, 2.986 and 3.094 s
+against **2.140, 2.183 and 2.245** -- 1.33 to 1.38. Sixteen is untouched,
+which is the point of the boundary being where it is.
+
+### Three ways of reading a batch that were measured and not kept
+
+The kernel above spends most of its time on one loop: for every weight it
+decodes, it multiplies that weight into sixteen accumulators and reads
+sixteen activations to do it. Those sixteen live one vector-length apart --
+eight kilobytes, for this model -- so the loop touches sixteen cache lines to
+use sixteen floats, and touches them again for the next column.
+
+**How much that spread costs was measured before anything was built.** Two
+builds that compute the wrong answer, alternated against the right one on a
+round of sixteen:
+
+| | reads | 64 rounds |
+| --- | --- | ---: |
+| as it stands | sixteen loads, sixteen lines apart | 3.08 s |
+| the same loads inside one line | `x[from[0] + col + k]` | 2.16 to 2.45 s |
+| one load, sixteen multiply-adds | `x[from[0] + col]` | 1.78 s |
+
+So the spread is worth about **1.34** and the loads themselves about as much
+again. That is a real ceiling and worth chasing. Three things were built to
+chase it and all three are slower than the loop they replace:
+
+**A transposed batch** -- the sixteen values a weight needs made contiguous,
+which is what the middle row above measures -- reads **4.02 s**, a third
+worse. Contiguity across `k` costs contiguity across lanes: eight lanes of a
+row read eight consecutive columns today, one thirty-two byte fetch, and
+under a transpose they read eight blocks sixteen floats apart. The layout
+cannot have both and the one it has is the better one.
+
+**Four columns to a load**, `vec4` instead of four scalars, reads the same
+3.10 s. The compiler did not merge them, and it cannot: the base is
+`vector * columns` and nothing tells it `columns` is a multiple of four.
+
+**A window of the batch staged in shared memory** -- two hundred and fifty-six
+columns at a time in the array the reduction uses later -- reads **12.9 s**
+as first written and **5.3 s** once the bank conflicts were out of it. Eight
+lanes reading a block apart land on one bank of thirty-two, which is eight
+times the reads; giving each lane one word of every block instead of every
+word of one block fixes that and makes the weight read contiguous as well.
+It is still 1.7 times slower than doing nothing. The cache is already serving
+these reads out of the nearest level, and staging them by hand costs the
+barriers and the shared reads without removing anything.
+
+**And a fourth, which is not about the reads at all.** The kernel does
+sixteen multiply-adds per weight whether the batch holds sixteen vectors or
+nine, because `GROUP` is a constant and the loop is unrolled around it.
+Bounding the loop by what the dispatch actually holds -- one word, uniform
+across the workgroup -- reads **5.72 s against 2.85 at nine sequences**, two
+and a half times worse: a dynamically bounded loop is not unrolled, and an
+array indexed by a variable in a loop that is not unrolled leaves registers
+for scratch memory. The shader's own note says the trip count has to be
+constant to unroll. It is right, and this is what it costs to disbelieve it.
 
 ### Drafting
 

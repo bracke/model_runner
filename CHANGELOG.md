@@ -7,6 +7,44 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`Tile_Least` is `Wide_Group + 1` rather than thirty-two**, so a batch
+  between seventeen and thirty-one vectors goes to the matrix product
+  instead of two dispatches of the row product. **Seventeen sequences cost
+  more than thirty-two** before this: the matrix product's tile is a hundred
+  and twenty-eight vectors wide whether it is handed seventeen or
+  thirty-two, so it costs the same across that whole span, while the row
+  product above sixteen is two passes over every weight.
+
+  A round of 17, 24 and 31 on the device reads 4.155, 4.336 and 4.482 s
+  against 5.431, 5.704 and 5.982 — **1.31 to 1.33**, and 1.33 to 1.38 with a
+  1419-token context. Sixteen is untouched. Conformance is 0 outside
+  tolerance; the matrix kernel is half precision, so those batch sizes now
+  answer within tolerance rather than identically.
+
+### Measured
+
+- **Three ways of feeding the wide row kernel, built and not kept**: a
+  transposed batch (4.02 s against 3.10 — contiguity across the batch costs
+  contiguity across lanes), four columns to a `vec4` load (no change — the
+  compiler cannot prove the alignment), and a window of the batch staged in
+  shared memory (12.9 s, then 5.3 with the bank conflicts out, against
+  3.10). And a fourth about the arithmetic rather than the reads: bounding
+  the accumulate loop by what the dispatch holds reads 5.72 s against 2.85,
+  because a loop that is not unrolled sends its accumulators to scratch.
+
+  The ceiling they were chasing was measured first, with two wrong-answer
+  builds: sixteen loads sixteen cache lines apart cost 3.08 s where the same
+  sixteen inside one line cost 2.16 to 2.45. **The spread is real and worth
+  1.34; nothing built so far collects it.**
+
+- **A correction.** The entry before this published the device prompt rows
+  against llama.cpp at 1182.8 and 1211.8 t/s and said they were a clock
+  state rather than the code. Three hours later the same two binaries read
+  0.812 to 0.841 s on the 1419-token device prompt against 1.162 to 1.186,
+  with the part at 1889 to 1944 MHz rather than 1755. The rows are now
+  1506.8 and 1648.1. Both readings are kept: the same binary, host and
+  command, **1.41 times apart on a clock state**.
+
 - **`row_product.comp` is compiled a third time, with `GROUP` at sixteen**,
   and the engine binds it when a batch is between nine and thirty-one
   vectors. `GROUP` is how many vectors an invocation carries and therefore
