@@ -11402,11 +11402,19 @@ not the sign of the difference between them. The long-context table further
 down is the one to argue about, as it is everywhere else in this section.
 
 **The check that matters here is a new one.** The round driver digests every
-token every member chose, in order; greedy from the same prompt is the same
-text, so the two backends must print the same mark -- and they do at every
-count measured. A device round says exactly what a processor round says, which
-nothing else in the suite would have caught: the conformance sweep runs
-evaluations, not rounds.
+token every member chose, in order, so the two backends must print the same
+mark -- and they do at every count measured. A device round says exactly what
+a processor round says, which nothing else in the suite would have caught:
+the conformance sweep runs evaluations, not rounds.
+
+**And it was weaker than it looked until 2026-09-04.** Every member was given
+the same prompt, so every member sat at the same position, and a round whose
+rows read each other's *positions* would have passed. Each member after the
+first is given a prompt one token shorter now, which is what a server's
+members look like. The shipped round passes: the two backends agree at two,
+four and eight members, and part only at thirty-two generated tokens, which
+is the drift this section records for two rows or more. The round tables
+above were taken with the members level and are left as they were.
 
 **All of the figures above are at a context of seventy-one positions**, and a
 round looks different at fourteen hundred. Thirty-two rounds after a

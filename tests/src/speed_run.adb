@@ -1034,8 +1034,15 @@ package body Speed_Run is
            (N.Element_Count (Members) * Width, Rows);
          Room_Of.Allocate (Width, Aside);
 
-         --  Each member opened and given the whole prompt on its own, which
-         --  is prefill as it stands: a member's prompt is its own rows.
+         --  Each member opened and given the prompt on its own, which is
+         --  prefill as it stands: a member's prompt is its own rows.
+         --
+         --  A token shorter for each member after the first, so that the
+         --  members sit at different positions. Every round measured before
+         --  this gave every member the same prompt, so every member sat at
+         --  the same position -- and a round whose rows read each other's
+         --  positions would have looked right. A server's members never sit
+         --  level, so neither do these.
          for Index in Live'Range loop
             L.Open (Live (Index), Engine, Workers => Where,
                     Status => Status);
@@ -1062,7 +1069,12 @@ package body Speed_Run is
                        Natural'Min (At_Token + 127, Last);
                   begin
                      L.Evaluate_Batch
-                       (Live (Index), Engine, Held (At_Token .. Upto),
+                       (Live (Index), Engine,
+                        Held (At_Token
+                              + (if At_Token = 1
+                                 then Natural'Min (Index - 1, Last - 1)
+                                 else 0)
+                              .. Upto),
                         Aside.all, Status => Status);
                      exit when E.Is_Error (Status);
                      At_Token := Upto + 1;

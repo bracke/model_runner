@@ -5,6 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A round's members sit at different positions now.** `tests speed
+  --round N` gave every member the same prompt, so every member sat at the
+  same position — and a round whose rows read each other's *positions* would
+  have passed. Every round figure taken so far was taken that way. Each
+  member after the first gets a prompt one token shorter, which is what a
+  server's members look like.
+
+  The shipped round passes it: processor and device agree at two, four and
+  eight members. They part at thirty-two tokens, which is the cross-backend
+  drift this repository already records for two rows or more.
+
 ### Measured
 
 - **The fused whole layer for a round: built, worth twelve per cent, and
