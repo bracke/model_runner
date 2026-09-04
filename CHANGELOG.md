@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The whole layer for a round, hunted again: what it is not, and one thing
+  that should not be possible.** The stronger check made the hunt possible
+  and the round driver now prints each member's first choice, which said the
+  collision was the wrong signal: **both** members choose the same wrong
+  token, so nothing leaks between them and the per-row table is not
+  implicated.
+
+  The plumbing was bisected a piece at a time — the product push block grown
+  by a word, `place.comp`'s new fields and table read, `Add_Place`'s
+  parameter, `Whole_Layer`'s parameter — and each is harmless on its own.
+  What breaks it is rewriting `Whole_Layer`'s arguments in terms of a
+  constant, **in a branch that is not reached for a round**: guarded with
+  `raise Program_Error` as its first statement, the exception does not fire
+  and the answers are still wrong. It survives `-O0` with inlining off; the
+  crate compiles without `-gnatp` so Ada's checks are on and none fires; a
+  live local of the same type in the same place changes nothing; and the
+  regenerated shaders are byte-identical to the committed ones.
+
+  That is the same signature as the note this repository has carried for
+  weeks about the attention push block. Size was ruled out yesterday; this
+  says what the shape is — **a change with no execution path to the failing
+  computation moves the answer, deterministically, at every optimisation
+  level.** The reproducer is four seconds and is written down.
+
 ### Changed
 
 - **A round's members sit at different positions now.** `tests speed

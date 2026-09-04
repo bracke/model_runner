@@ -8244,6 +8244,68 @@
 #
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-04, the whole layer for a round, hunted with the stronger check.
+# What it is not, and one thing that should not be possible.
+#
+#   THE COLLISION WAS THE WRONG SIGNAL. The round driver prints each
+#   member's first choice now, and in the failing tree BOTH members choose
+#   the same wrong token: 275 at a logit of 17.13, where the processor and
+#   the shipped device both say 29889 at 12.55 and 29892 at 12.60. Nothing
+#   is leaking between members. The round's per-row table is not implicated
+#   at all -- the whole round is wrong, equally, for every row.
+#
+#   THE PLUMBING IS NOT IT EITHER, bisected a piece at a time against the
+#   committed llama.adb, each built and run:
+#
+#     the product push block grown by a word, every aggregate filled   ok
+#     place.comp's two new fields, its table read, its binding renamed  ok
+#     Add_Place carrying a table through to that push                   ok
+#     Whole_Layer carrying a table through to its steps                 ok
+#
+#   AND THE THING THAT SHOULD NOT BE POSSIBLE. What breaks it is the
+#   rewriting of Whole_Layer's arguments in terms of a constant --
+#   Whole_Seat, which is Block_Base for a batch and zero for a round -- and
+#   THAT CALL IS NOT REACHED FOR A ROUND. It was guarded with
+#
+#     if Rounding then raise Program_Error; end if;
+#
+#   as the first statement inside the branch. The exception does not fire.
+#   The answers are still wrong.
+#
+#   What was ruled out around it:
+#
+#     Not the optimiser. It fails at -O0 with -gnatn removed, and the
+#     failure is byte-identical to the -O3 one.
+#
+#     Not Ada's own checks missing something: this crate compiles without
+#     -gnatp, so range and index checks are on and none fires.
+#
+#     Not stack layout by itself. A live local of the same type in the same
+#     declarative part, written and read, changes nothing. Declaring the
+#     two constants and marking them unreferenced changes nothing. It is
+#     declaring one AND using it in the unreachable argument list.
+#
+#     Not the shaders drifting under us. After reverting, the regenerated
+#     model_runner-shaders.ads is byte-identical to the committed one, so
+#     the compiled words are a function of their sources.
+#
+#   THAT IS THE SAME SIGNATURE AS THE NOTE THIS FILE HAS CARRIED FOR WEEKS
+#   -- "widening the attention push block by one field once corrupted this
+#   device's answers and nobody has explained it". The entry above proved
+#   the size is not it. This one says what the shape of the thing actually
+#   is: a change with no execution path to the failing computation moves
+#   the answer, deterministically, at every optimisation level. Something
+#   in this program reads memory it does not own, and both notes are that
+#   thing seen twice.
+#
+#   The whole layer for a round stays out. What is worth more than the
+#   twelve per cent is the reproducer: `tests speed --round 2 --max-tokens 1
+#   --backend device` against the same on the processor, with the two
+#   constants and the argument rewrite applied to llama.adb, is four seconds
+#   and shows it every time.
+#
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
