@@ -701,6 +701,23 @@ package Model_Runner.Llama is
    --  No others, which is every call that is not a round.
    Alone : constant Session_Group (1 .. 0) := [others => null];
 
+   --  How many rows each member of a round contributes, in the members'
+   --  order.
+   --
+   --  One apiece is a decode round: every member says its next token and the
+   --  pass produces one apiece. More than one is a member reading a prompt,
+   --  and the two mix -- a member joining with a hundred tokens to read and
+   --  seven members carrying on with one each is a round of a hundred and
+   --  seven rows, which costs one pass over the weights rather than two.
+   --
+   --  A row is a member and a position and nothing else, so nothing in an
+   --  evaluation cares which of the two kinds it is.
+   type Row_Counts is array (Positive range <>) of Positive;
+
+   --  One row a member, which is what a decode round asks for and what an
+   --  empty share list means.
+   Even_Shares : constant Row_Counts (1 .. 0) := [others => 1];
+
    --  Ask a session to keep account of where its time goes, or to stop.
    --
    --  Off by default, and worth saying why it is a switch rather than
@@ -961,12 +978,16 @@ package Model_Runner.Llama is
    --    question.
    --  @param Beside The sessions rows one and up belong to, where this is a
    --    round of several sequences rather than a batch of one sequence's
-   --    positions. Empty for a batch. A round takes one token a member and
-   --    each row sits at its own session's committed position, so Tokens is
-   --    one longer than Beside; every other row of the pass -- the
+   --    positions. Empty for a batch. Every row of the pass -- the
    --    normalizations, the rotation, the gated middle, the joins -- was
    --    already a row at a time, and the products were already over the
    --    whole batch. See docs/serving-several-sequences.md.
+   --  @param Shares How many rows each member of a round contributes, in
+   --    the members' order, or empty for one apiece. A member reading a
+   --    prompt contributes its length and a member carrying on contributes
+   --    one, and the two travel in the same pass: a row is a member and a
+   --    position and nothing in an evaluation cares which kind it is.
+   --    Ignored for a batch, whose rows are all one session's.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
@@ -976,6 +997,7 @@ package Model_Runner.Llama is
       Every  : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Beside : Session_Group := Alone;
+      Shares : Row_Counts := Even_Shares;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  One token from each of several sessions, in one pass over the weights.
@@ -998,8 +1020,13 @@ package Model_Runner.Llama is
    --
    --  @param Members The sessions taking part, one a row.
    --  @param Source The model they all belong to.
-   --  @param Tokens One token a member, in the members' order.
-   --  @param Logits Receives Vocabulary logits a member, in that order.
+   --  @param Tokens The rows' tokens, a member's rows together and the
+   --    members in order. One a member unless Shares says otherwise.
+   --  @param Shares How many rows each member contributes, or empty for one
+   --    apiece. A member reading a prompt contributes its length; a member
+   --    carrying on contributes one, and the two travel in the same pass.
+   --  @param Logits Receives Vocabulary logits a member -- the member's last
+   --    row -- in the members' order.
    --  @param Cancel Stops between layers, as evaluation does everywhere.
    --  @param Status Success, or the first refusal.
    procedure Evaluate_Round
@@ -1008,6 +1035,7 @@ package Model_Runner.Llama is
       Tokens  : Model_Runner.Tokenizer.Token_Array;
       Logits  : Model_Runner.Tensors.Real_Array_Access;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Shares  : Row_Counts := Even_Shares;
       Status  : out Model_Runner.Errors.Error_Info);
 
    --  What a session has committed, as bytes.

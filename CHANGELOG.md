@@ -7,6 +7,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A joining caller's prompt is read in a round, not in a pass of its own.**
+  `Evaluate_Round` takes a share list — how many rows each member
+  contributes, one apiece being a decode round — so a member reading a prompt
+  and seven members carrying on are one pass of a hundred and thirty-five
+  rows rather than two passes. A row is a member and a position, and nothing
+  in an evaluation cares which of the two kinds it is: the whole of it is a
+  map from row to member built once a call, and the logits come back a row a
+  member rather than a row a row.
+
+  With that and a seat that keeps its session — admitting a caller used to
+  open one and retiring it used to close one, which is a whole context's keys
+  and values allocated, zeroed and freed per caller — **admitting a caller
+  costs ten milliseconds where it cost seventy to four hundred and thirteen**.
+
+  Alternated, medians of three, eight seats and thirty-two callers: the
+  processor 8.817 → **6.827 s** at a seven-token prompt and 19.971 →
+  **16.444 s** at a hundred and ten; the device 9.559 → **7.502 s** and
+  10.754 → **9.292 s**.
+
+  One exception, and it is a kernel: a device answers sixteen query positions
+  at once out of one cache, a round's rows do not share a cache, so a stretch
+  of sixteen or more is still read on its own where that kernel exists.
+
 - **`Model_Runner.Serving`: several callers from one model, a round at a
   time.** The policy over `Evaluate_Round` that
   `docs/serving-several-sequences.md` names — a queue of callers, a round

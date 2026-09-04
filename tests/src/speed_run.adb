@@ -668,6 +668,14 @@ package body Speed_Run is
          Rounds   : Natural := 0;
          Smallest : Natural := Natural'Last;
 
+         --  What the arriving costs, kept apart from what the rounds cost.
+         --  A caller's prompt is read on its own, so a server whose members
+         --  turn over spends part of its time on a pass no round divides,
+         --  and the whole argument for reading several prompts together is
+         --  the size of this number.
+         Joining  : Duration := 0.0;
+         Joined   : Natural := 0;
+
          --  A digest of every token every member was handed, in the order
          --  they were handed out, so that two backends can be held against
          --  each other as the round driver holds them.
@@ -747,9 +755,20 @@ package body Speed_Run is
                Terms.Limit :=
                  Natural'Max (1, Tokens - (Sent - 1) mod Members);
 
-               Serving.Admit
-                 (Serve, Held (1 .. Last), Terms, Who (Sent),
-                  Status => Status);
+               declare
+                  At_Join : constant Ada.Real_Time.Time :=
+                    Ada.Real_Time.Clock;
+               begin
+                  Serving.Admit
+                    (Serve, Held (1 .. Last), Terms, Who (Sent),
+                     Status => Status);
+
+                  Joining :=
+                    Joining
+                    + Ada.Real_Time.To_Duration
+                        (Ada.Real_Time.Clock - At_Join);
+                  Joined := Joined + 1;
+               end;
 
                exit when E.Is_Error (Status);
             end loop;
@@ -775,6 +794,9 @@ package body Speed_Run is
 
          if E.Is_Error (Status) then
             Say ("serving failed: " & E.Error_Code'Image (Status.Code));
+            for Frame in 1 .. Status.Frame_Total loop
+               Say ("  " & Model_Runner.Text.To_String (Status.Frames (Frame)));
+            end loop;
          else
             Say ("members" & Natural'Image (Members)
                  & ", callers" & Natural'Image (Arrivals)
@@ -784,7 +806,12 @@ package body Speed_Run is
                  & Said (Spent / Duration (Natural'Max (Produced, 1)))
                  & " a token, smallest round"
                  & Natural'Image (Smallest)
-                 & ", mark " & Shown (Mark));
+                 & "; joining " & Said (Joining) & " over"
+                 & Natural'Image (Joined) & " callers, "
+                 & T.Image
+                     (Long_Float (Joining)
+                      / Long_Float (Natural'Max (Joined, 1)) * 1000.0, 1)
+                 & " ms each; mark " & Shown (Mark));
          end if;
 
          Serving.Close (Serve);

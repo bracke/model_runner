@@ -49,9 +49,17 @@ package Model_Runner.Backend.Device is
    --  before.
    Block_Limit : constant := 16;
 
-   --  Words a round's per-row table holds: two a row, and room for as many
-   --  rows as there are blocks.
-   Table_Room : constant := 2 * Block_Limit;
+   --  Rows a round's per-row table holds.
+   --
+   --  Rows and not members: a round whose members are all generating has one
+   --  row apiece, and one that carries a joining member's prompt has that
+   --  member's whole prompt in it. Sixteen kilobytes of a cache measured in
+   --  gigabytes, so the number is chosen to be past anything rather than to
+   --  be tight.
+   Table_Rows : constant := 2048;
+
+   --  Words that table holds: two a row.
+   Table_Room : constant := 2 * Table_Rows;
 
    --  A round's per-row table: where each row has got to and where its
    --  cache begins, a row at a time in the rows' order.

@@ -29,6 +29,16 @@ package body Model_Runner.Backend.Device is
 
    Ready_Now : Boolean := False;
 
+   --  Room for what a fused half-layer hands the device and takes back: a
+   --  row's queries and a row's residual, for every row of the call.
+   --
+   --  Held here rather than declared in the procedure because it is sixteen
+   --  kilobytes a row for a small model, and a round carrying a joining
+   --  member's prompt is hundreds of rows: on the stack that is megabytes,
+   --  and the stack said so. Grown to the largest call seen and kept, which
+   --  is one allocation for a run rather than one a layer.
+   Fed_Room : T.Real_Array_Access := null;
+
    --  Whether this device was opened to read the weights where they lie.
    --  Held here because Describe is asked about a device that is already
    --  open and has to answer for how it was opened.
@@ -199,6 +209,7 @@ package body Model_Runner.Backend.Device is
    procedure Close is
    begin
       T.Free (Landing);
+      T.Free (Fed_Room);
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);
@@ -769,8 +780,8 @@ package body Model_Runner.Backend.Device is
       Wanted  : constant Model_Runner.Numerics.Element_Count :=
         Blend + Rest + Slots * Down.Rows;
 
-      Fed     : Model_Runner.Numerics.Real_Array
-                  (0 .. Slots * (Wide + Weight.Rows) - 1);
+      Fed_Span : constant Model_Runner.Numerics.Element_Count :=
+        Slots * (Wide + Weight.Rows);
 
       Steps   : Products.Sequence;
       Packing : Products.Weight_Packing;
@@ -906,12 +917,28 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      --  The queries and the residual, one after the other.
-      Fed (Fed'First .. Fed'First + Slots * Wide - 1) :=
-        Query (Query'First .. Query'First + Slots * Wide - 1);
-      Fed (Fed'First + Slots * Wide .. Fed'Last) :=
-        Residual (Residual'First
-                  .. Residual'First + Slots * Weight.Rows - 1);
+      --  The queries and the residual, one after the other, in room this
+      --  package keeps rather than on the stack: a round carrying a joining
+      --  member's prompt is hundreds of rows at sixteen kilobytes each.
+      if Fed_Room = null or else Fed_Room.all'Length < Fed_Span then
+         T.Free (Fed_Room);
+         T.Allocate (Fed_Span, Fed_Room);
+         if Fed_Room = null then
+            return;
+         end if;
+      end if;
+
+      declare
+         Fed : Model_Runner.Numerics.Real_Array renames
+           Fed_Room.all (Fed_Room.all'First
+                         .. Fed_Room.all'First + Fed_Span - 1);
+      begin
+         Fed (Fed'First .. Fed'First + Slots * Wide - 1) :=
+           Query (Query'First .. Query'First + Slots * Wide - 1);
+         Fed (Fed'First + Slots * Wide .. Fed'Last) :=
+           Residual (Residual'First
+                     .. Residual'First + Slots * Weight.Rows - 1);
+      end;
 
       if Landing = null or else Landing.all'Length < Wanted then
          T.Free (Landing);
@@ -922,7 +949,10 @@ package body Model_Runner.Backend.Device is
       end if;
 
       Products.Run
-        (Engine, Steps, Fed, Natural'Max (Positions, 1),
+        (Engine, Steps,
+         Fed_Room.all (Fed_Room.all'First
+                       .. Fed_Room.all'First + Fed_Span - 1),
+         Natural'Max (Positions, 1),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Halted);
 

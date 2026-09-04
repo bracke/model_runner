@@ -28,12 +28,14 @@ with Model_Runner.Tokenizer;
 --  per member, and so are the stop tokens and the token limit. Nothing here
 --  is shared between members but the model and the pass.
 --
---  What this does not do. Members join by prefilling on their own, which is
---  the batched path exactly as it is today; a round is decode rows only.
---  Mixing a joining member's prompt into a round with everyone else's next
---  token needs a per-row token count as well as a per-row position, and it
---  is worth more than anything here -- see docs/serving-several-sequences.md
---  -- but it is not this.
+--  Joining costs one pass, not one a caller. A member arriving has a prompt
+--  to read, and reading it on its own was the largest thing a server spent
+--  its time on: seventy per cent of a run at a hundred and ten tokens a
+--  prompt, because a pass that reads one caller's prompt reads every weight
+--  in the model for that one caller. A round carries the arrivals instead --
+--  a joining member's next hundred and twenty-eight prompt tokens are rows
+--  of the same round as everyone else's next token -- so a caller's prompt
+--  costs its own arithmetic and no pass of its own.
 package Model_Runner.Serving is
 
    subtype Token_Id is Model_Runner.Tokenizer.Token_Id;
@@ -92,6 +94,15 @@ package Model_Runner.Serving is
    --  Fixed because the sessions are the memory: a member's cache is tens of
    --  megabytes and a server that grew one on demand would be a server whose
    --  worst moment is an allocation. Capacity is decided when it opens.
+   --  Tokens a caller's prompt may have.
+   --
+   --  A prompt is copied into the seat rather than read where it lies,
+   --  because the caller's array is gone by the time the next round reads
+   --  the rest of it. Eight kilobytes a seat, which is nothing beside the
+   --  cache a seat already holds; a longer prompt is refused by name rather
+   --  than truncated.
+   Max_Prompt : constant := 2048;
+
    type Server (Capacity : Positive) is tagged limited private;
 
    --  Open a server on a model.
@@ -117,34 +128,35 @@ package Model_Runner.Serving is
    --  @param Item The server.
    procedure Close (Item : in out Server);
 
-   --  Take a caller on: read its prompt and queue it.
+   --  Take a caller on: give it a seat and its prompt.
    --
-   --  The prompt is read on its own, in batches, which is prefill as it
-   --  stands. What comes back is the first token this member will say, taken
-   --  from the prompt's own last distribution through this member's sampler,
-   --  so a member joins a round with a token to contribute rather than with
-   --  a prompt to catch up on.
+   --  Nothing is evaluated here. The prompt is read by the rounds that
+   --  follow, a hundred and twenty-eight tokens at a time, as rows of the
+   --  same pass that carries everyone else's next token -- which is why
+   --  admitting a caller costs a copy and returns at once.
    --
    --  @param Item The server.
    --  @param Prompt The tokens this member starts from.
    --  @param With_Terms Its sampler, its stops and its limit.
    --  @param Who Which member it became, or No_Member on a refusal.
-   --  @param Cancel Stops a long prefill, as evaluation does everywhere.
    --  @param Status Success, Generation_Batch_Too_Large where the server is
-   --    full, or whatever reading the prompt refused with.
+   --    full, Tensor_Shape_Mismatch where the prompt is longer than the room
+   --    a seat has for one, or Generation_Empty_Prompt.
    procedure Admit
      (Item       : in out Server;
       Prompt     : Token_Array;
       With_Terms : Terms;
       Who        : out Member_Id;
-      Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Status     : out Model_Runner.Errors.Error_Info);
 
-   --  One round: everything ready says one token.
+   --  One round: everything ready moves one step.
    --
-   --  Gathers up to Gather members, evaluates them in a single pass, samples
-   --  each with its own sampler, and retires the ones that ended. A server
-   --  with nothing ready does nothing and says so through Gathered.
+   --  Gathers up to Gather members and evaluates them in a single pass. A
+   --  member that is generating contributes one row and gets a token back; a
+   --  member that is still reading its prompt contributes the next stretch
+   --  of it and gets nothing back until the prompt is done, at which point
+   --  its first token comes out of the same pass. A server with nothing
+   --  ready does nothing and says so through Gathered.
    --
    --  @param Item The server.
    --  @param Cancel Stops between layers.
@@ -223,12 +235,38 @@ private
 
    --  One member's own room. The session is aliased because a round names
    --  its members by access, which is what lets one call carry several.
+   --
+   --  A seat's session outlives the member sitting in it. Opening one costs
+   --  a whole context's keys and values -- a hundred and thirty-eight
+   --  megabytes for a small model at two thousand positions, allocated,
+   --  zeroed and given back -- and a server that did that per caller spent
+   --  a hundred and fifty milliseconds a caller on it, which at a
+   --  seven-token prompt was more than half of what serving cost. The seat
+   --  keeps it and rewinds it instead: Reset invalidates the cache and the
+   --  history and releases nothing.
+   --
+   --  It keeps the seat's block of a device's cache with it, which is the
+   --  same argument a second time: a block given back is a block the next
+   --  caller takes and fills.
    type Seat is limited record
       State   : Member_State := Free;
+
+      --  Whether that session has been opened at all. A seat that has never
+      --  held a member has nothing to rewind.
+      Seated  : Boolean := False;
       Why     : Ending := Still_Going;
       Session : aliased Model_Runner.Llama.Session;
       Sampler : Model_Runner.Sampling.Sampler;
       Terms   : Model_Runner.Serving.Terms;
+
+      --  The caller's prompt and how much of it has been read. A member
+      --  with more to read contributes that much of it to the next round
+      --  instead of a token, which is what makes a caller's arrival cost
+      --  its own arithmetic and no pass of its own.
+      Prompt  : Model_Runner.Tokenizer.Token_Array (1 .. Max_Prompt) :=
+        [others => Model_Runner.Tokenizer.No_Token];
+      Length  : Natural := 0;
+      Read    : Natural := 0;
 
       --  The token this member will contribute to the next round, and the
       --  ones it has said that nobody has taken yet.
@@ -251,6 +289,20 @@ private
       --  Room for one round's logits, a row a member, allocated once.
       Rows      : Model_Runner.Tensors.Real_Array_Access := null;
       Width     : Model_Runner.Numerics.Element_Count := 0;
+
+      --  A stretch of prompt this long is read on its own rather than as
+      --  rows of a round. Zero where every stretch rides the round.
+      --
+      --  A device has a second attention kernel that answers sixteen query
+      --  positions at once out of one cache, and it is what makes a prompt
+      --  on a device fast. A round's rows do not share a cache, so a round
+      --  cannot use it -- which costs nothing while the stretches are
+      --  shorter than the tile and a quarter of the prompt once they are
+      --  longer. So the rule is the kernel's own threshold: a stretch that
+      --  kernel would have taken is read on its own, and anything smaller
+      --  rides the round. On a processor there is no such kernel and
+      --  nothing is read alone.
+      Alone_Above : Natural := 0;
 
       Rounds_Made : Natural := 0;
       Last_Round  : Natural := 0;

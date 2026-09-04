@@ -1,5 +1,7 @@
 with Model_Runner.Limits;
 
+with Model_Runner.Backend;
+
 package body Model_Runner.Serving is
 
    package E renames Model_Runner.Errors;
@@ -18,6 +20,16 @@ package body Model_Runner.Serving is
    --  reason is the same: a batch is bounded, and handing a whole long
    --  prompt to one call is asking for a shape the engine never promised.
    Prefill_Batch : constant := 128;
+
+   --  Rows one round may have. What a batch is bounded at, because a round
+   --  is a batch whose rows belong to several sessions.
+   Row_Limit : constant := L.Max_Batch;
+
+   --  Query positions the device's matrix attention kernel answers at once.
+   --  The same number attention.comp and the engine agree on; named here
+   --  because it is the threshold above which a stretch of prompt is worth
+   --  a pass of its own.
+   Matrix_Queries : constant := 16;
 
    ------------
    -- Open --
@@ -56,6 +68,13 @@ package body Model_Runner.Serving is
          return;
       end if;
 
+      --  Only where the kernel it is about exists.
+      Item.Alone_Above :=
+        (if Model_Runner.Backend."="
+              (L.Capability (Source).Kind, Model_Runner.Backend.Backend_Device)
+         then Matrix_Queries
+         else 0);
+
       Item.Rounds_Made := 0;
       Item.Last_Round := 0;
       Item.Tokens_Made := 0;
@@ -71,13 +90,20 @@ package body Model_Runner.Serving is
    begin
       for Which in Item.Seats'Range loop
          if Item.Seats (Which).State /= Free then
-            L.Close (Item.Seats (Which).Session);
             S.Close (Item.Seats (Which).Sampler);
-            Item.Seats (Which).State := Free;
-            Item.Seats (Which).Held := 0;
-            Item.Seats (Which).Total := 0;
-            Item.Seats (Which).Why := Still_Going;
          end if;
+
+         --  The session outlives the member, so it is closed here and not
+         --  in Retire: this is where a seat stops existing.
+         if Item.Seats (Which).Seated then
+            L.Close (Item.Seats (Which).Session);
+            Item.Seats (Which).Seated := False;
+         end if;
+
+         Item.Seats (Which).State := Free;
+         Item.Seats (Which).Held := 0;
+         Item.Seats (Which).Total := 0;
+         Item.Seats (Which).Why := Still_Going;
       end loop;
 
       T.Free (Item.Rows);
@@ -133,7 +159,6 @@ package body Model_Runner.Serving is
       Prompt     : Token_Array;
       With_Terms : Terms;
       Who        : out Member_Id;
-      Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Status     : out Model_Runner.Errors.Error_Info)
    is
       Free_Seat : Natural := 0;
@@ -148,6 +173,14 @@ package body Model_Runner.Serving is
 
       if Prompt'Length = 0 then
          Status := E.Make (E.Generation_Empty_Prompt);
+         return;
+      end if;
+
+      if Prompt'Length > Max_Prompt then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer
+           (Status, "input", Long_Long_Integer (Prompt'Length));
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Prompt));
          return;
       end if;
 
@@ -172,94 +205,115 @@ package body Model_Runner.Serving is
       begin
          Seat_Here.Terms := With_Terms;
 
-         L.Open
-           (Seat_Here.Session, Item.Source.all,
-            Context => Item.Context,
-            Session_Bounds => Model_Runner.Limits.Default_Session_Limits,
-            Workers => Item.Workers,
-            Status => Status);
+         --  The seat's own session, opened once and rewound after that. A
+         --  rewind invalidates the cache and the history and releases
+         --  nothing, so the second caller in a seat pays none of what the
+         --  first one paid.
+         if Seat_Here.Seated then
+            L.Reset (Seat_Here.Session);
+         else
+            L.Open
+              (Seat_Here.Session, Item.Source.all,
+               Context => Item.Context,
+               Session_Bounds => Model_Runner.Limits.Default_Session_Limits,
+               Workers => Item.Workers,
+               Status => Status);
 
-         if E.Is_Error (Status) then
-            return;
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            Seat_Here.Seated := True;
          end if;
 
+         --  The sampler is the caller's rather than the seat's: two callers
+         --  in one seat are two temperatures, two penalties and two seeds.
+         --  It is a candidate list and two windows, not a cache, so opening
+         --  one a caller is not what serving was spending its time on.
+         S.Close (Seat_Here.Sampler);
          S.Open
            (Seat_Here.Sampler, With_Terms.Sampling,
             Settings.Vocabulary, With_Terms.Seed, Status);
 
          if E.Is_Error (Status) then
-            L.Close (Seat_Here.Session);
             return;
          end if;
 
-         --  The prompt, in batches. Only the last batch's distribution is
-         --  wanted, which is what the engine gives back either way.
-         declare
-            Aside : T.Real_Array_Access := null;
-            At_Token : Natural := Prompt'First;
-         begin
-            T.Allocate (Item.Width, Aside);
-
-            if Aside = null then
-               S.Close (Seat_Here.Sampler);
-               L.Close (Seat_Here.Session);
-               Status := E.Make (E.Memory_Allocation_Failed);
-               return;
-            end if;
-
-            while At_Token <= Prompt'Last loop
-               declare
-                  Upto : constant Natural :=
-                    Natural'Min (At_Token + Prefill_Batch - 1, Prompt'Last);
-               begin
-                  L.Evaluate_Batch
-                    (Seat_Here.Session, Item.Source.all,
-                     Prompt (At_Token .. Upto), Aside.all,
-                     Cancel => Cancel, Status => Status);
-
-                  exit when E.Is_Error (Status);
-                  At_Token := Upto + 1;
-               end;
-            end loop;
-
-            if E.Is_Error (Status) then
-               T.Free (Aside);
-               S.Close (Seat_Here.Sampler);
-               L.Close (Seat_Here.Session);
-               return;
-            end if;
-
-            --  The first token this member will say, through its own
-            --  sampler: a member joins a round with something to
-            --  contribute rather than with a prompt to catch up on.
-            S.Sample (Seat_Here.Sampler, Aside.all, Seat_Here.Next, Status);
-            T.Free (Aside);
-
-            if E.Is_Error (Status) then
-               S.Close (Seat_Here.Sampler);
-               L.Close (Seat_Here.Session);
-               return;
-            end if;
-         end;
+         --  The prompt, copied and not read. What reads it is the rounds
+         --  that follow, a stretch at a time and beside everyone else's
+         --  next token, which is the whole of what admitting a caller is
+         --  meant to cost.
+         Seat_Here.Prompt (1 .. Prompt'Length) := Prompt;
+         Seat_Here.Length := Prompt'Length;
+         Seat_Here.Read := 0;
 
          Seat_Here.State := Running;
          Seat_Here.Why := Still_Going;
          Seat_Here.Held := 0;
          Seat_Here.Total := 0;
-
-         --  That first token is the member's first output, not a spare: it
-         --  is what the prompt produced, and a caller reading this member
-         --  wants it. It goes into a round as well, which is where the
-         --  model reads it -- said once here and read once there.
-         Say (Seat_Here, Seat_Here.Next,
-              Room =>
-                L.Capacity (Seat_Here.Session)
-                - L.Position (Seat_Here.Session));
-
-         Item.Tokens_Made := Item.Tokens_Made + 1;
+         Seat_Here.Next := V.No_Token;
          Who := Member_Id (Free_Seat);
       end;
    end Admit;
+
+   --  One member's next stretch of prompt, on its own.
+   --
+   --  Everything a round does for a reading member, for one member and one
+   --  pass: the stretch is evaluated, the member's position advances, and a
+   --  member that has finished its prompt samples its first token out of
+   --  the same call.
+   procedure Read_Alone
+     (Item   : in out Server;
+      Which  : Positive;
+      Cancel : Model_Runner.Cancellation.Token_Reference;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Here : Seat renames Item.Seats (Which);
+
+      Stretch : constant Positive :=
+        Natural'Min (Prefill_Batch, Here.Length - Here.Read);
+
+      Row   : T.Real_Array_Access := null;
+      Token : Token_Id;
+   begin
+      T.Allocate (Item.Width, Row);
+
+      if Row = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      L.Evaluate_Batch
+        (Here.Session, Item.Source.all,
+         Here.Prompt (Here.Read + 1 .. Here.Read + Stretch),
+         Row.all, Cancel => Cancel, Status => Status);
+
+      if E.Is_Error (Status) then
+         T.Free (Row);
+         Here.Why := Refused;
+         return;
+      end if;
+
+      Here.Read := Here.Read + Stretch;
+      Item.Rounds_Made := Item.Rounds_Made + 1;
+      Item.Last_Round := 1;
+
+      if Here.Read >= Here.Length then
+         S.Sample (Here.Sampler, Row.all, Token, Status);
+
+         if E.Is_Error (Status) then
+            Here.Why := Refused;
+         else
+            Here.Next := Token;
+            Say (Here, Token,
+                 Room =>
+                   L.Capacity (Here.Session) - L.Position (Here.Session));
+            Item.Tokens_Made := Item.Tokens_Made + 1;
+         end if;
+      end if;
+
+      T.Free (Row);
+   end Read_Alone;
 
    ----------
    -- Step --
@@ -270,11 +324,25 @@ package body Model_Runner.Serving is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info)
    is
-      --  Which seats are in this round, in the order they were found. The
-      --  order is the members' order everywhere below: the tokens go in it
-      --  and the rows come back in it.
+      --  Which seats are in this round, in the order they were found. That
+      --  order is the members' order everywhere below: the rows go in it and
+      --  the logits come back in it.
       Chosen : array (1 .. Item.Gather) of Natural := [others => 0];
+      Share  : array (1 .. Item.Gather) of Positive := [others => 1];
       Taken  : Natural := 0;
+
+      --  Rows the round will have. A member generating brings one; a member
+      --  still reading brings the next stretch of its prompt.
+      Rows : Natural := 0;
+
+      --  How many members are still reading, and how long a stretch each of
+      --  them may bring. The row budget is shared out rather than handed to
+      --  whoever is asked first: eight members each taking a hundred and
+      --  twenty-eight rows do not fit in one round, and the ones left out
+      --  wait a round for nothing while the ones let in are no faster for
+      --  having a longer stretch.
+      Readers : Natural := 0;
+      Stretch : Positive := Prefill_Batch;
    begin
       Status := E.Success;
       Item.Last_Round := 0;
@@ -284,14 +352,71 @@ package body Model_Runner.Serving is
          return;
       end if;
 
+      --  A stretch long enough for the device's matrix attention kernel is
+      --  read on its own, because a round cannot use that kernel and the
+      --  kernel is worth more than the pass. One member a step: the others
+      --  wait, which is what they did for every arrival before rounds
+      --  carried any of them.
+      if Item.Alone_Above > 0 then
+         for Which in Item.Seats'Range loop
+            declare
+               Here : Seat renames Item.Seats (Which);
+            begin
+               if Here.State = Running
+                 and then Here.Why = Still_Going
+                 and then Here.Length - Here.Read >= Item.Alone_Above
+               then
+                  Read_Alone (Item, Which, Cancel, Status);
+                  return;
+               end if;
+            end;
+         end loop;
+      end if;
+
+      for Which in Item.Seats'Range loop
+         if Item.Seats (Which).State = Running
+           and then Item.Seats (Which).Why = Still_Going
+           and then Item.Seats (Which).Read < Item.Seats (Which).Length
+         then
+            Readers := Readers + 1;
+         end if;
+      end loop;
+
+      if Readers > 0 then
+         Stretch :=
+           Positive'Max
+             (1,
+              Positive'Min
+                (Prefill_Batch,
+                 (Row_Limit - Natural'Min (Item.Gather, Row_Limit / 2))
+                 / Readers));
+      end if;
+
       for Which in Item.Seats'Range loop
          exit when Taken = Item.Gather;
 
          if Item.Seats (Which).State = Running
            and then Item.Seats (Which).Why = Still_Going
          then
-            Taken := Taken + 1;
-            Chosen (Taken) := Which;
+            declare
+               Here : Seat renames Item.Seats (Which);
+
+               Wants : constant Positive :=
+                 (if Here.Read < Here.Length
+                  then Natural'Min (Stretch, Here.Length - Here.Read)
+                  else 1);
+            begin
+               --  A round is bounded like any other batch, and a member
+               --  that does not fit in this one waits for the next. Left
+               --  out rather than cut short, because a member's stretch is
+               --  already the size the bound was chosen for.
+               exit when Taken > 0 and then Rows + Wants > Row_Limit;
+
+               Taken := Taken + 1;
+               Chosen (Taken) := Which;
+               Share (Taken) := Wants;
+               Rows := Rows + Wants;
+            end;
          end if;
       end loop;
 
@@ -301,18 +426,33 @@ package body Model_Runner.Serving is
 
       declare
          Group  : L.Session_Group (1 .. Taken);
-         Tokens : V.Token_Array (1 .. Taken);
+         Counts : L.Row_Counts (1 .. Taken);
+         Tokens : V.Token_Array (1 .. Rows);
+
+         At_Row : Natural := 0;
       begin
          for Row in 1 .. Taken loop
-            Group (Row) :=
-              Item.Seats (Chosen (Row)).Session'Unchecked_Access;
-            Tokens (Row) := Item.Seats (Chosen (Row)).Next;
+            declare
+               Here : Seat renames Item.Seats (Chosen (Row));
+            begin
+               Group (Row) := Here.Session'Unchecked_Access;
+               Counts (Row) := Share (Row);
+
+               if Here.Read < Here.Length then
+                  Tokens (At_Row + 1 .. At_Row + Share (Row)) :=
+                    Here.Prompt (Here.Read + 1 .. Here.Read + Share (Row));
+               else
+                  Tokens (At_Row + 1) := Here.Next;
+               end if;
+
+               At_Row := At_Row + Share (Row);
+            end;
          end loop;
 
          L.Evaluate_Round
            (Members => Group, Source => Item.Source.all,
             Tokens => Tokens, Logits => Item.Rows,
-            Cancel => Cancel, Status => Status);
+            Cancel => Cancel, Shares => Counts, Status => Status);
 
          if E.Is_Error (Status) then
             --  A round that refused committed nothing, so every member of
@@ -339,24 +479,33 @@ package body Model_Runner.Serving is
                Token : Token_Id;
                Said  : E.Error_Info;
             begin
-               S.Sample
-                 (Here.Sampler,
-                  Item.Rows.all (Base .. Base + Item.Width - 1),
-                  Token, Said);
+               if Here.Read < Here.Length then
+                  Here.Read := Here.Read + Share (Row);
+               end if;
 
-               if E.Is_Error (Said) then
-                  Here.Why := Refused;
+               --  A member still reading says nothing: what comes back for
+               --  it is the distribution after the stretch it just read,
+               --  and the next stretch is what it wants, not a token.
+               if Here.Read >= Here.Length then
+                  S.Sample
+                    (Here.Sampler,
+                     Item.Rows.all (Base .. Base + Item.Width - 1),
+                     Token, Said);
 
-                  if not E.Is_Error (Status) then
-                     Status := Said;
+                  if E.Is_Error (Said) then
+                     Here.Why := Refused;
+
+                     if not E.Is_Error (Status) then
+                        Status := Said;
+                     end if;
+                  else
+                     Here.Next := Token;
+                     Say (Here, Token,
+                          Room =>
+                            L.Capacity (Here.Session)
+                            - L.Position (Here.Session));
+                     Item.Tokens_Made := Item.Tokens_Made + 1;
                   end if;
-               else
-                  Here.Next := Token;
-                  Say (Here, Token,
-                       Room =>
-                         L.Capacity (Here.Session)
-                         - L.Position (Here.Session));
-                  Item.Tokens_Made := Item.Tokens_Made + 1;
                end if;
             end;
          end loop;
@@ -423,7 +572,9 @@ package body Model_Runner.Serving is
             return;
          end if;
 
-         L.Close (Here.Session);
+         --  The session stays, rewound where the next caller takes the
+         --  seat. What goes is the member: its sampler, its tokens and its
+         --  claim on the seat.
          S.Close (Here.Sampler);
          Here.State := Free;
          Here.Why := Still_Going;

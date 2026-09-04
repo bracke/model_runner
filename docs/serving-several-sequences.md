@@ -111,22 +111,28 @@ Above the primitive, policy — **built**, as `Model_Runner.Serving`:
    arrived joins the next one.
 6. Re-form and step again.
 
-A session joining with a prompt prefills on its own first, which is the
-batched path exactly as it is today — its rows are its own tokens.
+A session joining with a prompt used to prefill on its own first. **It does
+not any more**, and that was the largest thing left here: with the arriving
+timed apart from the rounds, sixteen callers through eight seats spent
+seventy per cent of a run on arrivals at a hundred and ten tokens a prompt.
 
-**What that costs, now that the rest is built.** Eight members steady on the
-device read 7.0 ms a token; eight members turning over — sixteen callers
-through eight seats, each from a 110-token prompt — read 13. The arriving is
-the difference, and it is the largest thing left here: a caller's prompt is
-read on its own, so a server whose members turn over spends part of every
-round's worth of time on prefill that no round divides.
+A joining member's next stretch of prompt is rows of the same round as
+everyone else's next token. `Evaluate_Round` takes a share list — how many
+rows each member contributes, one apiece being a decode round — and a row is
+a member and a position and nothing in an evaluation cares which of the two
+kinds it is. Admitting a caller costs a copy of its prompt into its seat and
+ten milliseconds, where it cost seventy to four hundred and thirteen.
 
-Mixing prefill rows and decode rows in one round is what closes it, and it
-needs a per-row token count as well as a per-row position. It was called a
-later thing when this was written, on the ground that the win from it is
-smaller than the win from decode rounds. That was right about the order and
-wrong about the size: with decode rounds built, **it is the bigger of the
-two remaining**.
+Alternated, medians of three, eight seats and thirty-two callers: the
+processor reads **1.29×** at a seven-token prompt and **1.21×** at a hundred
+and ten; the device **1.27×** and **1.16×**.
+
+**One exception, and it is a kernel.** A device has a second attention kernel
+that answers sixteen query positions at once out of one cache, and a round's
+rows do not share a cache. A stretch of sixteen positions or more is read on
+its own where that kernel exists; anything smaller rides the round. Teaching
+that kernel to take one tile per member is what would remove the exception,
+and it is now the thing this design has left.
 
 ## Staging
 

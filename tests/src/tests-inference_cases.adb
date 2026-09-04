@@ -1799,10 +1799,11 @@ package body Tests.Inference_Cases is
                     "the members of a round did not each advance by one "
                     & "position a step");
 
-            --  And what a round refuses. A token a member is the shape it
-            --  takes, and a member that is not open cannot be in one: both
-            --  are refused by name, because a round that ran anyway would
-            --  give somebody another sequence's attention.
+            --  And what a round refuses. The rows have to add up to what
+            --  the members were given -- one apiece unless a share list
+            --  says otherwise -- and a member that is not open cannot be in
+            --  one: both are refused by name, because a round that ran
+            --  anyway would give somebody another sequence's attention.
             L.Evaluate_Round
               (Members => [One'Unchecked_Access, Two'Unchecked_Access],
                Source  => Under.Ready,
@@ -1810,9 +1811,23 @@ package body Tests.Inference_Cases is
                Logits  => Both,
                Status  => Status);
 
-            Assert (Status.Code = E.Generation_Batch_Too_Large,
-                    "a round with fewer tokens than members was not "
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a round with fewer tokens than rows was not "
                     & "refused as a shape: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  And a share list that does not name every member.
+            L.Evaluate_Round
+              (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+               Source  => Under.Ready,
+               Tokens  => [First_Prompt (1), Second_Prompt (1)],
+               Logits  => Both,
+               Shares  => [1 => 2],
+               Status  => Status);
+
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a round whose shares name fewer members than it has "
+                    & "was not refused as a shape: "
                     & E.Error_Code'Image (Status.Code));
 
             L.Close (Two);
@@ -1956,13 +1971,13 @@ package body Tests.Inference_Cases is
                     & E.Error_Code'Image (Status.Code));
 
             Model_Runner.Serving.Admit
-              (Serve, First_Prompt, First_Terms, One, Status => Status);
+              (Serve, First_Prompt, First_Terms, One, Status);
             Assert (E.Is_Ok (Status) and then One /= 0,
                     "the first member was not admitted: "
                     & E.Error_Code'Image (Status.Code));
 
             Model_Runner.Serving.Admit
-              (Serve, Second_Prompt, Then_Terms, Two, Status => Status);
+              (Serve, Second_Prompt, Then_Terms, Two, Status);
             Assert (E.Is_Ok (Status) and then Two /= 0,
                     "the second member was not admitted: "
                     & E.Error_Code'Image (Status.Code));
@@ -1977,12 +1992,13 @@ package body Tests.Inference_Cases is
                        & E.Error_Code'Image (Status.Code));
             end loop;
 
-            --  One fewer round than tokens: a member's first token comes
-            --  out of its own prompt, before it has been in any round.
-            Assert (Model_Runner.Serving.Rounds (Serve) = Steps - 1,
+            --  One round a token: the first of them is the one that reads
+            --  both prompts, which are rows of it like any other, and the
+            --  token each member says comes out of that same pass.
+            Assert (Model_Runner.Serving.Rounds (Serve) = Steps,
                     "a server of two members held to five tokens made"
                     & Integer'Image (Model_Runner.Serving.Rounds (Serve))
-                    & " rounds rather than four");
+                    & " rounds rather than five");
 
             Assert (Model_Runner.Serving.Gathered (Serve) = 2,
                     "the last round did not gather both members");
@@ -2032,12 +2048,30 @@ package body Tests.Inference_Cases is
                Retook : E.Error_Info;
             begin
                Model_Runner.Serving.Admit
-                 (Serve, First_Prompt, First_Terms, Again,
-                  Status => Retook);
+                 (Serve, First_Prompt, First_Terms, Again, Retook);
 
                Assert (E.Is_Ok (Retook) and then Again /= 0,
                        "a retired member's room was not taken again: "
                        & E.Error_Code'Image (Retook.Code));
+
+               --  And a full server says so by name rather than by
+               --  refusing to make progress: a caller told the room is
+               --  gone can wait, and one told nothing cannot.
+               for Seat in 2 .. 4 loop
+                  Model_Runner.Serving.Admit
+                    (Serve, First_Prompt, First_Terms, Again, Retook);
+                  Assert (E.Is_Ok (Retook),
+                          "a seat that was free would not take a caller: "
+                          & E.Error_Code'Image (Retook.Code));
+               end loop;
+
+               Model_Runner.Serving.Admit
+                 (Serve, First_Prompt, First_Terms, Again, Retook);
+
+               Assert (Retook.Code = E.Generation_Batch_Too_Large
+                         and then Again = 0,
+                       "a full server did not refuse a fifth caller by "
+                       & "name: " & E.Error_Code'Image (Retook.Code));
             end;
 
             Model_Runner.Serving.Close (Serve);

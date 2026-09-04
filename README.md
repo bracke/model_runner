@@ -11492,33 +11492,56 @@ server has to re-form.
 
 What a member brings with it is its own. The temperature, the filters, the
 penalties, the seed, the stop tokens and the token limit are one per member;
-what is shared is the model, the worker pool, and the pass. A member joins by
-reading its prompt on its own -- which is prefill exactly as it stands -- and
-the first token it contributes to a round is the one its own prompt produced,
-so it arrives with something to say rather than with reading to catch up on.
+what is shared is the model, the worker pool, and the pass.
 
-Sixteen callers, eight served at once, each from the 110-token prompt and
-held to about thirty-two tokens:
+**A caller arriving used to cost more than a caller generating.** The
+measurement that says so is the one this section was built to take: with the
+arriving timed apart from the rounds, sixteen callers through eight seats
+spent **seventy per cent** of the run on arrivals at a hundred and ten tokens
+a prompt, and thirty-one per cent at seven. Four hundred and thirteen
+milliseconds a caller on the processor, against a round that costs eight.
 
-| | processor | device |
-| --- | ---: | ---: |
-| 4 served, 8 callers | 22 ms a token | **15 ms** |
-| 8 served, 16 callers | 22 ms | **13 ms** |
-| 16 served, 32 callers | 23 ms | **15 ms** |
+Two things were wrong and both are fixed.
 
-**The processor's row is flat and the device's is not**, and the reason is
-the arriving: a caller's prompt is read on its own, so a server whose members
-turn over spends part of every round's worth of time on prefill that no round
-divides. Eight members steady on the device read 7.0 ms a token in the table
-above; eight members turning over read 13. **That gap is what mixing prefill
-rows into a round would close**, and it is the largest thing left in this
-part of the program -- see the end of
-[docs/serving-several-sequences.md](docs/serving-several-sequences.md).
+**A seat keeps its session.** Admitting a caller opened one and retiring it
+closed one, so every caller allocated, zeroed and freed a whole context's
+keys and values -- a hundred and thirty-eight megabytes here -- and gave back
+its block of the device's cache for the next caller to take and re-fill. The
+seat rewinds instead: `Reset` invalidates the cache and the history and
+releases nothing.
 
-With a seven-token prompt the two backends swap: the processor is ahead at
-every count, because a round that short is per-call cost on the device and
-the arriving is nearly free on both. A server is worth putting on a device
-when its callers have something to say.
+**A prompt is read in a round, not in a pass of its own.** A joining member's
+next stretch of prompt is rows of the same round as everyone else's next
+token. That is what `Evaluate_Round`'s share list is for: a member says how
+many rows it contributes, one apiece being a decode round and a hundred and
+twenty-eight being a member reading. A row is a member and a position and
+nothing in an evaluation cares which of the two kinds it is, which is why the
+whole of it is a map from row to member built once a call.
+
+Alternated with the arrangement they replace, medians of three each way,
+eight seats and thirty-two callers, each held to about thirty-two tokens:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| processor, 7-token prompts | 8.817 s | **6.827 s** | 1.29× |
+| device, 7-token prompts | 9.559 s | **7.502 s** | 1.27× |
+| processor, 110-token prompts | 19.971 s | **16.444 s** | 1.21× |
+| device, 110-token prompts | 10.754 s | **9.292 s** | 1.16× |
+
+**Admitting a caller costs ten milliseconds where it cost seventy to four
+hundred and thirteen**, and what is left of it is a copy of the prompt into
+the seat.
+
+**One stretch is still read on its own, and the reason is a kernel.** A
+device has a second attention kernel that answers sixteen query positions at
+once out of one cache, and it is most of why a prompt on a device is fast. A
+round's rows do not share a cache, so a round cannot use it -- which costs
+nothing while the stretches are shorter than its tile and a quarter of the
+prompt once they are longer. So the rule is that kernel's own threshold:
+**a stretch of sixteen positions or more is read on its own where that kernel
+exists, and anything smaller rides the round.** On a processor there is no
+such kernel and nothing is read alone. Teaching the matrix kernel to take one
+tile per member is what would remove the exception; it is not built.
 
 The check is the same one the round has. Every token every member is handed
 is digested in the order it was handed out, and the digest repeats run to run

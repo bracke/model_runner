@@ -6463,6 +6463,7 @@ package body Model_Runner.Llama is
       Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Beside : Session_Group := Alone;
+      Shares : Row_Counts := Even_Shares;
       Status : out E.Error_Info)
    is
       Settings  : constant Configuration := Source.Settings;
@@ -6501,18 +6502,55 @@ package body Model_Runner.Llama is
       --  always did.
       Seated    : Boolean := False;
 
+      --  How many members a round has. A batch is one member contributing
+      --  every row.
+      Members : constant Element_Count :=
+        (if Rounding then Element_Count (Beside'Length) + 1 else 1);
+
+      --  Which member each row belongs to, and how far into that member's
+      --  own share it sits.
+      --
+      --  A round's rows are pairs of a member and a position, and nothing
+      --  else about them follows from the row number: one member may
+      --  contribute a single token while another reads a prompt. The pairs
+      --  are written down rather than derived, which is what lets one
+      --  procedure answer for a batch, for a decode round and for a round
+      --  with a prompt in it.
+      Row_Owner : array (0 .. Element_Count'Max (Count, 1) - 1)
+        of Element_Count := [others => 0];
+      Row_Slot  : array (0 .. Element_Count'Max (Count, 1) - 1)
+        of Element_Count := [others => 0];
+
+      --  Whether the shares given add up to the rows given.
+      Shares_Fit : Boolean := True;
+
       --  The session row Which belongs to. Row nought is always the one the
       --  call was made on.
       function Held_By (Which : Element_Count) return Session_Access
-      is (if Which = 0 or else not Rounding
+      is (if not Rounding or else Row_Owner (Which) = 0
           then Item'Unchecked_Access
-          else Beside (Beside'First + Natural (Which) - 1));
+          else Beside (Beside'First + Natural (Row_Owner (Which)) - 1));
 
       --  Where row Which sits in that session's cache.
       function Sits_At (Which : Element_Count) return Element_Count
       is (if Rounding
-          then Element_Count (Held_By (Which).Committed)
+          then Element_Count (Held_By (Which).Committed) + Row_Slot (Which)
           else Reserved + Which);
+
+      --  The last row a member contributes, which is the row whose
+      --  distribution that member is answered with.
+      function Last_Row (Of_Member : Element_Count) return Element_Count;
+
+      function Last_Row (Of_Member : Element_Count) return Element_Count is
+      begin
+         for Which in reverse 0 .. Count - 1 loop
+            if Row_Owner (Which) = Of_Member then
+               return Which;
+            end if;
+         end loop;
+
+         return 0;
+      end Last_Row;
       Scale     : constant Real :=
         Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
 
@@ -6609,6 +6647,52 @@ package body Model_Runner.Llama is
       is (Which * Stride);
    begin
       Logits := [others => 0.0];
+
+      --  Which member owns each row, before anything asks. One row a member
+      --  where no shares are given, which is a decode round; a batch is one
+      --  member owning every row and the map is left as it starts.
+      if Rounding then
+         if Shares'Length = 0 then
+            Shares_Fit := Count = Members;
+
+            if Shares_Fit then
+               for Which in 0 .. Count - 1 loop
+                  Row_Owner (Which) := Which;
+                  Row_Slot (Which) := 0;
+               end loop;
+            end if;
+         else
+            declare
+               At_Row : Element_Count := 0;
+            begin
+               Shares_Fit := Element_Count (Shares'Length) = Members;
+
+               if Shares_Fit then
+                  for Index in Shares'Range loop
+                     for Slot in 0 .. Element_Count (Shares (Index)) - 1 loop
+                        exit when At_Row >= Count;
+
+                        Row_Owner (At_Row) :=
+                          Element_Count (Index - Shares'First);
+                        Row_Slot (At_Row) := Slot;
+                        At_Row := At_Row + 1;
+                     end loop;
+                  end loop;
+
+                  Shares_Fit := At_Row = Count;
+               end if;
+            end;
+         end if;
+
+         --  A share list that does not add up to the rows given would put
+         --  a row in nobody's cache. Refused by name rather than clamped.
+         if not Shares_Fit then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Integer (Status, "rows", Long_Long_Integer (Count));
+            E.Add_Integer (Status, "members", Long_Long_Integer (Members));
+            return;
+         end if;
+      end if;
 
       --  As in Evaluate: where the products can reach it, set on the way in
       --  by every entry point that reaches one.
@@ -6847,8 +6931,10 @@ package body Model_Runner.Llama is
       --  it has written half a round's positions to a device.
       if Rounding
         and then Item.Held = Exact
+        and then Members <= Element_Count (Model_Runner.Backend.Device
+                                             .Block_Limit)
         and then Count <= Element_Count (Model_Runner.Backend.Device
-                                           .Block_Limit)
+                                           .Table_Rows)
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
@@ -6870,6 +6956,9 @@ package body Model_Runner.Llama is
                          (1 .. 2 * Natural (Count));
                Ok    : Boolean;
             begin
+               --  Two words a row rather than a member: rows of one member
+               --  read the same block and sit at different positions, which
+               --  is what a round with a prompt in it needs said.
                for Which in 0 .. Count - 1 loop
                   Table (2 * Natural (Which) + 1) :=
                     Natural (Sits_At (Which));
@@ -7985,14 +8074,14 @@ package body Model_Runner.Llama is
       --  what the layers just saved.
       if Rounding and then Every /= null
         and then Every.all'Length
-                 >= Count * Element_Count (Settings.Vocabulary)
+                 >= Members * Element_Count (Settings.Vocabulary)
       then
          declare
             Wide_Logits : T.Real_Array_Access := null;
             Vocabulary  : constant Element_Count :=
               Element_Count (Settings.Vocabulary);
          begin
-            T.Allocate (Count * Vocabulary, Wide_Logits);
+            T.Allocate (Members * Vocabulary, Wide_Logits);
 
             if Wide_Logits = null then
                Release;
@@ -8002,18 +8091,28 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            for Which in 0 .. Count - 1 loop
+            --  A row a member and not a row a row: what a member is
+            --  answered with is where its own share ends, and a member
+            --  reading a hundred tokens has no use for the ninety-nine
+            --  distributions in front of that. It is also the difference
+            --  between a projection over a hundred rows and one over
+            --  eight, which for the largest matrix in the model is the
+            --  difference the round exists for.
+            for Member in 0 .. Members - 1 loop
                declare
-                  Origin : constant Element_Count := Slot (Which, Width);
+                  Origin : constant Element_Count :=
+                    Slot (Last_Row (Member), Width);
+
+                  Into : constant Element_Count := Member * Width;
                begin
                   Final_State
                     (Source, Acts.all (Origin .. Origin + Width - 1),
-                     Norm.all (Origin .. Origin + Width - 1));
+                     Norm.all (Into .. Into + Width - 1));
                end;
             end loop;
 
             Product_Batch
-              (Item, Source.Output, Norm, Count, Wide_Logits, Status);
+              (Item, Source.Output, Norm, Members, Wide_Logits, Status);
 
             if E.Is_Error (Status) then
                T.Free (Wide_Logits);
@@ -8022,9 +8121,9 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            for Which in 0 .. Count - 1 loop
+            for Member in 0 .. Members - 1 loop
                declare
-                  Into : constant Element_Count := Which * Vocabulary;
+                  Into : constant Element_Count := Member * Vocabulary;
                begin
                   Finish_Logits
                     (Source,
@@ -8042,8 +8141,8 @@ package body Model_Runner.Llama is
             if Settings.Has_Head then
                Logits :=
                  Wide_Logits.all
-                   ((Count - 1) * Vocabulary
-                    .. (Count - 1) * Vocabulary + Vocabulary - 1);
+                   ((Members - 1) * Vocabulary
+                    .. (Members - 1) * Vocabulary + Vocabulary - 1);
             end if;
 
             T.Free (Wide_Logits);
@@ -8149,6 +8248,7 @@ package body Model_Runner.Llama is
       Tokens  : Model_Runner.Tokenizer.Token_Array;
       Logits  : T.Real_Array_Access;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Shares  : Row_Counts := Even_Shares;
       Status  : out E.Error_Info)
    is
       Settings   : constant Configuration := Source.Settings;
@@ -8159,9 +8259,43 @@ package body Model_Runner.Llama is
    begin
       Status := E.Success;
 
+      --  What the rows add up to, which is one a member unless the caller
+      --  said otherwise.
+      declare
+         Rows : Natural := 0;
+      begin
+         if Shares'Length = 0 then
+            Rows := Members'Length;
+         else
+            for Share of Shares loop
+               Rows := Rows + Share;
+            end loop;
+         end if;
+
+         if Shares'Length /= 0 and then Shares'Length /= Members'Length then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Integer
+              (Status, "members", Long_Long_Integer (Members'Length),
+               E.Param_Tokens);
+            E.Add_Integer
+              (Status, "shares", Long_Long_Integer (Shares'Length),
+               E.Param_Tokens);
+            return;
+         end if;
+
+         if Tokens'Length /= Rows then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Integer
+              (Status, "input", Long_Long_Integer (Tokens'Length),
+               E.Param_Tokens);
+            E.Add_Integer
+              (Status, "rows", Long_Long_Integer (Rows), E.Param_Tokens);
+            return;
+         end if;
+      end;
+
       if Members'Length = 0
         or else Element_Count (Members'Length) > Element_Count (Max_Batch)
-        or else Tokens'Length /= Members'Length
       then
          Status := E.Make (E.Generation_Batch_Too_Large);
          E.Add_Integer
@@ -8246,6 +8380,7 @@ package body Model_Runner.Llama is
          Every  => Logits,
          Cancel => Cancel,
          Beside => Members (Members'First + 1 .. Members'Last),
+         Shares => Shares,
          Status => Status);
 
       T.Free (Aside);
