@@ -6843,35 +6843,43 @@ TinyLlama-1.1B-Chat Q8_0 on both sides, llama.cpp at `95b8e33e1`.
 
 | sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 31.1 | 33.8 | 44.5 | 55.1 |
-| 2 | 47.8 | 57.5 | 64.2 | 98.1 |
-| 4 | 89.5 | 92.8 | 110.3 | 155.9 |
-| 8 | 116.6 | 119.9 | 175.2 | 217.5 |
-| 16 | **142.5** | 128.7 | **255.1** | 445.6 |
+| 1 | 31.1 | 33.8 | 44.7 | 55.1 |
+| 2 | 47.8 | 57.5 | 66.3 | 98.1 |
+| 4 | 89.5 | 92.8 | 115.7 | 155.9 |
+| 8 | 116.6 | 119.9 | 189.8 | 217.5 |
+| 16 | **142.5** | 128.7 | **295.4** | 445.6 |
 
 **And after a seven-token prompt each, sixty-four generated:**
 
 | sequences | ours, processor | llama.cpp | ours, device | llama.cpp |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 34.0 | 39.5 | 49.8 | 57.6 |
-| 2 | 55.6 | 71.1 | 71.4 | 108.0 |
-| 4 | 112.8 | 135.9 | 137.6 | 196.8 |
-| 8 | 172.7 | 221.9 | 254.0 | 259.1 |
-| 16 | 216.6 | 242.1 | **491.6** | 613.9 |
+| 1 | 34.0 | 39.5 | 49.4 | 57.6 |
+| 2 | 55.6 | 71.1 | 70.8 | 108.0 |
+| 4 | 112.8 | 135.9 | 137.8 | 196.8 |
+| 8 | 172.7 | 221.9 | 254.1 | 259.1 |
+| 16 | 216.6 | 242.1 | **490.4** | 613.9 |
 
-**The device column at sixteen has moved twice since this table was first
-taken** -- 266.7, then 332.9 with `### The pass over the weights a tenth row
-cost`, then the 491.6 here with `### A tile the size of the batch`, and
-182.0 to 208.9 to 255.1 at a long context. The counts below nine are the
-same code throughout and read the same, and the processor column is
-untouched by either change.
+**The device column at sixteen has moved three times since this table was
+first taken** -- 266.7, then 332.9 with `### The pass over the weights a
+tenth row cost`, then 491.6 with `### A tile the size of the batch`, and
+182.0 to 208.9 to 255.1 to 295.4 at a long context, where `### The cache a
+round reads twice the size of` took the last step. The counts below nine are
+the same code throughout and read the same, and the processor column is
+untouched by all three.
+
+**The two contexts moved for different reasons and that is the useful
+part.** The short one moved because of the products, which is what the first
+two changes were about; the long one moved again after that because of the
+cache, which the third is. A round of sixteen at a long context is now 1.51
+behind llama.cpp where it was 2.45 this morning, and at a short one 1.25
+where it was 2.30.
 
 **The processor holds up and the device does not.** On the processor this
 program is between 1.03 and 1.28 behind and **ahead at sixteen sequences with
 a long context** -- 142.5 against 128.7, where llama.cpp's own curve turns
 down. On the device it is behind everywhere and the gap is not a constant:
-1.2 at one sequence, **1.4 to 1.5 at two and four**, 1.02 to 1.24 at eight,
-and 1.25 to 1.75 at sixteen.
+1.2 at one sequence, **1.4 to 1.5 at two and four**, 1.02 to 1.15 at eight,
+and 1.25 to 1.51 at sixteen.
 
 **That shape is the finding, not the average.** A curve that is worse at two
 and level at eight is not a slower program; it is a program whose scaling
@@ -7126,6 +7134,81 @@ puts fifty-three per cent in the strip kernel and twenty-one in the procedure
 around it -- the activations quantized, the scale tables built, the remainders
 -- and ten in the worker pool's waiting. That twenty-one per cent is the next
 processor question and it is not a question about rounds.
+
+### The cache a round reads twice the size of
+
+Splitting a round of sixteen by context length says where the last of the
+gap is:
+
+| per round-step, sixteen sequences, device | ours | llama.cpp |
+| --- | ---: | ---: |
+| after a 7-token prompt | 32.5 ms | 26.1 ms |
+| after a 1419-token prompt | 62.7 ms | 35.9 ms |
+| so attention over 1420 positions | **30.2 ms** | **9.8 ms** |
+
+**Everything but attention was 1.25 behind and attention was 3.1 behind**,
+and the reason was one line: `attention.comp` declares its cache binding as
+`float kv[]`. `place.comp` has written every position twice for some time
+now -- once as it is and once as half precision, in a copy that lies after
+the cache proper and is indexed the same way -- and `attention_matrix.comp`
+was the only thing that read the second. A round could not: that kernel
+takes a batch of queries against one cache, and a round is one query against
+each of several.
+
+The arithmetic agreed before anything was built. A round of sixteen at 1419
+positions reads about a gigabyte of cache a step; in 30.2 ms that is 34
+gigabytes a second, and llama.cpp moving half as much in 9.8 ms is 53 --
+a rate, not a different algorithm.
+
+So `attention.comp` is compiled a fourth time with `HALVED`, which reads the
+copy that was already there. Alternated, three rounds each, 1419-token
+prompts:
+
+| sequences | before | after | |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.719 s | 0.721 s | -- |
+| 8 | 1.472 s | **1.347 s** | 1.09 |
+| 16 | 2.025 s | **1.750 s** | 1.16 |
+
+and a short context is a wash, as it should be: seventy-one positions is not
+where a cache costs anything. **A round of sixteen at a long context now
+generates 295.4 tokens a second against 255.1, and is 1.51 behind llama.cpp
+where it was 2.45 this morning.**
+
+**The per-row table is the one thing not in the copy**, and it is why this is
+a compilation rather than a binding change. The table lives at the end of the
+cache proper -- the same buffer -- so under `HALVED` its words are read as
+the two halves they were written as, low half first, which is how a
+little-endian device stores them.
+
+**It is bound for a round and for nothing else, and that was a decision
+rather than a limit.** The kernel would serve any case the matrix and tiled
+ones leave alone, and the biggest of those is one token generated with a long
+cache behind it. Tried that way it reads 1.362 and 1.375 s against 1.374 and
+1.415 -- a wash, because one query against thirty-two heads is short of work
+rather than short of bandwidth. Half precision for nothing gained is a bad
+bargain, so that case keeps the cache proper and its exact answer.
+
+### The setup around the strip kernel, which is not what it looked like
+
+A profile of a processor round puts 52.8 per cent in `Rows_By_Strips` and
+**20.9 in `Rows`, the procedure around it** -- and annotating that twenty-one
+per cent shows a scalar loop converting half-precision weight scales one at a
+time, two byte loads and a `vcvtph2ps` each. It reads a two-byte scale out of
+every thirty-four-byte block of the whole tile, which is a second pass over
+the weights, and it is built once per product where three products share an
+activation. That is a good story and it is wrong.
+
+**The ablation says so.** A build that fills the scale table with a constant
+-- the wrong answer, and none of the conversion -- reads 4.872 and 4.687 s
+against 4.453 and 4.836 on a round of sixteen. There is nothing there to
+take. Either the tile is small enough that the second pass is served from
+cache and the conversion hides under the dot product, or the twenty-one per
+cent is inlined strip work that the profiler attributes to the caller. Both
+are consistent with what was measured and neither leaves anything to do.
+
+The processor round remains what the section above it says: behind by the
+same amount at every count, because a token is behind by that amount.
 
 ### Drafting
 

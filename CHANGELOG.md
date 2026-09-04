@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`attention.comp` is compiled a fourth time with `HALVED`**, reading the
+  half-precision copy of the cache that `place.comp` already writes, and a
+  round binds it. Splitting a round of sixteen by context length put
+  everything but attention 1.25 behind llama.cpp and **attention 3.1
+  behind** — 30.2 ms a round-step against 9.8 — because the round's kernel
+  declared its cache binding as `float kv[]` while the copy sat unread.
+
+  Alternated three rounds each with 1419-token prompts, a round of 8 and 16
+  reads **1.09 and 1.16** times faster; a short context is a wash. A round of
+  sixteen at a long context now generates 295.4 t/s against 255.1, and is
+  1.51 behind llama.cpp where it was 2.45 this morning.
+
+  Bound for a round and nothing else, which was a decision: the same kernel
+  serves one token generated with a long cache behind it, and there it reads
+  1.362 and 1.375 s against 1.374 and 1.415 — a wash. Half precision for
+  nothing gained is a bad bargain, so that case keeps its exact answer.
+
+### Measured
+
+- **The setup around the strip kernel is not what it looked like.** A
+  profile of a processor round puts 20.9 per cent in `Rows` rather than in
+  `Rows_By_Strips`, and annotating it shows a scalar half-precision scale
+  conversion reading two bytes out of every thirty-four-byte block — a
+  second pass over the weights, once per product. A build that fills that
+  table with a constant, doing none of the conversion, reads **4.872 and
+  4.687 s against 4.453 and 4.836**. There is nothing there to take.
+
 - **`matrix_product.comp` is compiled twice more with `NARROW`**, which sets
   its tile to thirty-two vectors instead of a hundred and twenty-eight, and
   the engine gives a batch of nine to sixty-four one of those. A tile costs

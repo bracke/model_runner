@@ -5693,6 +5693,19 @@ package body Checks is
                   & "attention_tiled.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
+
+         --  And the fourth, with HALVED, which is what a round binds.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Attention_Halved_Digest
+         then
+            Fail ("the fourth compilation of src/shaders/attention.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DHALVED to "
+                  & "attention_halved.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
       end;
 
       --  And the fourth, which only some devices run: the matrix product.

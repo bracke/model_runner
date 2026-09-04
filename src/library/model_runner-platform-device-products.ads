@@ -1133,6 +1133,12 @@ private
       --  sequences through a hundred-and-twenty-eight-wide tile pays for a
       --  hundred and eleven vectors of zeros. Null if the device refused
       --  them, which leaves those counts on the wide tile.
+      --  Attention again, compiled to read the half-precision copy of the
+      --  cache that place.comp already writes. It is what a round binds:
+      --  the matrix kernel reads that copy and a round cannot use it, so
+      --  until now a round read a cache twice the size it needed to.
+      Halver_Attend : System.Address := System.Null_Address;
+
       Narrow     : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
 
@@ -1151,6 +1157,7 @@ private
       Matrix_Line : System.Address := System.Null_Address;
       Halve_Line  : System.Address := System.Null_Address;
       Extra_Line  : System.Address := System.Null_Address;
+      Halved_Line : System.Address := System.Null_Address;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;

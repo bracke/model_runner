@@ -359,9 +359,26 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
+       elsif Rounding and then Item.Halved_Line /= Null_Handle
+       then Item.Halved_Line
        elsif Item.Group_Line /= Null_Handle
        then Item.Group_Line
        else Item.Attend_Line);
+
+   --  Whether the kernel that choice lands on reads the half-precision copy
+   --  rather than the cache proper, which decides where the bases point.
+   --  Asked wherever they are computed, so that the two cannot disagree.
+   --
+   --  A round and nothing else, though the kernel would serve any case the
+   --  matrix and the tiled ones leave alone. It was tried that way and the
+   --  case it would have taken -- one token generated with a long cache
+   --  behind it -- reads 1.362 and 1.375 s against 1.374 and 1.415, which
+   --  is a wash: one query against thirty-two heads is not short of
+   --  bandwidth, it is short of work. Half precision for nothing gained is
+   --  a bad bargain, so that case keeps the cache proper and its answer.
+   function Attends_By_Halves
+     (Item : Engine; Rounding : Boolean) return Boolean
+   is (Rounding and then Item.Halved_Line /= Null_Handle);
 
    --  And how many workgroups that kernel wants down the second axis: one
    --  per query position, or one per block of them where the tiled kernel
@@ -1425,6 +1442,27 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Query_Tile := Made;
                   end if;
                end;
+
+               --  And once more with HALVED, which reads the cache in half
+               --  precision. It is the subgroup one again -- a round binds
+               --  it -- so it needs the same device offer, and it is
+               --  allowed to fail on its own: a device that refuses it
+               --  reads the cache proper as it always did.
+               declare
+                  Halved : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attention_Halved;
+               begin
+                  Request.Size :=
+                    Interfaces.C.size_t (Halved'Length * 4);
+                  Request.Code := Halved'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Halver_Attend := Made;
+                  end if;
+               end;
             end if;
          end if;
       end;
@@ -1771,6 +1809,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Tile_Line := Made;
+            end if;
+         end if;
+
+         if Item.Halver_Attend /= Null_Handle then
+            Request.Stage.Module := Item.Halver_Attend;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Halved_Line := Made;
             end if;
          end if;
 
@@ -2256,6 +2304,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
+      Give_Back (Item.Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -2268,6 +2317,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Single, "vkDestroyShaderModule");
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
+      Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
@@ -5647,19 +5697,23 @@ package body Model_Runner.Platform.Device.Products is
                         K_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.K_Base)
-                             + (if This.Table = 0
-                                  and then Attends_By_Matrix
-                                     (Item, Count, This.Head_Size,
-                                      This.Value_Size)
+                             + (if (This.Table = 0
+                                    and then Attends_By_Matrix
+                                       (Item, Count, This.Head_Size,
+                                        This.Value_Size))
+                                  or else Attends_By_Halves
+                                            (Item, This.Table > 0)
                                 then Item.Cache_Elements * 2
                                 else 0)),
                         V_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.V_Base)
-                             + (if This.Table = 0
-                                  and then Attends_By_Matrix
-                                     (Item, Count, This.Head_Size,
-                                      This.Value_Size)
+                             + (if (This.Table = 0
+                                    and then Attends_By_Matrix
+                                       (Item, Count, This.Head_Size,
+                                        This.Value_Size))
+                                  or else Attends_By_Halves
+                                            (Item, This.Table > 0)
                                 then Item.Cache_Elements * 2
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),

@@ -44,6 +44,12 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 
+#ifdef HALVED
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16   : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
 //  A batch of positions attending to everything the cache holds.
 //
 //  The scores against every cached key, the bound the architecture states on
@@ -121,7 +127,42 @@ layout(local_size_x = 256) in;
 layout(local_size_x = 64) in;
 #endif
 
+//  The cache, in one of its two precisions.
+//
+//  place.comp writes every position twice -- once as it is and once as half
+//  precision, in a copy that lies after the cache proper and is indexed the
+//  same way -- and until now only attention_matrix.comp read the second.
+//  A round could not: that kernel takes a batch of queries against one
+//  cache and a round is one query against each of several.
+//
+//  So this source is compiled once more with HALVED, which reads the same
+//  copy through this binding and is what a round binds. The bytes a
+//  position costs are halved and the cache is what a long context spends
+//  its time reading: a round of sixteen sequences at 1419 positions spent
+//  thirty milliseconds of a sixty-three millisecond step here.
+//
+//  The per-row table is the one thing that is not in the copy. It lives at
+//  the end of the cache proper, which is the same buffer, so under HALVED
+//  it is read as two halves of the word it was written as -- the low half
+//  first, which is how a little-endian device stores it and every device
+//  this runs on is one.
+#ifdef HALVED
+layout(std430, binding = 0) readonly buffer Cache { float16_t kvh[]; };
+
+float held_at (uint at) { return float (kvh[at]); }
+
+uint word_at (uint at) {
+    return uint (float16BitsToUint16 (kvh[at * 2u]))
+         | (uint (float16BitsToUint16 (kvh[at * 2u + 1u])) << 16u);
+}
+#else
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
+
+float held_at (uint at) { return kv[at]; }
+
+uint word_at (uint at) { return floatBitsToUint (kv[at]); }
+#endif
+
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
 layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
 
@@ -359,7 +400,7 @@ void main() {
         //  was pushed: the end of the text is the end of the text for all
         //  of them.
         uint last = shape.table_at != 0u
-                  ? floatBitsToUint (kv[shape.table_at + slot * 2u])
+                  ? word_at (shape.table_at + slot * 2u)
                   : shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
@@ -372,7 +413,7 @@ void main() {
         //  Where this row's own cache begins, which is nothing at all for a
         //  batch and a member's worth for each row of a round.
         held_of[i] = shape.table_at != 0u
-                   ? floatBitsToUint (kv[shape.table_at + slot * 2u + 1u])
+                   ? word_at (shape.table_at + slot * 2u + 1u)
                    : 0u;
         q_of[i] = slot * shape.heads * shape.head_size
                   + head * shape.head_size;
@@ -439,7 +480,7 @@ void main() {
                 float kc[8];
 
                 for (uint e = 0u; e < 8u; e++) {
-                    kc[e] = kv[k_at + c + e];
+                    kc[e] = held_at (k_at + c + e);
                 }
 
                 for (uint i = 0u; i < QUERIES; i++) {
@@ -450,7 +491,7 @@ void main() {
             }
 
             for (uint c = whole; c < shape.head_size; c++) {
-                float kc = kv[k_at + c];
+                float kc = held_at (k_at + c);
                 for (uint i = 0u; i < QUERIES; i++) {
                     dot[i] += q[q_of[i] + c] * kc;
                 }
@@ -553,9 +594,9 @@ void main() {
                 float v[8];
 
                 for (uint e = 0u; e < 8u; e++) {
-                    v[e] = kv[shape.v_base + held_of[0]
-                              + (base + j + e) * shape.v_width
-                              + group * shape.value_size + c];
+                    v[e] = held_at (shape.v_base + held_of[0]
+                                    + (base + j + e) * shape.v_width
+                                    + group * shape.value_size + c);
                 }
 
                 for (uint i = 0u; i < QUERIES; i++) {
@@ -566,9 +607,9 @@ void main() {
             }
 
             for (uint j = run; j < hi; j++) {
-                float v = kv[shape.v_base + held_of[0]
-                             + (base + j) * shape.v_width
-                             + group * shape.value_size + c];
+                float v = held_at (shape.v_base + held_of[0]
+                                   + (base + j) * shape.v_width
+                                   + group * shape.value_size + c);
 
                 for (uint i = 0u; i < QUERIES; i++) {
                     got[i] += tile[i * LANES + j] * v;
