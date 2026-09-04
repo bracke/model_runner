@@ -8922,6 +8922,58 @@
 #   load:  about 1.0 for the A/B, 1.0 to 1.5 for the alternation
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-04, two more ways of narrowing, both measured and neither kept,
+# and the redundancy the arithmetic found instead.
+#
+#   A TILE OF SIXTEEN. Whole_Tiles (16) is thirty-two, so a round of sixteen
+#   still sends half a tile of invented zeros through the instruction. TILE_V
+#   at sixteen takes that half back and is slower at every count:
+#
+#     seqs   tile of 32   tile of 16
+#        9      1.922 s      2.060 s
+#       16      2.083        2.176
+#       24      2.127        3.349
+#       32      2.269        3.494
+#       48      3.779        5.044
+#       64      4.035        6.975
+#
+#   AV is TILE_V / 16, so sixteen makes it one and the weight tile staged in
+#   shared memory is used once per load rather than twice. That is the trade
+#   matrix_product.comp's own note pinned when it chose eight against two
+#   over two against eight -- 1709 against 328 gigaflops -- and thirty-two is
+#   the floor for that reason and not for how full the tile is.
+#
+#   THE HALVED CACHE READ AS WORDS. Halving the bytes bought a third of the
+#   time and not a half, which says the loads stayed eight where the bytes
+#   halved. Eight consecutive key components are four uint words, so the
+#   HALVED binding was declared uint and unpacked with unpackHalf2x16 -- one
+#   fetch instead of eight, and the per-row table read as one word each
+#   rather than recombined from two halves. Alternated, 1419-token prompts:
+#
+#      8 seqs   before 1.341, 1.356 s   after 1.380, 1.377
+#     16 seqs   before 1.721, 1.779     after 1.813, 1.787
+#
+#   No better. The unpack pays back what the fetch saves. The values cannot
+#   be read that way in any case: their eight are eight positions of one
+#   component, a row of the cache apart.
+#
+#   WHAT THE ARITHMETIC FOUND INSTEAD, and it is worth more than either.
+#   Attention still moves about 24 GB/s where llama.cpp moves 53. This model
+#   has 32 attention heads and 4 key-value heads (attention.head_count 32,
+#   attention.head_count_kv 4), so group_size is eight: eight query heads
+#   share one group of keys and values. attention.comp dispatches ONE
+#   WORKGROUP PER QUERY HEAD, so each group's slice of the cache is read
+#   eight times over, once by each workgroup that wants it. Whether those
+#   eight land close enough together to share a cache is the device's
+#   business; a kernel that gave a group's eight heads to one workgroup
+#   would read it once and not have to hope.
+#
+#   That is a kernel change rather than a constant, and it is the next
+#   thing.
+#
+#   load:  0.73 for the tile sweep, 1.42 for the word alternation
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

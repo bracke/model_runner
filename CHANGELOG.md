@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **Two more ways of narrowing, both measured and neither kept.** A tile of
+  sixteen vectors instead of thirty-two is slower at every count — `AV`
+  becomes one, so the weight tile staged in shared memory is used once per
+  load rather than twice, which is the trade `matrix_product.comp`'s own note
+  pinned. And reading the halved cache as `uint` words rather than as halves,
+  one fetch for eight key components instead of eight, is a wash: 1.380 and
+  1.377 s against 1.341 and 1.356.
+
+  **What the arithmetic found instead is worth more than either.** Attention
+  moves about 24 GB/s where llama.cpp moves 53, and this model has 32
+  attention heads against 4 key-value heads — so eight query heads share one
+  group, and `attention.comp` dispatches **one workgroup per query head**.
+  Each group's slice of the cache is read eight times over. A kernel that
+  gave a group's eight heads to one workgroup would read it once.
+
 ### Changed
 
 - **`attention.comp` is compiled a fourth time with `HALVED`**, reading the

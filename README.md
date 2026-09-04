@@ -7210,6 +7210,54 @@ are consistent with what was measured and neither leaves anything to do.
 The processor round remains what the section above it says: behind by the
 same amount at every count, because a token is behind by that amount.
 
+### Two more ways of narrowing, and what they found instead
+
+Narrowing the tile paid twice, so the obvious third was to narrow it again.
+`Whole_Tiles (16)` is thirty-two, so a round of sixteen sequences still puts
+half a tile of invented zeros through the matrix instruction; a `TILE_V` of
+sixteen would take that half back.
+
+**It is slower at every count, and the shader's own note said why before it
+was tried.** `AV` is `TILE_V / 16`, so sixteen makes it one, and the weight
+tile staged in shared memory is then used once per load rather than twice --
+which is the trade that note pinned when it chose eight against two over two
+against eight:
+
+| sequences | tile of 32 | tile of 16 |
+| ---: | ---: | ---: |
+| 9 | 1.922 s | 2.060 s |
+| 16 | 2.083 s | 2.176 s |
+| 24 | 2.127 s | 3.349 s |
+| 32 | 2.269 s | 3.494 s |
+| 64 | 4.035 s | 6.975 s |
+
+Thirty-two is the floor, and it is a floor for a reason that has nothing to
+do with how full the tile is.
+
+**And the halved cache read as words rather than as halves is a wash.**
+Halving the bytes bought a third of the time and not a half, which said the
+loads had stayed eight where the bytes had halved; reading eight consecutive
+components as four `uint`s and unpacking them makes it one fetch. It reads
+1.380 and 1.377 s against 1.341 and 1.356 at eight sequences, and 1.813 and
+1.787 against 1.721 and 1.779 at sixteen -- no better, and the `unpackHalf2x16`
+pays back what the fetch saves. The values cannot be done that way in any
+case: their eight are eight positions of one component, a row of the cache
+apart.
+
+**What the arithmetic found instead is worth more than either.** Attention
+still moves about twenty-four gigabytes a second where llama.cpp moves
+fifty-three, and the reason is not the loads. This model has thirty-two
+attention heads and **four key-value heads**, so eight query heads share one
+group of keys and values -- and this kernel dispatches **one workgroup per
+query head**. Each group's slice of the cache is therefore read eight times
+over, once by each of the eight workgroups that want it. Whether those eight
+land close enough together to share a cache is the device's business and not
+ours; a kernel that gave a group's eight heads to one workgroup would read it
+once and would not have to hope.
+
+That is the next thing to build, and it is a kernel change rather than a
+constant.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what
