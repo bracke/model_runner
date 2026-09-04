@@ -35,6 +35,8 @@
 --  used.
 --
 --  Task safety: run from one task.
+with Device_Clock;
+
 with Model_Runner.Backend;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
@@ -133,6 +135,13 @@ package Speed_Run is
       --  another; one that does not has to be believed.
       Load_Before : Long_Float := 0.0;
       Load_After  : Long_Float := 0.0;
+
+      --  And what the device was clocked at while it ran, where the run was
+      --  on one and the host says. The other half of the moment: a figure
+      --  taken while the part held two thirds of its top state is not the
+      --  same figure as one taken while it held all of it, and until this
+      --  existed nothing said which had happened. See Device_Clock.
+      Clock : Device_Clock.Reading;
 
       --  Processor seconds the whole run spent, which is what a worker
       --  count is really a question about: wall time says how long it took

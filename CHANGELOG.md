@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device figure carries what the device was clocked at.** `tests speed`
+  samples the part's clock and power every twentieth of a second through the
+  region the wall time is taken around, and reports the mean, the range and
+  the watts beside the load — on the single-sequence measurement, on
+  `--round` and on `--serve`.
+
+  It is the other half of the moment, and it was missing: the same binary
+  read a 1419-token prompt at 0.829 s in one sitting and 1.155 in another, on
+  a quiet machine and a settled part, and neither figure said that the clock
+  had held 2.7 GHz for one and 1.7 for the other. What the README inferred
+  from two hand-samplings under `### A prompt too short to wake the machine`
+  the figures now say for themselves: a 110-token prompt that generates
+  nothing holds **951 MHz of 2700 and never reaches 1539**, where sixty-four
+  generated tokens hold 2066.
+
+  Reported and not gated on, which a measurement decided: a threshold high
+  enough to catch the slow sitting would refuse the short-prompt row that the
+  section above keeps deliberately. The instrument's own cost was measured —
+  one per cent at a hundredth of a second with the kernel's directories
+  searched each time, under half a per cent at a twentieth with the paths
+  resolved once.
+
 - **A joining caller's prompt is read in a round, not in a pass of its own.**
   `Evaluate_Round` takes a share list — how many rows each member
   contributes, one apiece being a decode round — so a member reading a prompt

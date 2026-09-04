@@ -1279,6 +1279,31 @@ actually needs is the same file the load comes from, which this reads
 already; and a figure from the shell is a figure with no load beside it,
 which is the thing this section spent a week learning to care about.
 
+**A device figure carries what the device was clocked at**, sampled every
+twentieth of a second through the region the wall time is taken around and
+reported beside the load. It is the other half of the moment, and it was
+missing: on 2026-09-04 the same binary read a 1419-token prompt at 0.829 s in
+the morning and 1.155 s in the evening, on a quiet machine and a settled
+part, and nothing in either figure said that the clock had held 2.7 GHz for
+one and 1.7 for the other. Three binaries -- the morning's, the afternoon's
+and the evening's -- read within one per cent of each other on that
+measurement, so the host had moved and the program had not; it took a day to
+establish that and it is now a phrase on every device line.
+
+It is reported and not gated on, and that is a decision a measurement made.
+The load has a bound and refusing above it is right, because a busy machine
+is busy whatever is being asked. A clock has no such bound: on this host a
+1419-token prompt holds 1761 MHz of 2700 and a 110-token prompt holds 951,
+never reaching half -- and the short one is a published row that `### A
+prompt too short to wake the machine` keeps deliberately. A threshold that
+refused it would refuse the row it explains.
+
+The instrument costs what it measures, so it was measured. At a hundredth of
+a second, with the kernel's directories searched at every sample, it cost one
+per cent of a prompt; resolving the paths once took that to 0.7 and a
+twentieth of a second took it under what three alternated pairs resolve --
+1.173 s against 1.167, with the third pair level.
+
 This paragraph used to say 2.07 s, about 1.1 s of it evaluating the prompt,
 and 14.2 s of processor time, from "a short prompt" that was never named.
 Neither the prompt nor the figure could be recovered: the repository's own
@@ -11929,6 +11954,24 @@ the parts never leave their low state. Sampling
 
 Same prompt length, half the clock. And it is not only the device -- the
 processor's short row moves by nine per cent for the same reason.
+
+**Every device figure carries that number now**, sampled by the tool through
+the region the wall time is taken around rather than by hand afterwards. The
+same five measurements, one sitting, load under 0.71:
+
+| | mean of 2700 MHz | range | watts |
+| --- | ---: | ---: | ---: |
+| 110-token prompt, generating nothing | **951 MHz** | 800 to 1539 | 22.8 |
+| 12 generated | 1695 | 800 to 2542 | 16.4 |
+| 110-token prompt, 12 generated | 1710 | 800 to 2601 | 24.8 |
+| 1419-token prompt | 1761 | 800 to 2675 | 28.6 |
+| 64 generated | **2066** | 800 to 2541 | 30.4 |
+
+**A tenth of a second of work never gets the part above 1539 MHz**, and a
+second and a quarter of it holds two thirds of the top state. The row this
+section is about is the one at 951, and it is the only measurement here that
+never reaches half. What the section inferred from two hand-samplings, the
+figures now say for themselves.
 
 A second fixture, `speed-prompt-110.txt`, is the same prose at the same 110
 tokens in one line rather than eight, so the model continues instead of

@@ -342,7 +342,20 @@ package body Speed_Run is
             --  given would have shared them out.
             Where : constant CPU.Pool_Reference :=
               (if Threads = 1 then null else Team'Unchecked_Access);
+
+            --  What the device held while this was measured, around the
+            --  same region the wall time is taken around. Only where the
+            --  run is on a device: a processor figure has no such number
+            --  and a watcher that read one anyway would be reporting a
+            --  part that did nothing.
+            Watching : constant Boolean :=
+              Backend = Model_Runner.Backend.Backend_Device
+              and then Device_Clock.Offered;
+
+            Watch : Device_Clock.Watcher;
          begin
+            Watch.Start (Watching);
+
             for Pass in 1 .. Repeats loop
                declare
                   Session : L.Session;
@@ -514,6 +527,8 @@ package body Speed_Run is
                end;
             end loop;
 
+            Watch.Stop (Result.Clock);
+
             CPU.Close (Team);
          end;
 
@@ -568,7 +583,8 @@ package body Speed_Run is
         & T.Image (Long_Float (Item.Processor), 2)
         & " s of processor time"
         & "; load " & T.Image (Item.Load_Before, 2)
-        & " to " & T.Image (Item.Load_After, 2);
+        & " to " & T.Image (Item.Load_After, 2)
+        & Device_Clock.Shown (Item.Clock);
    end Summary;
 
    -----------
@@ -685,6 +701,15 @@ package body Speed_Run is
          Where : constant CPU.Pool_Reference :=
            (if Threads = 1 then null else Team'Unchecked_Access);
 
+         --  And what the part was clocked at while it served, for the same
+         --  reason the other two measurements carry it.
+         Watching : constant Boolean :=
+           Backend = Model_Runner.Backend.Backend_Device
+           and then Device_Clock.Offered;
+
+         Watch : Device_Clock.Watcher;
+         Clock : Device_Clock.Reading;
+
          --  Take what a member has said, digest it, and let it go when it
          --  has finished. A seat given back is a seat the next caller in
          --  the queue takes, which is the whole of the policy being
@@ -742,6 +767,7 @@ package body Speed_Run is
             return;
          end if;
 
+         Watch.Start (Watching);
          Started := Ada.Real_Time.Clock;
 
          --  Everything that fits, admitted; then one more for every one
@@ -791,6 +817,7 @@ package body Speed_Run is
 
          Spent :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+         Watch.Stop (Clock);
 
          if E.Is_Error (Status) then
             Say ("serving failed: " & E.Error_Code'Image (Status.Code));
@@ -811,7 +838,8 @@ package body Speed_Run is
                  & T.Image
                      (Long_Float (Joining)
                       / Long_Float (Natural'Max (Joined, 1)) * 1000.0, 1)
-                 & " ms each; mark " & Shown (Mark));
+                 & " ms each; mark " & Shown (Mark)
+                 & Device_Clock.Shown (Clock));
          end if;
 
          Serving.Close (Serve);
@@ -940,6 +968,16 @@ package body Speed_Run is
          Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
          Where : constant CPU.Pool_Reference :=
            (if Threads = 1 then null else Team'Unchecked_Access);
+
+         --  What the part was clocked at while the rounds ran, for the same
+         --  reason the single-sequence measurement carries it: a device
+         --  figure without one is a figure about an afternoon.
+         Watching : constant Boolean :=
+           Backend = Model_Runner.Backend.Backend_Device
+           and then Device_Clock.Offered;
+
+         Watch : Device_Clock.Watcher;
+         Clock : Device_Clock.Reading;
       begin
          Vocab.Encode
            (L.Vocabulary (Engine).all, Text,
@@ -996,6 +1034,11 @@ package body Speed_Run is
 
             exit when E.Is_Error (Status);
          end loop;
+
+         --  Watching from here, whichever way the prefill went: a task
+         --  that is never started is a rendezvous nobody arrives at, and
+         --  the block below waits on Stop.
+         Watch.Start (Watching);
 
          if E.Is_Error (Status) then
             Say ("a member would not read the prompt: "
@@ -1071,6 +1114,8 @@ package body Speed_Run is
               Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
          end if;
 
+         Watch.Stop (Clock);
+
          if E.Is_Error (Status) then
             Say ("a round failed: " & E.Error_Code'Image (Status.Code));
             for Frame in 1 .. Status.Frame_Total loop
@@ -1089,7 +1134,8 @@ package body Speed_Run is
                & Shown (Mark)
                & (if Stopped
                   then "; MEMBERS DISAGREED, which is a collision"
-                  else ""));
+                  else "")
+                 & Device_Clock.Shown (Clock));
 
             --  And where the round's time went. Charged to the first
             --  member's session, which is the one every round was made on
