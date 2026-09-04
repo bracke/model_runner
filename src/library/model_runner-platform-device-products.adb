@@ -421,7 +421,7 @@ package body Model_Runner.Platform.Device.Products is
    --  them rather than written again.
    Attention_Bytes : constant := 68;
    Shape_Bytes     : constant := Attention_Bytes;
-   Product_Bytes   : constant := 28;
+   Product_Bytes   : constant := 32;
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
@@ -573,6 +573,11 @@ package body Model_Runner.Platform.Device.Products is
       --  Whether the product adds the residual bound beside it before it
       --  stores, which is a join folded into the product the join followed.
       Joins   : C.unsigned := 0;
+
+      --  Where a round's per-row table begins, in elements, for the step
+      --  that writes the cache. Zero for a batch and for every other kind
+      --  of step, which do not read it.
+      Table   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -2913,7 +2918,7 @@ package body Model_Runner.Platform.Device.Products is
             First   => C.unsigned (Into),
             Packing => C.unsigned (Weight_Packing'Pos (Packing)),
             Base    => C.unsigned (Base),
-            Joins   => (if Joins then 1 else 0));
+            Joins   => (if Joins then 1 else 0), Table => 0);
       begin
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Product_Bytes, Shape'Address);
@@ -3257,7 +3262,7 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (Packing)),
                         Base    => C.unsigned (Weight_Base),
-                        Joins   => 0);
+                        Joins   => 0, Table => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -4198,7 +4203,8 @@ package body Model_Runner.Platform.Device.Products is
       Stride    : Natural;
       At_First  : Natural;
       Added     : out Boolean;
-      From_Step : Natural := 0)
+      From_Step : Natural := 0;
+      Table_At  : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -4220,7 +4226,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Width, Columns => Width, Key => System.Null_Address,
          Chained => True, Reads => Source,
          Kept => False, Places => True, Stride => Stride,
-         At_First => At_First,
+         At_First => At_First, Table => Table_At,
          Attends => False, Blends => False, Norms => False,
          Rotates => False,
          others => <>);
@@ -5579,7 +5585,14 @@ package body Model_Runner.Platform.Device.Products is
                         --  kernel needs that the others put nothing in.
                         Base    =>
                           C.unsigned (Item.Cache_Elements * 2),
-                          Joins   => 0);
+                        Joins   => 0,
+
+                        --  A round's per-row table, which this is the one
+                        --  kind of step that reads: every row of a round
+                        --  goes into its own member's block at its own
+                        --  position, and neither follows from the first
+                        --  row's place.
+                        Table   => C.unsigned (This.Table));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5607,7 +5620,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  The table begins where the buffer does: it is
                         --  written for this call and nothing else is in it.
                         Base    => 0,
-                        Joins   => 0);
+                        Joins   => 0, Table => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5649,7 +5662,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  rather than bytes because this one reads floats.
                         Base    =>
                           C.unsigned (Places (Index).Base / 4),
-                          Joins   => 0);
+                          Joins   => 0, Table => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -5797,7 +5810,8 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
                         Base    => C.unsigned (Places (Index).Base),
-                        Joins   => (if This.Joins then 1 else 0));
+                        Joins   => (if This.Joins then 1 else 0),
+                        Table   => 0);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);

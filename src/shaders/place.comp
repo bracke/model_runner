@@ -23,10 +23,14 @@ const uint LANES = 256u;
 
 layout(local_size_x = LANES) in;
 
-//  Bound but unread: a step's descriptor set carries four and this kernel
-//  wants two. Binding it to the cache costs nothing and leaves the set the
-//  shape every other step has.
-layout(std430, binding = 0) readonly  buffer Kept   { float unused_kept[]; };
+//  The cache again, read-only, which is where a round's per-row table is:
+//  two words a row, where the row has got to and where its block begins. It
+//  is bound here because a step's descriptor set carries four and this
+//  kernel wanted two, so binding zero was the cache and unread. Read
+//  through this one rather than through the writable view below, because a
+//  buffer that one declaration writes and another reads is a buffer two
+//  declarations disagree about.
+layout(std430, binding = 0) readonly  buffer Kept   { float kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Cache  { float kv[]; };
 
@@ -55,6 +59,15 @@ layout(push_constant) uniform Shape {
 
     //  Where the half-precision copy begins, in halves.
     uint half_base;
+
+    //  Bound but unread here: the products put a folded join in this word.
+    uint unused_joins;
+
+    //  Where a round's per-row table begins, in elements, or zero for a
+    //  batch. A batch's rows are one sequence at consecutive positions, so
+    //  the first one's place and the stride say where all of them go; a
+    //  round's rows are different sessions and say so a row at a time.
+    uint table_at;
 } shape;
 
 void main() {
@@ -66,7 +79,16 @@ void main() {
     }
 
     uint from = slot * shape.width;
-    uint into = shape.at_first + slot * shape.stride;
+
+    //  A batch: the first row's place and one stride a row after it. A
+    //  round: this row's own block, the layer's offset inside one session's
+    //  worth, and this row's own position.
+    uint into =
+        shape.table_at != 0u
+      ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
+        + shape.at_first
+        + floatBitsToUint (kept[shape.table_at + slot * 2u]) * shape.stride
+      : shape.at_first + slot * shape.stride;
 
     for (uint c = lane; c < shape.width; c += LANES) {
         float value = x[from + c];

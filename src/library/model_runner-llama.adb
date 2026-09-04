@@ -7322,14 +7322,20 @@ package body Model_Runner.Llama is
                   --  holds the cache: with the turning a step and the cache
                   --  write a step, there is nothing left for the host to do
                   --  between the two halves.
-                  --  Not for a round: this one names one cache and one
-                  --  run of positions for the whole batch, so a round
-                  --  taking it would have every row attend the first
-                  --  member's history and write over the first member's
-                  --  cache. The sequence below it takes rounds and is
-                  --  where a round's projections go.
-                  if not Rounding
-                    and then Turnable
+                  --  A round takes this too, through the same table its
+                  --  attention reads: the step that writes the cache looks
+                  --  a row's block and a row's position up there rather
+                  --  than counting from the first row's, so the bases
+                  --  below are the layer's offset alone.
+                  --
+                  --  The block a batch adds is read here and not hoisted
+                  --  into the declarations above, because Take_Block --
+                  --  which is what gives a session its block -- runs a
+                  --  dozen lines up from here, inside this same block. A
+                  --  constant declared before it holds the seat the
+                  --  session had before it had one, which is a batch
+                  --  writing its cache over somebody else's.
+                  if Turnable
                     and then Resident
                     and then Item.Held = Exact
                     and then Settings.Experts = 0
@@ -7343,18 +7349,24 @@ package body Model_Runner.Llama is
                         Angles.all (0 .. Count * Pairs * 2 - 1),
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
-                        Natural (Block_Base (Item) + Base
-                                 + Reserved * KV_Width),
-                        Natural (Block_Base (Item) + Item.Keys.all'Length
-                                 + V_Base + Reserved * V_Width),
+                        Natural ((if Rounding then 0
+                                  else Block_Base (Item) + Reserved
+                                       * KV_Width)
+                                 + Base),
+                        Natural ((if Rounding then 0
+                                  else Block_Base (Item) + Reserved
+                                       * V_Width)
+                                 + Item.Keys.all'Length + V_Base),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         Natural (Earliest (Settings, Reserved,
                                            Natural (Index))),
                         Natural (if Settings.Causal
                                  then Reserved else Reserved + Count - 1),
-                        Natural (Block_Base (Item) + Base),
-                        Natural (Block_Base (Item)
+                        Natural ((if Rounding then 0
+                                  else Block_Base (Item)) + Base),
+                        Natural ((if Rounding then 0
+                                  else Block_Base (Item))
                                  + Item.Keys.all'Length + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
@@ -7374,6 +7386,8 @@ package body Model_Runner.Llama is
                         Causal    => Settings.Causal,
                         Lifted    => Lifted_Norms (Source),
                         Max_Bias  => Settings.Max_Bias,
+                        Table_At  =>
+                          (if Rounding then Natural (Table_At) else 0),
                         Cancel    => Item.Stopping,
 
                         --  The first layer reads what the host sent and
@@ -8009,27 +8023,69 @@ package body Model_Runner.Llama is
       for Index in Source.Layers.all'Range loop
          if Deferred (Index) then
             declare
-               Base : constant Element_Count :=
+               Layer_Keys : constant Element_Count :=
                  Element_Count (Index) * Element_Count (Item.Context)
-                 * KV_Width
-                 + Element_Count (Item.Committed) * KV_Width;
+                 * KV_Width;
 
-               V_At : constant Element_Count :=
+               Layer_Vals : constant Element_Count :=
                  Element_Count (Index) * Element_Count (Item.Context)
-                 * V_Width
-                 + Element_Count (Item.Committed) * V_Width;
+                 * V_Width;
 
-               Read : Boolean;
+               Read : Boolean := True;
             begin
-               Model_Runner.Backend.Device.Get_Cache
-                 (Block_Base (Item) + Base,
-                  Item.Keys.all (Base .. Base + Count * KV_Width - 1), Read);
+               --  A batch is one session's own run of positions and comes
+               --  back in two reads. A round's rows are different sessions
+               --  in different blocks, so each row is fetched into the
+               --  member whose cache it belongs to -- which is the same
+               --  bytes and the same one wait, said a row at a time.
+               if Rounding then
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Whose : constant Session_Access := Held_By (Which);
 
-               if Read then
-                  Model_Runner.Backend.Device.Get_Cache
-                    (Block_Base (Item) + Item.Keys.all'Length + V_At,
-                     Item.Values.all (V_At .. V_At + Count * V_Width - 1),
-                     Read);
+                        At_Key : constant Element_Count :=
+                          Layer_Keys + Sits_At (Which) * KV_Width;
+
+                        At_Val : constant Element_Count :=
+                          Layer_Vals + Sits_At (Which) * V_Width;
+                     begin
+                        Model_Runner.Backend.Device.Get_Cache
+                          (Block_Base (Whose.all) + At_Key,
+                           Whose.Keys.all
+                             (At_Key .. At_Key + KV_Width - 1), Read);
+
+                        if Read then
+                           Model_Runner.Backend.Device.Get_Cache
+                             (Block_Base (Whose.all)
+                              + Whose.Keys.all'Length + At_Val,
+                              Whose.Values.all
+                                (At_Val .. At_Val + V_Width - 1), Read);
+                        end if;
+
+                        exit when not Read;
+                     end;
+                  end loop;
+               else
+                  declare
+                     Base : constant Element_Count :=
+                       Layer_Keys + Element_Count (Item.Committed) * KV_Width;
+
+                     V_At : constant Element_Count :=
+                       Layer_Vals + Element_Count (Item.Committed) * V_Width;
+                  begin
+                     Model_Runner.Backend.Device.Get_Cache
+                       (Block_Base (Item) + Base,
+                        Item.Keys.all (Base .. Base + Count * KV_Width - 1),
+                        Read);
+
+                     if Read then
+                        Model_Runner.Backend.Device.Get_Cache
+                          (Block_Base (Item) + Item.Keys.all'Length + V_At,
+                           Item.Values.all
+                             (V_At .. V_At + Count * V_Width - 1),
+                           Read);
+                     end if;
+                  end;
                end if;
 
                if not Read then

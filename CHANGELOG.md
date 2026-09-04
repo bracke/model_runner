@@ -5,6 +5,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A round takes the fused whole layer.** The bug was one line of my own: a
+  rewrite hoisted `Block_Base (Item)` — where a session's block of the
+  device's cache begins — into a constant declared *above* the `Take_Block`
+  call that gives the session its block, so a batch wrote its layer's cache
+  into somebody else's. That explains every symptom the two entries before
+  this one recorded: both members equally wrong (their prefills wrote to the
+  same wrong block), the per-row table innocent, and the branch "not entered
+  for a round" irrelevant — the damage was done by the prefill, which is a
+  batch and does enter it.
+
+  Alternated, medians of three, device, each pair at a comparable clock: a
+  round of eight at 1419 positions 1.667 → **1.473 s**, sixteen 3.191 →
+  **2.809**, a server of eight seats and thirty-two callers 6.993 →
+  **6.283 s** at a seven-token prompt and 8.782 → **7.489** at a hundred and
+  ten. Nothing outside a round moved: twelve tokens on the device 0.252 s
+  against 0.255 and the same digest.
+
+- **The read-alone exception is gone.** A stretch of sixteen positions or
+  more was read on its own on a device because a round could not use the
+  matrix attention kernel. With the whole layer in reach a round beats
+  reading alone — 8.184 s against 7.496 for the same server — so the
+  threshold, the pass it protected and `Read_Alone` are removed. The serving
+  path agrees with the processor at one, two and four tokens without it.
+
 ### Measured
 
 - **The whole layer for a round, hunted again: what it is not, and one thing

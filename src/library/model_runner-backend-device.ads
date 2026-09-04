@@ -629,6 +629,12 @@ package Model_Runner.Backend.Device is
    --    where the caller will read them out of the device's own cache
    --    afterwards instead, which is the same bytes without a step of
    --    this layer's waiting for them.
+   --  @param Table_At A round: where in the cache its per-row table begins,
+   --    counted in elements. The step that writes the cache and the step
+   --    that attends both read a row's block and a row's position out of it
+   --    rather than counting from the first row's, so the bases above are
+   --    the layer's offset alone. Zero for a batch, whose rows are one
+   --    session's own run of positions.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -675,7 +681,8 @@ package Model_Runner.Backend.Device is
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;
       Carry_Out      : Boolean := False;
-      Mirror         : Boolean := True);
+      Mirror         : Boolean := True;
+      Table_At       : Natural := 0);
 
    --  A gated feed-forward block, whole, in one submission.
    --

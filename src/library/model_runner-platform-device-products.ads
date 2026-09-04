@@ -514,13 +514,18 @@ package Model_Runner.Platform.Device.Products is
    --    hold together, or when the engine holds no cache.
    --  @param From_Step Which step's result to write, or zero for the step
    --    before this one.
+   --  @param Table_At A round: where in the cache its per-row table
+   --    begins, in elements. Each row then goes into its own member's block
+   --    at its own position, and At_First is the layer's offset alone. Zero
+   --    for a batch, whose rows go one stride apart from the first.
    procedure Add_Place
      (Steps     : in out Sequence;
       Width     : Natural;
       Stride    : Natural;
       At_First  : Natural;
       Added     : out Boolean;
-      From_Step : Natural := 0);
+      From_Step : Natural := 0;
+      Table_At  : Natural := 0);
 
    --  Name a root-mean-square normalization for a sequence to perform.
    --

@@ -1374,7 +1374,8 @@ package body Model_Runner.Backend.Device is
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;
       Carry_Out      : Boolean := False;
-      Mirror         : Boolean := True)
+      Mirror         : Boolean := True;
+      Table_At       : Natural := 0)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1548,7 +1549,7 @@ package body Model_Runner.Backend.Device is
       --  Seven and eight: into the cache, before anything attends to it.
       Products.Add_Place
         (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
-         From_Step => 6);
+         From_Step => 6, Table_At => Table_At);
       if not Added then
          return;
       end if;
@@ -1556,7 +1557,7 @@ package body Model_Runner.Backend.Device is
 
       Products.Add_Place
         (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
-         From_Step => 4);
+         From_Step => 4, Table_At => Table_At);
       if not Added then
          return;
       end if;
@@ -1567,7 +1568,8 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Chained => True, From_Step => 5, Kept => False);
+         Chained => True, From_Step => 5, Kept => False,
+         Table_At => Table_At);
       if not Added then
          return;
       end if;

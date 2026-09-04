@@ -25,12 +25,6 @@ package body Model_Runner.Serving is
    --  is a batch whose rows belong to several sessions.
    Row_Limit : constant := L.Max_Batch;
 
-   --  Query positions the device's matrix attention kernel answers at once.
-   --  The same number attention.comp and the engine agree on; named here
-   --  because it is the threshold above which a stretch of prompt is worth
-   --  a pass of its own.
-   Matrix_Queries : constant := 16;
-
    ------------
    -- Open --
    ------------
@@ -69,13 +63,6 @@ package body Model_Runner.Serving is
          Status := E.Make (E.Memory_Allocation_Failed);
          return;
       end if;
-
-      --  Only where the kernel it is about exists.
-      Item.Alone_Above :=
-        (if Model_Runner.Backend."="
-              (L.Capability (Source).Kind, Model_Runner.Backend.Backend_Device)
-         then Matrix_Queries
-         else 0);
 
       Item.Rounds_Made := 0;
       Item.Last_Round := 0;
@@ -265,65 +252,6 @@ package body Model_Runner.Serving is
       end;
    end Admit;
 
-   --  One member's next stretch of prompt, on its own.
-   --
-   --  Everything a round does for a reading member, for one member and one
-   --  pass: the stretch is evaluated, the member's position advances, and a
-   --  member that has finished its prompt samples its first token out of
-   --  the same call.
-   procedure Read_Alone
-     (Item   : in out Server;
-      Which  : Positive;
-      Cancel : Model_Runner.Cancellation.Token_Reference;
-      Status : out Model_Runner.Errors.Error_Info)
-   is
-      Here : Seat renames Item.Seats (Which);
-
-      Stretch : constant Positive :=
-        Natural'Min (Prefill_Batch, Here.Length - Here.Read);
-
-      Row   : T.Real_Array_Access := null;
-      Token : Token_Id;
-   begin
-      T.Allocate (Item.Width, Row);
-
-      if Row = null then
-         Status := E.Make (E.Memory_Allocation_Failed);
-         return;
-      end if;
-
-      L.Evaluate_Batch
-        (Here.Session, Item.Source.all,
-         Here.Prompt (Here.Read + 1 .. Here.Read + Stretch),
-         Row.all, Cancel => Cancel, Status => Status);
-
-      if E.Is_Error (Status) then
-         T.Free (Row);
-         Here.Why := Refused;
-         return;
-      end if;
-
-      Here.Read := Here.Read + Stretch;
-      Item.Rounds_Made := Item.Rounds_Made + 1;
-      Item.Last_Round := 1;
-
-      if Here.Read >= Here.Length then
-         S.Sample (Here.Sampler, Row.all, Token, Status);
-
-         if E.Is_Error (Status) then
-            Here.Why := Refused;
-         else
-            Here.Next := Token;
-            Say (Here, Token,
-                 Room =>
-                   L.Capacity (Here.Session) - L.Position (Here.Session));
-            Item.Tokens_Made := Item.Tokens_Made + 1;
-         end if;
-      end if;
-
-      T.Free (Row);
-   end Read_Alone;
-
    ----------
    -- Step --
    ----------
@@ -359,27 +287,6 @@ package body Model_Runner.Serving is
       if not Item.Open_Now or else Item.Source = null then
          Status := E.Make (E.Lifecycle_Session_Closed);
          return;
-      end if;
-
-      --  A stretch long enough for the device's matrix attention kernel is
-      --  read on its own, because a round cannot use that kernel and the
-      --  kernel is worth more than the pass. One member a step: the others
-      --  wait, which is what they did for every arrival before rounds
-      --  carried any of them.
-      if Item.Alone_Above > 0 then
-         for Which in Item.Seats'Range loop
-            declare
-               Here : Seat renames Item.Seats (Which);
-            begin
-               if Here.State = Running
-                 and then Here.Why = Still_Going
-                 and then Here.Length - Here.Read >= Item.Alone_Above
-               then
-                  Read_Alone (Item, Which, Cancel, Status);
-                  return;
-               end if;
-            end;
-         end loop;
       end if;
 
       for Which in Item.Seats'Range loop

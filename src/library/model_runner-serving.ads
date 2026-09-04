@@ -310,20 +310,6 @@ private
       Rows      : Model_Runner.Tensors.Real_Array_Access := null;
       Width     : Model_Runner.Numerics.Element_Count := 0;
 
-      --  A stretch of prompt this long is read on its own rather than as
-      --  rows of a round. Zero where every stretch rides the round.
-      --
-      --  A device has a second attention kernel that answers sixteen query
-      --  positions at once out of one cache, and it is what makes a prompt
-      --  on a device fast. A round's rows do not share a cache, so a round
-      --  cannot use it -- which costs nothing while the stretches are
-      --  shorter than the tile and a quarter of the prompt once they are
-      --  longer. So the rule is the kernel's own threshold: a stretch that
-      --  kernel would have taken is read on its own, and anything smaller
-      --  rides the round. On a processor there is no such kernel and
-      --  nothing is read alone.
-      Alone_Above : Natural := 0;
-
       Rounds_Made : Natural := 0;
       Last_Round  : Natural := 0;
       Tokens_Made : Natural := 0;

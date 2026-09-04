@@ -11565,39 +11565,51 @@ eight seats and thirty-two callers, each held to about thirty-two tokens:
 hundred and thirteen**, and what is left of it is a copy of the prompt into
 the seat.
 
-**One stretch is still read on its own, and the reason turned out not to be
-the kernel.** A device has a second attention kernel that answers sixteen
-query positions at once out of one cache; a round's rows do not share a
-cache, so a round cannot use it. The rule is that kernel's own threshold:
-**a stretch of sixteen positions or more is read on its own where that kernel
-exists, and anything smaller rides the round.** On a processor there is no
-such kernel and nothing is read alone.
+**Every stretch rides the round now, and getting there took two attempts and
+a correction.**
 
-Giving a round that kernel was built and measured and is not kept. A
-*member's* own rows do share a cache -- they are one sequence at consecutive
-positions, a batch in everything but name -- so a round dispatched a member
-at a time can have it. That took the in-round reading from 9.2 s to 8.9
-against 8.70 for reading alone: better, still behind. And on stretches
-shorter than the kernel's tile it is worse than not having it, because all it
-adds there is a dispatch a member where there was one.
+A device has a second attention kernel that answers sixteen query positions
+at once out of one cache; a round's rows do not share a cache, so a round
+cannot use it. For a while a stretch of sixteen positions or more was read on
+its own for that reason. Giving a round that kernel -- dispatching it a
+member at a time, since a *member's* own rows do share a cache -- was built,
+measured and dropped: it took the in-round reading from 9.2 s to 8.9 against
+8.70 for reading alone, and on stretches shorter than the kernel's tile it
+was worse than not having it.
 
-**What the lone path really wins with is `Whole_Layer`** -- the entire layer
-in one submission, the cache write included -- and a round cannot use that
-one either, because it names one cache and one run of positions for every
-row. Four submissions a layer against one is the gap, and the attention
-kernel was a third of it.
+**What the lone path really won with was `Whole_Layer`** -- the entire layer
+in one submission, the cache write included. A round could not use it because
+it names one cache and one run of positions for every row; but a round
+already carries a per-row table in the cache, so the step that writes the
+cache can read the same table the step that attends does, and the sequence
+stops naming one of anything.
 
-That was built too, and is also not kept. A round already carries a per-row
-table in the cache -- where each row has got to and where its block begins --
-so the step that writes the cache can read the same table the step that
-attends does, and the sequence stops naming one of anything. It measured
-**1.13x on a round of eight**, 1.17x on a server, and it made the exception
-above unnecessary: prompts as rows of a round then beat prompts read alone,
-7.43 s against 8.21. **And the members of a round disagree.** The error hides
-at a long context -- a wrongly placed position is one part in fourteen
-hundred of a softmax -- so the first measurements said it was right. Both
-attempts are written up in `docs/measured-figures.txt` with what the bisect
-established; the prize is still there and so is the bug.
+That took two goes. The first was wrong, and wrong in a way that read as a
+much deeper fault: both members of a round chose the same wrong token, the
+per-row table was provably innocent, and the branch that seemed to cause it
+was not entered. It was one line -- `Block_Base (Item)`, which says where a
+session's block of the device's cache begins, hoisted into a constant
+declared *above* the call that gives the session its block. A batch then
+wrote its layer's cache into somebody else's, the prefill corrupted the cache
+before any round ran, and every symptom follows from that. What found it,
+after the address sanitizer found nothing and `-O0` changed nothing, was
+asking the program rather than reading the code again: `if <new form> /= <old
+form> then raise Program_Error; end if;`, which fired on the first run.
+
+Alternated against the commit before it, medians of three, on the device,
+each pair at a comparable clock:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| round of 8, 1419 positions | 1.667 s | **1.473 s** | 1.13× |
+| round of 16 | 3.191 s | **2.809 s** | 1.14× |
+| server, 8 seats/32 callers, 7-token prompts | 6.993 s | **6.283 s** | 1.11× |
+| server, same, 110-token prompts | 8.782 s | **7.489 s** | 1.17× |
+
+With it, a round beats reading alone -- 8.184 s against 7.496 for the same
+server -- so the sixteen-position threshold and the pass it protected are
+gone. Nothing outside a round moved: twelve tokens on the device 0.252 s
+against 0.255, the same digest, at 1698 MHz against 1676.
 
 **Where a serving run's time goes**, which `tests speed --serve N --callers M
 --budget` now says: the phases are summed across the seats, because a round

@@ -127,32 +127,35 @@ Alternated, medians of three, eight seats and thirty-two callers: the
 processor reads **1.29×** at a seven-token prompt and **1.21×** at a hundred
 and ten; the device **1.27×** and **1.16×**.
 
-**One exception, and it is not the kernel it looked like.** A device has a
-second attention kernel that answers sixteen query positions at once out of
-one cache, and a round's rows do not share a cache. A stretch of sixteen
-positions or more is read on its own where that kernel exists; anything
-smaller rides the round.
+**Every stretch rides the round**, and there is no exception left.
 
-Giving a round that kernel was built — a *member's* own rows do share a
-cache, so a round dispatched a member at a time can have it — and measured,
-and reverted: 9.2 s to 8.9 for the in-round reading against 8.70 for reading
-alone, and worse than nothing on stretches below the kernel's tile.
+A device has a second attention kernel that answers sixteen query positions
+at once out of one cache, and a round's rows do not share a cache — so for a
+while a stretch of sixteen or more was read on its own. Giving a round that
+kernel, by dispatching it a member at a time, was built and measured and
+dropped: better than it was, still behind reading alone, and worse than
+nothing below the kernel's tile.
 
-**What a lone prompt really wins with is `Whole_Layer`**, the entire layer in
-one submission with the cache write in it, which a round cannot use either:
-it names one cache and one run of positions for every row. Four submissions a
-layer against one is the gap and the attention kernel was a third of it.
+What a lone prompt really won with was `Whole_Layer`, the entire layer in one
+submission with the cache write in it. **A round takes that now**: the step
+that writes the cache reads the same per-row table the step that attends
+does, so the sequence names no one cache and no one run of positions.
+Alternated, medians of three on the device: a round of eight **1.13×**,
+sixteen 1.14×, a server 1.11× at a seven-token prompt and **1.17×** at a
+hundred and ten. With it a round beats reading alone, so the threshold and
+the pass it protected are gone.
 
-That was built next and is not kept. The per-row table a round already
-carries is exactly what the step that writes the cache needs, so the sequence
-can stop naming one of anything — and it measured **1.13× on a round of
-eight**, 1.17× on a server, and it removed the read-alone exception
-altogether. But the members of a round disagree, and the error hides at a
-long context because a wrongly placed position is one part in fourteen
-hundred of a softmax. `docs/measured-figures.txt` has the bisect: the table
-reaches both shaders, one whole layer is already wrong, and it is neither the
-carry nor the shader's aliasing of the cache. **The prize is still there and
-so is the bug.**
+It took two goes, and the first read as a much deeper fault than it was — one
+hoisted expression, evaluated before the call that gives a session its block.
+`docs/measured-figures.txt` has it, and the rule it left: when a rewrite is
+supposed to be arithmetically identical, ask the program, do not read it
+again.
+
+**This design is built.** What is left is not in it: the cache is dealt out
+in blocks of a whole session's context, so sixteen members cost sixteen
+contexts whether or not the members fill them. Blocks of positions rather
+than blocks of sessions is the next thing, and it is a capacity question
+rather than a speed one.
 
 ## Staging
 
