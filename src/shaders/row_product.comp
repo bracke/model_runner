@@ -192,6 +192,28 @@ uint byte_at(uint at) {
     return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
 }
 
+//  Four bytes of the weights as one word, from a run that need not begin on
+//  a word boundary.
+//
+//  byte_at above is a word load, a shift and a mask for every byte, so a
+//  format whose quants are read one byte at a time pays four loads where one
+//  would do. Q8_0's own branch has read words since it was written; the
+//  k-quants did not, and a device generating with a four-bit k-quant was
+//  slower than one generating with the eight-bit format that moves twice the
+//  bytes -- 1.870 s against 1.281 for sixty-four tokens, which is what said
+//  the loads and not the bytes were the cost.
+//
+//  The shift is the run's offset within its first word and is the same for
+//  every block of a row, so a caller works it out once and passes it in.
+//  Zero is its own case because a shift of thirty-two is undefined.
+uint word_of(uint at_word, uint shift) {
+    uint first = w[at_word];
+
+    return shift == 0u
+         ? first
+         : (first >> shift) | (w[at_word + 1u] << (32u - shift));
+}
+
 //  One byte read as a signed number, which is how Q8_0 keeps a quant and
 //  Q6_K keeps a sub-block scale.
 int signed_at(uint at) {
@@ -546,8 +568,14 @@ void main() {
             uint quants = at + 16u;
             uint col0 = b * 256u;
 
+            //  A super-block is a hundred and forty-four bytes, which is a
+            //  whole number of words, so every run of quants in this row
+            //  begins the same distance into a word and the shift is worked
+            //  out once for the row rather than once for a group.
+            uint shift = (quants & 3u) * 8u;
+
             for (uint group = 0u; group < 4u; ++group) {
-                uint at_byte = quants + group * 32u;
+                uint at_word = (quants + group * 32u) >> 2u;
                 uint sub = group * 2u;
 
                 uint f1, m1, f2, m2;
@@ -564,12 +592,21 @@ void main() {
 
                 uint into = col0 + group * 64u;
 
-                for (uint L = 0u; L < 32u; ++L) {
-                    uint packed = byte_at(at_byte + L);
-                    accumulate(into + L,
-                               scale_1 * float(packed & 15u) - offset_1);
-                    accumulate(into + 32u + L,
-                               scale_2 * float(packed >> 4u) - offset_2);
+                //  Eight words rather than thirty-two bytes. The elements
+                //  are taken in the same order and each is the same number,
+                //  so nothing moves.
+                for (uint g = 0u; g < 8u; ++g) {
+                    uint word = word_of(at_word + g, shift);
+
+                    for (uint n = 0u; n < 4u; ++n) {
+                        uint packed = (word >> (n * 8u)) & 255u;
+                        uint L = g * 4u + n;
+
+                        accumulate(into + L,
+                                   scale_1 * float(packed & 15u) - offset_1);
+                        accumulate(into + 32u + L,
+                                   scale_2 * float(packed >> 4u) - offset_2);
+                    }
                 }
             }
         }
@@ -587,8 +624,25 @@ void main() {
             uint quants = at + 48u;
             uint col0 = b * 256u;
 
+            //  As above: a hundred and seventy-six bytes is a whole number
+            //  of words, so the offset within a word is the row's and not
+            //  the group's.
+            uint shift = (quants & 3u) * 8u;
+
+            //  The fifth-bit bytes read once for the block rather than once
+            //  for each of its four groups. They are the same thirty-two
+            //  bytes every time -- two bits of each serve one pair of
+            //  sub-blocks, which is what the masks below pick out -- so
+            //  reading them per group was three quarters waste, and it is
+            //  waste the byte-at-a-time form was paying too.
+            uint fifths[8];
+
+            for (uint g = 0u; g < 8u; ++g) {
+                fifths[g] = word_of((high >> 2u) + g, shift);
+            }
+
             for (uint group = 0u; group < 4u; ++group) {
-                uint at_byte = quants + group * 32u;
+                uint at_word = (quants + group * 32u) >> 2u;
                 uint sub = group * 2u;
 
                 uint f1, m1, f2, m2;
@@ -604,17 +658,31 @@ void main() {
                 uint mask_high = 2u << (2u * group);
                 uint into = col0 + group * 64u;
 
-                for (uint L = 0u; L < 32u; ++L) {
-                    uint packed = byte_at(at_byte + L);
-                    uint fifth = byte_at(high + L);
+                //  Two runs of eight words rather than two runs of
+                //  thirty-two bytes: the quants and the bytes carrying
+                //  their fifth bit. Both begin the same distance into a
+                //  word, because a super-block is a hundred and seventy-six
+                //  bytes and the two runs are a whole number of words
+                //  apart.
+                for (uint g = 0u; g < 8u; ++g) {
+                    uint word  = word_of(at_word + g, shift);
+                    uint fifth = fifths[g];
 
-                    float low = float((packed & 15u)
-                                      + ((fifth & mask_low) != 0u ? 16u : 0u));
-                    float up = float((packed >> 4u)
-                                     + ((fifth & mask_high) != 0u ? 16u : 0u));
+                    for (uint n = 0u; n < 4u; ++n) {
+                        uint packed = (word >> (n * 8u)) & 255u;
+                        uint bits = (fifth >> (n * 8u)) & 255u;
+                        uint L = g * 4u + n;
 
-                    accumulate(into + L, scale_1 * low - offset_1);
-                    accumulate(into + 32u + L, scale_2 * up - offset_2);
+                        float low = float((packed & 15u)
+                                          + ((bits & mask_low) != 0u
+                                             ? 16u : 0u));
+                        float up = float((packed >> 4u)
+                                         + ((bits & mask_high) != 0u
+                                            ? 16u : 0u));
+
+                        accumulate(into + L, scale_1 * low - offset_1);
+                        accumulate(into + 32u + L, scale_2 * up - offset_2);
+                    }
                 }
             }
         }

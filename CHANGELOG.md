@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The Q4_K and Q5_K branches of `row_product.comp` read a word at a time.**
+  `byte_at` is a word load, a shift and a mask, so a format whose quants are
+  read one byte at a time pays four loads where one would do; the Q8_0 branch
+  has read words since it was written and the k-quants had not. Q4_K
+  generating sixty-four tokens on the device reads **1.690 s against 1.882 —
+  1.11** — and Q5_K comes out level. Bit-exact: every format's digest is what
+  it was.
+
+### Measured
+
+- **Every figure in this file is Q8_0, and that was hiding something.**
+  Generating on the device against llama.cpp on the same files: Q4_K_M 38.4
+  t/s against **86.2**, Q5_K_M 34.9 against **76.9**, Q8_0 50.2 against 56.1.
+  **The k-quants move sixty per cent of the bytes and take a third more
+  time** — where llama.cpp is twice as fast with a four-bit format as with
+  the eight-bit one, this program is slower. The gap on the format most
+  published models use is 2.2 where the one every figure here is taken on is
+  1.12.
+
+  It also settles a thing assumed the other way: generating on the device is
+  **not** bandwidth-bound, or half the bytes could not cost more time.
+
 - **`attention.comp` is compiled a fifth time with `GROUPED`**, where a
   workgroup answers a bundle of four heads rather than one. This model has 32
   attention heads and 4 key-value heads, so eight query heads share one group
