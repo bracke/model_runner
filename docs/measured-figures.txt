@@ -8124,6 +8124,77 @@
 #     same clock.
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-04, the fused whole layer for a round: built, worth twelve per
+# cent, and wrong. Not kept.
+#
+#   THE IDEA, which the entry above named as the next thing. A prompt read
+#   on its own takes Whole_Layer -- the entire layer in one submission, the
+#   cache write included -- and a round could not, because that sequence
+#   names one cache and one run of positions for every row. But a round
+#   already has a per-row table in the cache, two words a row: where the row
+#   has got to and where its block begins. Give the step that writes the
+#   cache the same table the step that attends already reads, and the
+#   sequence stops naming one of anything.
+#
+#   WHAT WAS BUILT. place.comp reads the table and writes each row into its
+#   own member's block at its own position rather than one stride after the
+#   row before it. Add_Place and Whole_Layer carry the table through; the
+#   product push block went from twenty-eight bytes to thirty-two to hold
+#   it. The readback was generalised: a round's rows come back into the
+#   member whose cache they belong to, a row at a time. And the round was
+#   let into the path.
+#
+#   WHAT IT MEASURED, alternated, medians of three, on the device:
+#
+#     1419 positions, 32 rounds, 8 members    1.655 s -> 1.466 s   1.13x
+#     1419 positions, 32 rounds, 16 members   3.160   -> 2.809     1.12x
+#     8 seats, 32 callers, 110-token prompts  8.786   -> 7.533     1.17x
+#     8 seats, 32 callers, 7-token prompts    6.938   -> 6.329     1.10x
+#
+#   AND IT REMOVED THE EXCEPTION. With the whole layer in reach, prompts
+#   read as rows of a round beat prompts read on their own -- 7.43 s against
+#   8.21 -- so the sixteen-position threshold and the pass it protects could
+#   both go.
+#
+#   AND THE ANSWERS ARE WRONG. Members of a round disagree, which is the
+#   check the round driver exists for: two members with the same prompt and
+#   the same rule must say the same text, and they do not.
+#
+#   THE ERROR HIDES AT A LONG CONTEXT, which is what made it worth writing
+#   down. A wrongly placed new position is one part in fourteen hundred of a
+#   softmax: a 1419-token round agreed with the processor for thirty-two
+#   tokens and disagreed at sixty-four, while a seven-token round disagreed
+#   at ten. The first measurements taken of this change were the long ones,
+#   and they said it was right.
+#
+#   WHAT THE BISECT ESTABLISHED, for whoever takes it up:
+#
+#     The table does reach both shaders. Passing zero for it changes the
+#     answer, so it is read and used.
+#
+#     One whole layer is already wrong. Letting a round take Whole_Layer for
+#     the first layer alone moves the mark off the processor's, so it is not
+#     an interaction between layers.
+#
+#     It is not the carry -- turning the carry off for a round changes
+#     nothing -- and not the aliasing of the cache buffer in the place
+#     shader: reading the table through the read-only binding that shader
+#     already has, rather than through the writable one, changes nothing.
+#
+#   So the suspect is the fused layer's own cache write or its attention's
+#   cache base: the two things the table is supposed to redirect and the two
+#   the unfused path gets right. The measurement to take next is a round of
+#   two members with the same prompt, with the layer's blend read back for
+#   each of them and compared -- the collision says one member reads or
+#   writes the other's cache, and that would say which.
+#
+#   Reverted. The prize is twelve per cent of a device round and a serving
+#   run that needs no exception, and it is still there.
+#
+#   load:  under 0.60; device 1933 to 2085 MHz mean of 2700 across the
+#     alternated sets
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

@@ -11577,9 +11577,19 @@ adds there is a dispatch a member where there was one.
 in one submission, the cache write included -- and a round cannot use that
 one either, because it names one cache and one run of positions for every
 row. Four submissions a layer against one is the gap, and the attention
-kernel was a third of it. So the next thing is `Whole_Layer` for a round; the
-per-member dispatch is written up in `docs/measured-figures.txt` and
-reverted, because a path nothing reaches is a path nothing checks.
+kernel was a third of it.
+
+That was built too, and is also not kept. A round already carries a per-row
+table in the cache -- where each row has got to and where its block begins --
+so the step that writes the cache can read the same table the step that
+attends does, and the sequence stops naming one of anything. It measured
+**1.13x on a round of eight**, 1.17x on a server, and it made the exception
+above unnecessary: prompts as rows of a round then beat prompts read alone,
+7.43 s against 8.21. **And the members of a round disagree.** The error hides
+at a long context -- a wrongly placed position is one part in fourteen
+hundred of a softmax -- so the first measurements said it was right. Both
+attempts are written up in `docs/measured-figures.txt` with what the bisect
+established; the prize is still there and so is the bug.
 
 **Where a serving run's time goes**, which `tests speed --serve N --callers M
 --budget` now says: the phases are summed across the seats, because a round

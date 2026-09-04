@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The fused whole layer for a round: built, worth twelve per cent, and
+  wrong.** A round already carries a per-row table in the device's cache —
+  where each row has got to and where its block begins — so giving the step
+  that writes the cache the same table the step that attends already reads
+  lets the whole layer stop naming one cache and one run of positions.
+
+  Alternated, medians of three, device: a round of eight at 1419 positions
+  1.655 → **1.466 s**, sixteen 3.160 → **2.809**, a server of eight seats and
+  thirty-two callers 8.786 → **7.533** at a 110-token prompt and 6.938 →
+  **6.329** at seven. It also removed the need for the read-alone exception
+  entirely: prompts as rows of a round then beat prompts read on their own,
+  7.43 s against 8.21.
+
+  **And the members of a round disagree**, which is the check the round
+  driver exists for. The error hides at a long context — a wrongly placed
+  new position is one part in fourteen hundred of a softmax — so the first
+  measurements taken said it was right. Reverted, with what the bisect
+  established written into `docs/measured-figures.txt`: the table does reach
+  both shaders, one whole layer is already wrong, and it is neither the carry
+  nor the shader's aliasing of the cache buffer.
+
 - **The matrix attention kernel for a round: built, measured, not kept.** A
   member's own rows are one sequence and one cache — a batch in everything
   but name — so a round dispatched a member at a time can have the kernel a

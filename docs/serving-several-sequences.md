@@ -141,9 +141,18 @@ alone, and worse than nothing on stretches below the kernel's tile.
 **What a lone prompt really wins with is `Whole_Layer`**, the entire layer in
 one submission with the cache write in it, which a round cannot use either:
 it names one cache and one run of positions for every row. Four submissions a
-layer against one is the gap and the attention kernel was a third of it. So
-what this design has left is `Whole_Layer` for a round — per-member cache
-writes and per-member attention inside one sequence.
+layer against one is the gap and the attention kernel was a third of it.
+
+That was built next and is not kept. The per-row table a round already
+carries is exactly what the step that writes the cache needs, so the sequence
+can stop naming one of anything — and it measured **1.13× on a round of
+eight**, 1.17× on a server, and it removed the read-alone exception
+altogether. But the members of a round disagree, and the error hides at a
+long context because a wrongly placed position is one part in fourteen
+hundred of a softmax. `docs/measured-figures.txt` has the bisect: the table
+reaches both shaders, one whole layer is already wrong, and it is neither the
+carry nor the shader's aliasing of the cache. **The prize is still there and
+so is the bug.**
 
 ## Staging
 
