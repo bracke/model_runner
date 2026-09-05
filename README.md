@@ -8034,6 +8034,97 @@ an eight-bit figure that had not changed -- so the end-to-end number is the
 claim and the batched row is not. All three sittings are in the `## Speed`
 section above, under "Moving fewer bytes per weight".
 
+### Where llama.cpp's four-bit advantage actually is
+
+Every figure published against llama.cpp here has been Q8_0, where this
+program is level or ahead. Asked of Q4_K the answer was different -- 1.6 to
+1.7 times behind on every shape -- so this section is about finding out why
+and how much of it is reachable.
+
+**Half of it is a flag.** llama.cpp repacks Q4_K weights at load time into
+`block_q4_Kx8`, eight rows interleaved, and multiplies them with
+`ggml_gemv_q4_K_8x8_q8_K` rather than `ggml_vec_dot_q4_K_q8_K`. `llama-cli`
+exposes that with `-nr`, so it can be priced from the outside:
+
+| TinyLlama Q4_K_M, `--device none` | prompt | generating |
+| --- | ---: | ---: |
+| llama.cpp, repacking | 331.5 t/s | 64.8 t/s |
+| llama.cpp, `-nr` | 230.5 t/s | 64.0 t/s |
+| model_runner | 246.1 t/s | 44.4 t/s |
+
+**The repack is worth 1.44 times on a prompt and nothing at all generating**,
+and without it this program's prompt is ahead of llama.cpp's. So the prompt
+gap is one identified change -- an eight-row interleaved weight layout built
+at load -- and not a diffuse deficit. It is not built here; it is named with
+its size measured, which is what this file does with a change before it is
+worth starting.
+
+**The generating gap is the kernel, and it is bigger than it looks.** At one
+thread, where the thread pool and the memory ceiling both drop out, llama.cpp
+generates at 43.6 tokens a second and this program at 14.1: **three times
+behind per core**. At the worker count each chooses the gap is 1.47, because
+llama.cpp saturates the memory at two threads and this program does not
+saturate it at all.
+
+**And the profile said something surprising.** A single-threaded generated
+token executes 16.7 thousand million instructions at an IPC of 3.15 -- not
+stalled, instruction-bound -- and the hottest instructions in it were not in
+the four-bit kernel at all. They were a sixteen-iteration scalar loop with a
+floating-point store per iteration, at better than **a fifth of everything
+the program executed**, and it belonged to Q6_K: the format a "_M" file puts
+on its output projection. Two changes came out of that, and the larger one is
+for a format that was not being looked at.
+
+**The four-bit scale, kept whole.** `ggml_vec_dot_q4_K_q8_K` never turns a
+sub-block scale into a floating-point number: `_mm256_maddubs_epi16` gives
+int16 pair-sums, `_mm256_madd_epi16` multiplies them by the scale and widens
+to int32, and the whole super-block converts once. This kernel converted and
+scaled each of the eight sub-blocks separately -- `vcvtdq2ps`,
+`vbroadcastss`, `vfmadd231ps` -- so the accumulator was a chain of eight
+fused multiply-adds, four cycles apiece. It now does what llama.cpp does:
+`vpmaddubsw`, `vpmaddwd` against the six-bit factor held twice in a
+thirty-two bit word, `vpaddd` into an integer accumulator, and one convert
+and one multiply-add a super-block.
+
+**It is worth two and a third per cent, and the reason it is not worth more
+is the interesting part.** The argument for it was the dependency chain:
+eight four-cycle multiply-adds is thirty-two cycles a super-block where eight
+integer adds is eight. That argument is wrong, and the measurement is what
+says so -- consecutive rows are independent, the reorder window spans them,
+and the chain was never the limit. The instruction count fell by four in
+sixty and the time fell by about that much.
+
+**The six-bit prologue in lanes.** Q6_K keeps a signed byte of scale for each
+of a super-block's sixteen halves, and each has to become a floating-point
+number, take the block's scale, take the activation's scale for the
+thirty-two it falls in, be stored, and have its product with the activation's
+half-total joined to a running sum. A half at a time that is about ten
+instructions apiece, a hundred and sixty a block, against a dot product of
+sixty. It is twenty-six now: two sign-extending widenings, two converts, a
+broadcast multiply, the activation's eight scales permuted into the sixteen
+the halves want, and the minimum's term as a multiply, a fused multiply-add
+and one reduction of eight lanes.
+
+**Together**, five alternated rounds, medians of three:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, ten generated | 0.237 s | 0.224 s | **5.5 %** |
+| Q5_K_M, thirty-two generated | 0.839 s | 0.810 s | **3.5 %** |
+| Q4_K_M, 110-token prompt | 0.4525 s | 0.447 s | a wash |
+| Q8_0, 64 generated | 1.717 s | 1.723 s | a wash, the control |
+
+Every one of the five rounds on the same side for both k-quants, with the
+ranges not touching. The prompt row is a wash over eight further alternated
+rounds -- five of the first rounds looked like a five per cent regression and
+were not, on a figure whose own spread on unchanged code is 0.432 to 0.474 s.
+
+The four-bit format now generates **eighteen per cent faster per token than
+the eight-bit one**, from eleven. Q4_K's digest does not move; Q5_K's does,
+because a "_M" file's Q6_K tensors are in that path and the minimum's term is
+summed in a different order. Conformance is 28344 sequences and 0 outside
+tolerance.
+
 ### One activation scale for two hundred and fifty-six
 
 llama.cpp has a quantization format that exists for one reason. `Q8_K` is how

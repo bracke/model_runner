@@ -5,7 +5,51 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The six-bit k-quant's single-vector scale prologue is in lanes**, which a
+  profile put at **better than a fifth of every instruction a four-bit
+  generated token executes** — a sixteen-iteration scalar loop with a
+  floating-point store per iteration, belonging to the format a `_M` file
+  puts on its output projection. About a hundred and sixty instructions a
+  block became twenty-six.
+
+- **The four-bit k-quant's sub-block scale stays a whole number through the
+  dot product**, as `ggml_vec_dot_q4_K_q8_K` does: `vpmaddubsw`, `vpmaddwd`
+  against the factor, `vpaddd` into an integer accumulator, one convert a
+  super-block. Worth 2.3 % on its own — and the argument for it (an
+  eight-deep chain of four-cycle multiply-adds) was **wrong**: consecutive
+  rows are independent and the reorder window spans them, so the chain was
+  never the limit.
+
+  Together: **Q4_K_M generating 0.224 s against 0.237 and Q5_K_M 0.810
+  against 0.839**, five alternated rounds each, all five on the same side
+  with the ranges not touching. The four-bit format now generates eighteen
+  per cent faster per token than the eight-bit one, from eleven. Q5_K's
+  digest moves (a `_M` file's Q6_K tensors are in that path); conformance is
+  28344 sequences and 0 outside tolerance.
+
 ### Measured
+
+- **Where llama.cpp's four-bit advantage is, priced from outside.** It
+  repacks Q4_K at load into eight-row interleaved blocks; `llama-cli -nr`
+  turns that off. **The repack is worth 1.44× on a prompt and nothing
+  generating** — and without it, this program's prompt is *ahead* of
+  llama.cpp's. So the prompt gap is one named change, an eight-row weight
+  layout built at load, not a diffuse deficit. Not built; named with its size
+  measured.
+
+- **The generating gap is the kernel and is larger than the headline.** At
+  one thread llama.cpp reads 43.6 t/s against this program's 14.1 — **three
+  times per core** — where at the worker count each chooses it is 1.47,
+  because llama.cpp saturates the memory at two threads and this program does
+  not saturate it at all.
+
+- **Three alternated rounds is not enough for the 110-token prompt figure.**
+  It read a five per cent regression on a path the change does not touch;
+  eight further rounds read level, and its spread on unchanged code is 0.432
+  to 0.474 s.
+
 
 - **The super-block activation does not help the strip kernels, and the
   reason is structural.** A strip multiplies four vectors at once, so the
