@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The Q4_K, Q5_K and Q6_K branches of `row_product.comp` share a
+  super-block across the eight lanes of a row** instead of giving each lane a
+  block of its own. A super-block is 144 to 210 bytes, so a lane a block had
+  the eight lanes fetching from eight addresses that far apart; an ablation
+  put the weight reads at **27 per cent** of Q4_K's generating time.
+
+  Alternated three rounds each, sixty-four tokens on the device: **Q4_K_M
+  1.89× (1.884 → 0.996 s), Q5_K_M 1.68× (1.822 → 1.084)**, Q8_0 unchanged.
+  Q4_K generates 64.3 t/s where it generated 34.0 and is **1.36 behind
+  llama.cpp where it was 2.56**. Every digest is what it was.
+
+  Q6_K is most of it: a "_M" file is a mixture, and its output projection and
+  some attention tensors are Q6_K — worth a further 1.37 on both files after
+  the other two were done.
+
+### Measured
+
+- **The same treatment loses on a thirty-two element block and is blocked by
+  register pressure on two more formats.** Q8_0 shared reads 1.441 s against
+  1.251 — fourteen per cent worse, because the per-block setup is repeated
+  eight times for four elements of work. And Q2_K and Q3_K, which take the
+  treatment and a second saving with it, made **Q8_0 ten per cent slower with
+  its own branch byte-identical**: a shader is one module and its registers
+  are allocated for the worst branch in it, which is what
+  `matrix_product.comp` was split in two for. Splitting the row product by
+  format group is what would let them in.
+
 - **The Q4_K and Q5_K branches of `row_product.comp` read a word at a time.**
   `byte_at` is a word load, a shift and a mask, so a format whose quants are
   read one byte at a time pays four loads where one would do; the Q8_0 branch

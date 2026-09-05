@@ -560,7 +560,26 @@ void main() {
         //  first sub-block and the high nibbles the second.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = part; b < blocks; b += LANES) {
+        //  Every lane of the row takes a slice of the same super-block
+        //  rather than a super-block of its own.
+        //
+        //  A super-block is a hundred and forty-four bytes, so a lane a
+        //  block meant that the eight lanes sharing a row fetched from
+        //  eight addresses a hundred and forty-four bytes apart -- eight
+        //  cache lines to read thirty-two bytes, and again for the next
+        //  word. Sharing the block, the eight lanes read thirty-two
+        //  consecutive words. An ablation put the weight loads at
+        //  twenty-seven per cent of this format's generating time, which is
+        //  what made the arrangement worth changing rather than the
+        //  arithmetic inside it.
+        //
+        //  Eight lanes divide a super-block as four groups of two halves,
+        //  which needs LANES to be eight; it is, and the reduction at the
+        //  end of this shader is written for the same eight.
+        uint group = part >> 1u;
+        uint upper = part & 1u;
+
+        for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 144u;
             float d = half_at(at);
             float dmin = half_at(at + 2u);
@@ -568,45 +587,39 @@ void main() {
             uint quants = at + 16u;
             uint col0 = b * 256u;
 
-            //  A super-block is a hundred and forty-four bytes, which is a
-            //  whole number of words, so every run of quants in this row
-            //  begins the same distance into a word and the shift is worked
-            //  out once for the row rather than once for a group.
+            //  A hundred and forty-four bytes is a whole number of words,
+            //  so every run of quants in this row begins the same distance
+            //  into a word and the shift is worked out once.
             uint shift = (quants & 3u) * 8u;
 
-            for (uint group = 0u; group < 4u; ++group) {
-                uint at_word = (quants + group * 32u) >> 2u;
-                uint sub = group * 2u;
+            uint sub = group * 2u;
 
-                uint f1, m1, f2, m2;
-                sub_block_scale(scales, sub, f1, m1);
-                sub_block_scale(scales, sub + 1u, f2, m2);
+            uint f1, m1, f2, m2;
+            sub_block_scale(scales, sub, f1, m1);
+            sub_block_scale(scales, sub + 1u, f2, m2);
 
-                //  A sub-block's scale and offset are the same for all
-                //  thirty-two of its elements, so they are formed once here
-                //  rather than in the loop.
-                float scale_1 = d * float(f1);
-                float scale_2 = d * float(f2);
-                float offset_1 = dmin * float(m1);
-                float offset_2 = dmin * float(m2);
+            //  A sub-block's scale and offset are the same for all
+            //  thirty-two of its elements, so they are formed once here
+            //  rather than in the loop.
+            float scale_1 = d * float(f1);
+            float scale_2 = d * float(f2);
+            float offset_1 = dmin * float(m1);
+            float offset_2 = dmin * float(m2);
 
-                uint into = col0 + group * 64u;
+            uint at_word = (quants + group * 32u + upper * 16u) >> 2u;
+            uint into = col0 + group * 64u;
 
-                //  Eight words rather than thirty-two bytes. The elements
-                //  are taken in the same order and each is the same number,
-                //  so nothing moves.
-                for (uint g = 0u; g < 8u; ++g) {
-                    uint word = word_of(at_word + g, shift);
+            for (uint g = 0u; g < 4u; ++g) {
+                uint word = word_of(at_word + g, shift);
 
-                    for (uint n = 0u; n < 4u; ++n) {
-                        uint packed = (word >> (n * 8u)) & 255u;
-                        uint L = g * 4u + n;
+                for (uint n = 0u; n < 4u; ++n) {
+                    uint packed = (word >> (n * 8u)) & 255u;
+                    uint L = upper * 16u + g * 4u + n;
 
-                        accumulate(into + L,
-                                   scale_1 * float(packed & 15u) - offset_1);
-                        accumulate(into + 32u + L,
-                                   scale_2 * float(packed >> 4u) - offset_2);
-                    }
+                    accumulate(into + L,
+                               scale_1 * float(packed & 15u) - offset_1);
+                    accumulate(into + 32u + L,
+                               scale_2 * float(packed >> 4u) - offset_2);
                 }
             }
         }
@@ -615,7 +628,16 @@ void main() {
         //  quant, two bits of each byte serving one pair of sub-blocks.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = part; b < blocks; b += LANES) {
+        //  A slice of the same super-block to every lane, as Q4_K above
+        //  and for the same reason: a lane a block put the eight lanes of a
+        //  row a hundred and seventy-six bytes apart.
+        uint group = part >> 1u;
+        uint upper = part & 1u;
+
+        uint mask_low = 1u << (2u * group);
+        uint mask_high = 2u << (2u * group);
+
+        for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 176u;
             float d = half_at(at);
             float dmin = half_at(at + 2u);
@@ -624,65 +646,48 @@ void main() {
             uint quants = at + 48u;
             uint col0 = b * 256u;
 
-            //  As above: a hundred and seventy-six bytes is a whole number
-            //  of words, so the offset within a word is the row's and not
-            //  the group's.
+            //  A hundred and seventy-six bytes is a whole number of words,
+            //  so the offset within a word is the row's, and the fifth-bit
+            //  run begins a whole number of words from the quants.
             uint shift = (quants & 3u) * 8u;
 
-            //  The fifth-bit bytes read once for the block rather than once
-            //  for each of its four groups. They are the same thirty-two
-            //  bytes every time -- two bits of each serve one pair of
-            //  sub-blocks, which is what the masks below pick out -- so
-            //  reading them per group was three quarters waste, and it is
-            //  waste the byte-at-a-time form was paying too.
-            uint fifths[8];
+            uint sub = group * 2u;
 
-            for (uint g = 0u; g < 8u; ++g) {
-                fifths[g] = word_of((high >> 2u) + g, shift);
-            }
+            uint f1, m1, f2, m2;
+            sub_block_scale(scales, sub, f1, m1);
+            sub_block_scale(scales, sub + 1u, f2, m2);
 
-            for (uint group = 0u; group < 4u; ++group) {
-                uint at_word = (quants + group * 32u) >> 2u;
-                uint sub = group * 2u;
+            float scale_1 = d * float(f1);
+            float scale_2 = d * float(f2);
+            float offset_1 = dmin * float(m1);
+            float offset_2 = dmin * float(m2);
 
-                uint f1, m1, f2, m2;
-                sub_block_scale(scales, sub, f1, m1);
-                sub_block_scale(scales, sub + 1u, f2, m2);
+            uint at_word = (quants + group * 32u + upper * 16u) >> 2u;
+            uint high_word = (high + upper * 16u) >> 2u;
+            uint into = col0 + group * 64u;
 
-                float scale_1 = d * float(f1);
-                float scale_2 = d * float(f2);
-                float offset_1 = dmin * float(m1);
-                float offset_2 = dmin * float(m2);
+            //  Two runs of four words: the quants and the bytes carrying
+            //  their fifth bit. A lane reads only the sixteen of each that
+            //  its own sixteen elements need, so what was read four times
+            //  over for four groups is read once.
+            for (uint g = 0u; g < 4u; ++g) {
+                uint word  = word_of(at_word + g, shift);
+                uint fifth = word_of(high_word + g, shift);
 
-                uint mask_low = 1u << (2u * group);
-                uint mask_high = 2u << (2u * group);
-                uint into = col0 + group * 64u;
+                for (uint n = 0u; n < 4u; ++n) {
+                    uint packed = (word >> (n * 8u)) & 255u;
+                    uint bits = (fifth >> (n * 8u)) & 255u;
+                    uint L = upper * 16u + g * 4u + n;
 
-                //  Two runs of eight words rather than two runs of
-                //  thirty-two bytes: the quants and the bytes carrying
-                //  their fifth bit. Both begin the same distance into a
-                //  word, because a super-block is a hundred and seventy-six
-                //  bytes and the two runs are a whole number of words
-                //  apart.
-                for (uint g = 0u; g < 8u; ++g) {
-                    uint word  = word_of(at_word + g, shift);
-                    uint fifth = fifths[g];
+                    float low = float((packed & 15u)
+                                      + ((bits & mask_low) != 0u
+                                         ? 16u : 0u));
+                    float up = float((packed >> 4u)
+                                     + ((bits & mask_high) != 0u
+                                        ? 16u : 0u));
 
-                    for (uint n = 0u; n < 4u; ++n) {
-                        uint packed = (word >> (n * 8u)) & 255u;
-                        uint bits = (fifth >> (n * 8u)) & 255u;
-                        uint L = g * 4u + n;
-
-                        float low = float((packed & 15u)
-                                          + ((bits & mask_low) != 0u
-                                             ? 16u : 0u));
-                        float up = float((packed >> 4u)
-                                         + ((bits & mask_high) != 0u
-                                            ? 16u : 0u));
-
-                        accumulate(into + L, scale_1 * low - offset_1);
-                        accumulate(into + 32u + L, scale_2 * up - offset_2);
-                    }
+                    accumulate(into + L, scale_1 * low - offset_1);
+                    accumulate(into + 32u + L, scale_2 * up - offset_2);
                 }
             }
         }
@@ -693,52 +698,77 @@ void main() {
         //  sub-block scale of its own.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = part; b < blocks; b += LANES) {
+        //  A slice of the same super-block to every lane, as the two
+        //  k-quants above. Two hundred and ten bytes a block put the eight
+        //  lanes of a row that far apart when each took a block of its own.
+        //
+        //  The eight divide as four units -- two sides of two sub-runs --
+        //  and each unit's sixteen positions in half.
+        uint unit = part >> 1u;
+        uint upper = part & 1u;
+        uint side = unit >> 1u;
+        uint sub = unit & 1u;
+
+        for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 210u;
             float d = half_at(at + 208u);
             uint col0 = b * 256u;
 
-            for (uint side = 0u; side < 2u; ++side) {
-                uint low_half = at + side * 64u;
-                uint high_half = at + 128u + side * 32u;
-                uint scale_half = at + 192u + side * 8u;
-                uint out_half = col0 + side * 128u;
+            uint low_half = at + side * 64u;
+            uint high_half = at + 128u + side * 32u;
+            uint scale_half = at + 192u + side * 8u;
+            uint out_half = col0 + side * 128u;
 
-                for (uint sub = 0u; sub < 2u; ++sub) {
-                    uint low_run = low_half + sub * 16u;
-                    uint high_run = high_half + sub * 16u;
-                    uint out_run = out_half + sub * 16u;
+            uint low_run = low_half + sub * 16u;
+            uint high_run = high_half + sub * 16u;
+            uint out_run = out_half + sub * 16u;
 
-                    float scale_1 = d * float(signed_at(scale_half + sub));
-                    float scale_2 =
-                      d * float(signed_at(scale_half + sub + 2u));
-                    float scale_3 =
-                      d * float(signed_at(scale_half + sub + 4u));
-                    float scale_4 =
-                      d * float(signed_at(scale_half + sub + 6u));
+            float scale_1 = d * float(signed_at(scale_half + sub));
+            float scale_2 = d * float(signed_at(scale_half + sub + 2u));
+            float scale_3 = d * float(signed_at(scale_half + sub + 4u));
+            float scale_4 = d * float(signed_at(scale_half + sub + 6u));
 
-                    for (uint L = 0u; L < 16u; ++L) {
-                        uint first = byte_at(low_run + L);
-                        uint second = byte_at(low_run + 32u + L);
-                        uint top = byte_at(high_run + L);
+            //  Three runs of two words: the low nibbles of two sub-runs and
+            //  the byte carrying the pairs of high bits. Two hundred and
+            //  ten is not a multiple of four, so consecutive blocks begin
+            //  at different offsets within a word and each run's shift is
+            //  worked out here rather than once for the row.
+            uint at_first = low_run + upper * 8u;
+            uint at_second = low_run + 32u + upper * 8u;
+            uint at_top = high_run + upper * 8u;
 
-                        accumulate(out_run + L,
-                                   scale_1 * (float((first & 15u)
-                                                    + 16u * (top & 3u))
-                                              - 32.0));
-                        accumulate(out_run + 32u + L,
-                                   scale_2 * (float((second & 15u)
-                                                    + 16u * ((top >> 2u) & 3u))
-                                              - 32.0));
-                        accumulate(out_run + 64u + L,
-                                   scale_3 * (float((first >> 4u)
-                                                    + 16u * ((top >> 4u) & 3u))
-                                              - 32.0));
-                        accumulate(out_run + 96u + L,
-                                   scale_4 * (float((second >> 4u)
-                                                    + 16u * ((top >> 6u) & 3u))
-                                              - 32.0));
-                    }
+            uint shift_first = (at_first & 3u) * 8u;
+            uint shift_second = (at_second & 3u) * 8u;
+            uint shift_top = (at_top & 3u) * 8u;
+
+            for (uint g = 0u; g < 2u; ++g) {
+                uint w_first = word_of((at_first >> 2u) + g, shift_first);
+                uint w_second = word_of((at_second >> 2u) + g, shift_second);
+                uint w_top = word_of((at_top >> 2u) + g, shift_top);
+
+                for (uint n = 0u; n < 4u; ++n) {
+                    uint first = (w_first >> (n * 8u)) & 255u;
+                    uint second = (w_second >> (n * 8u)) & 255u;
+                    uint top = (w_top >> (n * 8u)) & 255u;
+
+                    uint L = upper * 8u + g * 4u + n;
+
+                    accumulate(out_run + L,
+                               scale_1 * (float((first & 15u)
+                                                + 16u * (top & 3u))
+                                          - 32.0));
+                    accumulate(out_run + 32u + L,
+                               scale_2 * (float((second & 15u)
+                                                + 16u * ((top >> 2u) & 3u))
+                                          - 32.0));
+                    accumulate(out_run + 64u + L,
+                               scale_3 * (float((first >> 4u)
+                                                + 16u * ((top >> 4u) & 3u))
+                                          - 32.0));
+                    accumulate(out_run + 96u + L,
+                               scale_4 * (float((second >> 4u)
+                                                + 16u * ((top >> 6u) & 3u))
+                                          - 32.0));
                 }
             }
         }

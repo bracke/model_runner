@@ -1605,19 +1605,19 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.376 s | **0.262 s** |
-| -- evaluating the prompt | 0.053 s | 0.034 s |
-| -- generating | 0.323 s | **0.227 s** |
-| -- processor time | 1.98 s | **0.06 s** |
-| 110-token prompt, nothing generated | 0.354 s | **0.102 s** |
-| -- processor time | 2.72 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.377 s | **0.258 s** |
+| -- evaluating the prompt | 0.054 s | 0.032 s |
+| -- generating | 0.322 s | **0.227 s** |
+| -- processor time | 1.97 s | **0.06 s** |
+| 110-token prompt, nothing generated | 0.361 s | **0.103 s** |
+| -- processor time | 2.75 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-09-04, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
 version of this table before last.
 
-**That cell read 0.098 s, then 0.122, then 0.100, 0.099, and the 0.102
-above, across five sittings with the code unmoved between the second and third.**
+**That cell read 0.098 s, then 0.122, 0.100, 0.099, 0.102 and the 0.103
+above, across six sittings with the code unmoved between the second and third.**
 It is the row `### A prompt too short to wake the machine` below is about: a
 tenth of a second of work never brings the part above about 1.5 GHz, and
 where inside its low band the clock happens to sit decides the cell. The
@@ -1639,7 +1639,7 @@ too`, which is why they are there.
 
 **The device wins both runs now, and spends a twentieth of the processor's
 time doing it** on the short run and a hundredth on the long one. Its
-110-token prompt has gone from 1.951 s to 0.102 s. Six changes took the
+110-token prompt has gone from 1.951 s to 0.103 s. Six changes took the
 first two thirds of that, to 0.280 s -- the default batch, the results a
 product reads back, the activation it writes, the kind of memory those
 results are read out of, the width of a workgroup, and -- last and largest -- the batch computed as a
@@ -6574,10 +6574,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 363.0 t/s | 36.6 t/s |
-| llama.cpp, processor | 369.2 t/s | 39.5 t/s |
-| model_runner, device | 1486.5 t/s | 50.5 t/s |
-| llama.cpp, device | 1539.3 t/s | 56.1 t/s |
+| model_runner, processor | 361.8 t/s | 36.7 t/s |
+| llama.cpp, processor | 378.9 t/s | 39.6 t/s |
+| model_runner, device | 1527.8 t/s | 50.2 t/s |
+| llama.cpp, device | 1643.9 t/s | 55.5 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6596,10 +6596,10 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **278.9 t/s** | 36.6 t/s |
-| llama.cpp, processor | 255.7 t/s | 39.3 t/s |
-| model_runner, device | 1695.3 t/s | 50.5 t/s |
-| llama.cpp, device | 1748.5 t/s | 55.8 t/s |
+| model_runner, processor | **275.6 t/s** | 36.7 t/s |
+| llama.cpp, processor | 254.5 t/s | 39.2 t/s |
+| model_runner, device | 1693.3 t/s | 50.2 t/s |
+| llama.cpp, device | 1760.5 t/s | 55.8 t/s |
 
 **The device prompt rows read 1182.8 and 1211.8 for one commit, and that was
 a slow window rather than the code.** The commit before this one published
@@ -6616,16 +6616,16 @@ history. A median of three inside one window is not a defence against a
 window that is itself unusual, which is the second time this section has had
 to say that in one day.
 
-**The processor's long prompt is ahead of llama.cpp -- 278.9 tokens a
-second against 255.7 at 1419 -- and its short one is behind, 363.0 against
-369.2 at 110.** The short row
+**The processor's long prompt is ahead of llama.cpp -- 275.6 tokens a
+second against 254.5 at 1419 -- and its short one is behind, 361.8 against
+378.9 at 110.** The short row
 has now been ahead in two of seven sittings and behind in five, with
 llama-bench's own spread on it thirty tokens a second; the rows that repeat
 are the long prompt and the two generating ones. Read the short rows knowing the spread on both sides: llama-bench's
-pp110 has read 369.2 ± 7.9, 367.9 ± 6.6, 375.3 ± 3.8, 369.3 ± 11.1, 340.4 ± 24.4, 371.3 ± 16.6,
+pp110 has read 378.9 ± 1.4, 369.2 ± 7.9, 367.9 ± 6.6, 375.3 ± 3.8, 369.3 ± 11.1, 340.4 ± 24.4, 371.3 ± 16.6,
 346.8 ± 34.5, 339.4 ± 27.2, 341.3 ± 25.0 and 342.4 ± 25.6 across nine
-sittings, and its device pp110 1539.3, 1647.3, 1560.0, 1543.3, 1645.5, 1538.3, 1579.1,
-1640.8, 1583.3 and 1654.0, against this program's 1486.5, 1549.3, 1506.8, 1182.8, 1571.4,
+sittings, and its device pp110 1643.9, 1539.3, 1647.3, 1560.0, 1543.3, 1645.5, 1538.3, 1579.1,
+1640.8, 1583.3 and 1654.0, against this program's 1527.8, 1486.5, 1549.3, 1506.8, 1182.8, 1571.4,
 1571.4, 1571.4, 1549.3, 1617.6 and 1486.5. The claim those rows
 carry is that the short prompt is close, not which side of close it lands on
 in a given afternoon. What moved the long one is `### A share a worker, decided
@@ -6641,8 +6641,8 @@ Both tables are one sitting, taken with `llama-bench` on the same
 pass, and the machine was gated to a load under 0.6 and a settled part before
 the first of them rather than only cooled. The rule an earlier entry
 added still holds and is what the reading is checked against: the long-prompt
-figure here, 5.088 s, sits beside the 5.130, 5.123, 5.034 and 4.972 four
-other windows read since, so it is a sitting and not a window.
+figure here, 5.148 s, sits beside the 5.088, 5.130, 5.123, 5.034 and 4.972
+five other windows read since, so it is a sitting and not a window.
 
 **The 1419-token processor row published before this one was wrong, and the
 way it went wrong is the same trap this file keeps setting for itself.** It
@@ -6659,8 +6659,8 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor is **ahead at the longer prompt** -- 1.09 at 1419 tokens --
-and 1.02 behind at 110; the device is 1.03 behind at 1419 and 1.04 behind at
+The processor is **ahead at the longer prompt** -- 1.08 at 1419 tokens --
+and 1.05 behind at 110; the device is 1.04 behind at 1419 and 1.08 behind at
 110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
 were the machine's clock rather than the code's; `### A prompt too short to
 wake the machine` is what they were. Attention grows with the square of the
@@ -6669,8 +6669,8 @@ table taken at a hundred and ten tokens reads a little kinder than the work
 deserves.
 
 And it is far less noisy. `llama-bench` reports its own spread, and over
-three runs it is **±18.5 on 1748.5 at 1419 tokens against ±11.1 on 1539.3 at
-110, both on the device** -- one per cent against under one -- and the same 1419 figure read 224.9 ±20 half an hour earlier on a
+three runs it is **±3.6 on 1760.5 at 1419 tokens against ±20.1 on 1643.9 at
+110, both on the device** -- a fifth of a per cent against one -- and the same 1419 figure read 224.9 ±20 half an hour earlier on a
 machine that was not quiet -- a hundred and ten tokens is where a call's fixed cost still shows,
 on both sides. This section has twice had to explain a figure that moved
 more between sittings than the change being measured moved it: the device row
@@ -6775,8 +6775,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.303 s
-and 64 in 1.748 s on the processor, 0.074 s and 1.267 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.304 s
+and 64 in 1.742 s on the processor, 0.072 s and 1.276 s on the device,
 medians of three as everywhere else here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -6791,13 +6791,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 700.9 t/s rather
-than 369.2 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 625.9 t/s rather
+than 378.9 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 50.5 t/s
-now, against 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 50.2 t/s
+now, against 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -7312,9 +7312,9 @@ llama.cpp on the same files:
 
 | | file | generating | ours | llama.cpp | |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Q4_K_M | 637 MB | 1.668 s | 38.4 t/s | 86.2 | **2.25** |
-| Q5_K_M | 746 MB | 1.833 s | 34.9 t/s | 76.9 | **2.20** |
-| Q8_0 | 1116 MB | 1.275 s | 50.2 t/s | 56.1 | 1.12 |
+| Q4_K_M | 637 MB | 1.884 s | 34.0 t/s | 87.1 | **2.56** |
+| Q5_K_M | 746 MB | 1.822 s | 35.1 t/s | 76.6 | **2.18** |
+| Q8_0 | 1116 MB | 1.280 s | 50.0 t/s | 55.5 | 1.11 |
 
 **The k-quants move sixty per cent of the bytes and take a third more time**,
 and where llama.cpp is twice as fast generating with a four-bit format as
@@ -7351,11 +7351,67 @@ byte-at-a-time form had been paying that too. Read once for the block they
 come out level. A change that is neutral after being wrong twice is worth
 recording as neutral.
 
-**And 1.11 of 2.25 is not the answer.** The byte loads were a real cost and
-they were not the main one. What is left is the decode itself -- a sub-block
-scale unpacked from twelve packed bytes, a nibble split, an offset -- against
-llama.cpp's per-format specialised kernels. That is the next thing and it is
-a kernel change rather than a read pattern.
+**And 1.11 of 2.56 was not the answer.** The byte loads were a real cost and
+they were not the main one. What was left is `### A lane a block, where the
+block is two hundred bytes` below, which took most of the rest.
+
+### A lane a block, where the block is two hundred bytes
+
+The section above got a ninth of the k-quant gap and said the byte loads were
+not the main cost. An ablation said where the rest was: a build of Q4_K with
+its weight reads removed -- the wrong answer, none of the loads -- generated
+in 1.231 s against 1.677, so **the loads were twenty-seven per cent**, which
+is a great deal for a format that fits in nine per cent of the file's bytes.
+
+The reason is the arrangement, not the reads. Eight invocations share a row,
+and each took **a super-block of its own**. A Q4_K super-block is a hundred
+and forty-four bytes, a Q5_K one a hundred and seventy-six, a Q6_K one two
+hundred and ten -- so the eight lanes of a row fetched from eight addresses
+that far apart, eight cache lines to use thirty-two bytes, and again for the
+next word.
+
+They now share the block and take consecutive words out of it. A super-block
+divides eight ways along lines the format already has: Q4_K and Q5_K as four
+groups of two halves, Q6_K as four unit-runs of two. Alternated, three rounds
+each, sixty-four tokens generated on the device:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M | 1.884 s | **0.996 s** | 1.89 |
+| Q5_K_M | 1.822 s | **1.084 s** | 1.68 |
+| Q8_0 | 1.280 s | 1.279 s | -- |
+
+**Q4_K generates 64.3 tokens a second where it generated 34.0**, and the gap
+to llama.cpp on it is **1.36 where it was 2.56**. Every digest is what it
+was.
+
+**Q6_K is most of that and it was not where I expected it.** Q4_K_M and
+Q5_K_M are not one format: their output projection and some of their
+attention tensors are Q6_K, and giving that branch the same treatment was
+worth a further 1.37 on both files after the other two had been done. A
+"_M" file is a mixture and its slowest format decides it.
+
+**It does not work for a thirty-two element block, and the measurement said
+so before the reasoning did.** Q8_0's block is thirty-four bytes: sharing it
+gives each lane one word, four elements -- and the per-block setup, a
+half-precision scale and two offsets, is then done eight times over for four
+elements of work. It reads **1.441 s against 1.251**, fourteen per cent
+worse. The trade is between the scatter a lane-a-block causes and the setup a
+shared block repeats, and two hundred elements a block is on one side of it
+while thirty-two is on the other.
+
+**And two formats are left out for a reason worth recording.** Q2_K and Q3_K
+take the same treatment and get a second saving with it -- their four groups
+are four two-bit fields of the same sixteen bytes, so a lane-a-group read
+them four times over. Done, they made **Q8_0 ten per cent slower** while its
+own branch stood byte-identical: 1.300, 1.315 and 1.317 s against 1.151,
+1.193 and 1.195. A shader is one module and its registers are allocated for
+the worst branch in it, so two branches holding four words across a loop cost
+every other branch its occupancy -- which is the same thing
+`matrix_product.comp` was split in two for, and measured at twenty-one per
+cent there. Reverting those two put Q8_0 back to a wash. **Splitting the row
+product by format group is what would let them in**, and that is the next
+thing.
 
 ### Drafting
 
