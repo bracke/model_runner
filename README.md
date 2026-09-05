@@ -7519,6 +7519,87 @@ the same fact used carelessly: measuring a format by running a file named
 after it credits that format with whatever else the file contains. Both times
 the answer was Q6_K.
 
+### Five things llama.cpp does, and the one of them that is worth anything here
+
+This section is the first that went looking rather than measuring: reading
+`ggml/src/ggml-vulkan` for what its matrix-vector path does that this one
+does not, and trying each. Four of the five are worth nothing on this part
+and the fifth is worth five per cent.
+
+**An integer dot product, and the cheapest disproof in this file.**
+llama.cpp has a whole second family of matrix-vector kernels -- `mul_mat_vecq`
+against `mul_mat_vec` -- which quantize the activation to eight bits and use
+`dotPacked4x8EXT`, four integer multiply-adds in one instruction, where the
+float kernel does four fused multiply-adds. This device advertises
+`integerDotProduct4x8BitPackedSignedAccelerated`. Our own processor backend
+has used exactly this trick for months. It was going to be a large piece of
+work: an activation quantized on the device, a buffer to hold it, a kernel to
+make it.
+
+**It is worth one and a half per cent to llama.cpp**, and they ship the knob
+that says so:
+
+```
+GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1 llama-bench ...
+```
+
+| | with | without |
+| --- | ---: | ---: |
+| Q8_0, 64 generated | 57.62 t/s | 56.24 |
+| Q4_K_M | 88.40 | 87.54 |
+
+Their float kernel alone is still 87.5 against our 64. **Half a day's
+measurement is cheaper than a fortnight's implementation**, and the knob was
+in their source.
+
+**The batch bound as `vec4`.** `data_b_v4` -- four activations per load,
+where we read one. Certain rather than hoped for, which is what an earlier
+attempt here got wrong. It reads 1.287 s against 1.281 on Q8_0 and 1.004
+against 0.991 on Q4_K: a wash, and the ablation says why -- the activation
+loads are six per cent of the run.
+
+**Thirty-two threads to a row**, where this program uses eight. Swept: eight
+and sixteen are identical, thirty-two is one per cent worse. The number was
+chosen once for coalescing and never swept; it is right.
+
+**Two output rows to a workgroup** (`rm_kq = 2` on this architecture), which
+amortizes the activation reads across rows. Those are the six per cent above,
+so it is bounded by a number already measured, and it was not built.
+
+**And the fifth: the workgroup width is not one number for every format.**
+llama.cpp builds its matrix-vector pipelines at two widths and picks per
+case. Swept here, the best width differs sharply by format:
+
+| | 256 wide | 128 wide |
+| --- | ---: | ---: |
+| Q4_K_M | 0.992 s | **0.941** |
+| Q5_K_M | 1.046 | **1.036** |
+| Q8_0 | **1.258** | 1.320 |
+| Q2_K | **0.894** | 1.053 |
+
+A wide group gives a row's lanes more neighbours to hide behind and a narrow
+one leaves more groups to schedule, and which a format wants depends on how
+long its decode is. Q2_K is sixteen per cent the wrong way.
+
+So the row product is now made into two pipelines, and Q4_K and Q5_K are
+bound to the narrower. Alternated, four rounds, load 0.29:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M | 1.028, 1.024, 1.017 s | **0.969, 0.980, 0.981** | 1.05 |
+| Q5_K_M | 0.995, 1.030, 1.107 | **0.979, 1.020, 1.073** | 1.02 |
+| Q8_0 | 1.290, 1.294, 1.292 | 1.300, 1.298, 1.302 | 0.99 |
+
+**Two pipelines and not two compilations, because a second copy of the words
+does not fit.** Adding one put `model_runner-shaders.ads` at 1,070,384 bytes
+against the megabyte this repository allows a file, and that check is worth
+more than the convenience. The width is a specialization constant instead --
+`local_size_x_id`, which is how llama.cpp declares its own -- so one module
+serves both. That costs Q8_0 six tenths of a per cent, every reading on the
+same side, because a workgroup size the compiler cannot see as a literal is
+one it optimizes a little less well. It is inside the spread that row has
+carried for a dozen sittings and it is stated rather than buried.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The row product is made into two pipelines at two workgroup widths**, and
+  Q4_K and Q5_K are bound to the narrower — **1.05× and 1.02×** generating on
+  the device, digests unchanged. The best width is not one number for every
+  format: Q8_0 is five per cent worse on the narrow one and **Q2_K sixteen**,
+  which is why llama.cpp builds its own matrix-vector pipelines at two widths
+  and picks per case.
+
+  The width is a specialization constant rather than a second compilation,
+  because a second copy of the words put `model_runner-shaders.ads` over the
+  megabyte this repository allows a file. That costs Q8_0 six tenths of a per
+  cent, every reading on the same side, and is stated rather than buried.
+
+### Changed
+
+- **`docs/measured-figures.txt` is split**, its entries before 2026-08-26
+  moved to `docs/measured-figures-earlier.txt`, because the log passed the
+  megabyte this repository allows a file. The fingerprint groups all stayed.
+  The move exposed a second thing: the suite reads a `# load:` line flush at
+  the start of a line, every entry this session had written it indented, and
+  the check was being satisfied by an August entry that happened to sit above
+  the first group. They are all flush now.
+
+### Measured
+
+- **Four other things llama.cpp does, none of them worth anything here.**
+  Chief among them the **integer dot product** — a second family of kernels
+  quantizing the activation to eight bits for `dotPacked4x8EXT` — which their
+  own `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT` knob prices at **1.5 per cent**
+  (57.62 t/s against 56.24). That disproof cost half a day and saved a
+  fortnight. Also: the batch bound as `vec4` (a wash), thirty-two threads to
+  a row rather than eight (identical at sixteen, worse at thirty-two), and
+  two output rows to a workgroup (bounded by an ablation at six per cent, so
+  not built).
+
 - **Q2_K joins the block sharing**, which is worth about one and a half per
   cent on it — 0.940 to 0.925 s generating — bit-exact and at no cost to any
   other format.

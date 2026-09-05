@@ -39,7 +39,27 @@
 //  Rows are contiguous, which is the layout every weight in this program
 //  already has: a row is what a matrix-vector product reads in one run.
 
-layout(local_size_x = 256) in;
+//  Invocations to a workgroup.
+//
+//  This was one number for every format and the best one is not: Q4_K
+//  generates in 0.941 s at a hundred and twenty-eight against 0.992 at two
+//  hundred and fifty-six, Q5_K in 1.036 against 1.046 -- and Q8_0 reads
+//  1.320 against 1.258 the other way, while Q2_K reads 1.053 against 0.894,
+//  which is sixteen per cent the wrong way. A wide group gives a row's lanes
+//  more neighbours to hide behind and a narrow one leaves more groups to
+//  schedule, and which of those a format wants depends on how long its
+//  decode is.
+//
+//  llama.cpp builds its own matrix-vector pipelines at two widths for this
+//  reason and picks per case. So does this now: the source is compiled once
+//  more with HALF_GROUP, and the engine binds it for the two formats that
+//  measured better on it.
+//  A specialization constant rather than a second compilation of the
+//  source. The words are the same either way and this repository will not
+//  hold another copy of them -- the generated package is a megabyte and
+//  that is the limit -- so the width is set when the pipeline is made.
+//  llama.cpp declares its own the same way, as local_size_x_id.
+layout(local_size_x_id = 0, local_size_x = 256) in;
 
 layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
@@ -163,6 +183,9 @@ const uint LANES = 8u;
 
 //  Each invocation's share of its row, for the reduction below. Sized by
 //  the workgroup width declared above, which the two have to agree about.
+//  Room for the widest the constant above may be set to. A workgroup
+//  narrower than that leaves the tail of this unread, which is a kilobyte
+//  at a batch of one and worth less than a second set of words.
 shared float shares[256u * GROUP];
 //  The sixteen levels a non-linear four-bit quant may take. A nibble in
 //  IQ4_NL and IQ4_XS is not a number but an index into this, and the table

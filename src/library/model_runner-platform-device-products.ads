@@ -1117,6 +1117,7 @@ private
       --  wide kernel exactly as before.
       Single     : System.Address := System.Null_Address;
 
+
       --  And a third time with WIDER, which sets its group to sixteen. A
       --  round of nine to thirty-one sequences is two dispatches on the
       --  eight-wide kernel and therefore two passes over every weight in
@@ -1176,6 +1177,7 @@ private
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
       Single_Line : System.Address := System.Null_Address;
+      Half_Group_Line : System.Address := System.Null_Address;
       Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;

@@ -97,6 +97,10 @@ package body Model_Runner.Platform.Device.Products is
    --  does not.
    Group_Size : constant := 256;
 
+   --  And the width the second compilation of the row product declares,
+   --  which the two formats named in Half_Grouped are bound to.
+   Half_Group : constant := 128;
+
    --  Invocations that share one row, which the shader states as well.
    --
    --  A row is divided across this many lanes so that their reads of the
@@ -418,8 +422,31 @@ package body Model_Runner.Platform.Device.Products is
        then C.unsigned ((Positions + Query_Block - 1) / Query_Block)
        else C.unsigned (Positions));
 
-   function Row_Line (Item : Engine; Count : Natural) return Address
-   is (if Count = 1 and then Item.Single_Line /= Null_Handle
+   --  Whether this format generates better on the narrower workgroup. Two
+   --  of them do and the rest do not, which is why this is a list and not a
+   --  rule: Q8_0 is four per cent worse on it and Q2_K sixteen.
+   function Half_Grouped
+     (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
+   is (Count = 1
+       and then Item.Half_Group_Line /= Null_Handle
+       and then Packing in Packed_Q4_K | Packed_Q5_K);
+
+   --  Invocations a workgroup of the bound row kernel has, which decides
+   --  how many workgroups the dispatch asks for. One decision with the
+   --  kernel below, as the group width is with the batch.
+   function Row_Width
+     (Item : Engine; Packing : Weight_Packing; Count : Natural)
+      return Positive
+   is (if Half_Grouped (Item, Packing, Count) then Half_Group
+       else Group_Size);
+
+   function Row_Line
+     (Item    : Engine;
+      Count   : Natural;
+      Packing : Weight_Packing := Values_F32) return Address
+   is (if Half_Grouped (Item, Packing, Count)
+       then Item.Half_Group_Line
+       elsif Count = 1 and then Item.Single_Line /= Null_Handle
        then Item.Single_Line
        elsif Count > Batch_Group and then Item.Wide_Line /= Null_Handle
        then Item.Wide_Line
@@ -552,6 +579,24 @@ package body Model_Runner.Platform.Device.Products is
       Module        : Address := Null_Handle;
       Name          : C.Strings.chars_ptr := C.Strings.Null_Ptr;
       Specialized   : Address := Null_Handle;
+   end record
+     with Convention => C;
+
+   --  One specialization constant and the block that carries it, which is
+   --  how the row product's workgroup width is set: the same words, made
+   --  into two pipelines at two widths.
+   type Specialization_Entry is record
+      Which  : C.unsigned := 0;
+      At_Was : C.unsigned := 0;
+      Span   : Interfaces.C.size_t := 4;
+   end record
+     with Convention => C;
+
+   type Specialization_Info is record
+      Count   : C.unsigned := 1;
+      Entries : Address := Null_Handle;
+      Span    : Interfaces.C.size_t := 4;
+      Values  : Address := Null_Handle;
    end record
      with Convention => C;
 
@@ -1309,6 +1354,8 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+
+
          --  And a third time for a batch between the two, allowed to fail
          --  on its own for the same reason: without it those counts run
          --  two dispatches of eight, which is what they did until now.
@@ -1720,6 +1767,32 @@ package body Model_Runner.Platform.Device.Products is
             then
                Item.Single_Line := Made;
             end if;
+         end if;
+
+         --  And the same words again at half the width, which is a
+         --  specialization constant and not another module.
+         if Item.Single /= Null_Handle then
+            declare
+               Entry_One : aliased Specialization_Entry;
+               Told      : aliased Specialization_Info;
+               Width     : aliased C.unsigned := Half_Group;
+            begin
+               Entry_One.Which := 0;
+               Entry_One.At_Was := 0;
+               Told.Entries := Entry_One'Address;
+               Told.Values := Width'Address;
+
+               Request.Stage.Module := Item.Single;
+               Request.Stage.Specialized := Told'Address;
+
+               if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                          Null_Handle, Made'Access) = 0
+               then
+                  Item.Half_Group_Line := Made;
+               end if;
+
+               Request.Stage.Specialized := Null_Handle;
+            end;
          end if;
 
          --  And the wider one, on the same terms.
@@ -2355,6 +2428,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
+      Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -2369,6 +2443,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
       Give_Back (Item.Single, "vkDestroyShaderModule");
+
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
@@ -3499,6 +3574,10 @@ package body Model_Runner.Platform.Device.Products is
             declare
                First : Natural := 0;
             begin
+               Bind_Pipeline
+                 (Item.Buffer, Bind_Point_Compute,
+                  Row_Line (Item, Count, Packing));
+
                while First < Count loop
                   declare
                      Shape : aliased Shape_Constants :=
@@ -3515,8 +3594,10 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((Rows * Row_Lanes + Group_Size - 1)
-                                    / Group_Size), 1, 1);
+                        C.unsigned
+                          ((Rows * Row_Lanes
+                            + Row_Width (Item, Packing, Count) - 1)
+                           / Row_Width (Item, Packing, Count)), 1, 1);
                   end;
 
                   First := First + Row_Group (Item, Count);
@@ -6054,6 +6135,14 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
+               --  Bound here rather than left to whatever the step
+               --  before it bound: the row kernel is chosen by the format
+               --  as well as by the batch, and only a product knows its
+               --  format.
+               Bind_Pipeline
+                 (Item.Buffer, Bind_Point_Compute,
+                  Row_Line (Item, Count, This.Packing));
+
                while First < Count loop
                   declare
                      Shape : aliased Shape_Constants :=
@@ -6071,8 +6160,10 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((This.Rows * Row_Lanes + Group_Size - 1)
-                                    / Group_Size), 1, 1);
+                        C.unsigned
+                          ((This.Rows * Row_Lanes
+                            + Row_Width (Item, This.Packing, Count) - 1)
+                           / Row_Width (Item, This.Packing, Count)), 1, 1);
                   end;
 
                   First := First + Row_Group (Item, Count);
