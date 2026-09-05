@@ -5,6 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The super-block activation does not help the strip kernels, and the
+  reason is structural.** A strip multiplies four vectors at once, so the
+  four are already the vector dimension: the minimum term is three
+  instructions per sub-block per row covering all four vectors, and the
+  integer form would be three as well plus a conversion and a scaling per
+  vector at every block. Ablating the term away entirely takes a 1419-token
+  Q4_K prompt from 6.94 s to 6.46 — **seven per cent is the whole ceiling**,
+  and the integer rewrite reaches none of it. The single-vector kernel gained
+  because it had no vector dimension and the term was scalar.
+
+- **The strip's scale-table layout, tried and refused.** It is laid out a
+  sub-block at a time with the two rows interleaved, which makes the compiler
+  scatter sixteen computed lanes to four addresses. Laying a row's sub-blocks
+  out contiguously makes that one store and is bit-exact — and measures a
+  wash on Q4_K and **1.4 % worse on Q5_K**, because the insertion reads a
+  sub-block's two rows back to back and interleaved they share a cache line.
+  What the store side saves the load side pays. No source changed.
+
 ### Added
 
 - **A super-block activation quantization for the k-quants**, which is what

@@ -8106,12 +8106,42 @@ Ten and thirty-two greedy tokens are not a sensitive instrument, and this is
 what it looks like when a change is inside the noise of the argmax rather
 than inside the noise of the clock.
 
-**What is not done.** The strip kernels evaluate a prompt and now receive
-super-block activations without exploiting them: their minimum term is still
-eight floating-point multiply-adds against a table built per call. The same
-factoring applies there and would need the minimums kept as whole numbers
-rather than pre-multiplied into `Held_Down`. That is why the prompt row above
-is a wash rather than a gain.
+**And it does not apply to the strip kernels**, which is worth writing down
+because the last section said it might. The strip multiplies four vectors at
+once, so the four vectors are already the vector dimension: the minimum term
+is three instructions for each sub-block of each row -- a broadcast of the
+weight's minimum, a four-wide multiply against a table built once per call,
+and a four-wide add -- and those three cover all four vectors. The integer
+form would be three instructions there as well, and would then owe a
+conversion and a scaling for each vector at the end of every block. It is
+strictly more. The single-vector kernel gained because it had no vector
+dimension at all and the term was eight scalar multiply-adds.
+
+**The ceiling is measured rather than argued.** Ablating the strip's minimum
+term away entirely -- the wrong answer, none of it -- takes a 1419-token Q4_K
+prompt from 6.94 s to 6.46: seven per cent. That is the whole of what any
+rewrite of that term could buy, and the integer rewrite buys none of it.
+
+**One other thing the profile pointed at, tried and refused.** The scale
+table the strip's insertion reads is laid out a sub-block at a time with the
+two rows interleaved, so the compiler computes four sub-blocks by four
+vectors in one sixteen-lane multiply and then scatters them to four addresses
+thirty-two bytes apart -- one store and three `vextracti32x4` where one store
+would do. Laying a row's eight sub-blocks out contiguously makes it one
+store, is bit-exact, and measures:
+
+| 1419-token prompt | interleaved | a row at a time |
+| --- | ---: | ---: |
+| Q4_K_M | 6.9415 s | 6.899 s |
+| Q5_K_M | 7.2065 s | 7.3105 s |
+
+A wash on the four-bit format -- three of four rounds better by less than a
+per cent, one worse -- and one and a half per cent *worse* on the five-bit
+one. The reason is the other side of the same access: the insertion reads a
+sub-block's two rows back to back, and interleaved they are sixteen bytes
+apart and in one cache line, where a row at a time puts them a hundred and
+twenty-eight apart in two. What the store side saves the load side pays.
+Not kept.
 
 ### The weight's sign, moved onto the activation
 

@@ -5387,6 +5387,59 @@
 #       1.20 for the A/B
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-05, the strip kernels asked the same question, and answering it
+# twice cost nothing and changed nothing.
+#
+#   The entry above says the strip kernels receive super-block activations
+#   without exploiting them and names the work. Both halves of that were
+#   measured. No source changed.
+#
+#   THE INTEGER MINIMUM TERM DOES NOT APPLY THERE, and the reason is
+#   structural. The strip multiplies four vectors at once, so the four are
+#   already the vector dimension: the term is three instructions for each
+#   sub-block of each row -- vbroadcastss of the weight's minimum, a
+#   four-wide vmulps against a per-call table, a four-wide add -- and those
+#   three cover all four vectors. The integer form is three there too
+#   (vpbroadcastd, vpmulld, vpaddd) and then owes a convert and a scaling
+#   for each vector at the end of every block. Strictly more. The
+#   single-vector kernel gained because it had no vector dimension and the
+#   term was eight scalar multiply-adds.
+#
+#   THE CEILING, ablated rather than argued. Q4_K 1419-token prompt with
+#   the minimum term's multiply removed -- wrong answer, none of it:
+#
+#     as it is                   6.962, 6.920 s
+#     the minimum term gone      6.445, 6.484    -7.0%
+#     that and the scale term    6.652, 6.724    -3.6%
+#
+#   Seven per cent is the whole of what any rewrite of that term could buy.
+#   The third row removing more work and measuring slower is the ablation
+#   losing its own vectorization, and is why an ablation is a ceiling and
+#   not a plan.
+#
+#   AND THE LAYOUT THE PROFILE POINTED AT, TRIED AND REFUSED. The strip's
+#   scale table is a sub-block at a time with the two rows interleaved, so
+#   the compiler computes four sub-blocks by four vectors in one zmm
+#   multiply and scatters to four addresses thirty-two bytes apart -- one
+#   vmovdqa and three vextracti32x4 where one store would do. Laid out a
+#   row at a time it is one store. Bit-exact, digest 1a26d24d33b8957b
+#   either way, four alternated rounds:
+#
+#     Q4_K pp1419  interleaved 6.856, 6.944, 6.988, 6.939 s
+#                  a row       6.992, 6.902, 6.896, 6.884   wash
+#     Q5_K pp1419  interleaved 7.187, 7.316, 7.226, 7.178
+#                  a row       7.352, 7.327, 7.293, 7.268   1.4% worse
+#     Q4_K pp110   interleaved 0.450, 0.442, 0.444, 0.467
+#                  a row       0.452, 0.457, 0.451, 0.449    wash
+#
+#   The insertion reads a sub-block's two rows back to back. Interleaved
+#   they are sixteen bytes apart and in one cache line; a row at a time
+#   puts them a hundred and twenty-eight apart in two. What the store side
+#   saves the load side pays. Not kept.
+#
+# load: under 1.10 throughout
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q5_K_M
+
 kernels D65213269D19D31E src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
