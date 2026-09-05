@@ -1499,32 +1499,40 @@ Moving fewer bytes per weight was the last idea, and measuring it twice is
 what settled it. Before the submitting task took a share, the four-bit format
 ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
-end. That gap was the contention, not the bytes: with the contention gone the
-four-bit format is within a few per cent of the eight-bit one either way --
-13496 Me/s against 13439 at eight shares with one vector, 21559 against 22790
-with thirty-two, and 2365 against 2407 serially. Which of the two leads
-changes with the case and with the run: half a per cent ahead with one
-vector, five behind batched, two behind serially -- where the sixteen sittings
-before read it half a per cent ahead with one vector and level batched, two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
-level, ahead by ten with one vector, ahead by two, behind by two, level, and
-behind.
-Read nineteen times, the pair is level and the sitting is the spread -- and
-this pair of sittings shows it plainly. Taken an hour apart on the same
-binary, the batched figure read the four-bit format nine per cent ahead and
-then five behind, which is a swing of fourteen; the first was taken at a load
-of half and the second on a machine that had settled. Neither says anything
-about the formats and the second is the one published, because the rule this
-file keeps is that a figure is taken on a quiet host or it is not taken.
-That is the finding -- they are level, and a gap either way at one shape is the
-machine rather than the format. End to end they are level too, and the two
-files have to be read a token at a time to see it: alternating the two round
-by round, four-bit generates at 86.8 and 92.4 ms a token against eight-bit at
-92.7 and 89.3, which is two readings each that bracket one another. The wall
-times themselves -- 1.133 and 1.199 s against 1.400 and 1.364 -- say nothing
-about the formats, because the four-bit file answers this prompt in ten tokens
-and the eight-bit one in twelve. The pair this replaces, 2.06 and 2.18 s
-against 2.06 and 2.26, was quoted as a wall time and had the same ten against
-twelve inside it, unnoticed.
+end. That gap was the contention, not the bytes: with the contention gone the two
+formats sat within a few per cent of each other either way, and stayed there
+for nineteen sittings -- half a per cent ahead with one vector and level
+batched, two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
+level, ahead by ten with one vector, ahead by two, behind by two, level,
+behind, and half a per cent ahead with one vector against five behind
+batched. Read nineteen times the pair was level and the sitting was the
+spread, and one pair of those sittings showed it plainly: taken an hour apart
+on the same binary, the batched figure read the four-bit format nine per cent
+ahead and then five behind, a swing of fourteen from nothing but a load of
+half against a machine that had settled.
+
+**The twentieth sitting is the first where the pair is not level, and the
+reason is in the code rather than in the host.** The four-bit and five-bit
+k-quants keep a sub-block scale packed six bits at a time across twelve
+bytes, and unpacking it is now hand-written vector code -- see `### The
+scale prologue in lanes` below. The eight-bit format has no such prologue to
+write, so this is a gap the machine cannot produce:
+
+| at eight shares | Q4_K | Q8_0 | |
+| --- | ---: | ---: | --- |
+| one vector | 13342 Me/s | 12952 Me/s | three per cent ahead |
+| thirty-two a pass | 22897 Me/s | 20754 Me/s | ten per cent ahead |
+| one share, one vector | 2385 Me/s | 2417 Me/s | level |
+
+Serially it is still level, which is the shape where one row is read at a
+time and the prologue is the smaller share of it. End to end the same gap
+shows: alternating the two round by round, four-bit generates at 25.8 and
+24.8 ms a token against eight-bit at 26.8 and 26.8. The wall times themselves
+-- 0.322 and 0.302 s against 0.376 and 0.374 -- say less than they look like
+they do, because the four-bit file answers this prompt in ten tokens and the
+eight-bit one in twelve; the pair before this one, 2.06 and 2.18 s against
+2.06 and 2.26, was quoted as a wall time and had the same ten against twelve
+inside it, unnoticed.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -7947,6 +7955,61 @@ in a kernel that already has some. It is named here with its size measured so
 that whoever writes it knows what it is worth before starting: a fifth of two
 formats' generating time, and this program is 2.1 times behind llama.cpp on
 one of them.
+
+### The scale prologue in lanes
+
+Written, and it is thirteen per cent of a four-bit generated token and eleven
+of a five-bit one. Four alternated rounds, medians of three each, on the
+short prompt:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, ten generated | 0.2915 s | 0.253 s | 13 % |
+| Q5_K_M, thirty-two generated | 0.9655 s | 0.8565 s | 11 % |
+
+Every one of the four rounds on the same side for both formats, and the
+digests are unchanged -- `4b6e8e99ae285b2a` and `0a1a63f0305d35d6` -- because
+this is the same arithmetic in the same order on the same numbers, done eight
+values at a time instead of one.
+
+**What the prologue is.** A k-quant super-block holds two scales for the
+whole block and then eight sub-block scales and eight sub-block minimums,
+packed six bits each into twelve bytes. The first four of each are a plain
+six-bit field; the last four are a nibble taken from the top third of the
+twelve with two high bits taken from the first third and laid above it. Every
+one of the sixteen then has to become a floating-point number and be
+multiplied by the block's scale and by the activation's own scale for that
+sub-block.
+
+Done a sub-block at a time that is about a hundred and twenty instructions a
+block, and every one of them is the same operation on eight neighbouring
+values. The compiler will not vectorize it: the byte-to-float widening and
+the six-bit fields split across two bytes are not shapes it recognises, which
+is what the two failed attempts recorded above and below this were finding
+out the hard way.
+
+**What replaced it is thirty-one instructions.** The twelve bytes arrive as
+one unaligned sixteen-byte read -- safe, because a block is a hundred and
+forty-four bytes and this reads twenty of them. Two byte-lane shifts put the
+three groups of four where they can be worked on together. The plain fields
+are one mask; the split fields are a shift, a mask and an or, on all four at
+once. `vpmovzxbd` widens each set of four bytes to four whole numbers in one
+instruction, `vinserti128` joins the two halves into a register of eight,
+`vcvtdq2ps` converts all eight to floating point together, and the block's
+scale and the activation's scale are two multiplies over the eight.
+
+**What is deliberately not in it** is the minimum's term, which is a running
+sum in binary64 over the whole row. Reassociating it into lanes would move
+the answers, and the point of this change was that it does not have to: the
+vector code produces the eight products and the sum that consumes them stays
+scalar and in order. That sum is now what is left, and it is a chain of
+sixty-four dependent additions a row.
+
+**Where this leaves the two formats.** The four-bit k-quant is no longer
+level with the eight-bit one on this host -- it is three per cent ahead with
+one vector, ten per cent ahead batched, and still level serially. The figures
+are in the `## Speed` section above, under "Moving fewer bytes per weight";
+this section is why they moved.
 
 ### Drafting
 

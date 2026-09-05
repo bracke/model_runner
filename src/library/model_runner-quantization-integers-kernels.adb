@@ -193,6 +193,16 @@ package body Model_Runner.Quantization.Integers.Kernels is
    --  because they are stored with an aligned move.
    type Lanes_8 is array (0 .. 7) of N.Real with Alignment => 32;
 
+   --  A block's two scales, side by side, so that the unpack below reaches
+   --  both from one address and broadcasts them without a second operand.
+   type Lanes_2 is array (0 .. 1) of N.Real with Alignment => 8;
+
+   --  The three masks the k-quant scale unpack works with, kept here so
+   --  that the block below broadcasts them from memory rather than
+   --  building them again for every one of a row's blocks.
+   Unpack_Masks : constant array (0 .. 2) of Interfaces.Unsigned_32 :=
+     [16#3F3F_3F3F#, 16#0F0F_0F0F#, 16#3030_3030#];
+
    --  One vector against a tile of rows, for the four-bit k-quant.
    procedure Rows_Singly_Q4K
      (Data      : Model_Runner.Bytes.Byte_Array;
@@ -3293,70 +3303,120 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   At_Byte : constant B.Byte_Index :=
                     Base + Width * B.Byte_Count (Block);
 
-                  Whole : constant N.Real := Scale_At (Data, At_Byte);
-                  Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+                  At_Base : constant Element_Count :=
+                    First / Activation_Block + Block * Deep;
 
-                  --  The twelve packed bytes taken apart in one go rather
-                  --  than a sub-block at a time.
+                  --  The block's scale and the block's least, together.
+                  Pair : constant Lanes_2 :=
+                    [Scale_At (Data, At_Byte), Scale_At (Data, At_Byte + 2)];
+
+                  --  The minimum's side of the product, one for every
+                  --  sub-block, kept for the running sum below.
+                  Lowered : Lanes_8;
+
+               begin
+                  --  The twelve packed bytes taken apart in lanes.
                   --
-                  --  Asked one at a time, the first four sub-blocks read
-                  --  two bytes each and the last four read three, and the
-                  --  bytes they read are the same twelve over again -- five
-                  --  and twenty reads where twelve will do, with a branch
-                  --  on the sub-block's number around each. Ablating this
+                  --  Asked one sub-block at a time, the first four read two
+                  --  bytes each and the last four read three, and the bytes
+                  --  they read are the same twelve over again -- five and
+                  --  twenty reads where twelve will do, with a branch on
+                  --  the sub-block's number around each. Ablating this
                   --  prologue away entirely -- the wrong answer, and none
                   --  of the unpacking -- took a generated token from 2.277
                   --  to 1.642 s, so it is twenty-eight per cent of what
-                  --  this format costs the processor and the reads are
-                  --  most of it.
-                  Packed : array (0 .. 11) of Interfaces.Unsigned_8;
+                  --  this format costs the processor.
+                  --
+                  --  Taking the twelve apart a byte at a time and then
+                  --  widening each byte to a floating-point number is a
+                  --  hundred and twenty instructions a block, and every one
+                  --  of them is the same operation on eight neighbouring
+                  --  values. Written first as two Ada loops -- one to
+                  --  unpack, one to multiply, with the scales read once --
+                  --  it measured one to two per cent worse than the single
+                  --  scalar loop it replaced, because the compiler
+                  --  vectorised neither: the byte-to-float widening and the
+                  --  six-bit fields split across two bytes are not shapes
+                  --  it recognises.
+                  --
+                  --  Written by hand it is thirty-one instructions. The
+                  --  twelve arrive as one unaligned sixteen-byte read --
+                  --  which is inside the block, since a block is a hundred
+                  --  and forty-four bytes and this reads twenty of them.
+                  --  The first four fields are a mask; the last four are a
+                  --  nibble from the top third of the twelve with two high
+                  --  bits from the first third laid above it, which is a
+                  --  shift, a mask and an or on all four at once. Both
+                  --  sets widen from bytes to whole numbers in one
+                  --  instruction apiece, join into a register of eight,
+                  --  convert to floating point together, and take the
+                  --  block's scale and the activation's scale as two
+                  --  multiplies over the eight.
+                  --
+                  --  Bit for bit what the scalar loop computed: the same
+                  --  two multiplies in the same order, on the same numbers.
+                  --  The running sum below is what is not done here, and
+                  --  is left in the order it was in.
+                  System.Machine_Code.Asm
+                    ("vmovdqu (%1), %%xmm0" & LF &
+                     "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+                     "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+                     "vpbroadcastd 0(%5), %%xmm3" & LF &
+                     "vpbroadcastd 4(%5), %%xmm4" & LF &
+                     "vpbroadcastd 8(%5), %%xmm5" & LF &
+                     "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+                     "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+                     "vpsrld $2, %%xmm0, %%xmm8" & LF &
+                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                     "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+                     "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+                     "vpsrld $2, %%xmm1, %%xmm8" & LF &
+                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                     "vpsrld $4, %%xmm2, %%xmm10" & LF &
+                     "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+                     "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+                     "vpmovzxbd %%xmm6, %%xmm6" & LF &
+                     "vpmovzxbd %%xmm9, %%xmm9" & LF &
+                     "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+                     "vpmovzxbd %%xmm7, %%xmm7" & LF &
+                     "vpmovzxbd %%xmm10, %%xmm10" & LF &
+                     "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+                     "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                     "vcvtdq2ps %%ymm7, %%ymm7" & LF &
+                     "vbroadcastss 0(%4), %%ymm8" & LF &
+                     "vbroadcastss 4(%4), %%ymm9" & LF &
+                     "vmulps %%ymm8, %%ymm6, %%ymm6" & LF &
+                     "vmulps %%ymm9, %%ymm7, %%ymm7" & LF &
+                     "vmovups (%2), %%ymm10" & LF &
+                     "vmulps %%ymm10, %%ymm6, %%ymm6" & LF &
+                     "vmulps %%ymm10, %%ymm7, %%ymm7" & LF &
+                     "vmovups %%ymm6, (%0)" & LF &
+                     "vmovups %%ymm7, (%3)",
+                     Inputs   =>
+                       [System.Address'Asm_Input
+                          ("r", Row_Scale (Natural (Block) * Deep)'Address),
+                        System.Address'Asm_Input
+                          ("r", Data (At_Byte + 4)'Address),
+                        System.Address'Asm_Input
+                          ("r", Scales (Scales'First + At_Base)'Address),
+                        System.Address'Asm_Input ("r", Lowered'Address),
+                        System.Address'Asm_Input ("r", Pair'Address),
+                        System.Address'Asm_Input
+                          ("r", Unpack_Masks (0)'Address)],
+                     Clobber  =>
+                       "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,"
+                       & "ymm9,ymm10,memory",
+                     Volatile => True);
 
-                  Factors  : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
-                  Minimums : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
-               begin
-                  for Index in Packed'Range loop
-                     Packed (Index) :=
-                       Data (At_Byte + 4 + B.Byte_Count (Index));
-                  end loop;
-
-                  --  The first four carry a six-bit field apiece; the last
-                  --  four carry a nibble in one of the top three bytes and
-                  --  their two high bits in one of the first eight.
-                  for Index in 0 .. 3 loop
-                     Factors (Index) := Packed (Index) and 63;
-                     Minimums (Index) := Packed (Index + 4) and 63;
-
-                     Factors (Index + 4) :=
-                       (Packed (Index + 8) and 16#0F#)
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right (Packed (Index), 6), 4);
-
-                     Minimums (Index + 4) :=
-                       Interfaces.Shift_Right (Packed (Index + 8), 4)
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right (Packed (Index + 4), 6),
-                             4);
-                  end loop;
-
+                  --  The minimum's term, which is a running sum and stays
+                  --  in the order it was summed in.
                   for Sub in 0 .. Deep - 1 loop
-                     declare
-                        At_Scale : constant Element_Count :=
-                          First / Activation_Block
-                          + Block * Deep + Element_Count (Sub);
-
-                        Scaled : constant N.Real :=
-                          Scales (Scales'First + At_Scale);
-                     begin
-                        Row_Scale (Natural (Block) * Deep + Sub) :=
-                          Whole * N.Real (Natural (Factors (Sub))) * Scaled;
-
-                        Undo := Undo
-                          + N.Wide_Real
-                              (Least * N.Real (Natural (Minimums (Sub)))
-                               * Scaled)
-                            * N.Wide_Real
-                                (Totals (Totals'First + At_Scale));
-                     end;
+                     Undo := Undo
+                       + N.Wide_Real (Lowered (Sub))
+                         * N.Wide_Real
+                             (Totals
+                                (Totals'First + At_Base
+                                 + Element_Count (Sub)));
                   end loop;
                end;
             end loop;
@@ -3540,70 +3600,120 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   At_Byte : constant B.Byte_Index :=
                     Base + Width * B.Byte_Count (Block);
 
-                  Whole : constant N.Real := Scale_At (Data, At_Byte);
-                  Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+                  At_Base : constant Element_Count :=
+                    First / Activation_Block + Block * Deep;
 
-                  --  The twelve packed bytes taken apart in one go rather
-                  --  than a sub-block at a time.
+                  --  The block's scale and the block's least, together.
+                  Pair : constant Lanes_2 :=
+                    [Scale_At (Data, At_Byte), Scale_At (Data, At_Byte + 2)];
+
+                  --  The minimum's side of the product, one for every
+                  --  sub-block, kept for the running sum below.
+                  Lowered : Lanes_8;
+
+               begin
+                  --  The twelve packed bytes taken apart in lanes.
                   --
-                  --  Asked one at a time, the first four sub-blocks read
-                  --  two bytes each and the last four read three, and the
-                  --  bytes they read are the same twelve over again -- five
-                  --  and twenty reads where twelve will do, with a branch
-                  --  on the sub-block's number around each. Ablating this
+                  --  Asked one sub-block at a time, the first four read two
+                  --  bytes each and the last four read three, and the bytes
+                  --  they read are the same twelve over again -- five and
+                  --  twenty reads where twelve will do, with a branch on
+                  --  the sub-block's number around each. Ablating this
                   --  prologue away entirely -- the wrong answer, and none
                   --  of the unpacking -- took a generated token from 2.277
                   --  to 1.642 s, so it is twenty-eight per cent of what
-                  --  this format costs the processor and the reads are
-                  --  most of it.
-                  Packed : array (0 .. 11) of Interfaces.Unsigned_8;
+                  --  this format costs the processor.
+                  --
+                  --  Taking the twelve apart a byte at a time and then
+                  --  widening each byte to a floating-point number is a
+                  --  hundred and twenty instructions a block, and every one
+                  --  of them is the same operation on eight neighbouring
+                  --  values. Written first as two Ada loops -- one to
+                  --  unpack, one to multiply, with the scales read once --
+                  --  it measured one to two per cent worse than the single
+                  --  scalar loop it replaced, because the compiler
+                  --  vectorised neither: the byte-to-float widening and the
+                  --  six-bit fields split across two bytes are not shapes
+                  --  it recognises.
+                  --
+                  --  Written by hand it is thirty-one instructions. The
+                  --  twelve arrive as one unaligned sixteen-byte read --
+                  --  which is inside the block, since a block is a hundred
+                  --  and forty-four bytes and this reads twenty of them.
+                  --  The first four fields are a mask; the last four are a
+                  --  nibble from the top third of the twelve with two high
+                  --  bits from the first third laid above it, which is a
+                  --  shift, a mask and an or on all four at once. Both
+                  --  sets widen from bytes to whole numbers in one
+                  --  instruction apiece, join into a register of eight,
+                  --  convert to floating point together, and take the
+                  --  block's scale and the activation's scale as two
+                  --  multiplies over the eight.
+                  --
+                  --  Bit for bit what the scalar loop computed: the same
+                  --  two multiplies in the same order, on the same numbers.
+                  --  The running sum below is what is not done here, and
+                  --  is left in the order it was in.
+                  System.Machine_Code.Asm
+                    ("vmovdqu (%1), %%xmm0" & LF &
+                     "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+                     "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+                     "vpbroadcastd 0(%5), %%xmm3" & LF &
+                     "vpbroadcastd 4(%5), %%xmm4" & LF &
+                     "vpbroadcastd 8(%5), %%xmm5" & LF &
+                     "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+                     "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+                     "vpsrld $2, %%xmm0, %%xmm8" & LF &
+                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                     "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+                     "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+                     "vpsrld $2, %%xmm1, %%xmm8" & LF &
+                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                     "vpsrld $4, %%xmm2, %%xmm10" & LF &
+                     "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+                     "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+                     "vpmovzxbd %%xmm6, %%xmm6" & LF &
+                     "vpmovzxbd %%xmm9, %%xmm9" & LF &
+                     "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+                     "vpmovzxbd %%xmm7, %%xmm7" & LF &
+                     "vpmovzxbd %%xmm10, %%xmm10" & LF &
+                     "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+                     "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                     "vcvtdq2ps %%ymm7, %%ymm7" & LF &
+                     "vbroadcastss 0(%4), %%ymm8" & LF &
+                     "vbroadcastss 4(%4), %%ymm9" & LF &
+                     "vmulps %%ymm8, %%ymm6, %%ymm6" & LF &
+                     "vmulps %%ymm9, %%ymm7, %%ymm7" & LF &
+                     "vmovups (%2), %%ymm10" & LF &
+                     "vmulps %%ymm10, %%ymm6, %%ymm6" & LF &
+                     "vmulps %%ymm10, %%ymm7, %%ymm7" & LF &
+                     "vmovups %%ymm6, (%0)" & LF &
+                     "vmovups %%ymm7, (%3)",
+                     Inputs   =>
+                       [System.Address'Asm_Input
+                          ("r", Row_Scale (Natural (Block) * Deep)'Address),
+                        System.Address'Asm_Input
+                          ("r", Data (At_Byte + 4)'Address),
+                        System.Address'Asm_Input
+                          ("r", Scales (Scales'First + At_Base)'Address),
+                        System.Address'Asm_Input ("r", Lowered'Address),
+                        System.Address'Asm_Input ("r", Pair'Address),
+                        System.Address'Asm_Input
+                          ("r", Unpack_Masks (0)'Address)],
+                     Clobber  =>
+                       "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,"
+                       & "ymm9,ymm10,memory",
+                     Volatile => True);
 
-                  Factors  : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
-                  Minimums : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
-               begin
-                  for Index in Packed'Range loop
-                     Packed (Index) :=
-                       Data (At_Byte + 4 + B.Byte_Count (Index));
-                  end loop;
-
-                  --  The first four carry a six-bit field apiece; the last
-                  --  four carry a nibble in one of the top three bytes and
-                  --  their two high bits in one of the first eight.
-                  for Index in 0 .. 3 loop
-                     Factors (Index) := Packed (Index) and 63;
-                     Minimums (Index) := Packed (Index + 4) and 63;
-
-                     Factors (Index + 4) :=
-                       (Packed (Index + 8) and 16#0F#)
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right (Packed (Index), 6), 4);
-
-                     Minimums (Index + 4) :=
-                       Interfaces.Shift_Right (Packed (Index + 8), 4)
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right (Packed (Index + 4), 6),
-                             4);
-                  end loop;
-
+                  --  The minimum's term, which is a running sum and stays
+                  --  in the order it was summed in.
                   for Sub in 0 .. Deep - 1 loop
-                     declare
-                        At_Scale : constant Element_Count :=
-                          First / Activation_Block
-                          + Block * Deep + Element_Count (Sub);
-
-                        Scaled : constant N.Real :=
-                          Scales (Scales'First + At_Scale);
-                     begin
-                        Row_Scale (Natural (Block) * Deep + Sub) :=
-                          Whole * N.Real (Natural (Factors (Sub))) * Scaled;
-
-                        Undo := Undo
-                          + N.Wide_Real
-                              (Least * N.Real (Natural (Minimums (Sub)))
-                               * Scaled)
-                            * N.Wide_Real
-                                (Totals (Totals'First + At_Scale));
-                     end;
+                     Undo := Undo
+                       + N.Wide_Real (Lowered (Sub))
+                         * N.Wide_Real
+                             (Totals
+                                (Totals'First + At_Base
+                                 + Element_Count (Sub)));
                   end loop;
                end;
             end loop;

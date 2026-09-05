@@ -5,6 +5,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The k-quant scale prologue is now hand-written vector code**, which the
+  entry under Measured below priced at a fifth of what those formats cost to
+  generate. A super-block's twelve packed bytes become eight scales and eight
+  minimums in one unaligned read, two byte-lane shifts, a mask, a
+  shift-mask-or, `vpmovzxbd`, `vinserti128`, `vcvtdq2ps` and two multiplies
+  over eight lanes — thirty-one instructions against about a hundred and
+  twenty. **Q4_K_M generating reads 0.253 s against 0.2915 and Q5_K_M 0.8565
+  against 0.9655**, four alternated rounds each and every one on the same
+  side: thirteen and eleven per cent. Bit-exact — the same two multiplies in
+  the same order — with the minimum's term deliberately left as a scalar
+  binary64 running sum, because reassociating it into lanes would move the
+  answers.
+
+  A third Ada attempt was tried first and is one to two per cent worse than
+  the scalar loop: both products fused into one pass with the unpacked fields
+  held as whole numbers so the widening is a conversion the compiler can
+  vectorize. It vectorized neither loop. Three attempts at persuading it is
+  what settled that the code had to be written.
+
+  It also ends nineteen sittings of the four-bit and eight-bit formats
+  reading level: Q4_K is now three per cent ahead with one vector and ten
+  ahead batched, and still level serially.
+
 ### Measured
 
 - **What is left of the k-quant scale prologue, and what it would take.**
