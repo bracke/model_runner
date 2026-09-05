@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A super-block activation quantization for the k-quants**, which is what
+  llama.cpp's `Q8_K` is for. One scale for two hundred and fifty-six values
+  instead of eight for thirty-two each, so that a k-quant's minimum term
+  factors: `dmin * dact * Σ minimum(sub) * total(sub)`, where the sum inside
+  is eight six-bit numbers against eight sums of thirty-two bytes and stays
+  integer. **One `vpmulld`, a horizontal add and one convert where the scalar
+  loop was about fifty instructions.**
+
+  **Q4_K_M generating reads 0.2360 s against 0.2510** — five alternated
+  rounds, all five on the same side, ranges not touching — and Q5_K_M 0.8400
+  against 0.8570. A 110-token prompt is a wash (the strip kernels don't
+  exploit it yet) and Q8_0 is the control and unaffected.
+
+  **The digests do not move** (`4b6e8e99ae285b2a`, `0a1a63f0305d35d6`) on
+  genuinely different arithmetic, and conformance is 28344 sequences and 0
+  outside tolerance either way. The coarser scale is a real trade and is
+  taken only where it pays: `Supers_Vectors` is Q4_K and Q5_K and nothing
+  else. `Scales` and `Totals` keep their shapes, so every other reader of
+  them is untouched.
+
 ### Changed
 
 - **The eight-bit kernel gives the byte instruction its unsigned operand with

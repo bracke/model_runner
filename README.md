@@ -1519,33 +1519,32 @@ scale prologue in lanes` below. The eight-bit format has no such prologue to
 write.
 
 **The figure that says so is the end-to-end one, and it is the only one
-here that held.** Alternating the two files round by round, four rounds of
-three, four-bit generates at 24.8, 24.6, 25.5 and 25.8 ms a token against
-eight-bit at 26.8, 27.0, 26.7 and 26.8 -- every round on the same side, about
-six per cent. The wall times themselves -- 0.302, 0.298, 0.305 and 0.310 s
-against 0.374, 0.376, 0.374 and 0.372 -- say less than they look like they
+here that has held.** Alternating the two files round by round, four rounds
+of three, four-bit generates at 24.0, 23.6, 23.5 and 23.9 ms a token against
+eight-bit at 26.7, 26.8, 26.3 and 26.7 -- every round on the same side, about
+eleven per cent. The wall times themselves -- 0.294, 0.290, 0.286 and 0.288 s
+against 0.368, 0.365, 0.359 and 0.364 -- say less than they look like they
 do, because the four-bit file answers this prompt in ten tokens and the
 eight-bit one in twelve; the pair before this one, 2.06 and 2.18 s against
 2.06 and 2.26, was quoted as a wall time and had the same ten against twelve
 inside it, unnoticed.
 
 **The share benchmark did not hold, and that is worth publishing as well.**
-Two sittings three hours apart, the second on quieter host, with only the
-strip prologue changed between them:
+Three sittings, the middle two a few hours apart with only the strip prologue
+changed between them and the last with the super-block activation:
 
-| at eight shares | Q4_K | Q8_0 | | Q4_K | Q8_0 | |
-| --- | ---: | ---: | --- | ---: | ---: | --- |
-| one vector | 13342 | 12952 | +3 % | 13610 | 13550 | +0.4 % |
-| thirty-two a pass | 22897 | 20754 | +10 % | 22804 | 23039 | −1 % |
-| one share, one vector | 2385 | 2417 | −1 % | 2473 | 2509 | −1 % |
+| at eight shares | Q4_K/Q8_0 | | Q4_K/Q8_0 | | Q4_K/Q8_0 | |
+| --- | ---: | --- | ---: | --- | ---: | --- |
+| one vector | 13342/12952 | +3 % | 13610/13550 | +0.4 % | 13317/13064 | +2 % |
+| thirty-two a pass | 22897/20754 | +10 % | 22804/23039 | −1 % | 22527/21196 | +6 % |
+| one share, one vector | 2385/2417 | −1 % | 2473/2509 | −1 % | 2452/2409 | +2 % |
 
-The four-bit column barely moved. The eight-bit batched figure went up eleven
-per cent on code that had not changed at all, which took a ten-point lead to
-a one-point deficit. So the batched row of this benchmark says nothing about
-the formats at either sitting, and the twenty sittings of it recorded above
-were right to treat a gap there as the machine. What the end-to-end
-alternation says instead is a per-token figure taken four times in a row on
-one host, and that is the one to read.
+The four-bit column barely moves across all three; the eight-bit batched
+figure went 20754, 23039, 21196 on code that changed once. A row that swings
+eleven per cent on its own says nothing about the formats, and the twenty
+sittings recorded above were right to treat a gap there as the machine. What
+the end-to-end alternation says instead is a per-token figure taken four
+times in a row on one host, and that is the one to read.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -8027,13 +8026,92 @@ scalar and in order. That sum is now what is left, and it is a chain of
 sixty-four dependent additions a row.
 
 **Where this leaves the two formats.** The four-bit k-quant is no longer
-level with the eight-bit one on this host: it generates about six per cent
+level with the eight-bit one on this host: it generates about eleven per cent
 faster per token, four alternated rounds out of four. A share-benchmark table
-published alongside that claimed ten per cent batched as well, and a second
-sitting three hours later took that row from ten ahead to one behind on an
-eight-bit figure that had not changed -- so the end-to-end number is the
-claim and the batched row is not. Both sittings are in the `## Speed`
+published alongside an earlier version of this claimed ten per cent batched
+as well, and the next sitting took that row from ten ahead to one behind on
+an eight-bit figure that had not changed -- so the end-to-end number is the
+claim and the batched row is not. All three sittings are in the `## Speed`
 section above, under "Moving fewer bytes per weight".
+
+### One activation scale for two hundred and fifty-six
+
+llama.cpp has a quantization format that exists for one reason. `Q8_K` is how
+it quantizes *activations* when the weights are a k-quant: two hundred and
+fifty-six values, one scale for all of them, and sixteen sub-block sums
+alongside. Everywhere else it uses `Q8_0` -- thirty-two values to a scale.
+The coarser one is not an oversight; it is what makes a k-quant's minimum
+term integer arithmetic.
+
+**Why the scale has to be coarse.** A four-bit or five-bit k-quant holds a
+scale *and a minimum* for each of eight thirty-two element sub-blocks, and
+the minimum's contribution to the product is
+
+```
+Undo = sum over the eight of   dmin * minimum(sub) * dact(sub) * total(sub)
+```
+
+where `total(sub)` is the activation's sum over those thirty-two. With a
+different `dact` for each sub-block nothing comes out of the sum: it is eight
+floating-point multiply-adds, each widening a byte and a whole number, and in
+this kernel it was fifty-odd instructions a super-block against the dot
+product's sixty. With one `dact` for all two hundred and fifty-six it comes
+out:
+
+```
+Undo = dmin * dact * sum over the eight of   minimum(sub) * total(sub)
+```
+
+and what is left inside is a dot product of eight whole numbers against eight
+whole numbers. Neither operand is large -- a minimum is six bits and a sum of
+thirty-two bytes is at most 4064 -- so it is one `vpmulld`, a horizontal add,
+and one convert. **Eight instructions where there were fifty.**
+
+**What it costs.** One scale over two hundred and fifty-six values is a
+coarser quantization of the activation than eight scales over thirty-two
+each, and that is a real trade rather than a free one. It is taken only
+where it buys something: `Supers_Vectors` is true for Q4_K and Q5_K and
+false for everything else, so the eight-bit format -- which has no minimum
+term and is waiting for memory anyway -- keeps its thirty-two.
+
+`Scales` and `Totals` keep their shapes. A super-block writes its one scale
+into all eight of its blocks' slots and its sums stay one for every
+thirty-two, so every other reader of those arrays is untouched and only the
+kernels that know the eight are equal read one and skip seven. A k-quant
+weight block is two hundred and fifty-six elements, so a row of one is always
+a whole number of super-blocks and no width condition is needed.
+
+**And it is worth six per cent of a four-bit generated token.** Five
+alternated rounds, medians of three:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, ten generated | 0.2510 s | 0.2360 s | **6.0 %** |
+| Q5_K_M, thirty-two generated | 0.8570 s | 0.8400 s | 2.0 % |
+| Q4_K_M, 110-token prompt | 0.453 s | 0.455 s | a wash |
+| Q8_0, 64 generated | 1.711 s | 1.721 s | a wash, the control |
+
+Every one of the five rounds on the same side for Q4_K and the ranges do not
+touch -- 0.226 to 0.240 against 0.249 to 0.254. Q5_K gains less because its
+dot loop is bigger, so the prologue is a smaller share of it. The prompt is
+a wash because it goes through the strip kernels, which still read the eight
+scales one at a time; the eight-bit run is the control and does not take this
+path at all.
+
+**The digests do not move**, which was not expected: `4b6e8e99ae285b2a` and
+`0a1a63f0305d35d6` before and after, on genuinely different arithmetic -- a
+coarser activation quantization *and* a restructured minimum term. The
+conformance sweep reads 28344 sequences and 0 outside tolerance either way.
+Ten and thirty-two greedy tokens are not a sensitive instrument, and this is
+what it looks like when a change is inside the noise of the argmax rather
+than inside the noise of the clock.
+
+**What is not done.** The strip kernels evaluate a prompt and now receive
+super-block activations without exploiting them: their minimum term is still
+eight floating-point multiply-adds against a table built per call. The same
+factoring applies there and would need the minimums kept as whole numbers
+rather than pre-multiplied into `Held_Down`. That is why the prompt row above
+is a wash rather than a gain.
 
 ### The weight's sign, moved onto the activation
 

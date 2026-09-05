@@ -47,6 +47,29 @@ package Model_Runner.Quantization.Integers is
    --  Accumulate_Dot.
    Activation_Block : constant := 32;
 
+   --  And the super-block the k-quants are quantized against.
+   --
+   --  A four-bit or five-bit k-quant weight holds a scale and a minimum for
+   --  each of eight thirty-two element sub-blocks, and the minimum's term of
+   --  the product is the sub-block's minimum against the activation's sum
+   --  over the same thirty-two. With a scale for every thirty-two
+   --  activations that term is eight floating-point multiply-adds a
+   --  super-block, each of them widening a byte and a sum; with one scale
+   --  for all two hundred and fifty-six the activation's scale comes out of
+   --  the sum, what is left is a dot product of eight whole numbers against
+   --  eight whole numbers, and the whole of it converts once.
+   --
+   --  This is what llama.cpp's Q8_K is for and is the only reason it exists:
+   --  the same bytes, quantized against a coarser scale, so that a k-quant's
+   --  minimum term is integer arithmetic.
+   --
+   --  It is not used for every format, because it is not free: one scale
+   --  over two hundred and fifty-six values is a coarser quantization than
+   --  eight over thirty-two each, and the eight-bit format gains nothing
+   --  from it -- its kernel has no minimum term and is waiting for memory
+   --  rather than for arithmetic. Supers_Vectors says who gets it.
+   Activation_Super : constant := 256;
+
    --  One quantized activation.
    type Byte_Signed is range -128 .. 127 with Size => 8;
 
@@ -87,6 +110,27 @@ package Model_Runner.Quantization.Integers is
    function Packs_Vectors
      (Format : Model_Runner.GGUF.Tensor_Type;
       Count  : Element_Count) return Boolean;
+
+   --  Whether this format's activations are quantized a super-block at a
+   --  time rather than a block at a time.
+   --
+   --  The four-bit and five-bit k-quants, and nothing else: they are the
+   --  formats with a minimum term, and the term is what the coarser scale
+   --  buys. No condition on the width is needed, because a k-quant weight
+   --  block is two hundred and fifty-six elements and a row is a whole
+   --  number of them -- so a row of one of these is always a whole number
+   --  of super-blocks.
+   --
+   --  Scales and Totals keep their shapes either way: a super-block writes
+   --  its one scale into all eight of its blocks' slots and its sums are
+   --  still one for every thirty-two. Every other reader of them is
+   --  unchanged, and the kernels that know the eight are equal are the only
+   --  ones that read one of them and skip seven.
+   --
+   --  @param Format Weight format.
+   --  @return Whether to quantize its activations by super-block.
+   function Supers_Vectors
+     (Format : Model_Runner.GGUF.Tensor_Type) return Boolean;
 
    --  Whether this package multiplies a weight format without decoding it
    --  into binary32 first.
@@ -150,6 +194,9 @@ package Model_Runner.Quantization.Integers is
    --  @param Ok True when the shape is packable, every buffer had room, and
    --    every element read was finite. False leaves the three outputs as they
    --    were rather than half filled.
+   --  @param Super Quantize by super-block rather than by block, which
+   --    Supers_Vectors decides from the weight format. The width must be a
+   --    whole number of super-blocks, and a shape that is not is refused.
    procedure Quantize_Vectors
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
@@ -157,7 +204,8 @@ package Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
-      Ok      : out Boolean);
+      Ok      : out Boolean;
+      Super   : Boolean := False);
 
    --  How many blocks such a run is cut into.
    --
@@ -197,6 +245,9 @@ package Model_Runner.Quantization.Integers is
    --  @param Totals One sum for every Activation_Block elements.
    --  @param Ok True when the shape is packable, every buffer had room, and
    --    every element this range read was finite.
+   --  @param Super Quantize by super-block rather than by block, which
+   --    requires First to begin one and Last to end one -- eight blocks to
+   --    a super-block -- and is refused otherwise.
    procedure Quantize_Blocks
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
@@ -206,7 +257,8 @@ package Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
-      Ok      : out Boolean);
+      Ok      : out Boolean;
+      Super   : Boolean := False);
 
    --  How many rows one call of Accumulate_Rows computes at once.
    --

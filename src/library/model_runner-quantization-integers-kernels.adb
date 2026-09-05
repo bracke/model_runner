@@ -3210,13 +3210,31 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   At_Base : constant Element_Count :=
                     First / Activation_Block + Block * Deep;
 
-                  --  The block's scale and the block's least, together.
-                  Pair : constant Lanes_2 :=
-                    [Scale_At (Data, At_Byte), Scale_At (Data, At_Byte + 2)];
+                  --  The activation's scale for this super-block. The
+                  --  quantizer gives a k-quant one scale for all two
+                  --  hundred and fifty-six -- see Supers_Vectors -- and
+                  --  writes it into all eight of the block slots it covers,
+                  --  so this reads the first of eight equal numbers.
+                  Apart : constant N.Real := Scales (Scales'First + At_Base);
 
-                  --  The minimum's side of the product, one for every
-                  --  sub-block, kept for the running sum below.
-                  Lowered : Lanes_8;
+                  --  The weight's scale against the activation's, which is
+                  --  what every sub-block's factor is multiplied by. One
+                  --  scalar multiply a super-block where it used to be a
+                  --  vector multiply against eight different numbers.
+                  Both : constant N.Real := Scale_At (Data, At_Byte) * Apart;
+
+                  --  And the same for the minimum's side, applied once to
+                  --  the whole term below rather than to each of the eight.
+                  Least : constant N.Real :=
+                    Scale_At (Data, At_Byte + 2) * Apart;
+
+                  --  The minimum's term as a whole number: the eight
+                  --  six-bit minimums against the eight block sums, which
+                  --  is what one scale for the super-block makes possible.
+                  --  Neither operand is larger than sixty-three and four
+                  --  thousand and sixty-four, so eight of the products fit
+                  --  in a thirty-two bit number many times over.
+                  Lowered : Interfaces.Integer_32;
 
                begin
                   --  The twelve packed bytes taken apart in lanes.
@@ -3285,26 +3303,27 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      "vpmovzxbd %%xmm7, %%xmm7" & LF &
                      "vpmovzxbd %%xmm10, %%xmm10" & LF &
                      "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+                     "vpmulld (%2), %%ymm7, %%ymm7" & LF &
+                     "vextracti128 $1, %%ymm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vmovd %%xmm7, (%3)" & LF &
                      "vcvtdq2ps %%ymm6, %%ymm6" & LF &
-                     "vcvtdq2ps %%ymm7, %%ymm7" & LF &
-                     "vbroadcastss 0(%4), %%ymm8" & LF &
-                     "vbroadcastss 4(%4), %%ymm9" & LF &
+                     "vbroadcastss %4, %%ymm8" & LF &
                      "vmulps %%ymm8, %%ymm6, %%ymm6" & LF &
-                     "vmulps %%ymm9, %%ymm7, %%ymm7" & LF &
-                     "vmovups (%2), %%ymm10" & LF &
-                     "vmulps %%ymm10, %%ymm6, %%ymm6" & LF &
-                     "vmulps %%ymm10, %%ymm7, %%ymm7" & LF &
-                     "vmovups %%ymm6, (%0)" & LF &
-                     "vmovups %%ymm7, (%3)",
+                     "vmovups %%ymm6, (%0)",
                      Inputs   =>
                        [System.Address'Asm_Input
                           ("r", Row_Scale (Natural (Block) * Deep)'Address),
                         System.Address'Asm_Input
                           ("r", Data (At_Byte + 4)'Address),
                         System.Address'Asm_Input
-                          ("r", Scales (Scales'First + At_Base)'Address),
+                          ("r", Totals (Totals'First + At_Base)'Address),
                         System.Address'Asm_Input ("r", Lowered'Address),
-                        System.Address'Asm_Input ("r", Pair'Address),
+                        N.Real'Asm_Input ("m", Both),
                         System.Address'Asm_Input
                           ("r", Unpack_Masks (0)'Address)],
                      Clobber  =>
@@ -3312,16 +3331,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
                        & "ymm9,ymm10,memory",
                      Volatile => True);
 
-                  --  The minimum's term, which is a running sum and stays
-                  --  in the order it was summed in.
-                  for Sub in 0 .. Deep - 1 loop
-                     Undo := Undo
-                       + N.Wide_Real (Lowered (Sub))
-                         * N.Wide_Real
-                             (Totals
-                                (Totals'First + At_Base
-                                 + Element_Count (Sub)));
-                  end loop;
+                  --  The minimum's term. One multiply and one add a
+                  --  super-block, where a scale for every thirty-two made
+                  --  it eight of each with two widenings apiece.
+                  Undo := Undo
+                    + N.Wide_Real (Lowered) * N.Wide_Real (Least);
                end;
             end loop;
 
@@ -3507,13 +3521,31 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   At_Base : constant Element_Count :=
                     First / Activation_Block + Block * Deep;
 
-                  --  The block's scale and the block's least, together.
-                  Pair : constant Lanes_2 :=
-                    [Scale_At (Data, At_Byte), Scale_At (Data, At_Byte + 2)];
+                  --  The activation's scale for this super-block. The
+                  --  quantizer gives a k-quant one scale for all two
+                  --  hundred and fifty-six -- see Supers_Vectors -- and
+                  --  writes it into all eight of the block slots it covers,
+                  --  so this reads the first of eight equal numbers.
+                  Apart : constant N.Real := Scales (Scales'First + At_Base);
 
-                  --  The minimum's side of the product, one for every
-                  --  sub-block, kept for the running sum below.
-                  Lowered : Lanes_8;
+                  --  The weight's scale against the activation's, which is
+                  --  what every sub-block's factor is multiplied by. One
+                  --  scalar multiply a super-block where it used to be a
+                  --  vector multiply against eight different numbers.
+                  Both : constant N.Real := Scale_At (Data, At_Byte) * Apart;
+
+                  --  And the same for the minimum's side, applied once to
+                  --  the whole term below rather than to each of the eight.
+                  Least : constant N.Real :=
+                    Scale_At (Data, At_Byte + 2) * Apart;
+
+                  --  The minimum's term as a whole number: the eight
+                  --  six-bit minimums against the eight block sums, which
+                  --  is what one scale for the super-block makes possible.
+                  --  Neither operand is larger than sixty-three and four
+                  --  thousand and sixty-four, so eight of the products fit
+                  --  in a thirty-two bit number many times over.
+                  Lowered : Interfaces.Integer_32;
 
                begin
                   --  The twelve packed bytes taken apart in lanes.
@@ -3582,26 +3614,27 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      "vpmovzxbd %%xmm7, %%xmm7" & LF &
                      "vpmovzxbd %%xmm10, %%xmm10" & LF &
                      "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+                     "vpmulld (%2), %%ymm7, %%ymm7" & LF &
+                     "vextracti128 $1, %%ymm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
+                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+                     "vmovd %%xmm7, (%3)" & LF &
                      "vcvtdq2ps %%ymm6, %%ymm6" & LF &
-                     "vcvtdq2ps %%ymm7, %%ymm7" & LF &
-                     "vbroadcastss 0(%4), %%ymm8" & LF &
-                     "vbroadcastss 4(%4), %%ymm9" & LF &
+                     "vbroadcastss %4, %%ymm8" & LF &
                      "vmulps %%ymm8, %%ymm6, %%ymm6" & LF &
-                     "vmulps %%ymm9, %%ymm7, %%ymm7" & LF &
-                     "vmovups (%2), %%ymm10" & LF &
-                     "vmulps %%ymm10, %%ymm6, %%ymm6" & LF &
-                     "vmulps %%ymm10, %%ymm7, %%ymm7" & LF &
-                     "vmovups %%ymm6, (%0)" & LF &
-                     "vmovups %%ymm7, (%3)",
+                     "vmovups %%ymm6, (%0)",
                      Inputs   =>
                        [System.Address'Asm_Input
                           ("r", Row_Scale (Natural (Block) * Deep)'Address),
                         System.Address'Asm_Input
                           ("r", Data (At_Byte + 4)'Address),
                         System.Address'Asm_Input
-                          ("r", Scales (Scales'First + At_Base)'Address),
+                          ("r", Totals (Totals'First + At_Base)'Address),
                         System.Address'Asm_Input ("r", Lowered'Address),
-                        System.Address'Asm_Input ("r", Pair'Address),
+                        N.Real'Asm_Input ("m", Both),
                         System.Address'Asm_Input
                           ("r", Unpack_Masks (0)'Address)],
                      Clobber  =>
@@ -3609,16 +3642,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
                        & "ymm9,ymm10,memory",
                      Volatile => True);
 
-                  --  The minimum's term, which is a running sum and stays
-                  --  in the order it was summed in.
-                  for Sub in 0 .. Deep - 1 loop
-                     Undo := Undo
-                       + N.Wide_Real (Lowered (Sub))
-                         * N.Wide_Real
-                             (Totals
-                                (Totals'First + At_Base
-                                 + Element_Count (Sub)));
-                  end loop;
+                  --  The minimum's term. One multiply and one add a
+                  --  super-block, where a scale for every thirty-two made
+                  --  it eight of each with two widenings apiece.
+                  Undo := Undo
+                    + N.Wide_Real (Lowered) * N.Wide_Real (Least);
                end;
             end loop;
 

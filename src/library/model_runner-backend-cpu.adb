@@ -425,6 +425,11 @@ package body Model_Runner.Backend.CPU is
       Values  : Signed_Array_Access;
       Scales  : Model_Runner.Tensors.Real_Array_Access;
       Totals  : Sum_Array_Access;
+
+      --  Whether the run is cut into super-blocks rather than blocks. When
+      --  it is, From and To below count super-blocks, because a super-block
+      --  is quantized whole or not at all.
+      Super   : Boolean;
       Ok      : Boolean;
    end record;
 
@@ -432,6 +437,12 @@ package body Model_Runner.Backend.CPU is
      (Share : in out Packing_Share;
       From  : Element_Count;
       To    : Element_Count);
+
+   --  Blocks to a super-block, which is what a share counts in when the
+   --  format asks for them.
+   Deep_Blocks : constant Element_Count :=
+     Model_Runner.Quantization.Integers.Activation_Super
+     / Model_Runner.Quantization.Integers.Activation_Block;
 
    overriding procedure Run
      (Share : in out Packing_Share;
@@ -448,12 +459,17 @@ package body Model_Runner.Backend.CPU is
         (Vectors => Share.Vectors.all,
          Count   => Share.Count,
          Columns => Share.Columns,
-         First   => From,
-         Last    => To,
+         First   =>
+           (if Share.Super then From * Deep_Blocks else From),
+         Last    =>
+           (if Share.Super
+            then To * Deep_Blocks + Deep_Blocks - 1
+            else To),
          Values  => Share.Values.all,
          Scales  => Share.Scales.all,
          Totals  => Share.Totals.all,
-         Ok      => Done);
+         Ok      => Done,
+         Super   => Share.Super);
 
       if not Done then
          Share.Ok := False;
@@ -519,6 +535,15 @@ package body Model_Runner.Backend.CPU is
          Blocks : constant Element_Count :=
            QI.Packed_Blocks (Count, Columns);
 
+         Super : constant Boolean :=
+           QI.Supers_Vectors (Weight.Format)
+           and then Columns mod QI.Activation_Super = 0;
+
+         --  Shares of super-blocks where the format asks for them, so that
+         --  no share begins or ends inside one.
+         Cuts : constant Element_Count :=
+           (if Super then Blocks / Deep_Blocks else Blocks);
+
          Least : constant Element_Count := 256;
 
          Share : aliased Packing_Share :=
@@ -528,6 +553,7 @@ package body Model_Runner.Backend.CPU is
             Values  => Item.Values,
             Scales  => Item.Scales,
             Totals  => Item.Totals,
+            Super   => Super,
             Ok      => True);
 
          Sent : E.Error_Info;
@@ -535,7 +561,7 @@ package body Model_Runner.Backend.CPU is
          if Blocks >= Least then
             Dispatch_Shares
               (Item   => Item'Unchecked_Access,
-               Items  => Blocks,
+               Items  => Cuts,
                Work   => Share'Unchecked_Access,
                Status => Sent);
 
@@ -545,16 +571,17 @@ package body Model_Runner.Backend.CPU is
 
             return Share.Ok;
          end if;
-      end;
 
-      QI.Quantize_Vectors
-        (Vectors => Vector.all,
-         Count   => Count,
-         Columns => Columns,
-         Values  => Item.Values.all,
-         Scales  => Item.Scales.all,
-         Totals  => Item.Totals.all,
-         Ok      => Ok);
+         QI.Quantize_Vectors
+           (Vectors => Vector.all,
+            Count   => Count,
+            Columns => Columns,
+            Values  => Item.Values.all,
+            Scales  => Item.Scales.all,
+            Totals  => Item.Totals.all,
+            Ok      => Ok,
+            Super   => Super);
+      end;
 
       return Ok;
    end Prepare_Packed;
@@ -613,7 +640,10 @@ package body Model_Runner.Backend.CPU is
             then
                QI.Quantize_Vectors
                  (Vector.all, Count, Columns, Values.all, Scales.all,
-                  Totals.all, Ok);
+                  Totals.all, Ok,
+                  Super =>
+                    QI.Supers_Vectors (Weight.Format)
+                    and then Columns mod QI.Activation_Super = 0);
             end if;
 
             if Ok then

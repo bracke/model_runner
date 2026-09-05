@@ -65,6 +65,14 @@ package body Model_Runner.Quantization.Integers is
                  or else Count = 1
                  or else Count >= 4));
 
+   ---------------------
+   -- Supers_Vectors --
+   ---------------------
+
+   function Supers_Vectors
+     (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
+   is (Format = G.Type_Q4_K or else Format = G.Type_Q5_K);
+
    ----------------------
    -- Quantize_Vectors --
    ----------------------
@@ -89,7 +97,8 @@ package body Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
-      Ok      : out Boolean)
+      Ok      : out Boolean;
+      Super   : Boolean := False)
    is
       Blocks : constant Element_Count := Packed_Blocks (Count, Columns);
    begin
@@ -104,7 +113,7 @@ package body Model_Runner.Quantization.Integers is
       --  place the two entry points differ.
       Quantize_Blocks
         (Vectors, Count, Columns, 0, Blocks - 1,
-         Values, Scales, Totals, Ok);
+         Values, Scales, Totals, Ok, Super);
    end Quantize_Vectors;
 
    --  The largest magnitude of one activation block and whether every one
@@ -213,11 +222,15 @@ package body Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
-      Ok      : out Boolean)
+      Ok      : out Boolean;
+      Super   : Boolean := False)
    is
       Elements : constant Element_Count :=
         (if Count > 0 and then Columns > 0 then Count * Columns else 0);
       Blocks   : constant Element_Count := Elements / Activation_Block;
+
+      --  Blocks to a super-block.
+      Deep : constant Element_Count := Activation_Super / Activation_Block;
    begin
       Ok := False;
 
@@ -232,9 +245,103 @@ package body Model_Runner.Quantization.Integers is
          return;
       end if;
 
+      --  A super-block is quantized whole or not at all, so a range that
+      --  begins or ends inside one is a caller's mistake rather than a
+      --  shape to accommodate. The one caller that cuts a run into pieces
+      --  cuts it into super-blocks when this is asked for.
+      if Super
+        and then First <= Last
+        and then (Columns mod Activation_Super /= 0
+                  or else First mod Deep /= 0
+                  or else (Last + 1) mod Deep /= 0)
+      then
+         return;
+      end if;
+
       --  An empty range is not a refusal: a share past the end of a short
       --  run has nothing to do and has done it.
       if First > Last then
+         Ok := True;
+         return;
+      end if;
+
+      --  One scale for two hundred and fifty-six, written into all eight of
+      --  the blocks it covers so that every reader of Scales keeps its
+      --  shape. The sums stay one for every thirty-two, because that is
+      --  what a k-quant's minimum term wants them for.
+      if Super then
+         for Super_Block in First / Deep .. Last / Deep loop
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               At_Element : constant Element_Count :=
+                 Super_Block * Activation_Super;
+
+               Largest : N.Real := 0.0;
+               Scale   : N.Real;
+               Inverse : N.Real;
+            begin
+               for Part in 0 .. Deep - 1 loop
+                  declare
+                     Here   : N.Real;
+                     Finite : Boolean;
+                  begin
+                     Block_Extent
+                       (Vectors,
+                        At_Element + Part * Activation_Block,
+                        Here, Finite);
+
+                     if not Finite then
+                        return;
+                     end if;
+
+                     if Here > Largest then
+                        Largest := Here;
+                     end if;
+                  end;
+               end loop;
+
+               Scale := Largest / 127.0;
+               Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);
+
+               for Part in 0 .. Deep - 1 loop
+                  declare
+                     At_Part : constant Element_Count :=
+                       At_Element + Part * Activation_Block;
+                     Total   : Interfaces.Integer_32 := 0;
+                  begin
+                     Scales (Scales'First + Super_Block * Deep + Part) :=
+                       Scale;
+
+                     for Index in 0 .. Element_Count (Activation_Block) - 1
+                     loop
+                        declare
+                           Scaled : constant N.Real :=
+                             Vectors (Vectors'First + At_Part + Index)
+                             * Inverse;
+
+                           Whole : constant Integer :=
+                             Integer'Max
+                               (-127,
+                                Integer'Min
+                                  (127,
+                                   Integer (N.Real'Rounding (Scaled))));
+                        begin
+                           Values (Values'First + At_Part + Index) :=
+                             Byte_Signed (Whole);
+                           Total := Total + Interfaces.Integer_32 (Whole);
+                        end;
+                     end loop;
+
+                     Totals (Totals'First + Super_Block * Deep + Part) :=
+                       Total;
+                  end;
+               end loop;
+            end;
+         end loop;
+
          Ok := True;
          return;
       end if;
