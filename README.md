@@ -6601,10 +6601,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 361.8 t/s | 36.7 t/s |
-| llama.cpp, processor | 378.9 t/s | 39.6 t/s |
-| model_runner, device | 1527.8 t/s | 50.2 t/s |
-| llama.cpp, device | 1643.9 t/s | 55.5 t/s |
+| model_runner, processor | **345.9 t/s** | 37.4 t/s |
+| llama.cpp, processor | 303.6 t/s | 39.4 t/s |
+| model_runner, device | 1582.7 t/s | 51.4 t/s |
+| llama.cpp, device | 1608.1 t/s | 56.4 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6623,10 +6623,18 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **275.6 t/s** | 36.7 t/s |
-| llama.cpp, processor | 254.5 t/s | 39.2 t/s |
-| model_runner, device | 1693.3 t/s | 50.2 t/s |
-| llama.cpp, device | 1760.5 t/s | 55.8 t/s |
+| model_runner, processor | **278.1 t/s** | 37.4 t/s |
+| llama.cpp, processor | 262.9 t/s | 39.4 t/s |
+| model_runner, device | 1730.5 t/s | 51.4 t/s |
+| llama.cpp, device | 1822.0 t/s | 56.4 t/s |
+
+**The processor is ahead on both prompts and within five per cent
+generating**, which is where this comparison has been going for thirty
+sittings: 1.14 times ahead on the short prompt, 1.06 on the long one, and
+1.05 behind a generated token. Both device prompt rows are within two and
+five per cent and the device's generated token is 1.10 behind. There is no
+row left in this table with a gap of more than fifteen per cent in either
+direction.
 
 **The device prompt rows read 1182.8 and 1211.8 for one commit, and that was
 a slow window rather than the code.** The commit before this one published
@@ -6802,8 +6810,8 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.304 s
-and 64 in 1.742 s on the processor, 0.072 s and 1.276 s on the device,
+speed` reports seconds and this table reports rates: 110 tokens in 0.318 s
+and 64 in 1.710 s on the processor, 0.070 s and 1.244 s on the device,
 medians of three as everywhere else here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -6818,13 +6826,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 625.9 t/s rather
-than 378.9 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 719.0 t/s rather
+than 303.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 50.2 t/s
-now, against 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 51.4 t/s
+now, against 50.2, 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8026,6 +8034,82 @@ sitting three hours later took that row from ten ahead to one behind on an
 eight-bit figure that had not changed -- so the end-to-end number is the
 claim and the batched row is not. Both sittings are in the `## Speed`
 section above, under "Moving fewer bytes per weight".
+
+### The weight's sign, moved onto the activation
+
+llama.cpp's `mul_sum_i8_pairs_float` is four lines long and the whole of what
+this section is about:
+
+```c
+const __m256i ax = _mm256_sign_epi8(x, x);   // |weights|
+const __m256i sy = _mm256_sign_epi8(y, x);   // activations, signed by them
+return mul_sum_us8_pairs_float(ax, sy);      // vpdpbusd
+```
+
+The byte instruction reads its first operand as unsigned and a weight is
+signed, and there are two ways to give it one. The bias -- add a hundred and
+twenty-eight to every weight, take a hundred and twenty-eight times the
+activation's block total back off at the end -- is what this kernel did.
+`VPSIGNB` is the other: it negates a byte where a controlling byte is
+negative, zeroes it where that byte is zero, and leaves it alone otherwise,
+so the weight applied to itself gives the magnitude and the weight applied to
+the activation gives the sign. Two instructions, and there is nothing to
+correct afterwards.
+
+**What the bias was costing was not the exclusive-or.** It was the second
+loop the correction needed: a widening of the block's activation total to
+binary64, the scale written to a table, read back, widened again, and a
+serial multiply-add into a running correction. Eighteen instructions a block,
+where the dot product beside it is ten. With the correction gone the scale
+can be worked out where it is used -- `vpbroadcastw`, `vcvtph2ps`, one
+multiply -- and the loop is one loop:
+
+| per 32-element block | before | after |
+| --- | ---: | ---: |
+| the dot product | 10 | 12 |
+| the scale and the correction | 18 | 4 |
+| | **28** | **16** |
+
+**And it is worth one per cent.** Five alternated rounds, Q8_0, 64 generated:
+1.726, 1.738, 1.732, 1.730 and 1.731 s before against 1.713, 1.710, 1.708 and
+1.718 after -- every reading after below every reading before, and the ranges
+do not touch.
+
+**One per cent for forty per cent fewer instructions is the finding, not the
+one per cent.** The kernel retires 43.1 thousand million instructions in 39.0
+thousand million cycles: an IPC of 1.11 on a core that can retire six, which
+is a core stalled about eighty per cent of the time. A generated token reads
+the whole model, 1.09 GiB of it, at about forty-four gigabytes a second, and
+llama.cpp on the same file reads it at about forty-six. Thread count says the
+same thing -- 1.707, 1.723, 1.738, 1.728 and 1.742 s at four, six, eight,
+twelve and sixteen threads, flat from four upward, because the memory is
+already saturated at four. **Arithmetic is not what a generated token on this
+processor is waiting for, and no further instruction removed from this loop
+will show.**
+
+**The digests move once, and this is what says they may.** The bias put a
+hundred and twenty-eight times the activation total into a binary32
+accumulator and took it out again in binary64 afterwards, and that term is
+routinely larger than the answer; dropping it is different arithmetic, not
+worse. The conformance sweep reads 28344 sequences and 0 outside tolerance
+either way, and the fixture comparison against the reference decoder reports
+the same seventy-three logits moved by less than a disagreement either way.
+Sixty-four greedy tokens do come out differently, and the exact-arithmetic
+path agrees with the old digest rather than the new one -- which is one
+argmax flipping on a near-tie, not a quality difference, since every
+continuous measure the suite has is identical.
+
+**The activation quantizer now clamps at minus a hundred and twenty-seven.**
+`VPSIGNB` cannot represent a weight applied to an activation of minus a
+hundred and twenty-eight, because that value negates to itself. It could not
+arise anyway -- the scale is the largest magnitude over a hundred and
+twenty-seven -- and now it cannot arise at all. A *weight* of minus a hundred
+and twenty-eight is fine: its magnitude read as unsigned is a hundred and
+twenty-eight, which is what it should be.
+
+The strip kernels keep the bias. There the weights are the per-row operand,
+so both `VPSIGNB`s would land in the innermost loop while the correction
+there is already folded into the insertion as a single integer add.
 
 ### The same prologue on the other path, where it is already amortized
 

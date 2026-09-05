@@ -88,58 +88,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       end if;
    end Scale_At;
 
-   --  The same two bytes, taken by the hardware in one go.
-   --
-   --  Scale_At above asks Ada for a sixteen-bit number out of two bytes of
-   --  a Byte_Array, which is two loads, a shift and an or before the
-   --  convert can start: six instructions, and it is called once for every
-   --  block of every row of every product. vpinsrw takes exactly the two
-   --  bytes at the address, which with the zeroing and the convert is
-   --  three, and a generated token executes eight and four tenths per cent
-   --  fewer instructions for it.
-   --
-   --  Only Rows_Singly calls it, and the reason is measured rather than
-   --  cautious. Put in Scale_At, where every format would take it, it is
-   --  worth 1.7 per cent of a Q8_0 generation at the worker count this
-   --  program chooses and 5.6 per cent at one worker -- and it costs Q4_K
-   --  generation twenty-one per cent and a Q4_K prompt fourteen. Three
-   --  instructions on a longer chain: vpinsrw is a load and an insert into
-   --  one register and the convert waits behind both, where two byte loads
-   --  issue beside whatever else is in flight. The eight-bit kernel has the
-   --  work to hide that behind and the k-quant one does not.
-   --
-   --  Exactly two bytes, which matters: the wider load vcvtph2ps offers
-   --  would read eight, and Q6_K keeps its scale in a block's last two.
-   --
-   --  The lanes above the first are zeroed rather than left as they were,
-   --  so the convert is given numbers rather than whatever the register
-   --  held. Only the first is read.
-   function Scale_Pair_At
-     (Data : B.Byte_Array;
-      Here : B.Byte_Index) return N.Real
-     with Inline;
-   pragma Inline_Always (Scale_Pair_At);
-
-   function Scale_Pair_At
-     (Data : B.Byte_Array;
-      Here : B.Byte_Index) return N.Real
-   is
-      LF     : constant Character := ASCII.LF;
-      Result : N.Real;
-   begin
-      --  Not volatile: it reads its operand and writes its answer and does
-      --  nothing else, so the compiler may hoist it, fold two of them
-      --  together, or drop one whose answer goes unread.
-      System.Machine_Code.Asm
-        ("vpxor %0, %0, %0" & LF
-         & "vpinsrw $0, %1, %0, %0" & LF
-         & "vcvtph2ps %0, %0",
-         Outputs => N.Real'Asm_Output ("=x", Result),
-         Inputs  => B.Byte'Asm_Input ("m", Data (Here)));
-
-      return Result;
-   end Scale_Pair_At;
-
    --  One vector against a tile of rows, with the block loop inside.
    --
    --  Written separately from Rows because it is a different shape rather
@@ -324,7 +272,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
-      Totals    : Sum_Array;
       First     : Element_Count;
 
       --  Where this call's answers go and how far apart they lie. A
@@ -344,7 +291,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
-      Totals    : Sum_Array;
       First     : Element_Count;
       At_Sum    : Element_Count;
       Sum_Step  : Element_Count;
@@ -356,82 +302,72 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       LF : constant Character := ASCII.LF;
 
-      --  Room for the largest run of blocks a row can have here, so that
-      --  nothing is allocated inside the loop. A row of a model this reads
-      --  is at most this many blocks wide; a wider one is refused above.
-      Scale_Room : constant := 1024;
-
-      --  Both scales multiplied together, one for each block, so the
-      --  insertion below reads one number a block rather than two. Built
-      --  once for a row, which is sixty-four multiplies against the two
-      --  thousand the row itself costs.
-      --  Not initialised: every entry the insertion reads is written by
-      --  the prologue below before it is read, and this is four kilobytes
-      --  zeroed on every call otherwise -- which a profile finds as a
-      --  string store at the top of the kernel.
-      Row_Scale : array (0 .. Scale_Room - 1) of N.Real;
-
       --  Eight partial sums, reduced once when the row is done.
       Landed : Lanes_8 := [others => 0.0];
-
-      --  A block of this format, in bytes: a scale and thirty-two quants.
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q8_0));
    begin
-      if Blocks > Scale_Room then
-         return;
-      end if;
-
       for Row in 0 .. Rows - 1 loop
          declare
             Base : constant B.Byte_Index :=
               Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
-
-            --  What the bias put in, taken out once for the whole row: a
-            --  sum over blocks of the scale against the block's own
-            --  activation total.
-            Undo : N.Wide_Real := 0.0;
          begin
-            for Block in 0 .. Blocks - 1 loop
-               declare
-                  At_Byte : constant B.Byte_Index :=
-                    Base + Width * B.Byte_Count (Block);
-
-                  Scaled : constant N.Real :=
-                    Scales (Scales'First + First / Activation_Block + Block);
-
-                  Weighted : constant N.Real :=
-                    (if Wider then Scale_Pair_At (Data, At_Byte)
-                     else Scale_At (Data, At_Byte));
-               begin
-                  Row_Scale (Natural (Block)) := Weighted * Scaled;
-                  Undo := Undo
-                    + N.Wide_Real (Row_Scale (Natural (Block)))
-                      * N.Wide_Real
-                          (Totals (Totals'First
-                                   + First / Activation_Block + Block));
-               end;
-            end loop;
-
             Landed := [others => 0.0];
 
             --  The whole row: a running accumulator in a register, one
             --  multiply-add a block, and nothing written until the end.
+            --
+            --  The byte instruction reads its first operand as unsigned
+            --  and a weight is signed, and there are two ways to give it
+            --  one. The bias -- add a hundred and twenty-eight to every
+            --  weight, and take a hundred and twenty-eight times the
+            --  activation's block total back off at the end -- is what
+            --  this kernel did, and it cost a second loop over the blocks:
+            --  a widening of the block's total to binary64, the scale
+            --  written to a table, read back, widened again, and a serial
+            --  multiply-add into a running correction. Eighteen
+            --  instructions a block, where the dot product itself is ten.
+            --
+            --  The other way is to move the weight's sign onto the
+            --  activation instead. VPSIGNB negates a byte where the
+            --  controlling byte is negative, zeroes it where that byte is
+            --  zero, and leaves it alone otherwise: applied to the weight
+            --  by itself it gives the magnitude, which is the unsigned
+            --  operand, and applied to the activation by the weight it
+            --  gives the signed one. Two instructions, and the whole
+            --  correction goes -- no table, no second loop, no binary64
+            --  chain, and the scale is worked out where it is used.
+            --
+            --  It also drops a term that was cancelling. The bias put a
+            --  hundred and twenty-eight times the activation total into a
+            --  binary32 accumulator and took it out again in binary64
+            --  afterwards, and that term is routinely larger than the
+            --  answer: this is fewer instructions and closer to the
+            --  reference at the same time. The digests move once, and the
+            --  conformance sweep is what says which way.
+            --
+            --  What VPSIGNB cannot represent is a weight applied to an
+            --  activation of minus a hundred and twenty-eight, which
+            --  negates to itself. The activation quantizer clamps to minus
+            --  a hundred and twenty-seven so that value does not exist; a
+            --  weight of minus a hundred and twenty-eight is fine, because
+            --  its magnitude read as unsigned is a hundred and
+            --  twenty-eight, which is what it should be.
             System.Machine_Code.Asm
               ("vpxor %%ymm6, %%ymm6, %%ymm6"        & LF &
-               "movl $0x80808080, %%eax"             & LF &
-               "vmovd %%eax, %%xmm7"                 & LF &
-               "vpbroadcastd %%xmm7, %%ymm7"         & LF &
                "xorq %%rcx, %%rcx"                   & LF &
                "xorq %%rdx, %%rdx"                   & LF &
                "movq %4, %%rax"                      & LF &
                "1:"                                  & LF &
-               "vmovdqu (%1,%%rdx,1), %%ymm0"        & LF &
-               "vpxor %%ymm7, %%ymm0, %%ymm0"        & LF &
+               "vmovdqu 2(%1,%%rdx,1), %%ymm0"       & LF &
+               "vpsignb %%ymm0, %%ymm0, %%ymm3"      & LF &
+               "vmovdqu (%2,%%rcx,8), %%ymm4"        & LF &
+               "vpsignb %%ymm0, %%ymm4, %%ymm4"      & LF &
                "vpxor %%ymm1, %%ymm1, %%ymm1"        & LF &
-               "vpdpbusd (%2,%%rcx,8), %%ymm0, %%ymm1" & LF &
+               "vpdpbusd %%ymm4, %%ymm3, %%ymm1"     & LF &
                "vcvtdq2ps %%ymm1, %%ymm1"            & LF &
+               "vpbroadcastw (%1,%%rdx,1), %%xmm5"   & LF &
+               "vcvtph2ps %%xmm5, %%ymm5"            & LF &
                "vbroadcastss (%3,%%rcx,1), %%ymm2"   & LF &
+               "vmulps %%ymm5, %%ymm2, %%ymm2"       & LF &
                "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"  & LF &
                "addq $4, %%rcx"                      & LF &
                "addq $34, %%rdx"                     & LF &
@@ -440,13 +376,16 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vmovaps %%ymm6, (%0)",
                Inputs =>
                  [System.Address'Asm_Input ("r", Landed'Address),
-                  System.Address'Asm_Input ("r", Data (Base + 2)'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
                   System.Address'Asm_Input
                     ("r", Values (Values'First + First)'Address),
-                  System.Address'Asm_Input ("r", Row_Scale (0)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Scales
+                       (Scales'First + First / Activation_Block)'Address),
                   Element_Count'Asm_Input ("r", Blocks)],
                Clobber  =>
-                 "rax,rcx,rdx,ymm0,ymm1,ymm2,ymm6,ymm7,memory",
+                 "rax,rcx,rdx,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,memory",
                Volatile => True);
 
             declare
@@ -457,8 +396,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                end loop;
 
                Sums (Sums'First + At_Sum + Row * Sum_Step) :=
-                 Sums (Sums'First + At_Sum + Row * Sum_Step)
-                 + Total - 128.0 * Undo;
+                 Sums (Sums'First + At_Sum + Row * Sum_Step) + Total;
             end;
          end;
       end loop;
@@ -4199,7 +4137,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  separate multiply and add become one fused multiply-add.
       if Deep and then Count = 1 then
          Rows_Singly
-           (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales, Totals,
+           (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
             First, 0, 1, Sums);
          Ok := True;
          return;
@@ -4302,7 +4240,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
             for Which in Four .. Count - 1 loop
                Rows_Singly
                  (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                  Totals, First + Which * Stride, Which, Count, Sums);
+                  First + Which * Stride, Which, Count, Sums);
             end loop;
 
             Ok := True;

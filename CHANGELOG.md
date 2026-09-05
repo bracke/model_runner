@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The eight-bit kernel gives the byte instruction its unsigned operand with
+  `VPSIGNB` instead of a bias**, which is what llama.cpp's
+  `mul_sum_i8_pairs_float` does: the weight applied to itself is the
+  magnitude, the weight applied to the activation is the sign, and there is
+  nothing to correct afterwards. The bias needed a second loop over the
+  blocks — a widening to binary64, a scale table written and read back, and a
+  serial multiply-add — **eighteen instructions a block where the dot product
+  is ten**. With it gone the scale is worked out where it is used and a block
+  costs sixteen instructions instead of twenty-eight. Q8_0 generating reads
+  1.710 s against 1.731, five alternated rounds with the ranges not touching.
+
+  **One per cent for forty per cent fewer instructions is the result worth
+  keeping.** The kernel runs at an IPC of 1.11 on a core that retires six, a
+  generated token reads the whole model at about 44 GB/s against llama.cpp's
+  46, and thread count is flat from four workers upward. A generated token on
+  this processor is waiting for memory, not arithmetic.
+
+  Digests move once (`448c2ed68ec342ee` → `1cb5fffbb21399ad`). Accuracy is
+  unchanged by every continuous measure: conformance 28344 sequences and 0
+  outside tolerance either way, and the same 73 logits moved against the
+  reference decoder either way. The activation quantizer now clamps at −127
+  rather than −128, a value it could not produce, because `VPSIGNB` cannot
+  represent it.
+
+- **The comparison against llama.cpp has no row more than fifteen per cent
+  apart in either direction**, for the first time. The processor is **ahead**
+  on both prompts — 1.14× on 110 tokens and 1.06× on 1419 — and 1.05× behind
+  generating; the device is 1.02× and 1.05× behind on the prompts and 1.10×
+  generating.
+
+
 - **The strip path's scale prologue is in lanes too**, and `Sub_Block_Scale`
   — a branch on the sub-block's number inside a loop of eight — is gone with
   it. That prologue runs once per call rather than per strip, so what it is

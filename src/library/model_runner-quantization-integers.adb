@@ -280,8 +280,17 @@ package body Model_Runner.Quantization.Integers is
                   --  scale is the largest magnitude over 127, so nothing
                   --  should reach 128, and the clamp is what makes that a
                   --  fact about the code rather than about the arithmetic.
+                  --
+                  --  Clamped at minus a hundred and twenty-seven rather
+                  --  than minus a hundred and twenty-eight, which the type
+                  --  would allow. The byte dot product applies the weight's
+                  --  sign to the activation, and minus a hundred and
+                  --  twenty-eight negated in a byte is itself -- so that one
+                  --  value would come out with the wrong sign. It cannot
+                  --  arise from the arithmetic above and now it cannot arise
+                  --  at all.
                   Whole  : constant Integer :=
-                    Integer'Max (-128,
+                    Integer'Max (-127,
                                  Integer'Min (127, Integer (N.Real'Rounding
                                                               (Scaled))));
                begin
