@@ -7489,6 +7489,36 @@ That is the third arrangement of this tile that has been measured and not
 kept: narrower loses on `AV`, taller loses on occupancy, and the sizes it has
 are a local best rather than an untested default.
 
+### One of the two formats left out, and what the other one was really costing
+
+Two formats were left out of the block sharing because together they made
+Q8_0 ten per cent slower with its own branch byte-identical, and the entry
+that recorded it named a split shader as the way to let them in. Neither half
+of that survives being taken apart.
+
+**It is Q3_K on its own.** With only Q2_K given the treatment, Q8_0 reads
+1.251, 1.285 and 1.274 s against 1.258, 1.278 and 1.279 -- a wash. Adding
+Q3_K takes it to **1.400, 1.398 and 1.399**, nine and a half per cent, every
+reading on the same side. Q2_K holds two words live across its group loop and
+Q3_K holds four -- its quants and the mask bytes that carry the third bit --
+and four is what pushes the allocation over. So no split is needed: Q2_K is
+in, on the same module as everything else, and Q3_K stays out.
+
+**And Q2_K was never worth what it looked worth.** The earlier reading had it
+at 1.27 -- 1.016 and 1.058 s against 0.818 and 0.811 -- and that was measured
+against a build with none of the three super-block formats done. A Q2_K file
+is a mixture like any other "_M" file and carries Q6_K tensors, so most of
+that 1.27 was Q6_K's, which is now in. Against a build that already has the
+three, Q2_K's own branch is worth **0.940 to 0.925 s, about one and a half per
+cent** -- consistent across three alternated pairs, free, and bit-exact, which
+is why it is kept, but it is not a quarter of anything.
+
+**The lesson is the one about mixtures again, pointed the other way.** The
+entry above learned that a mixture's slowest format decides it. This one is
+the same fact used carelessly: measuring a format by running a file named
+after it credits that format with whatever else the file contains. Both times
+the answer was Q6_K.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

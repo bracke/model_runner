@@ -9309,6 +9309,61 @@
 #   load:  0.92
 #   model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-05, one of the two formats left out, and what the other was
+# really costing.
+#
+#   Two formats were left out of the block sharing because together they
+#   made Q8_0 ten per cent slower with its own branch byte-identical, and
+#   the entry recording it named a split shader as the way in. Neither half
+#   of that survives being taken apart.
+#
+#   IT IS Q3_K ON ITS OWN. With only Q2_K given the treatment:
+#
+#     Q8_0   before 1.258, 1.278, 1.279 s   after 1.251, 1.285, 1.274
+#
+#   a wash. Adding Q3_K:
+#
+#     Q8_0   Q2_K only 1.251, 1.285, 1.274  with Q3_K 1.400, 1.398, 1.399
+#
+#   nine and a half per cent, every reading on the same side. Q2_K holds two
+#   words live across its group loop and Q3_K holds four -- its quants and
+#   the mask bytes carrying the third bit. Four is what pushes the
+#   allocation over. No split is needed: Q2_K is in on the same module as
+#   everything else and Q3_K stays out.
+#
+#   AND Q2_K WAS NEVER WORTH WHAT IT LOOKED WORTH. The earlier reading had
+#   it at 1.27 -- 1.016, 1.058 s against 0.818, 0.811 -- measured against a
+#   build with none of the three super-block formats done. A Q2_K file is a
+#   mixture and carries Q6_K tensors, so most of that was Q6_K's, which is
+#   now in. Against a build that already has the three:
+#
+#     Q2_K   before 0.940, 0.937, 0.941 s   after 0.923, 0.924, 0.925
+#
+#   about one and a half per cent. Consistent across three alternated pairs,
+#   free, bit-exact (0fbf5ccfc25ad073 before and after), and kept for that
+#   -- but not a quarter of anything.
+#
+#   THE LESSON IS THE ONE ABOUT MIXTURES, POINTED THE OTHER WAY. The entry
+#   above learned that a mixture's slowest format decides it. This is the
+#   same fact used carelessly: measuring a format by running a file named
+#   after it credits that format with whatever else the file holds. Both
+#   times the answer was Q6_K.
+#
+#   THE TWO FINGERPRINT GROUPS: NOT RE-MEASURED. The change is in the Q2_K
+#   branch and every figure in both groups is Q8_0, whose own branch is
+#   untouched -- and the one thing that could have carried across, the
+#   module's register allocation, was measured and did not:
+#
+#     6-token, 12 generated   before 0.224, 0.227 s   after 0.230, 0.230
+#     1419-token prompt       before 0.819, 0.857     after 0.805, 0.840
+#
+#   The figures published stand from this morning's sitting.
+#
+#   conformance: 0 outside tolerance.
+#
+#   load:  0.59 for the A/B, 1.03 for the alternation
+#   model: TinyLlama-1.1B-Chat Q2_K and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

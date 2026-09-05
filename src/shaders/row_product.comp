@@ -477,36 +477,53 @@ void main() {
         //  a four-bit scale and a four-bit minimum sharing one byte.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = part; b < blocks; b += LANES) {
+        //  A slice of the same super-block to every lane, and the quant
+        //  bytes read once for the four groups that share them.
+        //
+        //  at_byte does not depend on the group -- the four groups are four
+        //  two-bit fields of the same sixteen bytes -- so reading inside the
+        //  group loop read them four times over. Eight lanes divide the four
+        //  side-and-half pairs in two, so a lane holds two words and takes
+        //  four groups out of them.
+        uint pair = part >> 1u;
+        uint side = pair >> 1u;
+        uint upper = pair & 1u;
+        uint whole = part & 1u;
+
+        for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 84u;
             uint quants = at + 16u;
             float d = half_at(at + 80u);
             float dmin = half_at(at + 82u);
             uint col0 = b * 256u;
 
-            for (uint side = 0u; side < 2u; ++side) {
-                for (uint group = 0u; group < 4u; ++group) {
-                    for (uint upper = 0u; upper < 2u; ++upper) {
-                        //  The scales are consumed in the order the
-                        //  sub-blocks are written, which is why this is a
-                        //  running index rather than an offset computed from
-                        //  the element number.
-                        uint which = side * 8u + group * 2u + upper;
-                        uint packed = byte_at(at + which);
+            uint at_byte = quants + side * 32u + upper * 16u + whole * 8u;
+            uint shift_at = (at_byte & 3u) * 8u;
 
-                        float factor = d * float(packed & 15u);
-                        float lowest = dmin * float(packed >> 4u);
+            uint w0 = word_of((at_byte >> 2u), shift_at);
+            uint w1 = word_of((at_byte >> 2u) + 1u, shift_at);
 
-                        uint at_byte = quants + side * 32u + upper * 16u;
-                        uint into = col0 + side * 128u + group * 32u
-                                    + upper * 16u;
-                        uint shift = 2u * group;
+            for (uint group = 0u; group < 4u; ++group) {
+                //  The scales are consumed in the order the sub-blocks are
+                //  written, which is why this is a running index rather
+                //  than an offset computed from the element number.
+                uint which = side * 8u + group * 2u + upper;
+                uint packed = byte_at(at + which);
 
-                        for (uint L = 0u; L < 16u; ++L) {
-                            uint q = (byte_at(at_byte + L) >> shift) & 3u;
-                            accumulate(into + L, factor * float(q) - lowest);
-                        }
-                    }
+                float factor = d * float(packed & 15u);
+                float lowest = dmin * float(packed >> 4u);
+
+                uint into = col0 + side * 128u + group * 32u + upper * 16u;
+                uint shift = 2u * group;
+
+                for (uint n = 0u; n < 4u; ++n) {
+                    uint q0 = ((w0 >> (n * 8u)) >> shift) & 3u;
+                    uint q1 = ((w1 >> (n * 8u)) >> shift) & 3u;
+                    uint L = whole * 8u + n;
+
+                    accumulate(into + L, factor * float(q0) - lowest);
+                    accumulate(into + L + 4u,
+                               factor * float(q1) - lowest);
                 }
             }
         }

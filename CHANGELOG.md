@@ -5,7 +5,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Q2_K joins the block sharing**, which is worth about one and a half per
+  cent on it — 0.940 to 0.925 s generating — bit-exact and at no cost to any
+  other format.
+
 ### Measured
+
+- **It was Q3_K on its own, and no split is needed.** The two formats were
+  left out together for making Q8_0 ten per cent slower; taken apart, Q2_K
+  alone is a wash and **Q3_K alone accounts for all of it** (1.399 s against
+  1.274). Q2_K holds two words live across its group loop and Q3_K holds
+  four.
+
+- **And Q2_K was never worth what it looked worth.** The 1.27 recorded
+  earlier was measured against a build with none of the three super-block
+  formats done — and a Q2_K file carries Q6_K tensors, so most of it was
+  Q6_K's. **Measuring a format by running a file named after it credits that
+  format with whatever else the file holds**; both times the answer was
+  Q6_K.
 
 - **A tile twice as tall is 1.3 times worse.** The narrow tile has
   accumulator budget the wide one does not — `AV` is two rather than eight —
