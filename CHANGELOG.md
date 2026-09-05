@@ -5,6 +5,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **What is left of the k-quant scale prologue, and what it would take.**
+  After two changes it is still **a fifth** of what those formats cost on the
+  processor (2.057 s to 1.638 ablated away for Q4_K, 2.129 to 1.804 for
+  Q5_K). Splitting it so the eight independent products can vectorize while
+  the running sum stays in order is **three to four per cent worse** — the
+  second loop re-reads what the first already had.
+
+  llama.cpp does the whole prologue in vector registers and never turns the
+  sub-block scale into a float, keeping it integer against the integer sums.
+  That is the shape of the remaining fifth; it is hand-written vector code,
+  and it is recorded with its size measured so the next attempt knows what it
+  is worth first.
+
 ### Changed
 
 - **A four-kilobyte scale table is no longer zeroed on every call**, and the
