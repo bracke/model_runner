@@ -4809,6 +4809,48 @@
 # load: 0.88 to 2.04
 # model: TinyLlama-1.1B-Chat Q2_K, Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-05, the scale a block applies once, and where the search stopped.
+#
+#   llama.cpp's eight-bit kernel dots four quants against four activations
+#   and applies the block scale at the end of eight elements; this program
+#   applied it per element. Unlike Q4_K, where scale * q - offset fuses into
+#   one instruction, a bare scale * q fuses with nothing -- one operation an
+#   element in a loop of about six.
+#
+#     Q8_0   before 1.297, 1.296 s   after 1.296, 1.297
+#
+#   A wash, digest unchanged. The eight-bit generating path is not short of
+#   arithmetic, which is the fifth way of asking that has come back so.
+#
+#   THEIR KNOBS SAY THE SAME OF Q4_K, where this program is furthest behind.
+#   64 generated on Q4_K_M:
+#
+#     nothing off             89.12 t/s
+#     async                   81.92
+#     graph optimize          86.54
+#     bfloat16                86.67
+#     f16                     87.21
+#     host-visible vidmem     87.48
+#     dot2                    87.54
+#     integer dot product     87.87
+#     cooperative matrix      87.96
+#
+#   Nothing they can turn off is worth more than eight per cent to them, and
+#   the largest of those -- how the work is handed over -- was built here and
+#   found hidden behind the kernels. Their advantage on Q4_K is not a
+#   feature that can be named and copied.
+#
+#   ONE STRUCTURAL DIFFERENCE REMAINS UNTESTED, named rather than guessed
+#   at: their kernel answers two output rows to a workgroup where this one
+#   answers one, halving the activation traffic and doubling the arithmetic
+#   behind each load. It was passed over on an ablation bounding it at six
+#   per cent, and this file has twice recorded that an ablation bounds a
+#   change from above and is not the change. Building it means a row axis
+#   through every format branch and a dispatch a fraction of the size.
+#
+# load: 0.66 to 1.54
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

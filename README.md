@@ -7736,6 +7736,52 @@ threads a row is divided across, the rows a workgroup answers, and one
 submission a token -- every one of them measured here and none of them worth
 anything on this part.
 
+### The scale a block applies once, and where the search stopped
+
+llama.cpp's eight-bit kernel dots four quants against four activations and
+applies the block's scale at the end of eight elements. This program applied
+it per element -- and unlike the four-bit case, where the weight is a scale
+times the quant less an offset and those two fuse into one instruction, a
+bare scale times a quant fuses with nothing. One operation an element, in a
+loop of about six.
+
+It is a wash: 1.296 and 1.297 s against 1.297 and 1.296, and the digest
+unchanged. **The eight-bit generating path is not short of arithmetic**, and
+that is the fifth different way of asking it that has come back the same.
+
+**Their knobs say the same thing about the four-bit path**, where this
+program is furthest behind. Every switch their build offers, against 64
+generated on Q4_K_M:
+
+| turned off | |
+| --- | ---: |
+| nothing | 89.12 t/s |
+| async | 81.92 |
+| graph optimize | 86.54 |
+| bfloat16 | 86.67 |
+| f16 | 87.21 |
+| dot2 | 87.54 |
+| host-visible vidmem | 87.48 |
+| integer dot product | 87.87 |
+| cooperative matrix | 87.96 |
+
+**No single thing they can turn off is worth more than eight per cent to
+them**, and the largest -- how the work is handed over -- was built here and
+found to be hidden behind the kernels. So their advantage over this program
+on Q4_K is not a feature that can be named and copied; it is the kernel
+being better suited to this part in a way five readings have not isolated.
+
+**One structural difference remains untested and is named here rather than
+guessed at.** Their kernel answers two output rows to a workgroup where this
+one answers one, which halves the activation traffic and doubles the
+arithmetic behind each of those loads. It was passed over earlier on an
+ablation that bounded it at six per cent -- and this file has now twice
+recorded that an ablation bounds a change from above and is not the change,
+in both directions. Building it means a row axis through every format branch
+and a dispatch a fraction of the size, which is the scale of the block
+sharing above. It is the last idea from that source that has not been
+measured, and it should be measured before it is believed either way.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

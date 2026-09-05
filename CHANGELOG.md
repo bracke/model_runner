@@ -5,6 +5,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **A fourth reading of llama.cpp's backend, and two more nothings.**
+  Applying an eight-bit block's scale once per eight elements rather than per
+  element — which is what their kernel does, and which unlike the four-bit
+  case does not fuse away — is a wash (1.296, 1.297 s against 1.297, 1.296).
+  And every switch their build offers, measured on Q4_K_M: **nothing they can
+  turn off is worth more than eight per cent to them**, and the largest of
+  those was built here and found hidden behind the kernels.
+
+  One structural difference remains untested and is named rather than
+  guessed at: **two output rows to a workgroup**, passed over earlier on an
+  ablation bounding it at six per cent — a bound this repository has twice
+  recorded as unreliable in both directions.
+
 ### Changed
 
 - **The Q4_K and Q6_K branches take four nibbles out in one `unpack8`**
