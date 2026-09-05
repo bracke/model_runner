@@ -1501,18 +1501,20 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-13399 Me/s against 13279 at eight shares with one vector, 22325 against 20438
-with thirty-two, and 2408 against 2422 serially. Which of the two leads
-changes with the case and with the run: a per cent ahead with one vector,
-nine ahead batched, a per cent behind serially -- where the sixteen sittings
+13496 Me/s against 13439 at eight shares with one vector, 21559 against 22790
+with thirty-two, and 2365 against 2407 serially. Which of the two leads
+changes with the case and with the run: half a per cent ahead with one
+vector, five behind batched, two behind serially -- where the sixteen sittings
 before read it half a per cent ahead with one vector and level batched, two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
 level, ahead by ten with one vector, ahead by two, behind by two, level, and
 behind.
-Read eighteen times, the pair is level and the sitting is the spread -- and
-the nine per cent the four-bit format leads by batched in this sitting is the
-sitting, not the change: `### The twelve bytes a sub-block scale is packed
-into` below moved only the kernel a single vector takes, and the batched
-figure comes from the strip kernel, which it did not touch.
+Read nineteen times, the pair is level and the sitting is the spread -- and
+this pair of sittings shows it plainly. Taken an hour apart on the same
+binary, the batched figure read the four-bit format nine per cent ahead and
+then five behind, which is a swing of fourteen; the first was taken at a load
+of half and the second on a machine that had settled. Neither says anything
+about the formats and the second is the one published, because the rule this
+file keeps is that a figure is taken on a quiet host or it is not taken.
 That is the finding -- they are level, and a gap either way at one shape is the
 machine rather than the format. End to end they are level too, and the two
 files have to be read a token at a time to see it: alternating the two round
@@ -7871,6 +7873,44 @@ the table is built and used exactly once, that was paying for them.
 entirely the four-bit format generates in 1.642 s, which is 39 tokens a
 second against llama.cpp's 65.8. The rest is in the dot product itself and
 this section does not have it.
+
+### Four kilobytes zeroed and a branch in a loop of sixteen
+
+Profiling the four-bit k-quant again after the section above finds two more
+things in the same procedure, neither of them arithmetic.
+
+**A four-kilobyte table zeroed on every call.** The single-vector kernels
+declare their scale table initialised -- `[others => 0.0]` -- and then write
+every entry they read before reading it. A profile finds the string store
+that costs at the top of the kernel, about two per cent of it.
+
+**And a branch in a loop of sixteen.** The six-bit k-quant keeps a sub-block's
+scale as a signed byte, and the scale table read it as unsigned and corrected
+it with a test -- `if Raw < 128 then Raw else Raw - 256`. That test is the
+single hottest instruction pair in this file's profile, and it is what stops
+a loop of sixteen byte loads being lanes. Read as the signed byte it is, it
+is neither.
+
+Alternated, seven rounds each, sixty-four tokens on the processor:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q5_K_M | 2.182 s | **2.120** | 1.03 |
+| Q4_K_M | 2.087 | 2.069 | 1.01 |
+
+Bit-exact, the eight-bit path untouched, and **every one of the seven rounds
+on the same side for the five-bit format**. The spread is what makes this
+worth stating carefully: the same binary read 1.935 and 2.133 s for the
+four-bit format in one sitting, seven per cent apart, which is why seven
+rounds and not three.
+
+**And a lesson about the machine, not the code.** The four-bit against
+eight-bit figures under `## Speed` were re-measured twice an
+hour apart on the same binary. At a load of half the batched figure read the
+four-bit format nine per cent ahead; on a settled machine it read five per
+cent behind. A swing of fourteen points from nothing but the host. The
+settled one is published, and the pair is recorded because it is the
+clearest instance this file has of why the load gate exists.
 
 ### Drafting
 

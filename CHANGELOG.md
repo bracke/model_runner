@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A four-kilobyte scale table is no longer zeroed on every call**, and the
+  six-bit k-quant's signed sub-block scale is read as signed rather than
+  corrected with a test — a branch that was the hottest instruction pair in
+  the processor profile and what stopped a loop of sixteen being lanes.
+  **Q5_K_M generating reads 2.120 s against 2.182, seven rounds out of seven
+  on the same side**; Q4_K_M about one per cent. Bit-exact, Q8_0 untouched.
+
+  Also recorded: the four-bit against eight-bit figures under `## Speed`,
+  taken twice an hour apart on the same binary, read the four-bit format nine
+  per cent ahead batched at a load of half and five per cent behind on a
+  settled machine — **a swing of fourteen points from nothing but the host**.
+  The settled sitting is what is published.
+
+### Changed
+
 - **A k-quant's sub-block scales are unpacked once for the block** instead of
   once for each sub-block, in the kernels a single vector takes. Asked one at
   a time the same twelve packed bytes were read five and twenty times, with a

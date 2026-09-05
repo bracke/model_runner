@@ -39,6 +39,18 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Here : B.Byte_Index) return N.Real
      with Inline;
 
+   --  A byte read as the signed number it holds.
+   --
+   --  The six-bit k-quant keeps a sub-block's scale as a signed byte, and
+   --  reading it as unsigned and correcting with a test puts a branch in a
+   --  loop of sixteen -- which a profile found among the hottest
+   --  instructions here, and which is what stops the loop being lanes.
+   function To_Signed (Raw : Interfaces.Unsigned_8) return Interfaces.Integer_8
+   is (if Raw < 128
+       then Interfaces.Integer_8 (Raw)
+       else Interfaces.Integer_8 (Integer (Raw) - 256))
+     with Inline_Always;
+
    --  Not merely Inline. Taking the block size out of the driver's scale
    --  loop left the loop tight enough that the compiler stopped inlining
    --  this and gave it a symbol of its own, and a profile found it there
@@ -377,7 +389,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  insertion below reads one number a block rather than two. Built
       --  once for a row, which is sixty-four multiplies against the two
       --  thousand the row itself costs.
-      Row_Scale : array (0 .. Scale_Room - 1) of N.Real := [others => 0.0];
+      --  Not initialised: every entry the insertion reads is written by
+      --  the prologue below before it is read, and this is four kilobytes
+      --  zeroed on every call otherwise -- which a profile finds as a
+      --  string store at the top of the kernel.
+      Row_Scale : array (0 .. Scale_Room - 1) of N.Real;
 
       --  Eight partial sums, reduced once when the row is done.
       Landed : Lanes_8 := [others => 0.0];
@@ -3245,7 +3261,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       --  Both scales multiplied together, one for every sub-block, so the
       --  insertion reads one number a sub-block rather than three.
-      Row_Scale : array (0 .. Scale_Room - 1) of N.Real := [others => 0.0];
+      --  Not initialised: every entry the insertion reads is written by
+      --  the prologue below before it is read, and this is four kilobytes
+      --  zeroed on every call otherwise -- which a profile finds as a
+      --  string store at the top of the kernel.
+      Row_Scale : array (0 .. Scale_Room - 1) of N.Real;
 
       Landed : Lanes_8 := [others => 0.0];
 
@@ -3488,7 +3508,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       --  Both scales multiplied together, one for every sub-block, so the
       --  insertion reads one number a sub-block rather than three.
-      Row_Scale : array (0 .. Scale_Room - 1) of N.Real := [others => 0.0];
+      --  Not initialised: every entry the insertion reads is written by
+      --  the prologue below before it is read, and this is four kilobytes
+      --  zeroed on every call otherwise -- which a profile finds as a
+      --  string store at the top of the kernel.
+      Row_Scale : array (0 .. Scale_Room - 1) of N.Real;
 
       Landed : Lanes_8 := [others => 0.0];
 
@@ -3837,12 +3861,18 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      begin
                         for Half in 0 .. 15 loop
                            declare
-                              Raw : constant Interfaces.Unsigned_8 :=
-                                Data (At_Byte + 192 + B.Byte_Count (Half));
-
+                              --  Read as the signed byte it is rather than
+                              --  as an unsigned one corrected by a test:
+                              --  the test is a branch in a loop of sixteen
+                              --  that a profile finds among the hottest
+                              --  instructions in this file, and it stops
+                              --  the loop being lanes.
                               Signed : constant Integer :=
-                                (if Raw < 128 then Integer (Raw)
-                                 else Integer (Raw) - 256);
+                                Integer
+                                  (To_Signed
+                                     (Data
+                                        (At_Byte + 192
+                                         + B.Byte_Count (Half))));
                            begin
                               Held (At_Step + Element_Count (Half)) :=
                                 Whole * N.Real (Signed);
