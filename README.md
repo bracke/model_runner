@@ -7692,6 +7692,50 @@ twelve sets and a state machine across four procedures, for nothing
 measurable, and a device whose kernels were faster would still find the
 overhead hidden behind them.
 
+### Four nibbles in one unpack
+
+Three readings of llama.cpp's Vulkan backend have now produced one kept
+change and a long list of measured nothings. This is the second kept one,
+and it is the smallest idea in their k-quant kernels rather than any of the
+large ones.
+
+A four-bit quant taken out one at a time is a shift, a mask and a convert
+each. Their kernels take four at once -- one mask on the word, one `unpack8`,
+one convert of the resulting `u8vec4`:
+
+```
+const uint32_t qs0_u32_lo4 = qs0_u32 & 0x0F0F0F0F;
+const vec4 qs0_lo4 = vec4(unpack8(qs0_u32_lo4));
+```
+
+The Q4_K and Q6_K branches here now do the same. Alternated, three rounds,
+sixty-four tokens generated on the device:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M | 0.936, 0.957, 0.967 s | **0.930, 0.941, 0.927** | 1.03 |
+| Q5_K_M | 1.063, 1.067, 1.078 | 1.056, 1.076, 1.058 | 1.01 |
+| Q8_0 | 1.302, 1.299 | 1.293, 1.302 | -- |
+
+**Bit-exact**: every format's digest is what it was, because the numbers and
+their order are the same and only the instructions that produce them differ.
+
+**Q5_K was tried the same way and put back.** Its inner loop needs three sets
+of four -- the quants' low nibbles, their high ones, and the bytes carrying
+the fifth bit -- and holding all three as vectors read 1.059, 1.062 and 1.049
+against 1.005, 1.048 and 1.072, which is no better and possibly worse. Three
+vectors live where there were three scalars is three times the registers for
+the same arithmetic. So Q4_K and Q6_K have it and Q5_K does not, which is
+the third time in this file that a change has been right for some formats
+and wrong for others.
+
+**Three per cent is what it is.** It is the only thing in three passes over
+their source that transferred at all, the others being an integer dot
+product worth one and a half per cent to them, a `vec4` batch binding, the
+threads a row is divided across, the rows a workgroup answers, and one
+submission a token -- every one of them measured here and none of them worth
+anything on this part.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

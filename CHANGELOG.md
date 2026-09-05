@@ -5,6 +5,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The Q4_K and Q6_K branches take four nibbles out in one `unpack8`**
+  rather than a shift, a mask and a convert each — which is how llama.cpp's
+  k-quant kernels read theirs. Q4_K_M generating reads **0.930, 0.941 and
+  0.927 s against 0.936, 0.957 and 0.967**, about three per cent, bit-exact.
+  Q5_K was tried the same way and put back: its loop needs three sets of four
+  live at once and that costs more than it saves.
+
 ### Measured
 
 - **One submission a token, built, and it is a wash — the entry below

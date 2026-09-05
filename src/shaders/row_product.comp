@@ -1,5 +1,12 @@
 #version 450
 
+//  Four bytes of a word turned into four numbers at once, which is what
+//  unpack8 is for. A nibble taken out one at a time is a shift, a mask and
+//  a convert each; taken four at a time it is one mask on the word and one
+//  unpack. llama.cpp's own k-quant kernels read their quants this way and
+//  it is the one thing from them this program did not already do.
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+
 //  Rows of a matrix against a batch of vectors, one row per invocation.
 //
 //  y[v][row] = sum over col of w[row][col] * x[v][col]
@@ -652,14 +659,17 @@ void main() {
             for (uint g = 0u; g < 4u; ++g) {
                 uint word = word_of(at_word + g, shift);
 
-                for (uint n = 0u; n < 4u; ++n) {
-                    uint packed = (word >> (n * 8u)) & 255u;
-                    uint L = upper * 16u + g * 4u + n;
+                //  The word's four low nibbles and its four high ones,
+                //  each set turned into four numbers in one go.
+                vec4 low_4 = vec4 (unpack8 (word & 0x0F0F0F0Fu));
+                vec4 high_4 = vec4 (unpack8 ((word >> 4u) & 0x0F0F0F0Fu));
 
-                    accumulate(into + L,
-                               scale_1 * float(packed & 15u) - offset_1);
-                    accumulate(into + 32u + L,
-                               scale_2 * float(packed >> 4u) - offset_2);
+                uint at_low = into + upper * 16u + g * 4u;
+
+                for (uint n = 0u; n < 4u; ++n) {
+                    accumulate (at_low + n, scale_1 * low_4[n] - offset_1);
+                    accumulate (at_low + 32u + n,
+                                scale_2 * high_4[n] - offset_2);
                 }
             }
         }
@@ -786,26 +796,32 @@ void main() {
                 uint w_second = word_of((at_second >> 2u) + g, shift_second);
                 uint w_top = word_of((at_top >> 2u) + g, shift_top);
 
+                //  Four at a time, as the two above: three runs of bytes
+                //  become three sets of four numbers in three unpacks.
+                uvec4 first_4 = uvec4 (unpack8 (w_first));
+                uvec4 second_4 = uvec4 (unpack8 (w_second));
+                uvec4 top_4 = uvec4 (unpack8 (w_top));
+
+                uint at_run = out_run + upper * 8u + g * 4u;
+
                 for (uint n = 0u; n < 4u; ++n) {
-                    uint first = (w_first >> (n * 8u)) & 255u;
-                    uint second = (w_second >> (n * 8u)) & 255u;
-                    uint top = (w_top >> (n * 8u)) & 255u;
+                    uint first = first_4[n];
+                    uint second = second_4[n];
+                    uint top = top_4[n];
 
-                    uint L = upper * 8u + g * 4u + n;
-
-                    accumulate(out_run + L,
+                    accumulate(at_run + n,
                                scale_1 * (float((first & 15u)
                                                 + 16u * (top & 3u))
                                           - 32.0));
-                    accumulate(out_run + 32u + L,
+                    accumulate(at_run + 32u + n,
                                scale_2 * (float((second & 15u)
                                                 + 16u * ((top >> 2u) & 3u))
                                           - 32.0));
-                    accumulate(out_run + 64u + L,
+                    accumulate(at_run + 64u + n,
                                scale_3 * (float((first >> 4u)
                                                 + 16u * ((top >> 4u) & 3u))
                                           - 32.0));
-                    accumulate(out_run + 96u + L,
+                    accumulate(at_run + 96u + n,
                                scale_4 * (float((second >> 4u)
                                                 + 16u * ((top >> 6u) & 3u))
                                           - 32.0));
