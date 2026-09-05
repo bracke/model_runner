@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A fifth reading, and the unaligned word costs nothing.** llama.cpp loads
+  its quant words directly where this program's `word_of` carries a shift and
+  reads two words when the shift is not zero. Q4_K's runs turn out to be
+  word-aligned in practice — reading them directly leaves the digest
+  unchanged — and removing the shift is a wash (0.935, 0.924 s against 0.925,
+  0.936): the branch is uniform and the device was already skipping the
+  second load. Only Q6_K's 210-byte block and Q3_K's 110 misalign inherently.
+
 - **Two rows to an invocation, built both ways, and the search closes.**
   llama.cpp's kernel answers two output rows to a workgroup; built that way
   here it is **seven to nine per cent worse** (Q8_0 1.412, 1.404 s against

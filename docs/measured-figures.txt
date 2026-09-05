@@ -4900,6 +4900,33 @@
 # load: 0.57 to 0.80
 # model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
 
+# 2026-09-05, the unaligned word, which costs nothing.
+#
+#   llama.cpp indexes its quant data through a correctly-typed alias of the
+#   buffer -- data_a_packed32[...].qs[...] -- and loads a word directly.
+#   This program's word_of carries a shift, and where the shift is not zero
+#   it reads two words and combines them, because a block boundary need not
+#   be a word boundary.
+#
+#   WHICH BLOCKS MISALIGN, from the block lengths: Q6_K at 210 bytes and
+#   Q3_K at 110 are not multiples of four and alternate; Q4_K at 144, Q5_K
+#   at 176 and Q2_K at 84 are, and misalign only if the tensor's own base
+#   does.
+#
+#   IT DOES NOT. Reading Q4_K's words directly, with no shift at all, leaves
+#   the digest at 40c7b92c21dea698 -- so that format's runs are word-aligned
+#   in this model, and the shift was never doing anything for it.
+#
+#   AND REMOVING IT IS A WASH: 0.935, 0.924 s against 0.925, 0.936. The
+#   branch is uniform across the workgroup and the device was already
+#   skipping the second load. An earlier probe that assumed alignment
+#   everywhere read two to five per cent faster and changed two digests,
+#   which is what it looks like when a saving is really a format being
+#   computed wrongly.
+#
+# load: 1.29
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q5_K_M
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
