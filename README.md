@@ -7771,16 +7771,57 @@ found to be hidden behind the kernels. So their advantage over this program
 on Q4_K is not a feature that can be named and copied; it is the kernel
 being better suited to this part in a way five readings have not isolated.
 
-**One structural difference remains untested and is named here rather than
-guessed at.** Their kernel answers two output rows to a workgroup where this
-one answers one, which halves the activation traffic and doubles the
-arithmetic behind each of those loads. It was passed over earlier on an
-ablation that bounded it at six per cent -- and this file has now twice
-recorded that an ablation bounds a change from above and is not the change,
-in both directions. Building it means a row axis through every format branch
-and a dispatch a fraction of the size, which is the scale of the block
-sharing above. It is the last idea from that source that has not been
-measured, and it should be measured before it is believed either way.
+**One structural difference remained untested and is now built.** The
+section below is what it found: the ablation's bound was right, and the
+naive form is worse than the bound for a reason of its own.
+
+### Two rows to an invocation, both ways, and the search closes
+
+The last idea from llama.cpp's matrix-vector kernels: theirs answers two
+output rows to a workgroup where this one answers one. A row's weights are
+read once and multiplied into the batch; the batch is read once for each
+row -- so two rows to an invocation reads the batch once for both, which is
+the trade `GROUP` makes on the vector side made on the row side.
+
+Built: a row axis through the kernel, `sum` twice as long, the format chain
+in a loop over rows whose trip count is a constant so the two copies' reads
+are the same addresses, and the dispatch asking for half as many workgroups.
+Digests unchanged.
+
+**It is seven to nine per cent worse.**
+
+| | one row | two rows |
+| --- | ---: | ---: |
+| Q8_0, 64 generated | 1.286, 1.301 s | 1.412, 1.404 |
+| Q4_K_M | 0.927, 0.928 | 0.993, 0.988 |
+
+**And the reason is the one the tall tile found.** Half as many workgroups is
+thirty-two for a 2048-row matrix, under three to a compute unit on a part
+with twelve of them, and there is then no second workgroup on the unit to run
+while the first waits. It is the third arrangement measured here that loses
+on occupancy rather than on arithmetic.
+
+**So it was built again the other way**, with the lanes that share a row
+doubled from eight to sixteen -- which keeps the invocation count exactly
+where it was and keeps the sharing. That reads **1.290 and 1.286 s against
+1.293 and 1.298: a wash.**
+
+**Which settles it, and settles the method too.** The ablation that bounded
+this at six per cent was right; the sharing is worth about nothing here
+because the activation reads it saves were not costing anything. The naive
+form was worse than the bound because it changed a second thing -- the
+occupancy -- that the ablation said nothing about. **An ablation bounds the
+thing it removes and says nothing about what an implementation of it would
+disturb**, which is a sharper statement than the two this file has recorded
+before it.
+
+That is every difference between the two matrix-vector paths that four
+readings could find: the integer dot product, the `vec4` batch binding, the
+threads a row is divided across, the rows a workgroup answers, the workgroup
+width, one submission a token, the block scale applied once, and four
+nibbles in one unpack. **Two of the eight were worth anything here** -- the
+width, five per cent on two formats, and the unpack, three per cent on one.
+The rest are recorded so nobody has to try them again.
 
 ### Drafting
 

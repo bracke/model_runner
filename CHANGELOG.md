@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Two rows to an invocation, built both ways, and the search closes.**
+  llama.cpp's kernel answers two output rows to a workgroup; built that way
+  here it is **seven to nine per cent worse** (Q8_0 1.412, 1.404 s against
+  1.286, 1.301) because half as many workgroups is under three to a compute
+  unit on a part with twelve — the third arrangement to lose on occupancy
+  rather than arithmetic. Built again with the lanes per row doubled so the
+  invocation count holds, it is a wash.
+
+  So the ablation that bounded it at six per cent was right, and the naive
+  form was worse than the bound only because it disturbed something the
+  ablation said nothing about. **An ablation bounds the thing it removes and
+  says nothing about what an implementation of it would disturb.**
+
+  That is every difference four readings could find between the two
+  matrix-vector paths. **Two of eight were worth anything here**: the
+  workgroup width and the four-nibble unpack.
+
 - **A fourth reading of llama.cpp's backend, and two more nothings.**
   Applying an eight-bit block's scale once per eight elements rather than per
   element — which is what their kernel does, and which unlike the four-bit

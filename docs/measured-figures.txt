@@ -4851,6 +4851,55 @@
 # load: 0.66 to 1.54
 # model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
 
+# 2026-09-05, two rows to an invocation, both ways, and the search closes.
+#
+#   THE LAST IDEA from llama.cpp's matrix-vector kernels: two output rows to
+#   a workgroup where this program answers one. A row's weights are read
+#   once and multiplied into the batch; the batch is read once for each row,
+#   so two rows to an invocation reads it once for both -- GROUP's trade,
+#   made on the row side.
+#
+#   BUILT. A row axis through the kernel: sum twice as long, at_row at file
+#   scope so accumulate needs no extra parameter, the format chain in a loop
+#   whose trip count is constant so the copies' activation reads are the
+#   same addresses, the reduction and the write-out over rows, and
+#   Row_Groups asking for half as many workgroups. Digests unchanged.
+#
+#     Q8_0     one row 1.286, 1.301 s   two rows 1.412, 1.404
+#     Q4_K_M   one row 0.927, 0.928     two rows 0.993, 0.988
+#
+#   Seven to nine per cent worse, and for the reason the tall matrix tile
+#   found: half as many workgroups is thirty-two for a 2048-row matrix,
+#   under three to a compute unit on a part with twelve, and there is no
+#   second workgroup to run while the first waits. Third arrangement
+#   measured here that loses on occupancy rather than arithmetic.
+#
+#   BUILT AGAIN THE OTHER WAY, with the lanes sharing a row doubled from
+#   eight to sixteen so the invocation count is exactly what it was and the
+#   sharing is kept:
+#
+#     Q8_0     before 1.293, 1.298 s   after 1.290, 1.286
+#
+#   A wash. So the sharing itself is worth about nothing here -- the
+#   activation reads it saves were not costing anything -- and the naive
+#   form was worse than that only because it disturbed the occupancy.
+#
+#   WHICH SETTLES THE METHOD TOO. The ablation that bounded this at six per
+#   cent was right. An ablation bounds the thing it removes and says nothing
+#   about what an implementation of it would disturb, which is sharper than
+#   the two statements about ablations recorded above it.
+#
+#   THAT IS EVERY DIFFERENCE four readings could find between the two
+#   matrix-vector paths: the integer dot product, the vec4 batch binding,
+#   the threads a row is divided across, the rows a workgroup answers, the
+#   workgroup width, one submission a token, the block scale applied once,
+#   and four nibbles in one unpack. Two of the eight were worth anything
+#   here -- the width, five per cent on two formats, and the unpack, three
+#   on one.
+#
+# load: 0.57 to 0.80
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
