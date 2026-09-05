@@ -1499,8 +1499,8 @@ Moving fewer bytes per weight was the last idea, and measuring it twice is
 what settled it. Before the submitting task took a share, the four-bit format
 ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
-end. That gap was the contention, not the bytes: with the contention gone the two
-formats sat within a few per cent of each other either way, and stayed there
+end. That gap was the contention, not the bytes: with the contention gone the
+two formats sat within a few per cent of each other either way, and stayed there
 for nineteen sittings -- half a per cent ahead with one vector and level
 batched, two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
 level, ahead by ten with one vector, ahead by two, behind by two, level,
@@ -1516,23 +1516,36 @@ reason is in the code rather than in the host.** The four-bit and five-bit
 k-quants keep a sub-block scale packed six bits at a time across twelve
 bytes, and unpacking it is now hand-written vector code -- see `### The
 scale prologue in lanes` below. The eight-bit format has no such prologue to
-write, so this is a gap the machine cannot produce:
+write.
 
-| at eight shares | Q4_K | Q8_0 | |
-| --- | ---: | ---: | --- |
-| one vector | 13342 Me/s | 12952 Me/s | three per cent ahead |
-| thirty-two a pass | 22897 Me/s | 20754 Me/s | ten per cent ahead |
-| one share, one vector | 2385 Me/s | 2417 Me/s | level |
-
-Serially it is still level, which is the shape where one row is read at a
-time and the prologue is the smaller share of it. End to end the same gap
-shows: alternating the two round by round, four-bit generates at 25.8 and
-24.8 ms a token against eight-bit at 26.8 and 26.8. The wall times themselves
--- 0.322 and 0.302 s against 0.376 and 0.374 -- say less than they look like
-they do, because the four-bit file answers this prompt in ten tokens and the
+**The figure that says so is the end-to-end one, and it is the only one
+here that held.** Alternating the two files round by round, four rounds of
+three, four-bit generates at 24.8, 24.6, 25.5 and 25.8 ms a token against
+eight-bit at 26.8, 27.0, 26.7 and 26.8 -- every round on the same side, about
+six per cent. The wall times themselves -- 0.302, 0.298, 0.305 and 0.310 s
+against 0.374, 0.376, 0.374 and 0.372 -- say less than they look like they
+do, because the four-bit file answers this prompt in ten tokens and the
 eight-bit one in twelve; the pair before this one, 2.06 and 2.18 s against
 2.06 and 2.26, was quoted as a wall time and had the same ten against twelve
 inside it, unnoticed.
+
+**The share benchmark did not hold, and that is worth publishing as well.**
+Two sittings three hours apart, the second on quieter host, with only the
+strip prologue changed between them:
+
+| at eight shares | Q4_K | Q8_0 | | Q4_K | Q8_0 | |
+| --- | ---: | ---: | --- | ---: | ---: | --- |
+| one vector | 13342 | 12952 | +3 % | 13610 | 13550 | +0.4 % |
+| thirty-two a pass | 22897 | 20754 | +10 % | 22804 | 23039 | −1 % |
+| one share, one vector | 2385 | 2417 | −1 % | 2473 | 2509 | −1 % |
+
+The four-bit column barely moved. The eight-bit batched figure went up eleven
+per cent on code that had not changed at all, which took a ten-point lead to
+a one-point deficit. So the batched row of this benchmark says nothing about
+the formats at either sitting, and the twenty sittings of it recorded above
+were right to treat a gap there as the machine. What the end-to-end
+alternation says instead is a per-token figure taken four times in a row on
+one host, and that is the one to read.
 
 It is worth keeping as a lesson rather than a result. A measurement taken
 while something else is the bottleneck measures that other thing, and the way
@@ -8006,10 +8019,54 @@ scalar and in order. That sum is now what is left, and it is a chain of
 sixty-four dependent additions a row.
 
 **Where this leaves the two formats.** The four-bit k-quant is no longer
-level with the eight-bit one on this host -- it is three per cent ahead with
-one vector, ten per cent ahead batched, and still level serially. The figures
-are in the `## Speed` section above, under "Moving fewer bytes per weight";
-this section is why they moved.
+level with the eight-bit one on this host: it generates about six per cent
+faster per token, four alternated rounds out of four. A share-benchmark table
+published alongside that claimed ten per cent batched as well, and a second
+sitting three hours later took that row from ten ahead to one behind on an
+eight-bit figure that had not changed -- so the end-to-end number is the
+claim and the batched row is not. Both sittings are in the `## Speed`
+section above, under "Moving fewer bytes per weight".
+
+### The same prologue on the other path, where it is already amortized
+
+The strip kernels evaluate a prompt, and they read the same twelve packed
+bytes. Their prologue is not inside the strip: it was moved out to the
+dispatcher some commits ago and is now run once for a whole call, filling
+two tables the strips read -- because a batch has a quarter of its length in
+strips, and unpacking in the strip meant doing it twenty-eight times over on
+a 110-token prompt.
+
+That move is what makes the vector version worth almost nothing on a long
+prompt and quite a lot on a short one, and the three shapes say it plainly.
+Six alternated rounds each, medians of three, digests unchanged:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| six-token prompt, Q4_K | 0.061 s | 0.052 s | **15 %**, six of six |
+| six-token prompt, Q5_K | 0.0635 s | 0.060 s | **5.5 %**, six of six |
+| 110-token prompt, Q4_K | 0.464 s | 0.458 s | a wash |
+| 110-token prompt, Q5_K | 0.487 s | 0.4805 s | a wash |
+| 1419-token prompt, Q4_K | 6.915 s | 6.953 s | a wash |
+| 1419-token prompt, Q5_K | 7.199 s | 7.222 s | a wash |
+
+The prologue is a fixed cost over the whole weight tensor and the strips are
+what it is divided among, so its share falls as the batch grows. At six
+tokens there are two strips to a call and it is a seventh of the prompt; at
+1419 there are three hundred and fifty-five and it is not measurable.
+
+**And the middle row is where an earlier reading of this went wrong.** Four
+rounds on the 110-token prompt read four and a half per cent and looked like
+a result. Six rounds of the same thing, with an eight-bit run alongside as a
+control, read a wash -- and the control, whose code this change does not
+touch at all, spread from 0.342 to 0.377 s across its six readings. Ten per
+cent of spread on identical code is the floor here, and four and a half was
+under it.
+
+It is kept because the short-prompt figure is real, every one of its twelve
+rounds is on the same side, it never measures worse anywhere, and it deletes
+a helper that had a branch on the sub-block's number inside a loop of eight.
+Short prompts and drafting -- which reads four to eight positions at a time
+-- are the shapes that get it.
 
 ### Drafting
 

@@ -1289,9 +1289,10 @@ package body Fixtures is
                                       N.Real'Rounding (-Low (Sub) / DMin)));
                      Scales : constant B.Byte_Count := At_Byte + 4;
                   begin
-                     --  The same twelve bytes Sub_Block_Scale reads: the
-                     --  first four sub-blocks keep six bits in place, and
-                     --  the last four are split across two bytes.
+                     --  The same twelve bytes the kernels' scale unpack
+                     --  reads: the first four sub-blocks keep six bits in
+                     --  place, and the last four are split across two
+                     --  bytes.
                      if Sub < 4 then
                         Result (Scales + B.Byte_Count (Sub)) :=
                           Result (Scales + B.Byte_Count (Sub)) or Factor;

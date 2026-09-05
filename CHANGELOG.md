@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The strip path's scale prologue is in lanes too**, and `Sub_Block_Scale`
+  — a branch on the sub-block's number inside a loop of eight — is gone with
+  it. That prologue runs once per call rather than per strip, so what it is
+  worth depends entirely on the batch: **a six-token prompt reads 0.052 s
+  against 0.061 for Q4_K and 0.060 against 0.0635 for Q5_K, six alternated
+  rounds each and every one of the twelve on the same side**, while a
+  110-token prompt and a 1419-token one are a wash. Kept for the short-prompt
+  and drafting shapes; bit-exact everywhere.
+
+### Corrected
+
+- **The claim that the four-bit format is ten per cent ahead of the eight-bit
+  one batched is withdrawn.** It came from one share-benchmark sitting. A
+  second sitting three hours later, on a quieter host, reads the same row one
+  per cent *behind* — the four-bit figure barely moved and the eight-bit one
+  rose eleven per cent on code that had not changed. What holds is the
+  end-to-end pair, taken four alternated rounds of three: **Q4_K generates
+  about six per cent faster per token than Q8_0**, every round on the same
+  side. Both sittings are published side by side.
+
+
 - **The k-quant scale prologue is now hand-written vector code**, which the
   entry under Measured below priced at a fifth of what those formats cost to
   generate. A super-block's twelve packed bytes become eight scales and eight

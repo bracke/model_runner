@@ -140,40 +140,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       return Result;
    end Scale_Pair_At;
 
-   --  The six-bit scale and minimum a Q4_K or Q5_K sub-block carries.
-   --
-   --  Twelve bytes hold sixteen six-bit numbers: the first four pairs whole
-   --  in a byte each, and the last four split, four bits in one byte and
-   --  two in the top of another that a lower sub-block is already using.
-   --
-   --  At body scope rather than inside a kernel because the tables the
-   --  strip kernels read are built once for a whole call now, and the
-   --  building is done where the call is dispatched.
-   procedure Sub_Block_Scale
-     (Data    : Model_Runner.Bytes.Byte_Array;
-      Base    : Model_Runner.Bytes.Byte_Index;
-      Index   : Natural;
-      Factor  : out Interfaces.Unsigned_8;
-      Minimum : out Interfaces.Unsigned_8)
-   is
-      function Byte_At (Position : Natural) return Interfaces.Unsigned_8
-      is (Data (Base + B.Byte_Count (Position)));
-   begin
-      if Index < 4 then
-         Factor := Byte_At (Index) and 63;
-         Minimum := Byte_At (Index + 4) and 63;
-      else
-         Factor :=
-           (Byte_At (Index + 4) and 16#0F#)
-           or Interfaces.Shift_Left
-                (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
-         Minimum :=
-           Interfaces.Shift_Right (Byte_At (Index + 4), 4)
-           or Interfaces.Shift_Left
-                (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
-      end if;
-   end Sub_Block_Scale;
-
    --  One vector against a tile of rows, with the block loop inside.
    --
    --  Written separately from Rows because it is a different shape rather
@@ -3865,6 +3831,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok        : out Boolean)
    is
+      LF : constant Character := ASCII.LF;
+
       Width : constant B.Byte_Count :=
         B.Byte_Count (G.Block_Bytes (Format));
       Per   : constant Element_Count :=
@@ -4116,17 +4084,75 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         At_Scale : constant Element_Count :=
                           (Row * Blocks + Block) * 8;
 
-                        Factor, Minimum : Interfaces.Unsigned_8;
+                        --  The block's scale and its least, together, so
+                        --  that the block below broadcasts both from one
+                        --  address.
+                        Pair : constant Lanes_2 := [Whole, Least];
                      begin
-                        for Sub in 0 .. 7 loop
-                           Sub_Block_Scale
-                             (Data, At_Byte + 4, Sub, Factor, Minimum);
-
-                           Held_Up (At_Scale + Element_Count (Sub)) :=
-                             Whole * N.Real (Natural (Factor));
-                           Held_Down (At_Scale + Element_Count (Sub)) :=
-                             Least * N.Real (Natural (Minimum));
-                        end loop;
+                        --  The same unpack the single-vector kernels do,
+                        --  and the same thirty-one instructions, less the
+                        --  activation's scale: a strip applies that itself,
+                        --  once for each of the four vectors it carries.
+                        --
+                        --  Sub_Block_Scale is what this replaces, and it
+                        --  had a branch on the sub-block's number inside a
+                        --  loop of eight as well as reading the same twelve
+                        --  bytes five and twenty times. Here the branch was
+                        --  the worse half: the first four fields and the
+                        --  last four are different shapes, so the loop
+                        --  could not be one thing, and a profile put this
+                        --  loop's masking and shifting at about a tenth of
+                        --  a four-bit run on its own.
+                        --
+                        --  Nothing here is a running sum, so unlike the
+                        --  single-vector kernels there is no part of it
+                        --  that has to stay scalar.
+                        System.Machine_Code.Asm
+                          ("vmovdqu (%1), %%xmm0" & LF &
+                           "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+                           "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+                           "vpbroadcastd 0(%4), %%xmm3" & LF &
+                           "vpbroadcastd 4(%4), %%xmm4" & LF &
+                           "vpbroadcastd 8(%4), %%xmm5" & LF &
+                           "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+                           "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+                           "vpsrld $2, %%xmm0, %%xmm8" & LF &
+                           "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                           "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+                           "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+                           "vpsrld $2, %%xmm1, %%xmm8" & LF &
+                           "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+                           "vpsrld $4, %%xmm2, %%xmm10" & LF &
+                           "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+                           "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+                           "vpmovzxbd %%xmm6, %%xmm6" & LF &
+                           "vpmovzxbd %%xmm9, %%xmm9" & LF &
+                           "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+                           "vpmovzxbd %%xmm7, %%xmm7" & LF &
+                           "vpmovzxbd %%xmm10, %%xmm10" & LF &
+                           "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+                           "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                           "vcvtdq2ps %%ymm7, %%ymm7" & LF &
+                           "vbroadcastss 0(%3), %%ymm8" & LF &
+                           "vbroadcastss 4(%3), %%ymm9" & LF &
+                           "vmulps %%ymm8, %%ymm6, %%ymm6" & LF &
+                           "vmulps %%ymm9, %%ymm7, %%ymm7" & LF &
+                           "vmovups %%ymm6, (%0)" & LF &
+                           "vmovups %%ymm7, (%2)",
+                           Inputs   =>
+                             [System.Address'Asm_Input
+                                ("r", Held_Up (At_Scale)'Address),
+                              System.Address'Asm_Input
+                                ("r", Data (At_Byte + 4)'Address),
+                              System.Address'Asm_Input
+                                ("r", Held_Down (At_Scale)'Address),
+                              System.Address'Asm_Input ("r", Pair'Address),
+                              System.Address'Asm_Input
+                                ("r", Unpack_Masks (0)'Address)],
+                           Clobber  =>
+                             "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
+                             & "ymm8,ymm9,ymm10,memory",
+                           Volatile => True);
                      end;
                   end loop;
                end loop;
