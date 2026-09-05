@@ -2940,19 +2940,51 @@ package body Model_Runner.Quantization.Integers.Kernels is
          return;
       end if;
 
+      --  The activation's sum over every sixteen elements, in lanes.
+      --
+      --  Sixteen signed bytes added one at a time is a loop of sixteen with
+      --  a compare and a widening in it, and this runs for every row tile
+      --  of every product rather than once for the vector: a thirty-two
+      --  thousand row output projection is a thousand tiles, and the same
+      --  hundred and twenty-eight sums are formed a thousand times. A
+      --  profile of a four-bit model -- whose output projection is this
+      --  format -- found this loop's compare and its addition at better
+      --  than a quarter of every instruction the program executed, which is
+      --  more than the four-bit kernel it was there to serve.
+      --
+      --  Twelve instructions a half rather than about sixty-four. Two
+      --  sign-extending widenings take the sixteen bytes to whole numbers
+      --  eight at a time, three folds bring the eight lanes to one, and the
+      --  activation's own scale is applied where the sum is made.
       for Half in 0 .. Blocks * Halves - 1 loop
          declare
-            Base  : constant Element_Count :=
+            Base : constant Element_Count :=
               Values'First + First + Half * 16;
-            Total : Integer := 0;
          begin
-            for Index in Element_Count range 0 .. 15 loop
-               Total := Total + Integer (Values (Base + Index));
-            end loop;
-
-            Half_Total (Natural (Half)) :=
-              N.Real (Total)
-              * Scales (Scales'First + First / Activation_Block + Half / 2);
+            System.Machine_Code.Asm
+              ("vpmovsxbd (%1), %%ymm0" & LF &
+               "vpmovsxbd 8(%1), %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm0, %%ymm0" & LF &
+               "vextracti128 $1, %%ymm0, %%xmm1" & LF &
+               "vpaddd %%xmm1, %%xmm0, %%xmm0" & LF &
+               "vpshufd $0x4e, %%xmm0, %%xmm1" & LF &
+               "vpaddd %%xmm1, %%xmm0, %%xmm0" & LF &
+               "vpshufd $0xb1, %%xmm0, %%xmm1" & LF &
+               "vpaddd %%xmm1, %%xmm0, %%xmm0" & LF &
+               "vcvtdq2ps %%xmm0, %%xmm0" & LF &
+               "vmulss (%2), %%xmm0, %%xmm0" & LF &
+               "vmovss %%xmm0, (%0)",
+               Inputs   =>
+                 [System.Address'Asm_Input
+                    ("r", Half_Total (Natural (Half))'Address),
+                  System.Address'Asm_Input ("r", Values (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Scales
+                       (Scales'First + First / Activation_Block
+                        + Half / 2)'Address)],
+               Clobber  => "ymm0,ymm1,memory",
+               Volatile => True);
          end;
       end loop;
 

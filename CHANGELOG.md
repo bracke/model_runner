@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The six-bit k-quant's activation half-sums are in lanes**, which a fresh
+  profile put at **twenty-seven per cent of every instruction a
+  single-threaded generated token executes** — sixteen signed bytes added one
+  at a time, twelve instructions now against about sixty-four. **Q4_K_M
+  generating reads 0.185 s against 0.223 and Q5_K_M 0.688 against 0.810**,
+  five alternated rounds each, all five on the same side with the ranges not
+  touching. Digests unchanged.
+
+  The loop depends on nothing but the activation yet sits in a kernel called
+  once per *row tile*, so a 32000-row output projection forms the same 128
+  sums a thousand times. Only the arithmetic is fixed here; hoisting it out
+  of the tile would remove it rather than shrink it, and is named as the next
+  change on this path.
+
+  Q4_K now generates at 18.7 ms a token against llama.cpp's 15.2 — **1.23×
+  behind, from 1.58** — and 2.3× per core, from 3.1. It is thirty per cent
+  faster per token than Q8_0, which two sittings ago was eleven.
+
+
 - **The six-bit k-quant's single-vector scale prologue is in lanes**, which a
   profile put at **better than a fifth of every instruction a four-bit
   generated token executes** — a sixteen-iteration scalar loop with a

@@ -8125,6 +8125,60 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The same sixteen sums, formed a thousand times
+
+The section above vectorized the six-bit k-quant's *weight* prologue and a
+fresh profile said the hottest instructions in the program were still a
+sixteen-iteration scalar loop -- a different one, twenty-seven per cent of
+everything a single-threaded generated token executed.
+
+It is the activation's side. Q6_K's insertion wants the activation's sum over
+every sixteen elements, and it was formed a byte at a time:
+
+```ada
+for Half in 0 .. Blocks * Halves - 1 loop
+   Total := 0;
+   for Index in 0 .. 15 loop
+      Total := Total + Integer (Values (Base + Index));
+   end loop;
+   Half_Total (Half) := N.Real (Total) * Scales (...);
+end loop;
+```
+
+**Two things are wrong with it and the second is the larger.** Sixteen signed
+bytes added one at a time is about sixty-four instructions where twelve will
+do. And it depends on nothing but the activation -- yet it sits in a kernel
+that is called once for every *row tile*, so a thirty-two thousand row output
+projection forms the same hundred and twenty-eight sums a thousand times over.
+The comment above it said "once for the whole tile rather than once a row",
+which was true and was not the question worth asking.
+
+Only the first is fixed here: two `vpmovsxbd` take the sixteen bytes to whole
+numbers eight at a time, three folds bring the eight lanes to one, and the
+activation's scale is applied where the sum is made. Twelve instructions
+against about sixty-four. **Hoisting it out of the tile entirely would remove
+it rather than shrink it, and that is the next change on this path, named
+here with the reason it was not made now: it needs a place to live that
+outlives the call, and every such place in this engine is a buffer the pool
+owns.**
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, ten generated | 0.223 s | 0.185 s | **17 %** |
+| Q5_K_M, thirty-two generated | 0.810 s | 0.688 s | **15 %** |
+| Q4_K_M, 110-token prompt | 0.441 s | 0.4435 s | a wash |
+| Q8_0, 64 generated | 1.720 s | 1.720 s | a wash, the control |
+
+Five alternated rounds, all five on the same side for both k-quants and the
+ranges not touching -- 0.185 to 0.188 against 0.213 to 0.226. Digests
+unchanged.
+
+**Where that leaves the four-bit format.** It generates at 18.7 ms a token
+against llama.cpp's 15.2: **1.23 times behind**, from 1.58 when this began.
+Per core, where the pool and the memory ceiling both drop out, it is 2.3
+times behind, from 3.1. And it now generates **thirty per cent faster per
+token than the eight-bit format**, which two sittings ago was eleven.
+
 ### One activation scale for two hundred and fifty-six
 
 llama.cpp has a quantization format that exists for one reason. `Q8_K` is how
