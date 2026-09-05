@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`docs/measured-figures.txt` is split**, its entries before 2026-08-26
+  moved to `docs/measured-figures-earlier.txt`, because the log passed the
+  megabyte this repository allows a file. The fingerprint groups all stayed.
+  The move exposed a second thing: the suite reads a `# load:` line flush at
+  the start of a line, every entry this session had written it indented, and
+  the check was being satisfied by an August entry that happened to sit above
+  the first group. They are all flush now.
+
 - **The row product is made into two pipelines at two workgroup widths**, and
   Q4_K and Q5_K are bound to the narrower — **1.05× and 1.02×** generating on
   the device, digests unchanged. The best width is not one number for every
