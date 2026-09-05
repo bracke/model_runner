@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **One submission a token, built, and it is a wash — the entry below
+  inferred wrongly from a good ablation.** A bank of descriptors per layer,
+  eight to a command buffer, a barrier between them and the hand-over
+  deferred: instrumented, a submission carried six to eight layers instead of
+  one. **Q8_0 reads 1.303, 1.294 s against 1.296, 1.308**, digests unchanged.
+
+  The 0.160 s a work-free build costs is real and is not additive: the device
+  is busy about 800 µs a layer and the host needs 100, so the host finishes
+  first and waits. **An ablation that removes the work measures overhead in
+  isolation, and overhead in isolation is not overhead in place** — the same
+  error recorded two entries earlier against a different quantity. Not kept.
+
 - **An eighth of a generated token is not in a kernel.** A build whose layer
   records no work and submits anyway reads **0.160 s against 1.260** — 64
   tokens, 22 layers each, 1400 empty submissions. It is corroborated by a

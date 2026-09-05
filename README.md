@@ -7640,14 +7640,57 @@ them once when the engine opens is a wash: 1.294, 1.299, 1.302 s against
 1.241, 1.296, 1.299. The cost is in the driver's own calls, not in finding
 them.
 
-**What would collect it is one submission a token rather than one a layer**,
-which is what llama.cpp does: it records a whole graph and hands it over
-once. This engine already hands over without waiting and already keeps two
-command-buffer slots and two banks of descriptor sets, so the machinery is
-half there. What it does not have is a set per layer -- a step's descriptor
-names that step's weight buffer, and twenty-two layers recorded before any
-of them runs need twenty-two banks rather than two. That is the change, it
-is a large one, and it is the largest thing left.
+**What that suggested was one submission a token rather than one a layer**,
+which is what llama.cpp does. It was built, and the section below is what it
+found: the eighth of a token is real and it is not additive. **The inference
+was wrong and the ablation was not.**
+
+### One submission a token, built, and it is a wash
+
+The section above measured an eighth of a generated token outside the
+kernels and said the way to collect it was to stop submitting a command
+buffer for every layer. That is built here and it collects nothing.
+
+**It works.** A layer's descriptors are a bank of their own, eight banks to a
+command buffer, a barrier between the sequences that share one, and the
+hand-over deferred until the banks run out or something wants its answer on
+the host. Instrumented, a submission carries six to eight layers where it
+carried one -- three a token where there were twenty-two. Every digest is
+what it was.
+
+**And it reads the same.** Alternated, three rounds:
+
+| | before | after |
+| --- | ---: | ---: |
+| Q8_0, 64 generated | 1.296, 1.308 s | 1.303, 1.294 |
+| Q4_K_M | 0.978, 0.968 | 0.982, 0.979 |
+
+**The mistake was in the inference and not in the measurement.** A build that
+records no work and submits anyway does take 0.160 s of the 1.260, and that
+is a true statement about what the host and the driver cost when there is
+nothing else to do. It is not a statement about what they cost when there
+is: the device is busy for eight hundred microseconds a layer and the host
+needs a hundred, so the host finishes first and waits. **An ablation that
+removes the work measures the overhead in isolation, and overhead in
+isolation is not overhead in place.**
+
+This file has said the same thing about ablations once before, three
+sections up: one bounds a change from above and is not the change. That was
+about an arithmetic saving worth eleven per cent that turned out to be worth
+nothing because the multiply was already fused. This is the same error made
+against a different quantity, and it cost a working implementation of a
+thing nobody needs.
+
+**What the corroboration was worth, since it did not save me.** The prompt
+is 1.04 behind llama.cpp and generating is 1.11, and the fixed cost is a
+smaller share of a prompt -- which fits the theory and would fit a dozen
+others. A ratio that agrees with a hypothesis is not evidence for it when
+the hypothesis has not been tried.
+
+The change is not kept. Eight banks of descriptors is five hundred and
+twelve sets and a state machine across four procedures, for nothing
+measurable, and a device whose kernels were faster would still find the
+overhead hidden behind them.
 
 ### Drafting
 

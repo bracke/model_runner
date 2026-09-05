@@ -4715,6 +4715,52 @@
 # load: 1.01 for the entry-point A/B, 0.32 for the knobs
 # model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
 
+# 2026-09-05, one submission a token, built, and it is a wash. The entry
+# above inferred wrongly from a good ablation.
+#
+#   BUILT AND WORKING. A layer's descriptors are a bank of their own, eight
+#   banks to a command buffer, a barrier between the sequences sharing one,
+#   the hand-over deferred until the banks run out or a sequence wants its
+#   answer on the host, and Swap_Slots moved from every sequence to every
+#   opening -- which is what made it wrong the first time: a sequence
+#   joining an open buffer swapped out from under the ones already in it,
+#   every submission succeeded and every answer was noise.
+#
+#   Instrumented, a submission carried six to eight layers where it carried
+#   one: three a token against twenty-two. Digests unchanged.
+#
+#   AND IT READS THE SAME, alternated three rounds:
+#
+#     Q8_0     before 1.246, 1.296, 1.308 s   after 1.302, 1.303, 1.294
+#     Q4_K_M   before 0.936, 0.978, 0.968     after 0.964, 0.982, 0.979
+#
+#   THE MISTAKE WAS THE INFERENCE, NOT THE MEASUREMENT. A build that records
+#   no work and submits anyway does take 0.160 s of 1.260. That is what the
+#   host and the driver cost when there is nothing else to do. It is not
+#   what they cost when there is: the device is busy about eight hundred
+#   microseconds a layer and the host needs a hundred, so the host finishes
+#   first and waits. An ablation that removes the work measures overhead in
+#   isolation, and overhead in isolation is not overhead in place.
+#
+#   The same error is recorded three entries above against a different
+#   quantity -- an arithmetic saving an ablation put at eleven per cent that
+#   was worth nothing because the multiply was already fused. An ablation
+#   bounds a change from above; it is not the change.
+#
+#   AND THE CORROBORATION DID NOT SAVE ME. The prompt is 1.04 behind
+#   llama.cpp and generating 1.11, and a fixed cost is a smaller share of a
+#   prompt -- which fits the theory and would fit a dozen others. A ratio
+#   that agrees with a hypothesis is not evidence for it before the
+#   hypothesis has been tried.
+#
+#   NOT KEPT. Eight banks is five hundred and twelve descriptor sets and a
+#   state machine across four procedures, for nothing measurable, and a
+#   device whose kernels ran faster would still find the overhead hidden
+#   behind them.
+#
+# load: 0.65 to 1.26
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
