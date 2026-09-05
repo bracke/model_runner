@@ -1501,14 +1501,18 @@ ran sixteen per cent faster than the eight-bit one at eight-way parallelism
 while being level with it serially, and three to five per cent faster end to
 end. That gap was the contention, not the bytes: with the contention gone the
 four-bit format is within a few per cent of the eight-bit one either way --
-13349 Me/s against 13265 at eight shares with one vector, 22114 against 22110
-with thirty-two, and 2391 against 2414 serially. Which of the two leads
-changes with the case and with the run: half a per cent ahead with one
-vector, level batched, a per cent behind serially -- where the fifteen sittings
-before read it two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
+13399 Me/s against 13279 at eight shares with one vector, 22325 against 20438
+with thirty-two, and 2408 against 2422 serially. Which of the two leads
+changes with the case and with the run: a per cent ahead with one vector,
+nine ahead batched, a per cent behind serially -- where the sixteen sittings
+before read it half a per cent ahead with one vector and level batched, two per cent behind with one vector, a per cent ahead with one vector and seven behind batched, a per cent behind with one vector and seven behind batched, level on all three, ahead on all three, level on all three, level, level, level,
 level, ahead by ten with one vector, ahead by two, behind by two, level, and
 behind.
-Read seventeen times, the pair is level and the sitting is the spread.
+Read eighteen times, the pair is level and the sitting is the spread -- and
+the nine per cent the four-bit format leads by batched in this sitting is the
+sitting, not the change: `### The twelve bytes a sub-block scale is packed
+into` below moved only the kernel a single vector takes, and the batched
+figure comes from the strip kernel, which it did not touch.
 That is the finding -- they are level, and a gap either way at one shape is the
 machine rather than the format. End to end they are level too, and the two
 files have to be read a token at a time to see it: alternating the two round
@@ -7822,6 +7826,51 @@ width, one submission a token, the block scale applied once, and four
 nibbles in one unpack. **Two of the eight were worth anything here** -- the
 width, five per cent on two formats, and the unpack, three per cent on one.
 The rest are recorded so nobody has to try them again.
+
+### The twelve bytes a sub-block scale is packed into
+
+Five readings of llama.cpp's source went over the device backend. This one
+went to the half nobody had looked at, and the gap there is the widest in
+the file: **generating with a four-bit k-quant on the processor is 2.3 times
+behind** -- 28.1 tokens a second against 65.8 -- where the eight-bit format
+is 1.09 behind. The same shape the device had before three changes fixed it:
+llama.cpp runs the four-bit format nearly twice as fast as the eight-bit one,
+as fewer bytes should buy, and this program ran it slower.
+
+A profile puts sixty-seven per cent of it in `Rows` and thirteen in the strip
+kernel, which is the wrong way round. What is in `Rows` is a prologue: before
+the vectorised dot product, every sub-block's scale is unpacked from twelve
+packed bytes -- six-bit fields, four of them whole and four split between a
+nibble and two bits held elsewhere. Sixty-four sub-blocks a row, about ten
+scalar operations each, against a dot product that the byte instruction does
+in thirty-two.
+
+**Ablated away entirely -- the wrong answer, and none of the unpacking -- a
+generated token goes from 2.277 s to 1.642.** Twenty-eight per cent.
+
+It was asked a sub-block at a time. The first four read two bytes each and
+the last four read three, with a branch on the sub-block's number around
+each, and the bytes they read are the same twelve over again: five and twenty
+reads where twelve will do. Taken apart once for the block instead:
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, 64 generated | 2.275, 2.289 s | **2.089, 2.089** | 1.09 |
+| Q5_K_M | 2.251, 2.276 | **2.165, 2.160** | 1.04 |
+
+**Bit-exact**, and the eight-bit path is untouched: 1.764 and 1.759 s against
+1.764 and 1.740, with the same digest.
+
+**The same treatment on the strip kernel's prologue is a wash** -- 7.140 s
+against 7.128 on a 1419-token prompt -- and is not kept. There the table is
+built once and used by a quarter of the batch's length of strips, so the
+reads it saves were already amortised. It is the single-vector kernel, where
+the table is built and used exactly once, that was paying for them.
+
+**And twenty-eight per cent was not all of it.** Even with the prologue gone
+entirely the four-bit format generates in 1.642 s, which is 39 tokens a
+second against llama.cpp's 65.8. The rest is in the dot product itself and
+this section does not have it.
 
 ### Drafting
 

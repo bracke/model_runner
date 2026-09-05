@@ -3252,37 +3252,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Width : constant B.Byte_Count :=
         B.Byte_Count (G.Block_Bytes (G.Type_Q4_K));
 
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8);
-
-      --  As in the batch kernel beside this, and for the same reason: the
-      --  decoder that has this keeps it to itself.
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8)
-      is
-         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
-         is (Data (Base + B.Byte_Count (Position)));
-      begin
-         if Index < 4 then
-            Factor := Byte_At (Index) and 63;
-            Minimum := Byte_At (Index + 4) and 63;
-         else
-            Factor :=
-              (Byte_At (Index + 4) and 16#0F#)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
-            Minimum :=
-              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
-         end if;
-      end Sub_Scale;
    begin
       Taken := False;
 
@@ -3306,11 +3275,51 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
                   Whole : constant N.Real := Scale_At (Data, At_Byte);
                   Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+
+                  --  The twelve packed bytes taken apart in one go rather
+                  --  than a sub-block at a time.
+                  --
+                  --  Asked one at a time, the first four sub-blocks read
+                  --  two bytes each and the last four read three, and the
+                  --  bytes they read are the same twelve over again -- five
+                  --  and twenty reads where twelve will do, with a branch
+                  --  on the sub-block's number around each. Ablating this
+                  --  prologue away entirely -- the wrong answer, and none
+                  --  of the unpacking -- took a generated token from 2.277
+                  --  to 1.642 s, so it is twenty-eight per cent of what
+                  --  this format costs the processor and the reads are
+                  --  most of it.
+                  Packed : array (0 .. 11) of Interfaces.Unsigned_8;
+
+                  Factors  : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
+                  Minimums : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
                begin
+                  for Index in Packed'Range loop
+                     Packed (Index) :=
+                       Data (At_Byte + 4 + B.Byte_Count (Index));
+                  end loop;
+
+                  --  The first four carry a six-bit field apiece; the last
+                  --  four carry a nibble in one of the top three bytes and
+                  --  their two high bits in one of the first eight.
+                  for Index in 0 .. 3 loop
+                     Factors (Index) := Packed (Index) and 63;
+                     Minimums (Index) := Packed (Index + 4) and 63;
+
+                     Factors (Index + 4) :=
+                       (Packed (Index + 8) and 16#0F#)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right (Packed (Index), 6), 4);
+
+                     Minimums (Index + 4) :=
+                       Interfaces.Shift_Right (Packed (Index + 8), 4)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right (Packed (Index + 4), 6),
+                             4);
+                  end loop;
+
                   for Sub in 0 .. Deep - 1 loop
                      declare
-                        Factor, Minimum : Interfaces.Unsigned_8;
-
                         At_Scale : constant Element_Count :=
                           First / Activation_Block
                           + Block * Deep + Element_Count (Sub);
@@ -3318,14 +3327,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         Scaled : constant N.Real :=
                           Scales (Scales'First + At_Scale);
                      begin
-                        Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
-
                         Row_Scale (Natural (Block) * Deep + Sub) :=
-                          Whole * N.Real (Natural (Factor)) * Scaled;
+                          Whole * N.Real (Natural (Factors (Sub))) * Scaled;
 
                         Undo := Undo
                           + N.Wide_Real
-                              (Least * N.Real (Natural (Minimum)) * Scaled)
+                              (Least * N.Real (Natural (Minimums (Sub)))
+                               * Scaled)
                             * N.Wide_Real
                                 (Totals (Totals'First + At_Scale));
                      end;
@@ -3487,37 +3495,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Width : constant B.Byte_Count :=
         B.Byte_Count (G.Block_Bytes (G.Type_Q5_K));
 
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8);
-
-      --  As in the batch kernel beside this, and for the same reason: the
-      --  decoder that has this keeps it to itself.
-      procedure Sub_Scale
-        (Base    : B.Byte_Index;
-         Index   : Natural;
-         Factor  : out Interfaces.Unsigned_8;
-         Minimum : out Interfaces.Unsigned_8)
-      is
-         function Byte_At (Position : Natural) return Interfaces.Unsigned_8
-         is (Data (Base + B.Byte_Count (Position)));
-      begin
-         if Index < 4 then
-            Factor := Byte_At (Index) and 63;
-            Minimum := Byte_At (Index + 4) and 63;
-         else
-            Factor :=
-              (Byte_At (Index + 4) and 16#0F#)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index - 4), 6), 4);
-            Minimum :=
-              Interfaces.Shift_Right (Byte_At (Index + 4), 4)
-              or Interfaces.Shift_Left
-                   (Interfaces.Shift_Right (Byte_At (Index), 6), 4);
-         end if;
-      end Sub_Scale;
    begin
       Taken := False;
 
@@ -3541,11 +3518,51 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
                   Whole : constant N.Real := Scale_At (Data, At_Byte);
                   Least : constant N.Real := Scale_At (Data, At_Byte + 2);
+
+                  --  The twelve packed bytes taken apart in one go rather
+                  --  than a sub-block at a time.
+                  --
+                  --  Asked one at a time, the first four sub-blocks read
+                  --  two bytes each and the last four read three, and the
+                  --  bytes they read are the same twelve over again -- five
+                  --  and twenty reads where twelve will do, with a branch
+                  --  on the sub-block's number around each. Ablating this
+                  --  prologue away entirely -- the wrong answer, and none
+                  --  of the unpacking -- took a generated token from 2.277
+                  --  to 1.642 s, so it is twenty-eight per cent of what
+                  --  this format costs the processor and the reads are
+                  --  most of it.
+                  Packed : array (0 .. 11) of Interfaces.Unsigned_8;
+
+                  Factors  : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
+                  Minimums : array (0 .. Deep - 1) of Interfaces.Unsigned_8;
                begin
+                  for Index in Packed'Range loop
+                     Packed (Index) :=
+                       Data (At_Byte + 4 + B.Byte_Count (Index));
+                  end loop;
+
+                  --  The first four carry a six-bit field apiece; the last
+                  --  four carry a nibble in one of the top three bytes and
+                  --  their two high bits in one of the first eight.
+                  for Index in 0 .. 3 loop
+                     Factors (Index) := Packed (Index) and 63;
+                     Minimums (Index) := Packed (Index + 4) and 63;
+
+                     Factors (Index + 4) :=
+                       (Packed (Index + 8) and 16#0F#)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right (Packed (Index), 6), 4);
+
+                     Minimums (Index + 4) :=
+                       Interfaces.Shift_Right (Packed (Index + 8), 4)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right (Packed (Index + 4), 6),
+                             4);
+                  end loop;
+
                   for Sub in 0 .. Deep - 1 loop
                      declare
-                        Factor, Minimum : Interfaces.Unsigned_8;
-
                         At_Scale : constant Element_Count :=
                           First / Activation_Block
                           + Block * Deep + Element_Count (Sub);
@@ -3553,14 +3570,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         Scaled : constant N.Real :=
                           Scales (Scales'First + At_Scale);
                      begin
-                        Sub_Scale (At_Byte + 4, Sub, Factor, Minimum);
-
                         Row_Scale (Natural (Block) * Deep + Sub) :=
-                          Whole * N.Real (Natural (Factor)) * Scaled;
+                          Whole * N.Real (Natural (Factors (Sub))) * Scaled;
 
                         Undo := Undo
                           + N.Wide_Real
-                              (Least * N.Real (Natural (Minimum)) * Scaled)
+                              (Least * N.Real (Natural (Minimums (Sub)))
+                               * Scaled)
                             * N.Wide_Real
                                 (Totals (Totals'First + At_Scale));
                      end;

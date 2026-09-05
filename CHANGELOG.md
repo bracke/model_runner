@@ -5,6 +5,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **A k-quant's sub-block scales are unpacked once for the block** instead of
+  once for each sub-block, in the kernels a single vector takes. Asked one at
+  a time the same twelve packed bytes were read five and twenty times, with a
+  branch around each. **Q4_K_M generating on the processor reads 2.089 s
+  against 2.275 — 1.09× — and Q5_K_M 1.04×**, bit-exact, with the eight-bit
+  path untouched.
+
+  Found by going to the half of the project five readings of llama.cpp had
+  skipped: **the processor is 2.3 times behind on Q4_K generating**, the
+  widest gap in the file, and the prologue was 28 per cent of it. The same
+  treatment on the strip kernel's prologue is a wash and is not kept — there
+  the table is already amortised across strips.
+
 ### Measured
 
 - **A fifth reading, and the unaligned word costs nothing.** llama.cpp loads
