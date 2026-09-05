@@ -7600,6 +7600,55 @@ same side, because a workgroup size the compiler cannot see as a literal is
 one it optimizes a little less well. It is inside the spread that row has
 carried for a dozen sittings and it is stated rather than buried.
 
+### An eighth of a generated token is not in a kernel
+
+The section above tried five things llama.cpp does and found four of them
+worth nothing here. Their own knobs say which of their factors is worth most
+to them, and it is not a kernel at all:
+
+| turned off | 64 generated |
+| --- | ---: |
+| nothing | 57.67 t/s |
+| `GGML_VK_DISABLE_ASYNC` | **53.52** |
+| `GGML_VK_DISABLE_DOT2` | 55.95 |
+| `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM` | 55.95 |
+| `GGML_VK_DISABLE_GRAPH_OPTIMIZE` | 56.55 |
+| `GGML_VK_DISABLE_COOPMAT` | 56.78 |
+
+**Their largest single factor is how the work is handed to the device, worth
+seven and a half per cent to them.** So the same question was asked here, the
+way this file asks questions: a build whose layer records no work at all and
+submits anyway.
+
+**It reads 0.160 s against 1.260** -- sixty-four generated tokens, twenty-two
+layers each, fourteen hundred submissions with nothing in them. **An eighth
+of a generated token is the recording and the handing over**, and none of it
+is a shader.
+
+It is corroborated by a figure already published. The same overhead falls on
+a prompt, where a layer's work is a hundred and twenty-eight tokens' worth
+instead of one, so it is a much smaller share -- and the device prompt is
+1.04 behind llama.cpp where generating is 1.11. **The gap is widest exactly
+where the fixed cost is a larger fraction**, which is what it would be if
+this were the reason.
+
+**One cheap explanation was tested and is not it.** Every Vulkan entry point
+in the recording path is resolved by name at the point of use -- a heap
+allocation, a call into the loader and a free -- and the path asks for eight
+a layer and one more a step, twenty thousand for sixty-four tokens. Resolving
+them once when the engine opens is a wash: 1.294, 1.299, 1.302 s against
+1.241, 1.296, 1.299. The cost is in the driver's own calls, not in finding
+them.
+
+**What would collect it is one submission a token rather than one a layer**,
+which is what llama.cpp does: it records a whole graph and hands it over
+once. This engine already hands over without waiting and already keeps two
+command-buffer slots and two banks of descriptor sets, so the machinery is
+half there. What it does not have is a set per layer -- a step's descriptor
+names that step's weight buffer, and twenty-two layers recorded before any
+of them runs need twenty-two banks rather than two. That is the change, it
+is a large one, and it is the largest thing left.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

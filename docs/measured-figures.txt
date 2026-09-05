@@ -4664,6 +4664,57 @@
 # load:  0.29 for the A/B, 0.44 to 0.80 for the alternation
 # model: TinyLlama-1.1B-Chat Q2_K, Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-05, an eighth of a generated token is not in a kernel.
+#
+#   WHICH OF LLAMA.CPP'S FACTORS IS WORTH MOST TO LLAMA.CPP, asked with
+#   their own knobs, 64 generated on Q8_0:
+#
+#     nothing off                            57.67 t/s
+#     GGML_VK_DISABLE_ASYNC                  53.52
+#     GGML_VK_DISABLE_DOT2                   55.95
+#     GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM    55.95
+#     GGML_VK_DISABLE_GRAPH_OPTIMIZE         56.55
+#     GGML_VK_DISABLE_COOPMAT                56.78
+#
+#   Their largest single factor is how the work is handed to the device --
+#   seven and a half per cent -- and not a kernel.
+#
+#   THE SAME QUESTION HERE, as an ablation: a build whose layer records no
+#   work at all and submits anyway.
+#
+#     as it stands   1.260 s      records nothing   0.160 s
+#
+#   Sixty-four tokens, twenty-two layers each, fourteen hundred submissions
+#   with nothing in them. AN EIGHTH OF A GENERATED TOKEN IS THE RECORDING
+#   AND THE HANDING OVER, and none of it is a shader.
+#
+#   CORROBORATED BY A PUBLISHED FIGURE. The same fixed cost falls on a
+#   prompt, where a layer's work is 128 tokens' worth rather than one, so it
+#   is a much smaller share -- and the device prompt is 1.04 behind
+#   llama.cpp where generating is 1.11. The gap is widest exactly where the
+#   fixed cost is the larger fraction.
+#
+#   ONE CHEAP EXPLANATION TESTED AND REFUTED. Every Vulkan entry point in
+#   the recording path is resolved by name at the point of use -- a heap
+#   allocation, a loader call and a free -- eight a layer and one more a
+#   step, twenty thousand for sixty-four tokens. Resolved once at open:
+#
+#     Q8_0    before 1.241, 1.296, 1.299 s   after 1.294, 1.299, 1.302
+#     Q4_K_M  before 0.927, 0.970, 0.963     after 0.982, 0.975, 0.984
+#
+#   A wash. The cost is in the driver's calls, not in finding them.
+#
+#   WHAT WOULD COLLECT IT is one submission a token rather than one a layer,
+#   which is what llama.cpp does. This engine already hands over without
+#   waiting and already keeps two command-buffer slots and two banks of
+#   descriptor sets. What it does not have is a bank a layer: a step's
+#   descriptor names that step's weight buffer, so twenty-two layers
+#   recorded before any of them runs need twenty-two banks. That is the
+#   change and it is the largest thing left.
+#
+# load: 1.01 for the entry-point A/B, 0.32 for the knobs
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

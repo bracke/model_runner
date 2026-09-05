@@ -5,6 +5,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **An eighth of a generated token is not in a kernel.** A build whose layer
+  records no work and submits anyway reads **0.160 s against 1.260** — 64
+  tokens, 22 layers each, 1400 empty submissions. It is corroborated by a
+  published figure: the same fixed cost is a smaller share of a prompt, and
+  the device prompt is 1.04 behind llama.cpp where generating is 1.11.
+
+  llama.cpp's own knobs agree about where their advantage is:
+  `GGML_VK_DISABLE_ASYNC` costs them **7.5 per cent**, more than any other,
+  and it is not a shader. Resolving the recording path's Vulkan entry points
+  once instead of per call was tested as the cheap explanation and is a wash.
+  **One submission a token rather than one a layer is what would collect it**
+  — a large change, and the largest thing left.
+
 ### Changed
 
 - **`docs/measured-figures.txt` is split**, its entries before 2026-08-26
