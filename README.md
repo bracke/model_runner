@@ -7413,6 +7413,48 @@ cent there. Reverting those two put Q8_0 back to a wash. **Splitting the row
 product by format group is what would let them in**, and that is the next
 thing.
 
+### Two ways of getting at the rest of the k-quant gap, and what an ablation over-promised
+
+After the block sharing, Q4_K generates in 0.963 s against llama.cpp's 0.735.
+Ablating the current code says where that is:
+
+| | reads | |
+| --- | ---: | ---: |
+| as it stands | 0.963 s | |
+| with the weight loads removed | 0.830 s | 14 % |
+| with the activation loads removed | 0.902 s | 6 % |
+
+so about **eighty per cent is arithmetic and loop**, and removing every load
+in the kernel would not reach llama.cpp. Two things were tried against that
+and neither is kept.
+
+**A row product trimmed to Q8_0 and the three floating-point formats reads
+1.759 s against 1.270** -- thirty-nine per cent slower, with the digest
+unchanged. That was meant to size splitting the shader by format group, which
+is what the entry above named as the way to let Q2_K and Q3_K in: a slimmer
+module should allocate fewer registers and run better. It does not.
+**Register allocation is not monotone in branch count** -- a compiler with
+fewer branches to fit may unroll harder and spend the room it saved -- so a
+split is a gamble rather than a lever, and the two formats stay out on
+weaker grounds than they were left on.
+
+**And folding the scale out of the element loop is a wash**, 0.965, 0.981 and
+0.984 s against 0.946, 0.989 and 0.984. A k-quant's weight is
+`scale * q - offset` and both are constant across a sub-block, so the
+arithmetic says a sub-block's whole contribution is
+`scale * sum(q * x) - offset * sum(x)` -- two operations for the sub-block
+where there were two for each of its elements. An earlier ablation, which
+removed the scale and the offset outright, had put that at eleven per cent of
+the run.
+
+**It over-promised because `scale * q - offset` was already one
+instruction.** A multiply and a subtract with that shape fuse, so the element
+loop was paying one operation and not two, and the folded form's running sum
+of x costs an add that puts it back exactly. The ablation had measured
+something real -- what it costs to not need `scale` and `offset` at all --
+and that is not the same quantity as what folding them out would save. An
+ablation bounds a change from above and this is the distance between the two.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

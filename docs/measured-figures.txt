@@ -9233,6 +9233,46 @@
 #   load:  0.86 for the A/B, 0.44 to 0.48 for the published groups
 #   model: TinyLlama-1.1B-Chat, Q2_K, Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-05, two ways at the rest of the k-quant gap, both measured and
+# neither kept, and an ablation that over-promised.
+#
+#   WHERE Q4_K STANDS after the block sharing: 0.963 s generating 64 tokens
+#   against llama.cpp's 0.735. Ablating the current code:
+#
+#     as it stands                        0.963 s
+#     with the weight loads removed       0.830      14 %
+#     with the activation loads removed   0.902       6 %
+#
+#   So about eighty per cent is arithmetic and loop, and removing every load
+#   in the kernel would not reach llama.cpp.
+#
+#   A SPLIT SHADER IS NOT THE LEVER THE ENTRY ABOVE NAMED. A row product
+#   trimmed to Q8_0 and the three floating-point formats -- the best case a
+#   split by format group could give that branch -- reads 1.759, 1.754,
+#   1.759 s against 1.235, 1.270, 1.273, with the digest unchanged. Thirty-
+#   nine per cent slower. Register allocation is not monotone in branch
+#   count: a compiler with fewer branches to fit may unroll harder and spend
+#   what it saved. Q2_K and Q3_K stay out on weaker grounds than they were
+#   left on.
+#
+#   FOLDING THE SCALE OUT OF THE ELEMENT LOOP IS A WASH. A k-quant's weight
+#   is scale * q - offset and both are constant across a sub-block, so a
+#   sub-block's contribution is scale * sum(q * x) - offset * sum(x) -- two
+#   operations for the sub-block where there were two for each element.
+#   Alternated: 0.965, 0.981, 0.984 s against 0.946, 0.989, 0.984.
+#
+#   IT OVER-PROMISED BECAUSE scale * q - offset WAS ALREADY ONE INSTRUCTION.
+#   A multiply and a subtract of that shape fuse, so the element loop paid
+#   one operation and not two, and the folded form's running sum of x costs
+#   an add that puts it back exactly. The earlier ablation -- 11 per cent
+#   from removing the scale and offset outright -- measured what it costs to
+#   not need them at all, which is not the same quantity as what folding
+#   them out would save. An ablation bounds a change from above and this is
+#   the distance between the two.
+#
+#   load:  0.64 to 0.86
+#   model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

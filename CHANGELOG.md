@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **Two ways at the rest of the k-quant gap, both measured and neither
+  kept.** A row product trimmed to Q8_0 and the floating-point formats — the
+  best case a split by format group could give that branch — reads **1.759 s
+  against 1.270**, thirty-nine per cent slower with the digest unchanged, so
+  register allocation is not monotone in branch count and the split named in
+  the previous entry is a gamble rather than a lever.
+
+  And folding a k-quant's scale and offset out of the element loop is a wash.
+  **It over-promised because `scale * q - offset` was already one fused
+  instruction**: the element loop paid one operation and not two, and the
+  folded form's running sum of `x` costs an add that puts it back. The
+  ablation that suggested eleven per cent measured what it costs to not need
+  the scale at all, which is a different quantity — an ablation bounds a
+  change from above.
+
 ### Changed
 
 - **The Q4_K, Q5_K and Q6_K branches of `row_product.comp` share a
