@@ -7912,6 +7912,42 @@ cent behind. A swing of fourteen points from nothing but the host. The
 settled one is published, and the pair is recorded because it is the
 clearest instance this file has of why the load gate exists.
 
+### What is left of the k-quant prologue, and what it would take
+
+Two changes have been made to the scale prologue of the single-vector
+k-quant kernels and it is still a fifth of what those formats cost. Ablated
+away entirely -- the wrong answer, and none of it -- a generated token goes
+from 2.057 s to 1.638 for the four-bit format and 2.129 to 1.804 for the
+five-bit one.
+
+What is left is eight sub-blocks a block, each costing a byte widened to a
+float, two multiplies for the scale, and a wide multiply-add against the
+activation's block sum for the minimum's term. About ten operations a
+sub-block, sixty-four sub-blocks a row, against a dot product the byte
+instruction does in thirty-two.
+
+**Splitting it in two was tried and is three to four per cent worse.** The
+products are eight independent things and would be lanes; the minimum's term
+is a running sum and has to stay in order, so writing them as two loops
+should let the first vectorize. It does not pay: the second loop reads the
+same scales and the same unpacked bytes over again, and that costs more than
+the dependency did. Four rounds, every one on the same side, digests
+unchanged.
+
+**What llama.cpp does instead is the whole prologue in vector registers.**
+Its `ggml_vec_dot_q4_K_q8_K` takes the twelve packed bytes into an SSE
+register, produces all eight scales and all eight minimums with shifts and
+masks and one shuffle, and folds the minimum's term into a single dot product
+against the activation's block sums -- no scalar loop at all, and the
+sub-block scale never becomes a float: it stays an integer and multiplies the
+integer sums, which are converted once for the whole super-block.
+
+That is the shape of the remaining fifth, and it is hand-written vector code
+in a kernel that already has some. It is named here with its size measured so
+that whoever writes it knows what it is worth before starting: a fifth of two
+formats' generating time, and this program is 2.1 times behind llama.cpp on
+one of them.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

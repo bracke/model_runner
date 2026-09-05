@@ -5039,6 +5039,50 @@
 # load: 0.38 for the benchmark, 0.59 for the alternations
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-05, what is left of the k-quant prologue.
+#
+#   Two changes to the scale prologue of the single-vector k-quant kernels
+#   and it is still a fifth. Ablated away entirely, wrong answer and none of
+#   it:
+#
+#     Q4_K_M, 64 generated   2.057 s -> 1.638
+#     Q5_K_M                 2.129   -> 1.804
+#
+#   What is left is eight sub-blocks a block: a byte widened to a float, two
+#   multiplies for the scale, and a wide multiply-add against the
+#   activation's block sum for the minimum's term. About ten operations a
+#   sub-block and sixty-four sub-blocks a row, against a dot product the
+#   byte instruction does in thirty-two.
+#
+#   SPLITTING IT IN TWO IS THREE TO FOUR PER CENT WORSE. The products are
+#   eight independent things and would be lanes; the minimum's term is a
+#   running sum that has to stay in order; written as two loops the first
+#   should vectorize. It does not pay -- the second loop reads the same
+#   scales and unpacked bytes again, which costs more than the dependency
+#   did:
+#
+#     Q4_K_M  before 2.078, 2.069, 2.073 s  after 2.143, 2.142, 2.155
+#     Q5_K_M  before 2.144, 2.124, 2.127    after 2.188, 2.212, 2.178
+#
+#   Four rounds, every one on the same side, digests unchanged. Not kept.
+#
+#   WHAT LLAMA.CPP DOES INSTEAD is the whole prologue in vector registers:
+#   ggml_vec_dot_q4_K_q8_K takes the twelve packed bytes into an SSE
+#   register, produces all eight scales and all eight minimums with shifts,
+#   masks and one shuffle, and folds the minimum's term into a single dot
+#   product against the activation's block sums. No scalar loop, and the
+#   sub-block scale never becomes a float -- it stays an integer and
+#   multiplies the integer sums, which are converted once for the whole
+#   super-block.
+#
+#   That is the shape of the remaining fifth. It is hand-written vector code
+#   in a kernel that already has some, and it is named here with its size
+#   measured so that whoever writes it knows what it is worth first.
+#
+# load: 0.50 for the ablation, 5.29 for the split, which is alternated and
+#       consistent four rounds out of four
+# model: TinyLlama-1.1B-Chat Q4_K_M and Q5_K_M
+
 kernels 56A4CED592C45907 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
