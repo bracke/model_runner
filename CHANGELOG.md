@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A tile twice as tall is 1.3 times worse.** The narrow tile has
+  accumulator budget the wide one does not — `AV` is two rather than eight —
+  and rows are what it could buy, halving the workgroups and with them the
+  vector staging each repeats. A round of 16 reads **2.620 and 2.751 s
+  against 2.053 and 2.107**, marks unchanged. Doubling `TILE_R` doubles the
+  accumulators a workgroup holds and halves the workgroups to under three a
+  compute unit, so the tile stops being able to hide anything. Third
+  arrangement of this tile measured and not kept: narrower loses on `AV`,
+  taller on occupancy.
+
 - **Two ways at the rest of the k-quant gap, both measured and neither
   kept.** A row product trimmed to Q8_0 and the floating-point formats — the
   best case a split by format group could give that branch — reads **1.759 s

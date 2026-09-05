@@ -7455,6 +7455,40 @@ something real -- what it costs to not need `scale` and `offset` at all --
 and that is not the same quantity as what folding them out would save. An
 ablation bounds a change from above and this is the distance between the two.
 
+### A tile twice as tall, which is worse
+
+The narrow tile has accumulator budget the wide one does not. Accumulators
+are `AR` times `AV` in sixteen-by-sixteen fragments; the wide tile spends that
+on `AV` -- eight vector matrices against two of weights, which is the way
+round it measured fastest -- and the narrow one, at `AV` two, has six of those
+eight back. Rows are what they could buy.
+
+**And what rows would buy is the vector side of the staging.** Every workgroup
+loads the same tile of vectors for its own rows, so half as many workgroups is
+half as much of that -- and at a narrow tile the vectors are a comparable
+weight to the matrix rather than a small thing beside it. A 2048-row matrix at
+`TILE_V` thirty-two moves about as many vector bytes as weight bytes.
+
+It reads **1.3 times worse**:
+
+| round of | tall | as it is |
+| ---: | ---: | ---: |
+| 16 | 2.620, 2.751 s | 2.053, 2.107 s |
+| 32 | 2.884, 2.997 s | 2.253, 2.294 s |
+
+The marks are unchanged, so it computes what it should and simply takes
+longer. Two things are on the other side of that trade and both are about a
+twelve-unit part. Doubling `TILE_R` doubles the accumulators a workgroup
+holds, from four fragments to eight, which is sixty-four registers before
+anything else; and it halves the workgroups, from sixty-four for a
+2048-row matrix to thirty-two, which is under three to a compute unit. **A
+tile that is too tall stops being able to hide anything** -- there is no
+second workgroup on the unit to run while the first waits.
+
+That is the third arrangement of this tile that has been measured and not
+kept: narrower loses on `AV`, taller loses on occupancy, and the sizes it has
+are a local best rather than an untested default.
+
 ### Drafting
 
 `--draft-model PATH` gives the run a second, smaller model to propose what

@@ -9273,6 +9273,42 @@
 #   load:  0.64 to 0.86
 #   model: TinyLlama-1.1B-Chat Q4_K_M and Q8_0
 
+# 2026-09-05, a tile twice as tall, measured and not kept.
+#
+#   THE ARGUMENT. Accumulators are AR times AV in 16x16 fragments. The wide
+#   tile spends that budget on AV -- eight vector matrices against two of
+#   weights, which is the way round it measured fastest -- and the narrow
+#   tile, at AV two, has six of those eight back. What rows would buy is the
+#   vector side of the staging: every workgroup loads the same TILE_V
+#   vectors for its own rows, so half as many workgroups is half as much of
+#   that, and at a narrow tile the vectors are a comparable weight to the
+#   matrix rather than a small thing beside it.
+#
+#   TILE_R 64 under NARROW, AR 4, and the staging loop giving one row to
+#   each of the sixty-four invocations in two halves rather than half a row
+#   each. Dispatch height from Tile_Height (Count), and Uses_Matrix asking
+#   Rows mod Tile_Height rather than mod Tile_Rows.
+#
+#   IT READS 1.3 TIMES WORSE, marks unchanged:
+#
+#     round of 16   tall 2.620, 2.751 s   as it is 2.053, 2.107
+#     round of 32   tall 2.884, 2.997     as it is 2.253, 2.294
+#
+#   Two things are on the other side of the trade and both are about a
+#   twelve-unit part. Doubling TILE_R doubles the accumulators a workgroup
+#   holds, four fragments to eight, which is sixty-four registers before
+#   anything else. And it halves the workgroups -- sixty-four for a
+#   2048-row matrix to thirty-two, under three to a compute unit -- so a
+#   tile that is too tall stops being able to hide anything: there is no
+#   second workgroup on the unit to run while the first waits.
+#
+#   Third arrangement of this tile measured and not kept: narrower loses on
+#   AV, taller loses on occupancy. The sizes it has are a local best rather
+#   than an untested default.
+#
+#   load:  0.92
+#   model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 8333D14456EAD5EB src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
