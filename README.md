@@ -8188,6 +8188,65 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The pipeline depth, refused, and a correction to what sent me there
+
+The section below ends by saying the depth is where to look next: the host
+runs two submissions ahead of the part, and perhaps two is not enough. It was
+built and it is not that either, and on the way the reading that pointed at
+it turned out to be wrong.
+
+**The depth.** The engine held its slots as a pair -- two command buffers,
+two descriptor arrays, two fences, `Swap_Slots` exchanging them -- and that
+pair generalizes into a ring of any depth in about twenty lines. Three
+alternated rounds, digest `1a26d24d33b8957b` throughout:
+
+| depth | 1419-token device prompt |
+| --- | --- |
+| two | 1.077, 1.104, 1.105 s |
+| three | 1.089, 1.135, 1.149 s |
+| four | 1.093, 1.102, 1.106 s |
+| six | 1.089, 1.102, 1.105 s |
+
+Nothing, and three is if anything worse. Being six sequences ahead of the
+part buys exactly what being two ahead buys. Reverted, because a ring that
+buys nothing is a pair with more code and two compiler warnings at depth two.
+
+**And the correction.** The section below prices this program at 56 per cent
+fed against llama.cpp's 78 and concludes that both do the same work in the
+same device time. That pair of numbers was sampled over a fixed window while
+the two runs had different lengths: llama.cpp finished inside the window and
+its idle afterwards was averaged in. Sampled instead over eight seconds in
+the middle of a run long enough to fill it, three rounds each:
+
+| | busy, mid-run |
+| --- | ---: |
+| llama.cpp | 99, 99, 99 % |
+| this program | 78, 78, 78 % |
+
+**llama.cpp saturates the part and this program holds it at 78 per cent.**
+So the arithmetic is not what the entry below says. Ours: 1.083 s of wall is
+0.845 s of the part busy and 0.238 idle. llama.cpp's: 0.782 s of wall is
+0.774 busy and 0.008 idle. **This program spends nine per cent more device
+time on the same prompt, and leaves the part idle for twenty-two per cent of
+its wall on top of that.** The claim that the two do the same work in the
+same device time is withdrawn -- it was built on the badly-sampled pair.
+
+**What survives the correction is the negative result**, and it is now three
+deep. The count of submissions does not move the wall (552 against 345); the
+number of barriers between dispatches moves with that same count and does
+not move it either, at seventeen steps a sequence throughout; and the depth
+does not move it. Three orthogonal orchestration knobs, all null. Whatever
+the twenty-two per cent is, it does not answer to how the work is handed
+over.
+
+**And the instrument the entry below added under-reads.** Its own `fed`
+figure says 56 to 70 per cent where matched mid-run sampling says a steady
+78, because the window it samples over spans more than the evaluation it is
+reporting on. It is still the right number to carry; the window wants
+narrowing to the evaluation, which means `speed_run.adb`, which sits inside
+two figure groups' fingerprints and so wants a measurement sitting rather
+than a spare hour.
+
 ### The submission pattern was the leading hypothesis, and it is not it
 
 The section below ends by naming the submission pattern as the one thing

@@ -16425,3 +16425,62 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # one per cent of each other. It separates a starved run from a fed one and
 # does nothing finer, and the arithmetic above is the most that should be
 # asked of it.
+
+# 2026-09-06  The pipeline depth, and a correction to the fed arithmetic
+# ---------------------------------------------------------------------
+#
+# The entry above closes the submission count and says the two-deep pipeline
+# is where to look next. It is not that either, and the reading that pointed
+# there was wrong.
+#
+# THE DEPTH. The engine held its slots as a pair -- two command buffers, two
+# descriptor arrays, two fences, Swap_Slots exchanging them. Generalized to a
+# ring of any depth (about twenty lines), three alternated rounds on the
+# 1419-token device prompt, digest 1a26d24d33b8957b throughout:
+#
+#   depth two     1.077   1.104   1.105 s
+#   depth three   1.089   1.135   1.149
+#   depth four    1.093   1.102   1.106
+#   depth six     1.089   1.102   1.105
+#
+# Being six sequences ahead of the part buys what being two ahead buys.
+# Reverted: a ring that buys nothing is a pair with more code, and at depth
+# two the generic form warns twice (a null loop and an always-false guard).
+#
+# THE CORRECTION, which matters more. The entry above prices this program at
+# 56 per cent fed against llama.cpp's 78, and concludes from it that both do
+# the same work in the same device time. That pair was sampled over a fixed
+# ten-second window while the two runs had different lengths: llama.cpp
+# finished inside the window and the idle after it was averaged in.
+#
+# Sampled instead over eight seconds in the middle of a run long enough to
+# fill it -- llama-bench -r 20, and --repeats 15 here -- three rounds each:
+#
+#   llama.cpp        99%   99%   99%
+#   this program     78%   78%   78%
+#
+# So the arithmetic is:
+#
+#                  wall      busy      idle
+#   this program   1.083 s   0.845 s   0.238 s
+#   llama.cpp      0.782     0.774     0.008
+#
+# llama.cpp SATURATES the part. This program spends nine per cent more device
+# time on the same prompt AND leaves the part idle for twenty-two per cent of
+# its wall on top of that. "The two do the same work in the same device time"
+# is withdrawn.
+#
+# WHAT SURVIVES IS THE NEGATIVE RESULT, now three deep. The submission count
+# does not move the wall (552 against 345). The barriers between dispatches
+# move with that same count, at seventeen steps a sequence throughout, and do
+# not move it. The depth does not move it. Three orthogonal orchestration
+# knobs, all null: whatever the twenty-two per cent is, it does not answer to
+# how the work is handed over.
+#
+# AND THE INSTRUMENT UNDER-READS. The fed figure this tool prints says 56 to
+# 70 per cent where matched mid-run sampling says a steady 78, because the
+# window it samples spans more than the evaluation it reports on. It is still
+# the right number to carry and the window wants narrowing to the evaluation
+# -- which is speed_run.adb, inside two figure groups' fingerprints, so it
+# wants a measurement sitting rather than a spare hour. Until then, read a
+# printed fed share as a floor.

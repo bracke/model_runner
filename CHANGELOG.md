@@ -7,6 +7,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The pipeline depth is refused too, and the arithmetic that pointed at it
+  was wrong.** The entry below closes the submission count and names the
+  two-deep pipeline as where to look next. Both halves of that are now
+  settled.
+
+  The engine's slots were a pair -- two command buffers, two descriptor
+  arrays, two fences, `Swap_Slots` exchanging them -- and generalizing that
+  into a ring of any depth takes about twenty lines. Three alternated rounds
+  on the 1419-token device prompt, digest `1a26d24d33b8957b` throughout:
+  depth two 1.077, 1.104 and 1.105 s; three 1.089, 1.135, 1.149; four 1.093,
+  1.102, 1.106; six 1.089, 1.102, 1.105. Nothing, and three is if anything
+  worse. Reverted: a ring that buys nothing is a pair with more code and two
+  compiler warnings at depth two.
+
+  **The correction matters more.** The entry below prices this program at 56
+  per cent fed against llama.cpp's 78 and concludes both do the same work in
+  the same device time. That pair was sampled over a fixed window while the
+  two runs had different lengths, so llama.cpp's idle after it finished was
+  averaged in. Sampled over eight seconds in the middle of a run long enough
+  to fill it, three rounds each, **llama.cpp reads 99 per cent and this
+  program 78**. So: ours is 0.845 s of the part busy and 0.238 idle inside a
+  1.083 s wall; llama.cpp's is 0.774 busy and 0.008 idle inside 0.782. **This
+  program spends nine per cent more device time on the prompt and leaves the
+  part idle for twenty-two per cent of its wall on top of that.** The claim
+  that the two do the same work in the same device time is withdrawn.
+
+  What survives is the negative result, now three deep: the submission count
+  does not move the wall, the barriers between dispatches move with that
+  count and do not move it either, and the depth does not move it. Whatever
+  the twenty-two per cent is, it does not answer to how the work is handed
+  over.
+
+  And the instrument added last week under-reads: its `fed` figure says 56 to
+  70 per cent where matched mid-run sampling says a steady 78, because its
+  window spans more than the evaluation it reports on. Narrowing it means
+  `speed_run.adb`, which sits inside two figure groups' fingerprints.
+
 - **The submission pattern was the leading hypothesis for the device's idle
   half, and it is not it.** The entry below names it as the one thing
   measured and not excluded. Five measurements close it.
