@@ -6283,6 +6283,52 @@
 # load: under 1.20 throughout
 # model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
 
+# 2026-09-06, the traffic explanation withdrawn, and where the device prompt
+# really is. No source changed.
+#
+#   The entry above explains the sixty-four by sixty-four tile's loss by
+#   weight traffic and concludes that llama.cpp's shape suits its batching
+#   and this one suits this. Both halves are wrong.
+#
+#   ITS OWN NUMBERS REFUTE IT. A batch here is a hundred and twenty-eight
+#   vectors, so a 128-wide tile passes over the weights once where a 64-wide
+#   tile passes twice. That is a doubling of the largest stream a device
+#   prompt reads, and it cost five and a half per cent. An argument that
+#   explains a five per cent result by a hundred per cent change is not an
+#   explanation. Whatever this shader waits for, it is not the weights.
+#
+#   AND LLAMA.CPP SETTLES IT FROM THE OTHER SIDE. Its default micro-batch is
+#   512 against this program's tile of 128, and with its 64-wide tile that is
+#   eight passes over the weights a micro-batch -- twenty-four for a
+#   1419-token prompt against this program's twelve. It reads the model twice
+#   as often and is still faster:
+#
+#     Q8_0 1419 device prompt      ours        llama.cpp
+#       time                       1.089 s     0.767 s
+#       weight bytes moved         14.0 GB     28.1 GB
+#       of memory                  12.9 GB/s   36.6 GB/s
+#       of arithmetic              2.68 TF/s   3.81 TF/s
+#
+#   The part will do about ninety gigabytes a second and the busier of the
+#   two asks for thirty-seven. Neither is near the memory. The gap is the
+#   rate the shader feeds its matrix instruction, and that is unresolved.
+#
+#   THE SIXTY-FOUR BY SIXTY-FOUR TEST DOES NOT SETTLE THE TILE. It changed
+#   two things -- the tile, and the staging, which had to take two passes of
+#   thirty-two rows through the decode to fill sixty-four. A result with two
+#   changes in it does not attribute to one. The pair together is worse and
+#   that is why the pair is not kept; the tile is not thereby shown wrong.
+#
+#   NAMED NEXT, rather than guessed at. This shader loads its activation
+#   operand straight from global memory, column major, with the batch's
+#   stride: a sixteen by sixteen fragment gathered from sixteen separate
+#   lines. llama.cpp stages that operand into shared memory with coalesced
+#   reads and takes the fragment from there. That is a difference in how the
+#   instruction is fed, which is where the numbers above put the gap.
+#
+# load: figures taken from the alternated rounds above
+# model: TinyLlama-1.1B-Chat Q8_0
+
 kernels 67408AEFEAB84F30 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

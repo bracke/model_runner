@@ -15,12 +15,23 @@ Keep a Changelog and the project uses semantic versioning.
   0.080** — three alternated rounds, three of three on every row, answers
   right either way.
 
-  A batch here is 128 vectors: a 128-wide tile covers one in a single pass
-  over the weights, a 64-wide tile needs two, and the weights are what a
-  device prompt reads most of. **llama.cpp's shape is right for llama.cpp's
-  batching and this one is right for this** — the subgroup count transferred
-  because it is a register question, the tile did not because it is a traffic
-  question. No source changed.
+  **The traffic explanation first published with this is withdrawn.** A
+  128-wide tile passes over the weights once where a 64-wide tile passes
+  twice — a doubling of the largest stream a device prompt reads — and it
+  cost 5.5 %. An argument that explains a 5 % result by a 100 % change is not
+  an explanation. llama.cpp settles it from the other side: its default
+  micro-batch is 512 with a 64-wide tile, so it makes **24 passes over the
+  weights to this program's 12, moves 28.1 GB against 14.0, and is still
+  faster**. Neither is near this part's ~90 GB/s. The gap is the rate the
+  shader feeds its matrix instruction, and it is unresolved.
+
+  **The 64×64 test also does not settle the tile**: it changed the tile *and*
+  the staging (two passes of 32 rows through the decode to fill 64), so the
+  result attributes to neither alone. The pair is worse and the pair is not
+  kept. Named next: this shader loads its activation operand from global
+  memory column-major with the batch's stride — a 16×16 fragment gathered
+  from sixteen lines — where llama.cpp stages it into shared memory with
+  coalesced reads. No source changed.
 
 ### Changed
 

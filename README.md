@@ -8232,21 +8232,51 @@ traffic.
 | Q4_K_M, 1419-token prompt | 1.069 s | 1.111 s |
 | Q8_0, 110-token prompt | 0.080 s | 0.088 s |
 
-Three of three on every row, and the answers are right either way. **A batch
-here is a hundred and twenty-eight vectors.** A tile a hundred and
-twenty-eight wide covers one in a single pass over the weights; a tile
-sixty-four wide needs two, and the weights are what a device prompt reads
-most of. Halving the vectors doubles the rows, so the activation's traffic
-halves -- but a model is six hundred megabytes and a batch is two, and the
-trade is not close.
+Three of three on every row, and the answers are right either way.
 
-That is the same thing the tile sweep measured when thirty-two by sixty-four
-came out five per cent behind thirty-two by a hundred and twenty-eight, and
-it holds with the tile twice as tall. **So llama.cpp's shape is right for
-llama.cpp's batching and this one is right for this.** The part that
-transferred was the subgroup count, which is a register question and does not
-depend on how a batch is cut; the part that did not was the tile, which is a
-traffic question and does.
+**The traffic explanation this first carried was wrong, and its own numbers
+say so.** A batch here is a hundred and twenty-eight vectors, so a tile a
+hundred and twenty-eight wide passes over the weights once where a
+sixty-four wide tile passes twice -- and that is a doubling of the largest
+stream a device prompt reads. A doubling costs five and a half per cent.
+**Whatever this shader is waiting for, it is not the weights**, and an
+argument that explains a five per cent result by a hundred per cent change
+is not an explanation.
+
+**And llama.cpp settles it from the other side.** Its default micro-batch is
+five hundred and twelve where this program's tile is a hundred and
+twenty-eight, and with its sixty-four wide tile that is eight passes over the
+weights for every micro-batch -- twenty-four for a 1419-token prompt against
+this program's twelve. It reads the model **twice as often** and is still
+faster:
+
+| Q8_0, 1419-token device prompt | model_runner | llama.cpp |
+| --- | ---: | ---: |
+| time | 1.089 s | 0.767 s |
+| weight bytes moved | 14.0 GB | 28.1 GB |
+| of memory | 12.9 GB/s | 36.6 GB/s |
+| of arithmetic | 2.68 TFLOP/s | 3.81 TFLOP/s |
+
+Neither is near this part's memory: it will do about ninety gigabytes a
+second and the busier of the two asks for thirty-seven. So the gap is not
+bandwidth, and it is not the tile's effect on bandwidth either. **It is the
+rate the shader feeds its matrix instruction, and that is unresolved.**
+
+**The sixty-four by sixty-four test does not settle the tile either**, and
+that is a fault in how it was run rather than in the answer. It changed two
+things: the tile, and the staging, which had to take two passes of thirty-two
+rows through the decode to fill sixty-four. A result with two changes in it
+does not attribute to one of them. What can be said is that the pair together
+is worse, and that is why the pair is not kept -- not that the tile is wrong
+for this program.
+
+**What is worth looking at next is named rather than guessed.** This shader
+loads its activation operand straight from global memory, column major, with
+the batch's own stride: a sixteen by sixteen fragment gathered from sixteen
+separate lines. llama.cpp stages that operand into shared memory with
+coalesced reads and takes the fragment from there. That is a difference in
+how the instruction is fed, which is where the measurements above say the
+gap is.
 
 ### Where the gap is after all of that
 
