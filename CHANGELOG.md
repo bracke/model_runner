@@ -7,6 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The small dispatches cost one per cent -- and there was no fifth of a
+  prompt to find, because the window moved again.** The entries below chase a
+  fifth of a device prompt through the submission count, the barriers and the
+  pipeline depth, find nothing, and land on the launch and drain of the
+  seventeen steps inside a sequence. Ablated two ways so the readers confound
+  cancels -- `norm`, `rotate`, `place` and `combine` returning at the top of
+  `main` with every dispatch still issued, against the recorder jumping past
+  those four steps with the barriers kept -- three alternated rounds: as it
+  is 0.744, 0.813, 0.778 s; body voided 0.679, 0.742, 0.747; dispatch skipped
+  0.726, 0.733, 0.760. **Nine milliseconds** between the last two, so issuing
+  those dispatches is about one per cent of the prompt, and thirty-six
+  between the first two, so what the kernels do is about five.
+
+  **Then the window moved.** Partway through the sitting, clean tree and no
+  rebuild between, the same binary went from 1.08 s to 0.78. Six alternated
+  rounds after it read this program at 1910, 1884, 1801, 1895, 1743 and 1817
+  tokens a second against llama.cpp's 1811.8, 1762.9, 1759.8, 1808.9, 1762.2
+  and 1754.0 -- medians 1850 against 1763, **this program five per cent ahead
+  and ahead in five of six rounds**. So the entry below, which prices it at
+  nine per cent more device time and twenty-two per cent idle, is
+  **withdrawn**: every reading behind it was taken inside the slow window.
+
+  What moves is this program's number and not llama.cpp's -- ours read 1284
+  then 1850, a swing of forty-four per cent, against llama.cpp's 1815 then
+  1763, a swing of three. A device ratio here is not a fact about the two
+  programs unless it says which window it was taken in.
+
+  And the fed share is not fit for arithmetic: inside one sitting it read 58
+  per cent on a 0.743 s run and 85 on a 0.753 s one. The sums the last two
+  entries did with it are worth nothing. It stays a flag for starved against
+  fed.
+
 - **The pipeline depth is refused too, and the arithmetic that pointed at it
   was wrong.** The entry below closes the submission count and names the
   two-deep pipeline as where to look next. Both halves of that are now

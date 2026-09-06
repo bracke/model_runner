@@ -16484,3 +16484,64 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # -- which is speed_run.adb, inside two figure groups' fingerprints, so it
 # wants a measurement sitting rather than a spare hour. Until then, read a
 # printed fed share as a floor.
+
+# 2026-09-06  The small dispatches, and the window moving mid-sitting
+# ------------------------------------------------------------------
+#
+# The entries above chase a fifth of a device prompt through the submission
+# count, the barriers and the pipeline depth, find nothing in any of them,
+# and land on the one place left: inside a sequence, seventeen steps each
+# costing a launch and a drain. This ablates that, and then the ground moved.
+#
+# THE INSTRUMENT. Voiding a kernel entirely charges it for what its readers
+# save -- established here on 2026-09-02 and priced at a factor of twelve.
+# The confound cancels between two builds that both write nothing:
+#
+#   body voided       norm, rotate, place and combine return at the top of
+#                     main; every dispatch still recorded and still issued
+#   dispatch skipped  the recorder jumps past those four steps; the barriers
+#                     around them stay
+#
+# Both leave the same unwritten regions downstream, so the difference is the
+# launching and draining and nothing else. Three alternated rounds:
+#
+#   as it is           0.744   0.813   0.778 s
+#   body voided        0.679   0.742   0.747
+#   dispatch skipped   0.726   0.733   0.760
+#
+# Nine milliseconds between the last two: issuing those four dispatches is
+# about one per cent of the prompt. Thirty-six between the first two: what
+# the four kernels do is about five, and that one is an upper bound because
+# the readers confound is in it.
+#
+# So the small dispatches are not it either, and with the count, the barriers
+# and the depth already refused there is no orchestration candidate left.
+#
+# BECAUSE THERE WAS NOTHING TO FIND. Partway through this sitting, clean tree
+# and no rebuild between, the same binary went from 1.08 s to 0.78. Six
+# alternated rounds against llama.cpp afterwards, tokens a second:
+#
+#   this program   1910  1884  1801  1895  1743  1817     median 1850
+#   llama.cpp      1812  1763  1760  1809  1762  1754     median 1763
+#
+# Ahead in five of six. THE ENTRY ABOVE -- nine per cent more device time and
+# twenty-two per cent idle -- IS WITHDRAWN. Every reading behind it was taken
+# inside the slow window.
+#
+# AND WHAT MOVES IS OURS, NOT THEIRS:
+#
+#                  slow window   fast window   swing
+#   this program      1284 t/s      1850 t/s    44 %
+#   llama.cpp         1815          1763         3 %
+#
+# So a device ratio here is not a fact about the two programs unless it says
+# which window it was taken in. This file has now had three device
+# conclusions in three sittings invalidated by the same thing, and the rule
+# that follows is stronger than any of them: DO NOT PUBLISH A DEVICE RATIO
+# FROM ONE WINDOW. Take it in two, at least, and say so.
+#
+# THE FED SHARE IS NOT FIT FOR ARITHMETIC. Inside this one sitting it read 58
+# per cent on a 0.743 s run and 85 on a 0.753 s one. The sums the last two
+# entries did with it are worth nothing. It stays what it was offered as -- a
+# flag for starved against fed -- and its window still wants narrowing to the
+# evaluation.

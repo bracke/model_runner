@@ -8188,6 +8188,69 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The small dispatches cost one per cent, and the window moved again
+
+The sections below chase a fifth of a device prompt through the submission
+count, the barriers and the pipeline depth, find nothing in any of them, and
+land on the one place left: inside a sequence, where seventeen steps each
+cost a launch and a drain whether or not there is much for them to do. That
+is the thing to ablate, and it is worth about one per cent.
+
+**The instrument.** Voiding a kernel entirely charges it for what its readers
+save, which this file established on 2026-09-02 and priced at a factor of
+twelve. That confound cancels between two builds that both write nothing:
+
+  - **body voided** -- `norm`, `rotate`, `place` and `combine` return at the
+    top of `main`. Every dispatch is still recorded and still issued.
+  - **dispatch skipped** -- the recorder jumps past those four steps. The
+    barriers around them stay.
+
+Both leave the same unwritten regions for everything downstream, so the
+difference between them is the launching and draining of those dispatches and
+nothing else. Three alternated rounds:
+
+| | 1419-token device prompt |
+| --- | --- |
+| as it is | 0.744, 0.813, 0.778 s |
+| body voided | 0.679, 0.742, 0.747 s |
+| dispatch skipped | 0.726, 0.733, 0.760 s |
+
+**Nine milliseconds** between the last two: issuing the four small kernels'
+dispatches costs about one per cent of the prompt. And thirty-six between the
+first two, so what those kernels do is about five per cent -- an upper bound,
+because that pair does have the readers confound in it.
+
+So the small dispatches are not where a fifth of a prompt goes, and with the
+count, the barriers and the depth already refused, there is no orchestration
+candidate left standing.
+
+**Because there was no fifth of a prompt to find.** Partway through this
+sitting, with a clean tree and no rebuild between, the same binary went from
+1.08 s to 0.78. Six alternated rounds against llama.cpp taken after it:
+
+| | 1419-token device prompt |
+| --- | --- |
+| this program | 1910, 1884, 1801, 1895, 1743, 1817 t/s |
+| llama.cpp | 1811.8, 1762.9, 1759.8, 1808.9, 1762.2, 1754.0 t/s |
+
+Medians 1850 against 1763: **this program is five per cent ahead**, and ahead
+in five of the six rounds. The entry below prices it at nine per cent more
+device time and twenty-two per cent idle. **That is withdrawn.** It was
+measured inside the slow window, every reading of it, and the window is worth
+more than everything the last two sittings measured put together.
+
+**What moves is this program's number and not llama.cpp's.** Across the two
+windows ours read 1284 and then 1850 tokens a second, a swing of forty-four
+per cent; llama.cpp read 1815 and then 1763, a swing of three. So a device
+ratio here is not a fact about the two programs unless it says which window
+it was taken in, and this file should stop publishing one that does not.
+
+**And the fed share is not fit for arithmetic.** Inside this one sitting it
+read 58 per cent on a 0.743 s run and 85 on a 0.753 s one. The last two
+entries did sums with it; those sums are worth nothing. It stays as a flag
+for starved against fed, which is what it was offered as, and the window it
+samples over still wants narrowing to the evaluation.
+
 ### The pipeline depth, refused, and a correction to what sent me there
 
 The section below ends by saying the depth is where to look next: the host
