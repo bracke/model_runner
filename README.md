@@ -8188,6 +8188,68 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The submission pattern was the leading hypothesis, and it is not it
+
+The section below ends by naming the submission pattern as the one thing
+measured and not excluded: this program submits and waits where llama.cpp
+records a graph and submits once. Five measurements say that reading was
+wrong, and they are worth more than the guess was.
+
+**We already submit fewer times than llama.cpp does.** One 1419-token device
+prompt, counted at the kernel:
+
+| | `AMDGPU_CS` | `SYNCOBJ_WAIT` |
+| --- | ---: | ---: |
+| this program | 345 | 34,841 |
+| llama.cpp | 1,199 | 3,364 |
+
+Three and a half times fewer submissions, ten times more waiting. The
+40,473-against-9,699 figure the section below quotes is real, but almost all
+of the difference is fence polls rather than work handed over.
+
+**And the polls cost nothing in wall.** Built with the fence spin at zero the
+same prompt makes 352 `SYNCOBJ_WAIT` calls instead of 34,841 -- 99 per cent
+gone -- and reads 1.086 s against 1.078. They cost host processor time, which
+is what the entry that priced them already said; they do not cost the run.
+
+**Nor does the number of submissions.** `--batch-size` 128 makes 552
+submissions and 2048 makes 345, and the walls are 1.074 and 1.088 s. A third
+of the submissions removed buys nothing, which is not what a per-submission
+cost looks like.
+
+**Nor is the host copying, or recording.** An interposer over `memcpy` and
+`memmove` says the run copies 5.64 GB in 864,000 calls, and that going from
+one repeat to three adds only 0.30 GB: **the copying is the model being
+loaded**, once, and a prompt evaluation costs 0.15 GB -- about one per cent
+of the wall. Timing the host between the wait returning and the submission
+going out gives a median of **16 microseconds** for a seventeen-step
+sequence. The host is not in the way.
+
+**What the arithmetic says instead.** At 56 per cent fed over a 1.083 s
+prompt the part is busy 0.61 s; llama.cpp at 78 per cent over its 0.78 s is
+busy 0.61 s. **The two do the same work in the same device time.** The whole
+of the difference is idle: 0.47 s of it here and 0.17 s there. So there is
+nothing wrong with the shaders and nothing wrong with the host, and the
+question is what the part is waiting for in between -- which is not the
+count of submissions, because changing that count changes nothing.
+
+**One thing was learned about the waiting on the way.** Every one of the 345
+submissions is followed by a wait, and the sequence machinery's own way of
+avoiding that -- hand over without waiting where nothing is read back -- fires
+for only 15 of 330 sequences. The other 315 report `carryout=TRUE,
+kept=FALSE, lent=FALSE`, which is exactly the case it was written for. They
+wait anyway, in the two-slot reuse wait at the top of the next `Run`, for a
+median of 856 microseconds. That is the pipeline being two deep and the host
+running ahead of the part, which is a healthy shape and not a bug -- but it
+means the depth is where to look next, not the count.
+
+**Read the fed share knowing what it could not settle.** It is what made the
+arithmetic above possible, and it is still too coarse to rank two runs: at
+`--batch-size` 128 it reads 55 per cent and at 2048 it reads 70, and the two
+walls are within one per cent of each other. A number that moves fifteen
+points while the thing it is meant to explain does not move at all is for
+telling starved from fed, and for nothing finer.
+
 ### What a device figure is really measuring
 
 The section below finds that a device figure moves with how well the host

@@ -7,6 +7,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The submission pattern was the leading hypothesis for the device's idle
+  half, and it is not it.** The entry below names it as the one thing
+  measured and not excluded. Five measurements close it.
+
+  This program already submits fewer times than llama.cpp: one 1419-token
+  device prompt makes 345 `AMDGPU_CS` calls against llama.cpp's 1,199, and
+  34,841 `SYNCOBJ_WAIT` against 3,364 -- three and a half times fewer
+  submissions and ten times more polling, so nearly all of the
+  40,473-against-9,699 gap quoted below is fence polls rather than work
+  handed over. The polls cost no wall: with the fence spin at zero the same
+  prompt makes 352 waits instead of 34,841 and reads 1.086 s against 1.078.
+  Nor does the submission count: `--batch-size` 128 makes 552 submissions
+  and 2048 makes 345, for walls of 1.074 and 1.088. Nor is the host copying
+  -- an interposer over `memcpy` and `memmove` puts 5.64 GB of the run's
+  5.94 at load time, leaving about one per cent of the wall for an
+  evaluation -- nor recording, which takes a median of 16 microseconds for a
+  seventeen-step sequence.
+
+  What the arithmetic says instead: at 56 per cent fed over 1.083 s the part
+  is busy 0.61 s, and llama.cpp at 78 per cent over 0.78 s is busy 0.61 s.
+  **The two do the same work in the same device time**, and the whole
+  difference is idle -- 0.47 s here against 0.17 s there. The shaders are
+  not slow and the host is not in the way.
+
+  Learned on the way: every one of the 345 submissions is followed by a
+  wait, and the machinery written to avoid exactly that -- hand over without
+  waiting where nothing is read back -- fires for 15 of 330 sequences. The
+  other 315 report `carryout=TRUE, kept=FALSE, lent=FALSE`, the case it was
+  written for, and wait anyway in the two-slot reuse wait at the top of the
+  next `Run`, a median of 856 microseconds. That is a two-deep pipeline with
+  the host ahead of the part, which is the healthy shape; **the depth is
+  where to look next, not the count.**
+
+  And a limit on the new instrument: the fed share reads 55 per cent at
+  `--batch-size` 128 and 70 at 2048 while the two walls sit within one per
+  cent of each other. It tells starved from fed and nothing finer.
+
 - **A device figure now says how well the part was fed, and the gate now
   names the number it refused on.** Two instrument changes and one
   investigation that did not reach its end.
