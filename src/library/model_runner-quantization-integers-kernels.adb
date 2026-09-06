@@ -3026,9 +3026,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       Landed : Lanes_8 := [others => 0.0];
 
-      Width : constant B.Byte_Count :=
-        B.Byte_Count (G.Block_Bytes (G.Type_Q4_K));
-
    begin
       Taken := False;
 
@@ -3045,142 +3042,108 @@ package body Model_Runner.Quantization.Integers.Kernels is
             --  back on every sub-block.
             Undo : N.Wide_Real := 0.0;
          begin
-            for Block in 0 .. Blocks - 1 loop
-               declare
-                  At_Byte : constant B.Byte_Index :=
-                    Base + Width * B.Byte_Count (Block);
-
-                  At_Base : constant Element_Count :=
-                    First / Activation_Block + Block * Deep;
-
-                  --  The activation's scale for this super-block. The
-                  --  quantizer gives a k-quant one scale for all two
-                  --  hundred and fifty-six -- see Supers_Vectors -- and
-                  --  writes it into all eight of the block slots it covers,
-                  --  so this reads the first of eight equal numbers.
-                  Apart : constant N.Real := Scales (Scales'First + At_Base);
-
-                  --  The weight's scale against the activation's, which is
-                  --  what every sub-block's factor is multiplied by. One
-                  --  scalar multiply a super-block where it used to be a
-                  --  vector multiply against eight different numbers.
-                  Both : constant N.Real := Scale_At (Data, At_Byte) * Apart;
-
-                  --  And the same for the minimum's side, applied once to
-                  --  the whole term below rather than to each of the eight.
-                  Least : constant N.Real :=
-                    Scale_At (Data, At_Byte + 2) * Apart;
-
-                  --  The minimum's term as a whole number: the eight
-                  --  six-bit minimums against the eight block sums, which
-                  --  is what one scale for the super-block makes possible.
-                  --  Neither operand is larger than sixty-three and four
-                  --  thousand and sixty-four, so eight of the products fit
-                  --  in a thirty-two bit number many times over.
-                  Lowered : Interfaces.Integer_32;
-
-               begin
-                  --  The twelve packed bytes taken apart in lanes.
-                  --
-                  --  Asked one sub-block at a time, the first four read two
-                  --  bytes each and the last four read three, and the bytes
-                  --  they read are the same twelve over again -- five and
-                  --  twenty reads where twelve will do, with a branch on
-                  --  the sub-block's number around each. Ablating this
-                  --  prologue away entirely -- the wrong answer, and none
-                  --  of the unpacking -- took a generated token from 2.277
-                  --  to 1.642 s, so it is twenty-eight per cent of what
-                  --  this format costs the processor.
-                  --
-                  --  Taking the twelve apart a byte at a time and then
-                  --  widening each byte to a floating-point number is a
-                  --  hundred and twenty instructions a block, and every one
-                  --  of them is the same operation on eight neighbouring
-                  --  values. Written first as two Ada loops -- one to
-                  --  unpack, one to multiply, with the scales read once --
-                  --  it measured one to two per cent worse than the single
-                  --  scalar loop it replaced, because the compiler
-                  --  vectorised neither: the byte-to-float widening and the
-                  --  six-bit fields split across two bytes are not shapes
-                  --  it recognises.
-                  --
-                  --  Written by hand it is thirty-one instructions. The
-                  --  twelve arrive as one unaligned sixteen-byte read --
-                  --  which is inside the block, since a block is a hundred
-                  --  and forty-four bytes and this reads twenty of them.
-                  --  The first four fields are a mask; the last four are a
-                  --  nibble from the top third of the twelve with two high
-                  --  bits from the first third laid above it, which is a
-                  --  shift, a mask and an or on all four at once. Both
-                  --  sets widen from bytes to whole numbers in one
-                  --  instruction apiece, join into a register of eight,
-                  --  convert to floating point together, and take the
-                  --  block's scale and the activation's scale as two
-                  --  multiplies over the eight.
-                  --
-                  --  Bit for bit what the scalar loop computed: the same
-                  --  two multiplies in the same order, on the same numbers.
-                  --  The running sum below is what is not done here, and
-                  --  is left in the order it was in.
-                  System.Machine_Code.Asm
-                    ("vmovdqu (%1), %%xmm0" & LF &
-                     "vpsrldq $4, %%xmm0, %%xmm1" & LF &
-                     "vpsrldq $8, %%xmm0, %%xmm2" & LF &
-                     "vpbroadcastd 0(%4), %%xmm3" & LF &
-                     "vpbroadcastd 4(%4), %%xmm4" & LF &
-                     "vpbroadcastd 8(%4), %%xmm5" & LF &
-                     "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
-                     "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
-                     "vpsrld $2, %%xmm0, %%xmm8" & LF &
-                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
-                     "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
-                     "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
-                     "vpsrld $2, %%xmm1, %%xmm8" & LF &
-                     "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
-                     "vpsrld $4, %%xmm2, %%xmm10" & LF &
-                     "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
-                     "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
-                     "vpmovzxbd %%xmm6, %%xmm6" & LF &
-                     "vpmovzxbd %%xmm9, %%xmm9" & LF &
-                     "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
-                     "vpmovzxbd %%xmm7, %%xmm7" & LF &
-                     "vpmovzxbd %%xmm10, %%xmm10" & LF &
-                     "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
-                     "vpmulld (%2), %%ymm7, %%ymm7" & LF &
-                     "vextracti128 $1, %%ymm7, %%xmm8" & LF &
-                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
-                     "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
-                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
-                     "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
-                     "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
-                     "vmovd %%xmm7, (%3)" & LF &
-                     "vpslld $16, %%ymm6, %%ymm9" & LF &
-                     "vpor %%ymm9, %%ymm6, %%ymm6" & LF &
-                     "vmovups %%ymm6, (%0)",
-                     Inputs   =>
-                       [System.Address'Asm_Input
-                          ("r", Row_Factor (Natural (Block) * Deep)'Address),
-                        System.Address'Asm_Input
-                          ("r", Data (At_Byte + 4)'Address),
-                        System.Address'Asm_Input
-                          ("r", Totals (Totals'First + At_Base)'Address),
-                        System.Address'Asm_Input ("r", Lowered'Address),
-                        System.Address'Asm_Input
-                          ("r", Unpack_Masks (0)'Address)],
-                     Clobber  =>
-                       "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,"
-                       & "ymm9,ymm10,memory",
-                     Volatile => True);
-
-                  Row_Both (Natural (Block)) := Both;
-
-                  --  The minimum's term. One multiply and one add a
-                  --  super-block, where a scale for every thirty-two made
-                  --  it eight of each with two widenings apiece.
-                  Undo := Undo
-                    + N.Wide_Real (Lowered) * N.Wide_Real (Least);
-               end;
-            end loop;
+            --  Every block's scales, in one insertion rather than one a
+            --  block.
+            --
+            --  What is here was already vector code -- the twelve packed
+            --  bytes taken apart in lanes, the minimum's term as an integer
+            --  dot product -- but it was reached from an Ada loop that ran
+            --  once for each of a row's blocks. That loop is not free, and a
+            --  profile made it visible: its counter, its bound and the six
+            --  operand addresses it works out for an insertion it may not
+            --  hoist across came to about an eighth of everything this
+            --  kernel executed. The dot product below has always walked a
+            --  whole row inside one insertion with two pointer increments;
+            --  this now does the same.
+            --
+            --  Three cursors are what the four tables want: a hundred and
+            --  forty-four bytes a block through the weights, thirty-two
+            --  through the activation's sums and scales and the factor
+            --  table they fill, and four through the one number a block
+            --  that carries both scales multiplied together.
+            --
+            --  The minimum's term is summed here as well, in binary64 and
+            --  block by block, which is the order it was summed in before.
+            --  Everything this computes it computed already and in the same
+            --  order, so no answer moves.
+            System.Machine_Code.Asm
+              ("vpxor %%xmm12, %%xmm12, %%xmm12" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "xorq %%rsi, %%rsi" & LF &
+               "movq %6, %%rax" & LF &
+               "2:" & LF &
+               "vmovdqu 4(%1,%%rcx,1), %%xmm0" & LF &
+               "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+               "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+               "vpbroadcastd 0(%5), %%xmm3" & LF &
+               "vpbroadcastd 4(%5), %%xmm4" & LF &
+               "vpbroadcastd 8(%5), %%xmm5" & LF &
+               "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+               "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+               "vpsrld $2, %%xmm0, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+               "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+               "vpsrld $2, %%xmm1, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpsrld $4, %%xmm2, %%xmm10" & LF &
+               "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+               "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+               "vpmovzxbd %%xmm6, %%xmm6" & LF &
+               "vpmovzxbd %%xmm9, %%xmm9" & LF &
+               "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+               "vpmovzxbd %%xmm7, %%xmm7" & LF &
+               "vpmovzxbd %%xmm10, %%xmm10" & LF &
+               "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+               "vpmulld (%2,%%rdx,1), %%ymm7, %%ymm7" & LF &
+               "vextracti128 $1, %%ymm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpbroadcastw (%1,%%rcx,1), %%xmm11" & LF &
+               "vcvtph2ps %%xmm11, %%xmm11" & LF &
+               "vpbroadcastw 2(%1,%%rcx,1), %%xmm13" & LF &
+               "vcvtph2ps %%xmm13, %%xmm13" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm11, %%xmm11" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm13, %%xmm13" & LF &
+               "vmovss %%xmm11, (%3,%%rsi,1)" & LF &
+               "vcvtdq2pd %%xmm7, %%xmm7" & LF &
+               "vcvtss2sd %%xmm13, %%xmm13, %%xmm13" & LF &
+               "vmulsd %%xmm13, %%xmm7, %%xmm7" & LF &
+               "vaddsd %%xmm7, %%xmm12, %%xmm12" & LF &
+               "vpslld $16, %%ymm6, %%ymm9" & LF &
+               "vpor %%ymm9, %%ymm6, %%ymm6" & LF &
+               "vmovups %%ymm6, (%0,%%rdx,1)" & LF &
+               "addq $144, %%rcx" & LF &
+               "addq $32, %%rdx" & LF &
+               "addq $4, %%rsi" & LF &
+               "decq %%rax" & LF &
+               "jnz 2b" & LF &
+               "vmovsd %%xmm12, (%7)",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Row_Factor (0)'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Totals
+                       (Totals'First + First / Activation_Block)'Address),
+                  System.Address'Asm_Input ("r", Row_Both (0)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Scales
+                       (Scales'First + First / Activation_Block)'Address),
+                  System.Address'Asm_Input
+                    ("r", Unpack_Masks (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks),
+                  System.Address'Asm_Input ("r", Undo'Address)],
+               Clobber  =>
+                 "rax,rcx,rdx,rsi,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,"
+                 & "xmm7,xmm8,xmm9,xmm10,xmm11,xmm12,xmm13,ymm6,ymm7,"
+                 & "ymm9,memory",
+               Volatile => True);
 
             Landed := [others => 0.0];
 

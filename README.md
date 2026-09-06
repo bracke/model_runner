@@ -8173,12 +8173,41 @@ large thing:
 - the block scales, two half-precision conversions a block, and the
   minimum's term's scalar tail between insertions.
 
-**The named next change is to put the prologue's loop inside its insertion**,
-as the dot product's already is. The dot loop walks all of a row's blocks
-with two pointer increments; the prologue is called once a block from Ada and
-pays for the call each time. It is the largest single item the profile shows
-and it is the same shape as work already in this file. Named with its size,
-not built.
+**The largest single item was the prologue's loop, and it is now inside its
+insertion**, as the dot product's always has been. The dot loop walks all of a
+row's blocks with two pointer increments; the prologue was called once a block
+from Ada and paid for the call each time.
+
+What was already vector code stayed vector code -- the twelve packed bytes
+taken apart in lanes, the minimum's term as an integer dot product. What went
+is the Ada loop around it: its counter, its bound, and the six operand
+addresses it worked out for an insertion it may not hoist across. Three
+cursors replace them: a hundred and forty-four bytes a block through the
+weights, thirty-two through the activation's sums and scales and the factor
+table they fill, and four through the one number a block carrying both scales
+multiplied together. The minimum's term is summed inside as well, in binary64
+and block by block, which is the order it was summed in before -- so the
+change is **bit-exact and the digest does not move**, which is what checks it.
+
+| Q4_K_M, ten generated | before | after | |
+| --- | ---: | ---: | ---: |
+| one thread | 0.5205 s | 0.4665 s | **10.4 %** |
+| eight threads | 0.1835 s | 0.1795 s | 2.2 % |
+
+Four alternated rounds, four of four on the same side for both, and the
+one-thread ranges do not touch -- 0.466 to 0.478 against 0.511 to 0.534. Two
+controls stay level: Q5_K generating, whose single-vector kernel this does not
+touch, and a 1419-token prompt, which goes through the strip kernels.
+
+**Ten per cent per core and two at eight is the shape to read.** The
+instructions are gone either way; at the worker count the program uses, a
+four-bit generated token is nearer the memory wall than the per-core figure
+suggests, which is the same thing `### The weight's sign, moved onto the
+activation` found for the eight-bit kernel. The gap to llama.cpp goes 1.22 to
+**1.19** at eight threads and 2.28 to **2.10** per core.
+
+The same loop is still outside the insertion in the five-bit single-vector
+kernel, which is the same change again.
 
 ### The same instruction in the other kernel, and why it does nothing there
 

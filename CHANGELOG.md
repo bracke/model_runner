@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The four-bit single-vector kernel's per-block prologue loop is inside its
+  insertion**, as the dot product's always has been. It was called once a
+  block from Ada and paid the call each time — counter, bound, and six
+  operand addresses for an insertion the compiler may not hoist across.
+  Three cursors replace them, and the minimum's term is summed inside in the
+  same order, so the change is **bit-exact and the digest does not move** —
+  which is what checks it.
+
+  **Ten generated tokens read 0.4665 s against 0.5205 at one thread (10.4 %)
+  and 0.1795 against 0.1835 at eight (2.2 %)**, four alternated rounds, four
+  of four on the same side with the one-thread ranges not touching. Two
+  controls level. Ten per cent per core and two at eight is the shape: the
+  instructions are gone either way, and at the worker count the program uses,
+  a four-bit generated token is nearer the memory wall than the per-core
+  figure suggests. The gap to llama.cpp goes 1.22 → **1.19** at eight threads
+  and 2.28 → **2.10** per core.
+
+  The same loop is still outside the insertion in the five-bit single-vector
+  kernel.
+
 ### Measured
 
 - **The comparison against llama.cpp, taken again from scratch after nine
