@@ -16213,3 +16213,60 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # whichever state it was asked for. Every device figure taken in an
 # alternated comparison during that work had builds running between its
 # readings.
+
+# 2026-09-06  Generating is at the memory wall, and four ways round it
+# ------------------------------------------------------------------
+#
+# The last measured gap against llama.cpp was generating: 37.0 tokens a
+# second against 39.0 on tinyllama-1.1b-chat-q8_0, five and a half per cent.
+# Everything below is one sitting on a quiet host, alternated, digest
+# 1cb5fffbb21399ad on every reading.
+#
+# The ceiling. Half a gigabyte read four times over, by threads:
+#
+#   one     35.9 GB/s
+#   two     44.1 GB/s
+#   four    45.1 GB/s
+#   eight   44.7 GB/s
+#
+# Two threads reach it. A generated token reads every weight once -- about a
+# gigabyte for this model -- so 37.0 tokens a second is 40.3 GB/s and
+# llama.cpp's 39.0 is 42.5: eighty-nine per cent of the ceiling against
+# ninety-four, with eleven per cent above either of them.
+#
+# The kernel is ahead, not behind. One thread, no sharing at all:
+#
+#   this program   27.2 tokens a second   (2.332 and 2.376 s for sixty-four)
+#   llama.cpp      22.3                   (24.22 and 20.35 t/s, -t 1)
+#
+# Twenty-two per cent ahead per core. What llama.cpp does better is scale:
+# 1.86 times from one thread to eight against 1.31 to 1.43 here from one
+# share to five, bought with 7.7 hot cores against 5.1, 54.8 billion cycles
+# against 38.2, and 113 context switches against 4,899. It spins where this
+# sleeps, and the spin is why its cycles are higher and its wall lower.
+#
+# Four sweeps, three alternated rounds each, all refused.
+#
+#   shares      wall       of the processor
+#   five        1.730 s    8.78 s
+#   six         1.738      10.37
+#   eight       1.758      13.78
+#
+# Every reading of five below every reading of six and eight. This confirms
+# the Vector_Team constant against today's kernels rather than against the
+# sitting it was first swept in -- which the entry above this one says is
+# the only way such a constant may be confirmed.
+#
+#   spin budget   20_000 against 100_000 against 400_000 pause turns: wall
+#                 inside its own spread on every round, context switches
+#                 4,899 to 4,534. What sleeps is not a spin running out.
+#
+#   tile grain    thirty-two rows against sixty-four against a hundred and
+#                 twenty-eight: every reading overlapping.
+#
+# So the five and a half per cent is scaling efficiency on a memory path two
+# threads already saturate, and llama.cpp buys it with cores this pool
+# deliberately does not spend on a fifteen-watt part. Reading fewer bytes is
+# a choice about quantization rather than about kernels. On a machine with
+# more bandwidth per core than this one the shares sweep would want running
+# again, and could well land somewhere else.

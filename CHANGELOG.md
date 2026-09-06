@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Generating is at the memory wall, and four ways round it were refused.**
+  The last measured gap was 37.0 tokens a second against llama.cpp's 39.0.
+  This machine's memory path reads 35.9 GB/s with one thread, 44.1 with two
+  and 45.1 with four, so two threads reach the ceiling; a generated token
+  reads the whole model once, about a gigabyte, which puts this program at
+  40.3 GB/s and llama.cpp at 42.5 -- eighty-nine per cent of that ceiling
+  against ninety-four. The kernel is not what is behind: with one thread and
+  no sharing this generates 27.2 tokens a second against 22.3, twenty-two
+  per cent ahead per core. llama.cpp scales better instead, 1.86 times from
+  one thread to eight where this reaches 1.31 to 1.43, and buys it with 7.7
+  hot cores against 5.1, 54.8 billion cycles against 38.2 and 113 context
+  switches against 4,899. Four sweeps, alternated three rounds in one
+  sitting with digest `1cb5fffbb21399ad` throughout, each refused: more
+  shares (five 1.730 s at 8.78 s of processor, six 1.738 at 10.37, eight
+  1.758 at 13.78, every reading of five below every reading of the others);
+  a longer spin (twenty thousand pause turns against a hundred thousand
+  against four hundred thousand, wall inside its own spread, context
+  switches only 4,899 to 4,534); a coarser tile (thirty-two rows against
+  sixty-four against a hundred and twenty-eight, every reading
+  overlapping); and the kernel, which is already ahead. At eighty-nine per
+  cent of a hardware ceiling the five and a half per cent left is scaling
+  efficiency on a path two threads already saturate, and reading fewer bytes
+  is a choice about quantization rather than about kernels.
+
 - **What put the device in a bad window was the host, in two parts.** The
   entry below withdraws a device figure because the same binary read 1.51
   times behind in one sitting and level in the next; this is the cause.

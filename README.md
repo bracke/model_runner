@@ -8125,6 +8125,66 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### Generating is at the memory wall, and four ways round it were refused
+
+Prompts are level or ahead and the device long prompt is level, which left
+generating as the last measured gap: 37.0 tokens a second against llama.cpp's
+39.0, five and a half per cent. This is what that five and a half per cent
+is, measured on a quiet host in one sitting.
+
+**The machine's memory path is the thing being shared.** A read of half a
+gigabyte, four times over, by threads:
+
+| threads | read |
+| --- | ---: |
+| one | 35.9 GB/s |
+| two | 44.1 GB/s |
+| four | 45.1 GB/s |
+| eight | 44.7 GB/s |
+
+Forty-five gigabytes a second, and two threads reach it. A generated token
+reads every weight of the model once -- about a gigabyte for this one -- so
+at 37.0 tokens a second this program moves 40.3 GB/s and llama.cpp at 39.0
+moves 42.5. **Eighty-nine per cent of the ceiling against ninety-four**, and
+the whole of what is left above either of them is eleven per cent.
+
+**The kernel is not what is behind.** With one thread and no sharing at all
+this program generates 27.2 tokens a second against llama.cpp's 22.3: the
+arithmetic is twenty-two per cent ahead per core. What llama.cpp does better
+is scale -- 1.86 times from one thread to eight, where this reaches 1.31 to
+1.43 from one share to five -- and it buys that by keeping 7.7 cores hot
+where this uses 5.1, 54.8 billion cycles against 38.2, and 113 context
+switches against 4,899.
+
+So the four things that could buy the difference were each swept, alternated
+three rounds against the current shape in one sitting, digest
+`1cb5fffbb21399ad` throughout:
+
+| shares | wall | of the processor |
+| --- | ---: | ---: |
+| five | 1.730 s | 8.78 s |
+| six | 1.738 s | 10.37 s |
+| eight | 1.758 s | 13.78 s |
+
+Every reading of five below every reading of six and eight, and eight costs
+half again as much processor to be slower. **A longer spin** does nothing:
+twenty thousand pause turns against a hundred thousand against four hundred
+thousand leaves the wall inside its own spread and takes context switches
+only from 4,899 to 4,534, so what sleeps is not a spin running out. **A
+coarser tile** does nothing either: thirty-two rows against sixty-four
+against a hundred and twenty-eight, every reading overlapping. And the
+kernel is already ahead.
+
+**Which is the answer rather than a failure to find one.** At eighty-nine
+per cent of a hardware ceiling, with a kernel twenty-two per cent faster per
+core than the one it is measured against, the five and a half per cent left
+is scaling efficiency on a memory path that two threads already saturate --
+and llama.cpp buys it with cores this pool deliberately does not spend, on a
+part sharing fifteen watts with a device. To generate faster on this machine
+one has to read fewer bytes, which is a choice about quantization and not
+about kernels. A machine with more bandwidth per core than this one would
+reward more shares, and this file's sweep would want running again there.
+
 ### What puts it in a bad window is the host
 
 The section below withdraws a device figure because the same binary read 1.51
