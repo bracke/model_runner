@@ -6239,6 +6239,50 @@
 # load: under 1.20 throughout; the device at 1698-1792 MHz
 # model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
 
+# 2026-09-06, the sixty-four by sixty-four tile, built and refused. No
+# source changed.
+#
+#   The other half of llama.cpp's shape. With the four subgroups already in
+#   place it changes nothing about the accumulators -- two by two lane
+#   groups over sixty-four rows and sixty-four vectors gives each the same
+#   thirty-two by thirty-two and the same four. What it changes is traffic.
+#
+#   THREE ALTERNATED ROUNDS, medians of three:
+#
+#     Q8_0 device 1419 prompt   32x128 1.083 1.089 1.098 s
+#                               64x64  1.152 1.149 1.151    5.7% worse
+#     Q4_K device 1419 prompt   32x128 1.069 1.060 1.071
+#                               64x64  1.104 1.118           3.9% worse
+#     Q8_0 device 110 prompt    32x128 0.081 0.080 0.080
+#                               64x64  0.088 0.091 0.088     10% worse
+#
+#   Three of three on every row and the answers right either way, digest
+#   1a26d24d33b8957b.
+#
+#   WHY. A batch here is a hundred and twenty-eight vectors. A tile a
+#   hundred and twenty-eight wide covers one in a single pass over the
+#   weights; a tile sixty-four wide needs two, and the weights are what a
+#   device prompt reads most of. Halving the vectors doubles the rows so the
+#   activation's traffic halves -- but a model is six hundred megabytes and a
+#   batch is two, and the trade is not close.
+#
+#   The tile sweep measured the same thing when thirty-two by sixty-four came
+#   out five per cent behind thirty-two by a hundred and twenty-eight; it
+#   holds with the tile twice as tall.
+#
+#   So llama.cpp's shape is right for llama.cpp's batching and this one for
+#   this. The part that transferred was the subgroup count, which is a
+#   register question and does not depend on how a batch is cut. The part
+#   that did not was the tile, which is a traffic question and does.
+#
+#   The staging was extended for it and is not kept either: sixty-four rows
+#   a chunk needs two passes of thirty-two through the decode, which works
+#   and is a line of the shader that would only be read again if the batch
+#   size changed.
+#
+# load: under 1.20 throughout
+# model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+
 kernels 67408AEFEAB84F30 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

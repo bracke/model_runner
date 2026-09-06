@@ -8220,6 +8220,34 @@ partial shape rather than llama.cpp's: it has the four subgroups and four
 accumulators, and still a thirty-two by a hundred and twenty-eight workgroup
 tile where llama.cpp uses sixty-four by sixty-four.
 
+**And the sixty-four by sixty-four tile was built and is worse.** With the
+four subgroups already in place it changes nothing about the accumulators --
+two by two lane groups over sixty-four rows and sixty-four vectors gives each
+the same thirty-two by thirty-two and the same four. What it changes is the
+traffic.
+
+| device, three alternated rounds | 32 x 128 | 64 x 64 |
+| --- | ---: | ---: |
+| Q8_0, 1419-token prompt | 1.089 s | 1.151 s |
+| Q4_K_M, 1419-token prompt | 1.069 s | 1.111 s |
+| Q8_0, 110-token prompt | 0.080 s | 0.088 s |
+
+Three of three on every row, and the answers are right either way. **A batch
+here is a hundred and twenty-eight vectors.** A tile a hundred and
+twenty-eight wide covers one in a single pass over the weights; a tile
+sixty-four wide needs two, and the weights are what a device prompt reads
+most of. Halving the vectors doubles the rows, so the activation's traffic
+halves -- but a model is six hundred megabytes and a batch is two, and the
+trade is not close.
+
+That is the same thing the tile sweep measured when thirty-two by sixty-four
+came out five per cent behind thirty-two by a hundred and twenty-eight, and
+it holds with the tile twice as tall. **So llama.cpp's shape is right for
+llama.cpp's batching and this one is right for this.** The part that
+transferred was the subgroup count, which is a register question and does not
+depend on how a batch is cut; the part that did not was the tile, which is a
+traffic question and does.
+
 ### Where the gap is after all of that
 
 Nine changes into this line of work, the comparison is worth taking again

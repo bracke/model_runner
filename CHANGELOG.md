@@ -5,6 +5,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **llama.cpp's 64×64 matrix tile, built and refused.** With four subgroups
+  already in place it changes nothing about the accumulators — 2×2 lane groups
+  over 64 rows and 64 vectors gives each the same 32×32 and the same four. It
+  changes traffic, and loses: **Q8_0's 1419-token device prompt 1.151 s
+  against 1.089, Q4_K's 1.111 against 1.069, Q8_0's 110-token 0.088 against
+  0.080** — three alternated rounds, three of three on every row, answers
+  right either way.
+
+  A batch here is 128 vectors: a 128-wide tile covers one in a single pass
+  over the weights, a 64-wide tile needs two, and the weights are what a
+  device prompt reads most of. **llama.cpp's shape is right for llama.cpp's
+  batching and this one is right for this** — the subgroup count transferred
+  because it is a register question, the tile did not because it is a traffic
+  question. No source changed.
+
 ### Changed
 
 - **The matrix shader runs four subgroups where it ran one**, so each holds
