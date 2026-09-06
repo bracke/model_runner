@@ -1631,16 +1631,19 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.377 s | **0.258 s** |
-| -- evaluating the prompt | 0.054 s | 0.032 s |
-| -- generating | 0.322 s | **0.227 s** |
-| -- processor time | 1.97 s | **0.06 s** |
-| 110-token prompt, nothing generated | 0.361 s | **0.103 s** |
-| -- processor time | 2.75 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.360 s | **0.261 s** |
+| -- evaluating the prompt | 0.041 s | 0.035 s |
+| -- generating | 0.319 s | **0.227 s** |
+| -- processor time | 1.87 s | **0.07 s** |
+| 110-token prompt, nothing generated | 0.355 s | **0.114 s** |
+| -- processor time | 2.77 s | **0.04 s** |
 
-All six cells were taken in one sitting on 2026-09-04, back to back, at the
+All six cells were taken in one sitting on 2026-09-06, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
-version of this table before last.
+version of this table before last. The device column now carries what share
+of each run the part had work to do, and these two runs are fed 26 and 21
+per cent: both are short, and a short run is mostly the host. See
+`### What a device figure is really measuring` below.
 
 **That cell read 0.098 s, then 0.122, 0.100, 0.099, 0.102 and the 0.103
 above, across six sittings with the code unmoved between the second and third.**
@@ -8184,6 +8187,66 @@ part sharing fifteen watts with a device. To generate faster on this machine
 one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
+
+### What a device figure is really measuring
+
+The section below finds that a device figure moves with how well the host
+keeps the part fed, and stops there because it had no way to see that share.
+`tests speed` now reports it -- `fed 56% of the run` -- and with it the
+window stops being a mystery and becomes a number.
+
+**What it shows.** On 2026-09-06 the 1419-token device prompt read 1.075 to
+1.131 s a dozen times over an afternoon, fed 56 to 70 per cent. In the same
+minutes llama.cpp on the same file read 1815 tokens a second against the
+1822 published five days earlier -- within half a per cent. The machine was
+not slow. This program was.
+
+**And only half of it was.** The single-vector path was untouched: sixty-four
+tokens generated on the device read 51.0 tokens a second against 51.4
+published, and the twelve-token run read 0.227 s against 0.227. What was
+slow was the batched matrix path and only that -- the 110-token prompt at
+973 tokens a second where eleven sittings have read 1182.8 to 1571.4, and
+the 1419-token one at 1284 where the row above reads 1730.
+
+**Ten things were ruled out, each measured rather than reasoned:** the part's
+temperature (55 C, then 61 after four minutes of idle, and the idle changed
+nothing); the processor's clock and governor (4018 MHz mean during the run,
+above llama.cpp's 3692 on the same work, boost on, `amd-pstate-epp` at
+`balance_performance`); the load (0.45 to 0.50, and the gate's own instrument
+agreed); device memory placement (501 MB of VRAM and 1912 of GTT against
+llama.cpp's 482 and 1883); the binary (the repository's stale-build check
+passes, and recompiling every shader variant from source produces a
+`model_runner-shaders.ads` byte-identical to the committed one); the shader
+cache (clearing it, and `RADV_DEBUG=nocache`, both read the same); the fence
+spin (0, 64 and 1000 turns, three alternated rounds, walls overlapping); the
+repeat count; a rebuild between measurements; and competition for the
+processor.
+
+**What is left is the feeding.** The part is idle nearly half of a batched
+prompt here and 22 per cent of the same work under llama.cpp. For three
+repeats of that prompt this program spends 1.34 s in the kernel against
+llama.cpp's 0.28, and makes 40,473 `ioctl` calls against 9,699 -- 37,653 of
+ours completion polls that found nothing. That is the shape of a path that
+submits and waits many times where llama.cpp records a graph and submits
+once, and it is why this program's wall moves with the host when llama.cpp's
+does not.
+
+**What is not established is what selects the state.** The same command read
+0.755 to 0.760 s three times one morning and 1.075 to 1.131 a dozen times
+that afternoon, with llama.cpp unmoved across both. Nothing in the list
+above accounts for it. So the device rows in the llama.cpp table were
+re-measured and **deliberately not published**: they came in twenty to
+forty-five per cent below every reading in their own history while the
+program they are compared against was within half a per cent of its last
+one, and a figure taken in a window like that is the thing this file has
+twice had to withdraw. What is published instead is the instrument, so that
+the next sitting can say which window it was in rather than discovering it
+three commits later.
+
+**The share is a coarse number and should be read as one.** It is sampled
+from the kernel a hundred times a second and the same run read 56, 63 and 70
+per cent on three passes with walls inside a spread of five per cent. It
+separates a well-fed run from a starved one; it does not rank two good ones.
 
 ### What puts it in a bad window is the host
 

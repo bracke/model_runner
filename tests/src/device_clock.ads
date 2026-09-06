@@ -43,6 +43,25 @@ package Device_Clock is
       --  symptom and the power budget is usually the cause: an integrated
       --  part shares fifteen watts with the processor it is helping.
       Watts   : Long_Float := 0.0;
+
+      --  What share of the run the part had work to do, in per cent, and
+      --  whether the host says at all.
+      --
+      --  The clock above was added because the same binary read a prompt
+      --  forty per cent apart in one day; it narrowed the question without
+      --  closing it, because on 2026-09-06 the slow readings held 1704 to
+      --  1750 MHz and the fast ones 1763 to 1841, which overlap. This is
+      --  the number that separated them. In the slow state the part was
+      --  busy 53 per cent of the run and llama.cpp on the same file in the
+      --  same minutes held it at 78; the fast state is 0.757 s against the
+      --  slow 1.08, and 0.757 over 1.08 is 0.70 where 53 over 78 is 0.68.
+      --
+      --  So a device figure here is not a fact about the part's speed but
+      --  about how much of the time the host managed to keep it fed, and
+      --  this is the number that says which. A row that carries it can be
+      --  compared with another; one that does not has to be believed.
+      Busy      : Natural := 0;
+      Busy_Seen : Boolean := False;
    end record;
 
    --  Whether this host says anything about a device's clock at all.

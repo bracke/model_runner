@@ -16270,3 +16270,84 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # a choice about quantization rather than about kernels. On a machine with
 # more bandwidth per core than this one the shares sweep would want running
 # again, and could well land somewhere else.
+
+# 2026-09-06  What a device figure is really measuring, and one window unsolved
+# --------------------------------------------------------------------------
+#
+# The entry above finds a device figure moves with how well the host keeps
+# the part fed and stops there, having no way to see that share. tests speed
+# now prints it, and this is what it showed.
+#
+# THE SITTING. The 1419-token device prompt, a dozen readings over an
+# afternoon: 1.075 to 1.131 s, fed 56 to 70 per cent. llama.cpp on the same
+# file in the same minutes:
+#
+#   llama.cpp device pp1419   1815.25 t/s   against 1822.0 published on 09-01
+#   this program              1284      t/s   against 1730.5 published on 09-01
+#
+# Within half a per cent on one side and twenty-six per cent down on the
+# other. The machine was not slow.
+#
+# AND ONLY THE BATCHED PATH WAS. The single-vector path read what it has
+# always read:
+#
+#   sixty-four tokens generated, device   51.0 t/s   against 51.4 published
+#   twelve tokens generated, device       0.227 s    against 0.227 published
+#   110-token device prompt                973 t/s   against 1182.8 to 1571.4
+#   1419-token device prompt              1284 t/s   against 1730.5
+#
+# The two prompts go through the matrix shader and the two generating runs
+# do not, and the split falls exactly there.
+#
+# TEN THINGS MEASURED AND EXCLUDED, none of them it:
+#
+#   temperature          55 C, then 61 after four minutes idle; idle changed
+#                        nothing (1.080, 1.091, 1.091 after it)
+#   processor clock      4018 MHz mean during the run, above llama.cpp's
+#                        3692 on the same work; boost on, amd-pstate-epp at
+#                        balance_performance
+#   load                 0.45 to 0.50, and the gate's own instrument agreed
+#   memory placement     501 MB VRAM and 1912 GTT, against llama.cpp's 482
+#                        and 1883 -- the same
+#   the binary           the stale-build check passes, and recompiling every
+#                        shader variant from source gives a
+#                        model_runner-shaders.ads byte-identical to the
+#                        committed one (md5 f8eb0b46...)
+#   the shader cache     moving ~/.cache/mesa_shader_cache aside, and
+#                        RADV_DEBUG=nocache, both read the same
+#   the fence spin       0, 64 and 1000 turns, three alternated rounds,
+#                        walls overlapping
+#   the repeat count     the effect the entry above prices, and not this
+#   a rebuild            0.755 against 0.757
+#   processor contention the run is 0.44 s of host across a 1.4 s wall
+#
+# WHAT IS LEFT IS THE FEEDING. The part is idle nearly half of a batched
+# prompt here and twenty-two per cent of the same work under llama.cpp. For
+# three repeats of that prompt:
+#
+#                     user      sys      ioctls   of them failed   fed
+#   this program      1.52 s    1.34 s   40,473   37,653           53%
+#   llama.cpp         0.63 s    0.28 s    9,699    6,870           78%
+#
+# Five times the kernel time and four times the calls, most of ours polls
+# for a completion that had not arrived. That is a path that submits and
+# waits many times where llama.cpp records a graph and submits once, and it
+# is why this program's wall moves with the host where llama.cpp's does not.
+#
+# WHAT IS NOT ESTABLISHED IS WHAT SELECTS THE STATE. The same command read
+# 0.755 to 0.760 s three times in the morning and 1.075 to 1.131 a dozen
+# times that afternoon, with llama.cpp unmoved across both, and nothing in
+# the list above accounts for it.
+#
+# SO THE DEVICE ROWS WERE RE-MEASURED AND DELIBERATELY NOT PUBLISHED. They
+# came in twenty to forty-five per cent below every reading in their own
+# history while the program they are compared against was within half a per
+# cent of its last one. A figure taken in a window like that is the thing
+# this file has twice had to withdraw. What is published instead is the
+# instrument, so the next sitting can say which window it is in rather than
+# find out three commits later.
+#
+# READ THE SHARE AS A COARSE NUMBER. It is sampled a hundred times a second
+# and the same run read 56, 63 and 70 per cent on three passes whose walls
+# were inside five per cent of each other. It separates a starved run from a
+# well-fed one; it does not rank two good ones.

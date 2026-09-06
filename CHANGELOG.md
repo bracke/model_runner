@@ -7,6 +7,52 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A device figure now says how well the part was fed, and the gate now
+  names the number it refused on.** Two instrument changes and one
+  investigation that did not reach its end.
+
+  `tests speed` reports `fed 56% of the run` beside the clock and the watts.
+  It exists because the clock, added for the same reason, narrowed the
+  question without closing it: on 2026-09-06 the slow readings held 1704 to
+  1750 MHz and the fast ones 1763 to 1841, which overlap, while the fed
+  share separated them cleanly. A device figure is not a fact about the
+  part's speed so much as about how much of the run the host managed to keep
+  it busy, and now it says so.
+
+  What it found: the 1419-token device prompt read 1.075 to 1.131 s a dozen
+  times over an afternoon, fed 56 to 70 per cent, while llama.cpp on the
+  same file in the same minutes read 1815 tokens a second against the 1822
+  published five days earlier -- within half a per cent. Only the batched
+  matrix path was slow; the single-vector path read 51.0 tokens a second
+  against 51.4 published and 0.227 s against 0.227. Ten causes were measured
+  and excluded: temperature, the processor's clock and governor, the load,
+  device memory placement, the binary (the stale-build check passes and
+  recompiling every shader from source gives a byte-identical
+  `model_runner-shaders.ads`), the shader cache, the fence spin, the repeat
+  count, a rebuild, and competition for the processor. What is left is the
+  feeding: 1.34 s of kernel time against llama.cpp's 0.28 for the same three
+  repeats, and 40,473 `ioctl` calls against 9,699, of which 37,653 are
+  completion polls that found nothing. **What selects the state is still not
+  established**, so the device rows of the llama.cpp table were re-measured
+  and deliberately not published -- twenty to forty-five per cent below
+  every reading in their own history is the window this file has twice had
+  to withdraw a figure for.
+
+  The gate's refusal used to print one instrument and decide on another: it
+  decides on the share of processors busy just now and printed the minute's
+  average, so a machine turned away with one core spinning was told it was
+  "at a load of 0.62, above the 1.50". `Host_Load.Look` returns the verdict
+  with the number behind it, in one sample, and the refusal now reads "the
+  machine has 3.20 processors busy, above the 1.50". `tests benchmark` keeps
+  the old wording for now: its source is inside four figure groups'
+  fingerprints, and touching it re-prices all four.
+
+  Also re-measured and unchanged: **the fence spin still buys nothing in
+  wall and costs two to three times the host processor time** (0.33 to 0.44 s
+  against 0.14 to 0.16 on sixty-four device tokens, three alternated rounds
+  at 0, 64 and 1000 turns). That is what the entry which closed this road
+  already said, and it stands.
+
 - **Generating is at the memory wall, and four ways round it were refused.**
   The last measured gap was 37.0 tokens a second against llama.cpp's 39.0.
   This machine's memory path reads 35.9 GB/s with one thread, 44.1 with two

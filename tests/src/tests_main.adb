@@ -1516,8 +1516,6 @@ begin
             return False;
          end Given;
 
-         Load_Now : constant Long_Float := Host_Load.Now;
-
          --  How many looks have gone by, so that waiting says so once in a
          --  while rather than once a second.
          Told : Natural := 0;
@@ -1583,19 +1581,32 @@ begin
          --  average is the right instrument for the second question and the
          --  wrong one for the first: it answers about the window a finished
          --  stage occupied, and it lags the window a run is about to.
-         elsif not Given ("--anyway")
-           and then not Host_Load.Quiet_Enough
-         then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "the machine is at a load of "
-               & Model_Runner.Text.Image (Load_Now, 2)
-               & ", above the "
-               & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
-               & " a figure worth publishing needs; wait, or pass --anyway "
-               & "for the shape of the answer");
-            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-            return;
+         elsif not Given ("--anyway") then
+            declare
+               Quiet      : Boolean;
+               Reading    : Long_Float;
+               Processors : Boolean;
+            begin
+               Host_Load.Look (Quiet, Reading, Processors);
+
+               if not Quiet then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     (if Processors
+                      then "the machine has "
+                        & Model_Runner.Text.Image (Reading, 2)
+                        & " processors busy, above the "
+                      else "the machine is at a load of "
+                        & Model_Runner.Text.Image (Reading, 2)
+                        & ", above the ")
+                     & Model_Runner.Text.Image
+                         (Long_Float (Host_Load.Too_Busy), 2)
+                     & " a figure worth publishing needs; wait, or pass "
+                     & "--anyway for the shape of the answer");
+                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+                  return;
+               end if;
+            end;
          end if;
 
          --  The arithmetic, told to the backend before anything is

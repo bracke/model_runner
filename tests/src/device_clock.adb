@@ -141,6 +141,14 @@ package body Device_Clock is
      (if Card_Now >= 0 then Clock_File (Card_Now) else "");
    Power_At  : constant String := Power_File (Card_Now);
 
+   --  Where the kernel says what share of the last moment the part had work.
+   Busy_At   : constant String :=
+     (if Card_Now >= 0
+      then "/sys/class/drm/card"
+        & Natural'Image (Card_Now) (2 .. Natural'Image (Card_Now)'Last)
+        & "/device/gpu_busy_percent"
+      else "");
+
    --------------
    -- Offered --
    --------------
@@ -173,6 +181,34 @@ package body Device_Clock is
          end if;
          return 0.0;
    end Watts_Now;
+
+   --  What share of the last moment the part had work, or -1 where the host
+   --  does not say. Negative rather than zero, because a part with nothing
+   --  to do reads zero and that is an answer rather than a silence.
+   function Busy_Now return Integer;
+
+   function Busy_Now return Integer is
+      Handle : Ada.Text_IO.File_Type;
+   begin
+      if Busy_At = "" then
+         return -1;
+      end if;
+
+      Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Busy_At);
+
+      declare
+         Line : constant String := Ada.Text_IO.Get_Line (Handle);
+      begin
+         Ada.Text_IO.Close (Handle);
+         return Integer'Value (Line);
+      end;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (Handle) then
+            Ada.Text_IO.Close (Handle);
+         end if;
+         return -1;
+   end Busy_Now;
 
    ----------
    -- Look --
@@ -216,6 +252,15 @@ package body Device_Clock is
 
       if Got.Seen then
          Got.Watts := Watts_Now;
+
+         declare
+            Share : constant Integer := Busy_Now;
+         begin
+            if Share >= 0 then
+               Got.Busy := Share;
+               Got.Busy_Seen := True;
+            end if;
+         end;
       end if;
 
       return Got;
@@ -251,7 +296,10 @@ package body Device_Clock is
         & Rate (Of_Reading.Top) & ", " & Rate (Of_Reading.Least)
         & " to " & Rate (Of_Reading.Most)
         & (if Of_Reading.Watts > 0.0
-           then " at " & Two (Of_Reading.Watts) & " W" else "");
+           then " at " & Two (Of_Reading.Watts) & " W" else "")
+        & (if Of_Reading.Busy_Seen
+           then ", fed " & Rate (Of_Reading.Busy) & "% of the run"
+           else "");
    end Shown;
 
    -------------
@@ -262,6 +310,8 @@ package body Device_Clock is
       Got   : Reading;
       Total : Long_Float := 0.0;
       Power : Long_Float := 0.0;
+      Fed   : Long_Float := 0.0;
+      Feeds : Natural := 0;
       Done  : Boolean := False;
       Awake : Boolean := False;
    begin
@@ -289,6 +339,15 @@ package body Device_Clock is
                     Natural (Total / Long_Float (Watcher.Got.Samples));
                   Watcher.Got.Watts :=
                     Power / Long_Float (Watcher.Got.Samples);
+
+                  --  Counted over the samples that carried one rather than
+                  --  over all of them, because a host that says nothing
+                  --  about this still says plenty about the clock.
+                  if Feeds > 0 then
+                     Watcher.Got.Busy :=
+                       Natural (Fed / Long_Float (Feeds));
+                     Watcher.Got.Busy_Seen := True;
+                  end if;
                else
                   --  Nothing was seen, so nothing is claimed.
                   Watcher.Got.Least := 0;
@@ -310,6 +369,11 @@ package body Device_Clock is
                   Got.Samples := Got.Samples + 1;
                   Total := Total + Long_Float (Now.Mean);
                   Power := Power + Now.Watts;
+
+                  if Now.Busy_Seen then
+                     Fed := Fed + Long_Float (Now.Busy);
+                     Feeds := Feeds + 1;
+                  end if;
                end if;
             end;
          end select;

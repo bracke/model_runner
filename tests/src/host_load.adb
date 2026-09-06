@@ -24,18 +24,40 @@ package body Host_Load is
    -------------------
 
    function Quiet_Enough return Boolean is
+      Quiet      : Boolean;
+      Reading    : Long_Float;
+      Processors : Boolean;
+   begin
+      Look (Quiet, Reading, Processors);
+      return Quiet;
+   end Quiet_Enough;
+
+   ----------
+   -- Look --
+   ----------
+
+   procedure Look
+     (Quiet      : out Boolean;
+      Reading    : out Long_Float;
+      Processors : out Boolean)
+   is
       Busy : constant Long_Float := Busy_Processors;
    begin
       --  Where the processors say, they decide, because they are answering
       --  about now and the average is answering about the minute behind.
       if Busy >= 0.0 then
-         return Busy <= Too_Busy;
+         Quiet      := Busy <= Too_Busy;
+         Reading    := Busy;
+         Processors := True;
+         return;
       end if;
 
       --  A host that keeps no per-processor times has only the average, and
       --  is left exactly where it was before this existed.
-      return Publishable (Now);
-   end Quiet_Enough;
+      Reading    := Now;
+      Quiet      := Publishable (Reading);
+      Processors := False;
+   end Look;
 
    ----------------------
    -- Busy_Processors --
@@ -160,21 +182,28 @@ package body Host_Load is
       Say     : access procedure (Load : Long_Float) := null) return Boolean
    is
       Looks : constant Natural := Minutes * 60;
-      Seen  : Long_Float := Now;
+
+      --  The number the gate decided on, so that a caller shown "it is at"
+      --  is shown the same instrument the bound is in.
+      Quiet      : Boolean;
+      Seen       : Long_Float;
+      Processors : Boolean;
    begin
-      if Quiet_Enough then
+      Look (Quiet, Seen, Processors);
+
+      if Quiet then
          return True;
       end if;
 
-      for Look in 1 .. Looks loop
+      for Turn in 1 .. Looks loop
          if Say /= null then
             Say (Seen);
          end if;
 
          delay 1.0;
-         Seen := Now;
+         Look (Quiet, Seen, Processors);
 
-         if Quiet_Enough then
+         if Quiet then
             return True;
          end if;
       end loop;

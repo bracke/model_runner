@@ -96,6 +96,30 @@ package Host_Load is
    --  @return True when a figure taken now is worth publishing.
    function Quiet_Enough return Boolean;
 
+   --  The gate's verdict together with the number it reached it on.
+   --
+   --  Quiet_Enough answers the question; this answers it with its evidence,
+   --  because a refusal naming a number the reader cannot square with the
+   --  bound is worse than one naming none. The gate decides on the share of
+   --  processors busy just now and the refusals used to print the minute's
+   --  average beside it, so a machine turned away with one core spinning
+   --  was told it was "at a load of 0.62, above the 1.50" -- two instruments
+   --  in one sentence, and the one that decided was not the one shown.
+   --
+   --  One reading rather than two, because the sample behind the processor
+   --  share costs a fifth of a second and a second call could disagree with
+   --  the first: a message must name the number that actually refused.
+   --
+   --  @param Quiet True when a figure taken now is worth publishing.
+   --  @param Reading The number the verdict was reached on.
+   --  @param Processors True when Reading counts busy processors, False when
+   --    it is the load average, which is what a host keeping no
+   --    per-processor times leaves to decide on.
+   procedure Look
+     (Quiet      : out Boolean;
+      Reading    : out Long_Float;
+      Processors : out Boolean);
+
    --  Wait for the machine to be quiet enough to publish a figure from.
    --
    --  Every figure retaken this week came through a loop that polled the
