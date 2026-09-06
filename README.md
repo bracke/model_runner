@@ -8125,6 +8125,61 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### Where the gap is after all of that
+
+Nine changes into this line of work, the comparison is worth taking again
+from scratch rather than reasoning from the last one.
+
+| TinyLlama, processor | model_runner | llama.cpp | |
+| --- | ---: | ---: | --- |
+| Q4_K_M, 110-token prompt | 292.6 t/s | 390 t/s | 1.33 behind |
+| Q4_K_M, 1419-token prompt | 236.8 t/s | 317 t/s | 1.34 behind |
+| Q4_K_M, generating | 54.6 t/s | 66.5 t/s | 1.22 behind |
+| Q5_K_M, 110-token prompt | 267.6 t/s | 193.8 t/s | **1.38 ahead** |
+| Q5_K_M, 1419-token prompt | 226.5 t/s | 159.1 t/s | **1.42 ahead** |
+| Q5_K_M, generating | 47.2 t/s | 56.4 t/s | 1.19 behind |
+| Q8_0, generating | 36.9 t/s | 39.3 t/s | 1.06 behind |
+
+The four-bit prompt rows are llama.cpp's eight-row repack, which
+`### The repack, priced and refused` prices at one per cent of *this*
+kernel's time and which it does not apply to the five-bit format -- hence
+the two rows where this program is ahead.
+
+**The generating rows are not memory.** A four-bit generated token moves
+34.7 gigabytes a second where the eight-bit one reaches 44, so the wall is
+not where the eight-bit kernel found it. At one thread, where the pool drops
+out, this program reads 19.0 tokens a second against llama.cpp's 43.3 --
+**2.28 times behind per core** -- and both run near their instruction limit:
+
+| Q4_K generating, one thread | instructions | cycles | IPC |
+| --- | ---: | ---: | ---: |
+| model_runner, 30 tokens | 33.0 G | 11.6 G | 2.84 |
+| llama.cpp, about 128 | 44.9 G | 13.0 G | 3.46 |
+
+**Two to three times the instructions for a token, at a comparable rate of
+retiring them.** That is the whole of the generating gap and it is not
+subtle; what is subtle is where they are. The four-bit dot loop is a seventh
+of an instruction per weight and the program as a whole spends one and a
+tenth, so **six sevenths of them are not in the arithmetic**.
+
+A profile of that single-threaded token says where, and none of it is one
+large thing:
+
+- the Ada loop around the per-block prologue -- its counter, its bound and
+  the addresses it computes for six operands of an insertion it may not
+  hoist across -- at about an eighth of the kernel's instructions;
+- the six-bit output projection, which a `_M` file carries whatever its own
+  name says, at twice the instructions a weight of the four-bit path;
+- the block scales, two half-precision conversions a block, and the
+  minimum's term's scalar tail between insertions.
+
+**The named next change is to put the prologue's loop inside its insertion**,
+as the dot product's already is. The dot loop walks all of a row's blocks
+with two pointer increments; the prologue is called once a block from Ada and
+pays for the call each time. It is the largest single item the profile shows
+and it is the same shape as work already in this file. Named with its size,
+not built.
+
 ### The same instruction in the other kernel, and why it does nothing there
 
 `vpdpwssd` took the strip kernels' innermost work from four instructions to

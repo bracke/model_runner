@@ -5957,6 +5957,64 @@
 # load: 0.80 for the benchmark, under 1.10 for the A/B and the rest
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-06, where the gap is after all of that. No source changed.
+#
+#   Nine changes in, the comparison taken again from scratch rather than
+#   reasoned from the last one. Processor, TinyLlama:
+#
+#     Q4_K_M  110 prompt   292.6 t/s  against llama.cpp 390    1.33 behind
+#             1419 prompt  236.8      against 317             1.34 behind
+#             generating    54.6      against 66.5            1.22 behind
+#     Q5_K_M  110 prompt   267.6      against 193.8           1.38 AHEAD
+#             1419 prompt  226.5      against 159.1           1.42 AHEAD
+#             generating    47.2      against 56.4            1.19 behind
+#     Q8_0    generating    36.9      against 39.3            1.06 behind
+#
+#   The four-bit prompt rows are llama.cpp's eight-row repack, which the
+#   entry above prices at one per cent of this kernel's time and which it
+#   does not apply to the five-bit format -- hence the two rows ahead.
+#
+#   THE GENERATING ROWS ARE NOT MEMORY. A four-bit generated token moves
+#   34.7 GB/s where the eight-bit one reaches 44. At one thread this program
+#   reads 19.0 tokens a second against llama.cpp's 43.3 -- 2.28 times behind
+#   per core -- and both run near their instruction limit:
+#
+#     Q4_K generating, one thread   instructions   cycles   IPC
+#       model_runner, 30 tokens       33.0e9       11.6e9   2.84
+#       llama.cpp, about 128          44.9e9       13.0e9   3.46
+#
+#   Two to three times the instructions a token at a comparable rate of
+#   retiring them. The four-bit dot loop is a seventh of an instruction a
+#   weight and the program spends one and a tenth, so six sevenths of them
+#   are not in the arithmetic.
+#
+#   WHERE THEY ARE, from a profile of that single-threaded token, and none
+#   of it one large thing:
+#
+#     the Ada loop around the per-block prologue -- counter, bound and the
+#       addresses it computes for six operands of an insertion it may not
+#       hoist across -- about an eighth of the kernel's instructions;
+#     the six-bit output projection, which a "_M" file carries whatever its
+#       own name says, at twice the instructions a weight of the four-bit
+#       path;
+#     the block scales, two half-precision conversions a block, and the
+#       minimum's term's scalar tail between insertions.
+#
+#   THE NAMED NEXT CHANGE is to put the prologue's loop inside its
+#   insertion, as the dot product's already is. The dot loop walks all of a
+#   row's blocks with two pointer increments; the prologue is called once a
+#   block from Ada and pays for the call each time. Largest single item the
+#   profile shows, and the same shape as work already in this file.
+#
+#   Also weighed and set aside: vpdpwssd in the six-bit single-vector
+#   kernel. Its dot is five instructions there against the strip's, and
+#   masked accumulation would make it three -- but the weight assembly is
+#   forty-eight of the block's ninety-two, so the whole change is under
+#   eight per cent of that kernel and about one of a generated token.
+#
+# load: under 1.10 throughout
+# model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
+
 kernels 4A07832B2F7EED3B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The comparison against llama.cpp, taken again from scratch after nine
+  changes.** Q4_K prompts are 1.33–1.34× behind (its eight-row repack), Q4_K
+  and Q5_K generating 1.22× and 1.19× behind, Q8_0 generating 1.06×, and
+  **Q5_K prompts are 1.38–1.42× ahead** — the format llama.cpp does not
+  repack.
+
+  **The generating gap is instructions, not memory.** A Q4_K generated token
+  moves 34.7 GB/s where the Q8_0 one reaches 44, and at one thread this
+  program reads 19.0 t/s against llama.cpp's 43.3 — **2.28× behind per core**,
+  executing 2–3× the instructions per token at a comparable IPC (2.84 against
+  3.46). The Q4_K dot loop is ⅐ of an instruction per weight and the program
+  spends 1.1, so **six sevenths of them are not in the arithmetic**.
+
+  Named next, with its size: **put the per-block prologue's loop inside its
+  insertion**, as the dot product's already is. It is called once a block from
+  Ada and pays the call each time — about an eighth of the kernel's
+  instructions, and the largest single item the profile shows. Also weighed
+  and set aside: `vpdpwssd` in the six-bit *single-vector* kernel, worth under
+  8 % of that kernel because its weight assembly is 48 of the block's 92.
+
 ### Changed
 
 - **The six-bit strip kernel keeps its scale whole**, which was the largest
