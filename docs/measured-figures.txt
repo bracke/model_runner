@@ -16160,3 +16160,56 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 #     Columns, which for a step whose Rows and Columns say what it reads and
 #     writes is a square: the loader was asked to upload four million values
 #     out of an array of two thousand.
+
+# What puts a device figure in a bad window, and what a device row needs
+# ---------------------------------------------------------------------
+#
+# A device figure in this file swung 1.51 times between sittings with the
+# same binary in it, and one of them was published and then withdrawn. The
+# cause is the host, in two parts, and both reproduce.
+#
+# The repeat count is a third of the figure. A 1419-token Q8_0 device prompt:
+#
+#   --repeats 1    1.022, 1.022, 1.027 s    0.36 to 0.39 s of host
+#   --repeats 3    0.751, 0.764, 0.773 s    0.20 to 0.27 s of host
+#
+# Three runs each way, one sitting, no overlap. The first run of a process
+# builds its pipelines, writes its descriptors and touches a gigabyte of
+# mapped model for the first time; a median of three hides that where a
+# single run reports it. The host share this tool prints beside every wall
+# says it from the other side, which is why that column is printed.
+#
+# Competition for the host is the rest of it. Busy loops, nothing else
+# changed:
+#
+#   quiet, load 1.00          0.760 s    0.22 s of host
+#   two loops, load 1.35      0.799 s    0.27 s of host
+#   four loops, load 2.23     0.878 s    0.27 s of host
+#
+# Smooth and in one direction. About a fifth of that prompt's wall is the
+# processor between submissions -- normalizations, rotations, joins -- so
+# whatever stretches the fifth stretches the wall. llama.cpp is not immune:
+# eight loops took it from 1826 to 1295 tokens a second.
+#
+# Three candidates were checked and are not it. The clock the part reports
+# was 1758 to 1779 MHz in the slow readings and 1763 to 1841 in the fast,
+# which overlaps. The power budget is shared: both programs draw twenty-five
+# watts sustained, and forty-five seconds of idle before a measurement gives
+# 1.032 s rather than a boosted one. And a rebuild between measurements is
+# worth nothing, 0.755 against 0.757.
+#
+# So the comparison that stands is the quiet one. 1785 tokens a second
+# against llama.cpp's 1755, taken on a quiet machine, is sound; the 1211 that
+# read 1.51 times behind was taken between builds and test runs and is not.
+# On a quiet host the device long prompt is level.
+#
+# The rule this leaves is about taking figures, not about the shader. This
+# file's rule is that a figure is taken on a quiet host or it is not taken,
+# and the gate refuses above a load of 1.50. That is loose for a device row:
+# 2.23 is worth sixteen per cent and 1.35 is worth five, and both publish. A
+# device row wants a quieter machine than a processor row does, because a
+# fifth of it is the processor -- and it wants its repeat count written down
+# beside it, because llama-bench always warms up first and this tool reports
+# whichever state it was asked for. Every device figure taken in an
+# alternated comparison during that work had builds running between its
+# readings.

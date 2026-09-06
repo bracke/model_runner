@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What put the device in a bad window was the host, in two parts.** The
+  entry below withdraws a device figure because the same binary read 1.51
+  times behind in one sitting and level in the next; this is the cause.
+  First, the repeat count: a 1419-token device prompt reads 1.022, 1.022 and
+  1.027 s at `--repeats 1` carrying 0.36 to 0.39 s of host, and 0.751, 0.764
+  and 0.773 at `--repeats 3` carrying 0.20 to 0.27 -- the first run of a
+  process builds pipelines and touches a gigabyte of mapped model, and a
+  median hides what a single run reports. Second, competition for that host:
+  0.760 s quiet, 0.799 under two busy loops, 0.878 under four, smooth and in
+  one direction, because a fifth of that prompt's wall is the processor
+  between submissions. llama.cpp is not immune either -- eight loops took it
+  from 1826 to 1295 tokens a second. Not the clock (1758 to 1779 MHz slow
+  against 1763 to 1841 fast, overlapping), not the power budget (both draw
+  twenty-five watts sustained, and a forty-five second idle gives 1.032 s
+  rather than a boost), not a rebuild between measurements (0.755 against
+  0.757). So the 1785 tokens a second that said this program was level was
+  taken quiet and stands, and the 1211 that said 1.51 times behind was taken
+  between builds and does not: **on a quiet host the device long prompt is
+  level with llama.cpp**, and the gap chased through four staging shapes and
+  a tile was this program's host being starved. The rule that follows is
+  about this file rather than the shader -- the 1.50 load gate is loose for
+  a device row, where load 2.23 is worth sixteen per cent and 1.35 is worth
+  five.
+
 - **llama.cpp's shared-memory staging for the activation, refused four ways
   — and the gap it was chasing withdrawn.** Its `load_b_to_shmem` takes eight
   halves in one instruction; filling a tile a half at a time is one two-byte

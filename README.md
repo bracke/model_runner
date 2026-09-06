@@ -8125,6 +8125,64 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### What puts it in a bad window is the host
+
+The section below withdraws a device figure because the same binary read 1.51
+times behind in one sitting and level in the next, and ends by saying that
+finding the cause is worth more than any shape tried. It is the host, in two
+parts, and both are reproducible.
+
+**The repeat count is a third of the figure.**
+
+| Q8_0, 1419-token device prompt | wall | of the host |
+| --- | ---: | ---: |
+| `--repeats 1` | 1.022, 1.022, 1.027 s | 0.36 to 0.39 s |
+| `--repeats 3` | 0.751, 0.764, 0.773 s | 0.20 to 0.27 s |
+
+Three runs each way and no overlap. The first run of a process carries work
+the ones after it do not -- pipelines built, descriptors written, a
+gigabyte of mapped model touched for the first time -- and a median of three
+hides it where a single run reports it. The host's own share, which this tool
+has always printed beside the wall, says the same thing from the other side.
+
+**And competition for the host is the rest of it.** Busy loops, nothing else
+changed:
+
+| | wall | of the host |
+| --- | ---: | ---: |
+| quiet, load 1.00 | 0.760 s | 0.22 s |
+| two loops, load 1.35 | 0.799 s | 0.27 s |
+| four loops, load 2.23 | 0.878 s | 0.27 s |
+
+Smooth and in one direction. A 1419-token device prompt is about three
+quarters of a second of device work with a fifth of a second of host inside
+it -- the normalizations, the rotations and the joins between submissions --
+so whatever stretches that fifth stretches the wall. llama.cpp is not immune
+either: eight loops took it from 1826 to 1295 tokens a second.
+
+**What it is not**, each checked rather than assumed: the clock the part
+reports, which was 1758 to 1779 MHz in the slow readings and 1763 to 1841 in
+the fast, and overlaps; the power budget, since both programs draw
+twenty-five watts sustained and a forty-five second idle produced 1.032 s
+rather than a boosted one; and a rebuild between measurements, which gives
+0.755 against 0.757.
+
+**So the correction of the correction.** The 1785 tokens a second that said
+this program was ahead was taken on a quiet machine, and llama.cpp's 1755 in
+the same window: that comparison stands. The 1211 that said it was 1.51 times
+behind was taken between builds and test runs, and does not. **On a quiet
+host the device long prompt is level with llama.cpp**, and the gap that was
+chased through four staging shapes and a tile was this program's host being
+starved.
+
+**Which is a rule about this file rather than about the shader.** Its own
+rule is that a figure is taken on a quiet host or it is not taken, and the
+load gate is set at 1.50. That is loose for a device figure: at 2.23 the
+error is sixteen per cent and at 1.35 it is five, and every device figure
+taken in an alternated comparison here had builds running between its
+readings. A device row wants a quieter machine than a processor row, because
+a fifth of it is the processor.
+
 ### The device gap was a window, and the staging that chased it
 
 Two things came out of chasing llama.cpp's shared-memory staging, and the
