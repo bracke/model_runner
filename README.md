@@ -8125,6 +8125,62 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The strip's scale, kept whole
+
+The section below prices llama.cpp's repack at nothing here and names this
+instead. This is it, and it is six and a half per cent of a prompt.
+
+**One instruction of the four was doing no arithmetic.** The strip kernel's
+innermost work was a zeroed accumulator, the byte dot product, a convert and
+a scaled multiply-add -- per sub-block, per row, *per vector*. The convert is
+there only because the scale is a floating-point number, and the scale is a
+floating-point number only because the weight's six-bit factor was folded
+into the block's own scale before the kernel ever saw it.
+
+Unfolded, the factor is a whole number no larger than sixty-three and it can
+multiply the integer dot product directly:
+
+```
+vpmaddubsw  activation, weights -> int16 pair sums
+vpdpwssd    factor{1to8}, those -> int32, accumulated
+```
+
+**Two instructions, and `vpdpwssd` is why.** It multiplies sixteen-bit pairs
+and accumulates into thirty-two-bit lanes, and it takes a broadcast memory
+operand -- so the factor arrives free, as the scale used to, with no separate
+broadcast and no separate add. Eight sub-blocks accumulate as whole numbers
+and the super-block converts once, taking the block's scale against the
+vector's in a single multiply-add.
+
+**And the table shrinks with it.** The factor does not depend on the vector,
+where the folded scale did. What was an entry for every sub-block, row and
+vector is now one for every sub-block and row, plus eight for the block --
+sixteen numbers where there were sixty-four, and a prologue that fills them
+with a quarter of the arithmetic.
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, 1419-token prompt | 6.895 s | 6.444 s | **6.5 %** |
+| Q4_K_M, 110-token prompt | 0.4445 s | 0.4165 s | **6.3 %** |
+| Q5_K_M, 1419-token prompt | 7.12 s | 7.13 s | a control, level |
+| Q4_K_M, ten generated | 0.183 s | 0.184 s | a control, level |
+
+Four alternated rounds, all four on the same side for both Q4_K rows and the
+ranges not touching. The two controls are the point of the table: Q5_K's
+prompt goes through a strip kernel this change does not touch, and Q4_K
+generating goes through the single-vector kernel, and both stay where they
+were. The digests do not move -- `1a26d24d33b8957b` and `cbf29ce484222325` --
+because the arithmetic that changed is exact until the convert.
+
+**Where it leaves the prompt.** 260.0 tokens a second at 110 and 222.9 at
+1419, against llama.cpp's 387.1 and 321.1 with its eight-row repack and 230.5
+without it. Per core the gap is 1.48, from 1.58. The four-bit prompt is now
+comfortably ahead of llama.cpp's unrepacked kernel and about one and a half
+times behind its repacked one.
+
+**Q5_K's strip kernel still folds its scale**, and is the same change again
+with the fifth bit's plane to carry through it. Named, not built.
+
 ### The repack, priced and refused
 
 The section below names llama.cpp's eight-row interleaved Q4_K layout as the
@@ -8173,13 +8229,10 @@ combination of the three.
 
 **So the change that is worth making is the one already made twice
 elsewhere**, and not the layout: keep the sub-block factor a whole number,
-multiply the integer dot product by it, and convert once a super-block. In
-the strip kernel the factor does not depend on the vector, so the scale table
-collapses from one entry per sub-block, row and vector to one per sub-block
-and row -- a quarter of its size and a quarter of the prologue that fills it.
-That is named here rather than built, with the same rule the repack was named
-under: the estimate is eleven per cent of the dot loop and most of a prologue
-that an ablation puts at seven per cent of the prompt.
+multiply the integer dot product by it, and convert once a super-block. It
+was estimated at eleven per cent of the dot loop and most of a prologue an
+ablation puts at seven per cent of the prompt, and it is `### The strip's
+scale, kept whole` below. It came out at six and a half.
 
 The repack may still be the right change for a kernel shaped like
 llama.cpp's unrepacked one, which reads a single row at a time; this one

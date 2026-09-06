@@ -5,6 +5,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The four-bit strip kernel keeps its sub-block scale a whole number**, so
+  the innermost work is two instructions instead of four: `vpmaddubsw` for
+  int16 pair sums, then `vpdpwssd` accumulating into int32 with the factor as
+  a **broadcast memory operand** — arriving free exactly as the float scale
+  used to, with no separate broadcast and no separate add. Eight sub-blocks
+  accumulate whole and the super-block converts once.
+
+  The scale table shrinks with it: the factor does not depend on the vector
+  where the folded scale did, so an entry per (sub-block, row, vector) becomes
+  one per (sub-block, row) plus eight per block — **sixteen numbers where
+  there were sixty-four**, filled with a quarter of the arithmetic.
+
+  **A 1419-token Q4_K prompt reads 6.444 s against 6.895 and a 110-token one
+  0.4165 against 0.4445** — 6.5 % and 6.3 %, four alternated rounds each, all
+  four on the same side with the ranges not touching. Two controls stay level:
+  Q5_K's prompt (a strip kernel this does not touch) and Q4_K generating (the
+  single-vector kernel). Digests unchanged; conformance 28344 sequences, 0
+  outside tolerance.
+
+  Per core the gap to llama.cpp on a Q4_K prompt is 1.48, from 1.58, and this
+  program is 1.13× ahead of llama.cpp's unrepacked prompt kernel. Q5_K's strip
+  kernel still folds its scale and is the same change again.
+
 ### Measured
 
 - **llama.cpp's eight-row Q4_K repack, priced and refused.** Its two possible
