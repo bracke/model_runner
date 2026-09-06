@@ -71,7 +71,9 @@ package body Model_Runner.Quantization.Integers is
 
    function Supers_Vectors
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
-   is (Format = G.Type_Q4_K or else Format = G.Type_Q5_K);
+   is (Format = G.Type_Q4_K
+       or else Format = G.Type_Q5_K
+       or else Format = G.Type_Q6_K);
 
    ----------------------
    -- Quantize_Vectors --

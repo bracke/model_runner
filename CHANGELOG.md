@@ -5,6 +5,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The six-bit strip kernel keeps its scale whole**, which was the largest
+  ratio left: a 32-element byte product spans *two* of Q6_K's 16-element
+  halves, so it ended in two masked multiply-adds — five instructions where
+  the four-bit kernel had four. `vpdpwssd` takes a full register operand as
+  well as a broadcast one, so a 32-byte entry holding one half's factor in
+  four lanes and the other's in the next four **collapses all five to two**.
+
+  It needed **Q6_K quantized against a super-block first** — the scale that
+  comes out of the sum is the activation's, and Q6_K was the one k-quant
+  still taking a scale for every thirty-two. `Supers_Vectors` now names it
+  with the other two, which is what llama.cpp's Q8_K does for every k-quant.
+  No digest moves; conformance 28344 sequences, 0 outside tolerance.
+
+  **Q4_K prompts read 0.378 s against 0.4175 at 110 tokens and 6.017 against
+  6.377 at 1419; Q5_K 6.304 against 6.615** — 9.5 %, 5.6 % and 4.7 %, four
+  alternated rounds, four of four on the same side with the ranges not
+  touching. Q8_0 is the control and level. Both k-quant files gain because a
+  `_M` file puts this format on its output projection whatever its own name
+  says.
+
+  The four-bit prompt is **1.33× behind llama.cpp, from 1.58** when this line
+  of work began; the five-bit is **1.38–1.42× ahead**.
+
 ### Measured
 
 - **`vpdpwssd` in the single-vector k-quant kernel is worth nothing, and why

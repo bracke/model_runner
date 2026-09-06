@@ -8160,14 +8160,40 @@ do not show, because generating is not what this processor is short of
 instructions for. **The strip kernels are, and that is where the same
 instruction paid six and a half and eight and a half per cent.**
 
-**Q6_K's strip kernel has not had it and has the largest ratio left.** A
+**Q6_K's strip kernel had the largest ratio left, and it is built.** A
 thirty-two element byte product there spans *two* of its sixteen-element
-halves, which have different scales, so it ends in two masked multiply-adds
+halves, which have different scales, so it ended in two masked multiply-adds
 rather than one -- five instructions where the four-bit kernel had four.
 `vpdpwssd` takes a full register operand as well as a broadcast one, so a
 thirty-two byte table entry holding one half's factor in four lanes and the
-other's in the next four would collapse all five to two. It is a quarter of a
-four-bit model's prompt and the whole of a six-bit one's. Named, not built.
+other's in the next four collapses all five to two.
+
+**It needed Q6_K quantized against a super-block first.** The scale that
+comes out of the sum is the activation's, and until this sitting Q6_K was the
+one k-quant still taking a scale for every thirty-two -- so there was nothing
+constant to take out. `Supers_Vectors` now names it with the other two, which
+is what llama.cpp's Q8_K does for every k-quant and not just the two with a
+minimum term. Conformance is 28344 sequences and 0 outside tolerance either
+way, and no digest moves.
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_K_M, 110-token prompt | 0.4175 s | 0.378 s | **9.5 %** |
+| Q4_K_M, 1419-token prompt | 6.377 s | 6.017 s | **5.6 %** |
+| Q5_K_M, 1419-token prompt | 6.615 s | 6.304 s | **4.7 %** |
+| Q8_0, 1419-token prompt | 4.958 s | 4.935 s | a control, level |
+
+Four alternated rounds, four of four on the same side for every k-quant row
+and the ranges not touching. Both k-quant files gain because a `_M` file puts
+this format on its output projection whatever its own name says -- which is
+also why the eight-bit control does not move at all.
+
+**Where the four prompts now stand.** The four-bit reads 292.6 tokens a
+second at 110 and 236.8 at 1419, against llama.cpp's 390 and 317 with its
+eight-row repack: **1.33 times behind**, from 1.58 when this line of work
+began. The five-bit reads 267.6 and 226.5 against llama.cpp's 193.8 and
+159.1 -- **1.38 and 1.42 times ahead**, because that format it does not
+repack.
 
 ### The strip's scale, kept whole
 
