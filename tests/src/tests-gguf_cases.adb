@@ -994,6 +994,8 @@ package body Tests.GGUF_Cases is
       Whole_Values, Piece_Values : QI.Signed_Array (0 .. Room - 1);
       Whole_Scales, Piece_Scales : N.Real_Array (0 .. Blocks - 1);
       Whole_Totals, Piece_Totals : QI.Sum_Array (0 .. Blocks - 1);
+      Whole_Halves, Piece_Halves : QI.Sum_Array
+        (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half) - 1);
 
       Ok : Boolean;
    begin
@@ -1007,7 +1009,8 @@ package body Tests.GGUF_Cases is
 
       QI.Quantize_Vectors
         (Vectors, Count, Columns,
-         Whole_Values, Whole_Scales, Whole_Totals, Ok);
+         Whole_Values, Whole_Scales, Whole_Totals, Whole_Halves,
+         Ok);
       Assert (Ok, "the whole run was refused");
 
       --  Four pieces, uneven, the last of them empty.
@@ -1021,7 +1024,8 @@ package body Tests.GGUF_Cases is
               (Vectors, Count, Columns,
                From,
                (if Take = 0 then From - 1 else From + Take - 1),
-               Piece_Values, Piece_Scales, Piece_Totals, Ok);
+               Piece_Values, Piece_Scales, Piece_Totals,
+               Piece_Halves, Ok);
             Assert (Ok, "a piece of the run was refused");
             From := From + Take;
          end loop;
@@ -1042,12 +1046,21 @@ package body Tests.GGUF_Cases is
          Assert (Whole_Totals (Index) = Piece_Totals (Index),
                  "a total differs at block"
                  & N.Element_Count'Image (Index));
+         Assert (Whole_Halves (Index * 2) = Piece_Halves (Index * 2)
+                 and then Whole_Halves (Index * 2 + 1)
+                          = Piece_Halves (Index * 2 + 1),
+                 "a half differs at block"
+                 & N.Element_Count'Image (Index));
+         Assert (Whole_Halves (Index * 2) + Whole_Halves (Index * 2 + 1)
+                 = Whole_Totals (Index),
+                 "the two halves do not add up to the block's total at"
+                 & N.Element_Count'Image (Index));
       end loop;
 
       --  And a range that leaves the run is refused rather than read.
       QI.Quantize_Blocks
         (Vectors, Count, Columns, 0, Blocks,
-         Piece_Values, Piece_Scales, Piece_Totals, Ok);
+         Piece_Values, Piece_Scales, Piece_Totals, Piece_Halves, Ok);
       Assert (not Ok, "a range past the last block was accepted");
    end Packing_In_Pieces_Is_Packing_Whole;
 
@@ -1461,6 +1474,9 @@ package body Tests.GGUF_Cases is
       Values  : QI.Signed_Array (0 .. Columns * Count - 1);
       Scales  : N.Real_Array (0 .. Columns * Count / Per - 1);
       Totals  : QI.Sum_Array (0 .. Columns * Count / Per - 1);
+      Halves : QI.Sum_Array
+        (0 .. (Columns * Count / Per - 1 + 1)
+              * (QI.Activation_Block / QI.Activation_Half) - 1);
 
       Plain_Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) :=
         [others => 0.0];
@@ -1491,7 +1507,7 @@ package body Tests.GGUF_Cases is
       end loop;
 
       QI.Quantize_Vectors
-        (Vectors, Count, Columns, Values, Scales, Totals, Ok);
+        (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok);
       Assert (Ok, "the activations could not be quantized");
 
       --  The deepest is asked for by name below; the two here are the
@@ -1501,13 +1517,13 @@ package body Tests.GGUF_Cases is
       QI.Use_Wide_Rows (False);
       QI.Accumulate_Rows
         (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
-         Values, Scales, Totals, 0, Columns, Count, Plain_Sums, Ok);
+         Values, Scales, Totals, Halves, 0, Columns, Count, Plain_Sums, Ok);
       Assert (Ok, "the baseline product refused the call");
 
       QI.Use_Wide_Rows (Wide);
       QI.Accumulate_Rows
         (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
-         Values, Scales, Totals, 0, Columns, Count, Wide_Sums, Ok);
+         Values, Scales, Totals, Halves, 0, Columns, Count, Wide_Sums, Ok);
       Assert (Ok, "the wider product refused the call");
 
       for Index in Plain_Sums'Range loop
@@ -1541,8 +1557,8 @@ package body Tests.GGUF_Cases is
             QI.Use_Deep_Rows (True);
             QI.Accumulate_Rows
               (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows,
-               Blocks, Values, Scales, Totals, 0, Columns, Count, Deep_Sums,
-               Ok);
+               Blocks, Values, Scales, Totals, Halves, 0, Columns, Count,
+               Deep_Sums, Ok);
             QI.Use_Deep_Rows (False);
             Assert (Ok, "the byte product refused the call");
 
@@ -1622,6 +1638,9 @@ package body Tests.GGUF_Cases is
       Values  : QI.Signed_Array (0 .. Columns * Count - 1);
       Scales  : N.Real_Array (0 .. Columns * Count / Per - 1);
       Totals  : QI.Sum_Array (0 .. Columns * Count / Per - 1);
+      Halves : QI.Sum_Array
+        (0 .. (Columns * Count / Per - 1 + 1)
+              * (QI.Activation_Block / QI.Activation_Half) - 1);
 
       Handled : Boolean;
       Ok      : Boolean;
@@ -1653,13 +1672,14 @@ package body Tests.GGUF_Cases is
               "could not make the weight view");
 
       QI.Quantize_Vectors
-        (Vectors, Count, Columns, Values, Scales, Totals, Ok);
+        (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok);
       Assert (Ok, "the activations could not be quantized");
 
       Model_Runner.Tensors.Mat_Mul_Range
         (Item, Vectors, Count, Floated, 0, Rows - 1);
       Model_Runner.Tensors.Mat_Mul_Range_Packed
-        (Item, Values, Scales, Totals, Count, Packed, 0, Rows - 1, Handled);
+        (Item, Values, Scales, Totals, Halves, Count, Packed, 0, Rows - 1,
+         Handled);
       Assert (Handled, "the quantized product refused a format it implements");
 
       for Index in Floated'Range loop
@@ -1685,7 +1705,8 @@ package body Tests.GGUF_Cases is
            (Model_Runner.GGUF.Type_F32, 1, Columns, Data, 0, Other, Status);
          if not Model_Runner.Errors.Is_Error (Status) then
             Model_Runner.Tensors.Mat_Mul_Range_Packed
-              (Other, Values, Scales, Totals, 1, Packed, 0, 0, Refuse);
+              (Other, Values, Scales, Totals, Halves, 1, Packed, 0, 0,
+               Refuse);
             Assert (not Refuse,
                     "the quantized product answered for a format it has no "
                     & "integer kernel for");

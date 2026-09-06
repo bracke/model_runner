@@ -449,6 +449,7 @@ package body Model_Runner.Tensors is
       Values  : Model_Runner.Quantization.Integers.Signed_Array;
       Scales  : Real_Array;
       Totals  : Model_Runner.Quantization.Integers.Sum_Array;
+      Halves  : Model_Runner.Quantization.Integers.Sum_Array;
       Count   : Element_Count;
       Target  : in out Real_Array;
       First   : Element_Count;
@@ -516,6 +517,7 @@ package body Model_Runner.Tensors is
                   Values    => Values,
                   Scales    => Scales,
                   Totals    => Totals,
+                  Halves    => Halves,
                   First     => 0,
                   Stride    => Item.Columns,
                   Count     => Count,

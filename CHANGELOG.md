@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The six-bit k-quant's activation half-sums are hoisted out of the
+  kernels into the quantizer**, which already walks every element and
+  already carries a running total per thirty-two — it now writes that total
+  out at the halfway point as well. The kernels formed them once per *row
+  tile*; a 32000-row output projection formed the same 128 sums a thousand
+  times. **The work is gone rather than faster.** `Halves` travels beside
+  `Totals` through `Quantize_Vectors`, `Accumulate_Rows`,
+  `Mat_Mul_Range_Packed`, the pool's buffers and the packing share.
+
+  Q4_K_M generating answers **0.183 s in four rounds out of four** where the
+  version before it ranges 0.184 to 0.188 — about two per cent, and steadier,
+  because what is left no longer varies with how many tiles a tensor is cut
+  into. Prompts are a wash. Digests unchanged; conformance 28344 sequences, 0
+  outside tolerance.
+
+  **The first attempt cost three to five per cent** and is why the quantizer's
+  loop is written as two of sixteen: asking for the half-sum with a test
+  inside the element loop put a compare on every element of every activation,
+  and it measured on paths that read none of the answer (Q8_0 generating 1.784
+  s against 1.720, a 1419-token prompt 7.329 against 6.958).
+
+
 - **The six-bit k-quant's activation half-sums are in lanes**, which a fresh
   profile put at **twenty-seven per cent of every instruction a
   single-threaded generated token executes** — sixteen signed bytes added one

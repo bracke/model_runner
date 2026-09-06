@@ -396,6 +396,7 @@ package body Model_Runner.Backend.CPU is
    begin
       Release (Item.Values);
       Release (Item.Totals);
+      Release (Item.Halves);
       T.Free (Item.Scales);
    end Free_Packed;
 
@@ -425,6 +426,7 @@ package body Model_Runner.Backend.CPU is
       Values  : Signed_Array_Access;
       Scales  : Model_Runner.Tensors.Real_Array_Access;
       Totals  : Sum_Array_Access;
+      Halves  : Sum_Array_Access;
 
       --  Whether the run is cut into super-blocks rather than blocks. When
       --  it is, From and To below count super-blocks, because a super-block
@@ -468,6 +470,7 @@ package body Model_Runner.Backend.CPU is
          Values  => Share.Values.all,
          Scales  => Share.Scales.all,
          Totals  => Share.Totals.all,
+         Halves  => Share.Halves.all,
          Ok      => Done,
          Super   => Share.Super);
 
@@ -504,11 +507,14 @@ package body Model_Runner.Backend.CPU is
          Free_Packed (Item);
          Item.Values := new QI.Signed_Array (0 .. Elements - 1);
          Item.Totals := new QI.Sum_Array (0 .. Blocks - 1);
+         Item.Halves :=
+           new QI.Sum_Array
+             (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half) - 1);
          T.Allocate (Blocks, Item.Scales);
       end if;
 
       if Item.Values = null or else Item.Scales = null
-        or else Item.Totals = null
+        or else Item.Totals = null or else Item.Halves = null
       then
          return False;
       end if;
@@ -553,6 +559,7 @@ package body Model_Runner.Backend.CPU is
             Values  => Item.Values,
             Scales  => Item.Scales,
             Totals  => Item.Totals,
+            Halves  => Item.Halves,
             Super   => Super,
             Ok      => True);
 
@@ -579,6 +586,7 @@ package body Model_Runner.Backend.CPU is
             Values  => Item.Values.all,
             Scales  => Item.Scales.all,
             Totals  => Item.Totals.all,
+            Halves  => Item.Halves.all,
             Ok      => Ok,
             Super   => Super);
       end;
@@ -614,6 +622,7 @@ package body Model_Runner.Backend.CPU is
       Values  : Signed_Array_Access := null;
       Scales  : T.Real_Array_Access := null;
       Totals  : Sum_Array_Access := null;
+      Halves  : Sum_Array_Access := null;
       Handled : Boolean := False;
       Ok      : Boolean := False;
    begin
@@ -634,13 +643,18 @@ package body Model_Runner.Backend.CPU is
          begin
             Values := new QI.Signed_Array (0 .. Elements - 1);
             Totals := new QI.Sum_Array (0 .. Blocks - 1);
+            Halves :=
+              new QI.Sum_Array
+                (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half)
+                      - 1);
             T.Allocate (Blocks, Scales);
 
             if Values /= null and then Totals /= null and then Scales /= null
+              and then Halves /= null
             then
                QI.Quantize_Vectors
                  (Vector.all, Count, Columns, Values.all, Scales.all,
-                  Totals.all, Ok,
+                  Totals.all, Halves.all, Ok,
                   Super =>
                     QI.Supers_Vectors (Weight.Format)
                     and then Columns mod QI.Activation_Super = 0);
@@ -648,13 +662,14 @@ package body Model_Runner.Backend.CPU is
 
             if Ok then
                T.Mat_Mul_Range_Packed
-                 (Weight, Values.all, Scales.all, Totals.all, Count,
-                  Target.all, 0, Weight.Rows - 1, Handled);
+                 (Weight, Values.all, Scales.all, Totals.all, Halves.all,
+                  Count, Target.all, 0, Weight.Rows - 1, Handled);
             end if;
          end;
 
          Release (Values);
          Release (Totals);
+         Release (Halves);
          T.Free (Scales);
       end if;
 
@@ -781,10 +796,12 @@ package body Model_Runner.Backend.CPU is
       if Work.Values /= null
         and then Work.Scales /= null
         and then Work.Totals /= null
+        and then Work.Halves /= null
       then
          T.Mat_Mul_Range_Packed
            (Work.Weight, Work.Values.all, Work.Scales.all, Work.Totals.all,
-            Work.Count, Work.Target.all, First, Last, Handled);
+            Work.Halves.all, Work.Count, Work.Target.all, First, Last,
+            Handled);
       end if;
 
       if not Handled then
@@ -1080,6 +1097,7 @@ package body Model_Runner.Backend.CPU is
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
+         Work.Halves := Item.Halves;
 
          --  And now, and only now, the smaller team.
          --
@@ -1199,6 +1217,7 @@ package body Model_Runner.Backend.CPU is
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
+         Work.Halves := Item.Halves;
 
          --  The smaller team, as a single product asks for it and for the
          --  same reason: the byte path is answered by the memory.
@@ -1352,6 +1371,7 @@ package body Model_Runner.Backend.CPU is
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
+         Work.Halves := Item.Halves;
       end if;
 
       Item.Control.Post (Work, Accepted);

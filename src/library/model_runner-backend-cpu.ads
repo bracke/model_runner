@@ -325,6 +325,7 @@ private
       Values : Signed_Array_Access := null;
       Scales : Model_Runner.Tensors.Real_Array_Access := null;
       Totals : Sum_Array_Access := null;
+      Halves : Sum_Array_Access := null;
 
       --  Indexed work that is not a matrix product. When it is there the
       --  share runs it and nothing else, so a job that never carries one
@@ -458,6 +459,7 @@ private
       Values : Signed_Array_Access := null;
       Scales : Model_Runner.Tensors.Real_Array_Access := null;
       Totals : Sum_Array_Access := null;
+      Halves : Sum_Array_Access := null;
    end record;
 
    overriding procedure Finalize (Item : in out Pool);

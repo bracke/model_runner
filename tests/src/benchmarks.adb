@@ -1017,6 +1017,8 @@ package body Benchmarks is
          Values : QI.Signed_Array (0 .. Columns * Vectors_Per_Pass - 1);
          Scales : N.Real_Array (0 .. Columns * Vectors_Per_Pass / Per - 1);
          Totals : QI.Sum_Array (0 .. Columns * Vectors_Per_Pass / Per - 1);
+         Halves : QI.Sum_Array
+           (0 .. Columns * Vectors_Per_Pass / QI.Activation_Half - 1);
 
          Sums   : N.Wide_Real_Array (0 .. Vectors_Per_Pass - 1);
          Ok     : Boolean;
@@ -1038,7 +1040,8 @@ package body Benchmarks is
          end loop;
 
          QI.Quantize_Vectors
-           (Inputs.all, Vectors_Per_Pass, Columns, Values, Scales, Totals, Ok);
+           (Inputs.all, Vectors_Per_Pass, Columns, Values, Scales, Totals,
+            Halves, Ok);
          if not Ok then
             IO.Put_Line ("  " & Name & " could not be quantized");
             B.Free (Data);
@@ -1092,7 +1095,8 @@ package body Benchmarks is
                           (Format, Data.all,
                            B.Byte_Count (Row) * Width * B.Byte_Count (Blocks),
                            Width * B.Byte_Count (Blocks), 1,
-                           Blocks, Values, Scales, Totals, 0, Columns,
+                           Blocks, Values, Scales, Totals, Halves,
+                           0, Columns,
                            Vectors_Per_Pass, Sums, Ok);
                      end loop;
                      Done := Done + Long_Long_Integer (Rows * Columns

@@ -279,6 +279,8 @@ package Model_Runner.Tensors is
    --  @param Values Quantized activations, Count vectors of Columns.
    --  @param Scales One scale per thirty-two elements of Values.
    --  @param Totals One block sum per thirty-two elements of Values.
+   --  @param Halves One sum per sixteen elements of Values, which the
+   --    six-bit k-quant's kernels want beside the block sums.
    --  @param Count Number of input vectors.
    --  @param Target Count output vectors laid end to end, each of length
    --    Rows; vector K starts at Target'First + K * Rows.
@@ -290,6 +292,7 @@ package Model_Runner.Tensors is
       Values  : Model_Runner.Quantization.Integers.Signed_Array;
       Scales  : Real_Array;
       Totals  : Model_Runner.Quantization.Integers.Sum_Array;
+      Halves  : Model_Runner.Quantization.Integers.Sum_Array;
       Count   : Element_Count;
       Target  : in out Real_Array;
       First   : Element_Count;

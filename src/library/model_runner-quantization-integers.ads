@@ -70,6 +70,20 @@ package Model_Runner.Quantization.Integers is
    --  rather than for arithmetic. Supers_Vectors says who gets it.
    Activation_Super : constant := 256;
 
+   --  And the sixteen a six-bit k-quant's scale covers.
+   --
+   --  Q6_K keeps a scale for every sixteen elements where every other
+   --  format here keeps one for every thirty-two, so its insertion wants
+   --  the activation summed over sixteen as well. That sum is a pass over
+   --  the activation and nothing else, and it used to be taken inside the
+   --  kernel -- which is called once for every row tile, so a thirty-two
+   --  thousand row output projection formed the same hundred and twenty
+   --  eight sums a thousand times. The quantizer already walks every byte
+   --  and already carries a running total; it now writes the total out at
+   --  the halfway point as well, which costs one store for every thirty-two
+   --  elements and removes the loop rather than moving it.
+   Activation_Half : constant := 16;
+
    --  One quantized activation.
    type Byte_Signed is range -128 .. 127 with Size => 8;
 
@@ -194,6 +208,9 @@ package Model_Runner.Quantization.Integers is
    --  @param Ok True when the shape is packable, every buffer had room, and
    --    every element read was finite. False leaves the three outputs as they
    --    were rather than half filled.
+   --  @param Halves One sum for every Activation_Half elements, from
+   --    Halves'First. Two of these add up to the block's own total; the
+   --    six-bit k-quant is the only reader and wants them at that width.
    --  @param Super Quantize by super-block rather than by block, which
    --    Supers_Vectors decides from the weight format. The width must be a
    --    whole number of super-blocks, and a shape that is not is refused.
@@ -204,6 +221,7 @@ package Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
+      Halves  : out Sum_Array;
       Ok      : out Boolean;
       Super   : Boolean := False);
 
@@ -245,6 +263,8 @@ package Model_Runner.Quantization.Integers is
    --  @param Totals One sum for every Activation_Block elements.
    --  @param Ok True when the shape is packable, every buffer had room, and
    --    every element this range read was finite.
+   --  @param Halves One sum for every Activation_Half elements; only this
+   --    range's are written.
    --  @param Super Quantize by super-block rather than by block, which
    --    requires First to begin one and Last to end one -- eight blocks to
    --    a super-block -- and is refused otherwise.
@@ -257,6 +277,7 @@ package Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
+      Halves  : out Sum_Array;
       Ok      : out Boolean;
       Super   : Boolean := False);
 
@@ -314,6 +335,8 @@ package Model_Runner.Quantization.Integers is
    --  @param Values Quantized activations, as Quantize_Vectors wrote them.
    --  @param Scales Activation scales, one per block of Values.
    --  @param Totals Activation block sums, one per block of Values.
+   --  @param Halves Activation sums, one for every Activation_Half
+   --    elements of Values.
    --  @param First Index in Values of the first element of vector zero.
    --  @param Stride Distance in Values from one vector to the next.
    --  @param Count Number of vectors.
@@ -333,6 +356,7 @@ package Model_Runner.Quantization.Integers is
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
+      Halves    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
       Count     : Element_Count;

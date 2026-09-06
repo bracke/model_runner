@@ -74,6 +74,8 @@ package Model_Runner.Quantization.Integers.Kernels is
    --  @param Values Quantized activations, as Quantize_Vectors wrote them.
    --  @param Scales Activation scales, one per block of Values.
    --  @param Totals Activation block sums, one per block of Values.
+   --  @param Halves Activation sums, one for every sixteen elements of
+   --    Values, which the six-bit k-quant's kernels want.
    --  @param First Index in Values of the first element of vector zero.
    --  @param Stride Distance in Values from one vector to the next.
    --  @param Count Number of vectors.
@@ -90,6 +92,7 @@ package Model_Runner.Quantization.Integers.Kernels is
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
+      Halves    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
       Count     : Element_Count;

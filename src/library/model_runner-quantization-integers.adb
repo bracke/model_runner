@@ -97,6 +97,7 @@ package body Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
+      Halves  : out Sum_Array;
       Ok      : out Boolean;
       Super   : Boolean := False)
    is
@@ -113,7 +114,7 @@ package body Model_Runner.Quantization.Integers is
       --  place the two entry points differ.
       Quantize_Blocks
         (Vectors, Count, Columns, 0, Blocks - 1,
-         Values, Scales, Totals, Ok, Super);
+         Values, Scales, Totals, Halves, Ok, Super);
    end Quantize_Vectors;
 
    --  The largest magnitude of one activation block and whether every one
@@ -222,6 +223,7 @@ package body Model_Runner.Quantization.Integers is
       Values  : out Signed_Array;
       Scales  : out Model_Runner.Numerics.Real_Array;
       Totals  : out Sum_Array;
+      Halves  : out Sum_Array;
       Ok      : out Boolean;
       Super   : Boolean := False)
    is
@@ -240,6 +242,7 @@ package body Model_Runner.Quantization.Integers is
         or else Values'Length < Elements
         or else Scales'Length < Blocks
         or else Totals'Length < Blocks
+        or else Halves'Length < Blocks * (Activation_Block / Activation_Half)
         or else Last >= Blocks
       then
          return;
@@ -310,12 +313,41 @@ package body Model_Runner.Quantization.Integers is
                   declare
                      At_Part : constant Element_Count :=
                        At_Element + Part * Activation_Block;
+                     At_Half : constant Element_Count :=
+                       (Super_Block * Deep + Part)
+                       * (Activation_Block / Activation_Half);
                      Total   : Interfaces.Integer_32 := 0;
+                     Earlier : Interfaces.Integer_32 := 0;
                   begin
                      Scales (Scales'First + Super_Block * Deep + Part) :=
                        Scale;
 
-                     for Index in 0 .. Element_Count (Activation_Block) - 1
+                     for Index in 0 .. Element_Count (Activation_Half) - 1
+                     loop
+
+                        declare
+                           Scaled : constant N.Real :=
+                             Vectors (Vectors'First + At_Part + Index)
+                             * Inverse;
+
+                           Whole : constant Integer :=
+                             Integer'Max
+                               (-127,
+                                Integer'Min
+                                  (127,
+                                   Integer (N.Real'Rounding (Scaled))));
+                        begin
+                           Values (Values'First + At_Part + Index) :=
+                             Byte_Signed (Whole);
+                           Total := Total + Interfaces.Integer_32 (Whole);
+                        end;
+                     end loop;
+
+                     Halves (Halves'First + At_Half) := Total;
+                     Earlier := Total;
+
+                     for Index in Element_Count (Activation_Half)
+                                  .. Element_Count (Activation_Block) - 1
                      loop
                         declare
                            Scaled : constant N.Real :=
@@ -337,6 +369,7 @@ package body Model_Runner.Quantization.Integers is
 
                      Totals (Totals'First + Super_Block * Deep + Part) :=
                        Total;
+                     Halves (Halves'First + At_Half + 1) := Total - Earlier;
                   end;
                end loop;
             end;
@@ -362,6 +395,12 @@ package body Model_Runner.Quantization.Integers is
             Scale      : N.Real;
             Inverse    : N.Real;
             Total      : Interfaces.Integer_32 := 0;
+
+            --  The running total at the halfway point, kept so that the
+            --  second half is a subtraction rather than a second pass.
+            Earlier    : Interfaces.Integer_32 := 0;
+            At_Half    : constant Element_Count :=
+              Block * (Activation_Block / Activation_Half);
          begin
             --  A block holding anything that is not finite has no nearest
             --  byte. Refusing here rather than clamping is what keeps the
@@ -377,7 +416,12 @@ package body Model_Runner.Quantization.Integers is
             Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);
             Scales (Scales'First + Block) := Scale;
 
-            for Index in 0 .. Element_Count (Activation_Block) - 1 loop
+            --  Two passes of sixteen rather than one of thirty-two with a
+            --  test in it. The half-sum is wanted at the halfway point, and
+            --  asking for it there put a compare on every element of every
+            --  activation -- which measured, on paths that read none of it.
+            for Index in 0 .. Element_Count (Activation_Half) - 1 loop
+
                declare
                   Scaled : constant N.Real :=
                     Vectors (Vectors'First + At_Element + Index) * Inverse;
@@ -407,7 +451,29 @@ package body Model_Runner.Quantization.Integers is
                end;
             end loop;
 
+            Halves (Halves'First + At_Half) := Total;
+            Earlier := Total;
+
+            for Index in Element_Count (Activation_Half)
+                         .. Element_Count (Activation_Block) - 1
+            loop
+               declare
+                  Scaled : constant N.Real :=
+                    Vectors (Vectors'First + At_Element + Index) * Inverse;
+
+                  Whole  : constant Integer :=
+                    Integer'Max (-127,
+                                 Integer'Min (127, Integer (N.Real'Rounding
+                                                              (Scaled))));
+               begin
+                  Values (Values'First + At_Element + Index) :=
+                    Byte_Signed (Whole);
+                  Total := Total + Interfaces.Integer_32 (Whole);
+               end;
+            end loop;
+
             Totals (Totals'First + Block) := Total;
+            Halves (Halves'First + At_Half + 1) := Total - Earlier;
          end;
       end loop;
 
@@ -428,6 +494,7 @@ package body Model_Runner.Quantization.Integers is
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
       Totals    : Sum_Array;
+      Halves    : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
       Count     : Element_Count;
@@ -444,15 +511,15 @@ package body Model_Runner.Quantization.Integers is
       if Deeper then
          Deep.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok);
       elsif Wider then
          Wide.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok);
       else
          Plain.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok);
       end if;
    end Accumulate_Rows;
 
