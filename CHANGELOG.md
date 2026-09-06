@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The five-bit strip kernel keeps its scale whole too** — the same
+  `vpmaddubsw`/`vpdpwssd` pair as the four-bit one, with the plane of fifth
+  bits carried through the unpack untouched. **A 1419-token Q5_K prompt reads
+  6.567 s against 7.192 and a 110-token one 0.433 against 0.4745 — 8.7 % on
+  both**, four alternated rounds, four of four on the same side with the
+  ranges not touching. Two controls level; digest unchanged; conformance
+  28344 sequences, 0 outside tolerance.
+
+  It is worth more than the four-bit kernel's 6.5 % because the fifth bit's
+  six instructions ride in the part that did not change. **This puts the
+  five-bit prompt ahead of llama.cpp** — 217.1 t/s at 1419 tokens against its
+  159.1 — the first k-quant prompt row in this comparison that is ahead
+  rather than behind.
+
+### Changed
+
 - **The four-bit strip kernel keeps its sub-block scale a whole number**, so
   the innermost work is two instructions instead of four: `vpmaddubsw` for
   int16 pair sums, then `vpdpwssd` accumulating into int32 with the factor as

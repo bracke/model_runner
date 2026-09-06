@@ -8178,8 +8178,29 @@ without it. Per core the gap is 1.48, from 1.58. The four-bit prompt is now
 comfortably ahead of llama.cpp's unrepacked kernel and about one and a half
 times behind its repacked one.
 
-**Q5_K's strip kernel still folds its scale**, and is the same change again
-with the fifth bit's plane to carry through it. Named, not built.
+**And the same again for Q5_K**, which is the four-bit kernel with a plane of
+fifth bits carried through the unpack. The dot is the same four instructions
+becoming the same two; the six around it that fold the fifth bit in are
+untouched.
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q5_K_M, 1419-token prompt | 7.192 s | 6.567 s | **8.7 %** |
+| Q5_K_M, 110-token prompt | 0.4745 s | 0.433 s | **8.7 %** |
+| Q4_K_M, 1419-token prompt | 6.44 s | 6.40 s | a control, level |
+| Q5_K_M, thirty-two generated | 0.683 s | 0.682 s | a control, level |
+
+Four alternated rounds, four of four on the same side and the ranges not
+touching -- 6.512 to 6.603 against 7.115 to 7.226. It is worth more here than
+the four-bit kernel's six and a half, because the fifth bit's six
+instructions ride in the part that did not change, so removing two of four
+from the part that did is a larger share of what is left.
+
+**Which puts the five-bit prompt ahead of llama.cpp.** 217.1 tokens a second
+at 1419 against its 159.1, and about 250 at 110 against its 193.8 -- the
+first row of this comparison where a k-quant prompt is ahead rather than
+behind. The four-bit prompt is still 1.4 times behind, because llama.cpp
+repacks that format and does not repack this one.
 
 ### The repack, priced and refused
 
