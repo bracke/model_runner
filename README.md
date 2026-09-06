@@ -8125,6 +8125,50 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The same instruction in the other kernel, and why it does nothing there
+
+`vpdpwssd` took the strip kernels' innermost work from four instructions to
+two. The single-vector kernel has the same four -- it was left with
+`vpmaddubsw`, a broadcast, `vpmaddwd` and `vpaddd` because the broadcast form
+of `vpmaddwd` does not exist and that was found out before `vpdpwssd` was.
+Putting it in there removes three of those four. **It is worth nothing, and
+the reason is worth more than the change would have been.**
+
+| Q4_K_M generating, one thread | instructions | time |
+| --- | ---: | ---: |
+| broadcast, multiply, add | 11.84 G | 0.520 s |
+| one `vpdpwssd` | 11.31 G | 0.535 s |
+| four `vpdpwssd`, rotated | — | 0.507 s |
+
+**Four and a half per cent fewer instructions and three per cent slower**, on
+the first attempt. `vpdpwssd` accumulates, so it is on the dependency chain,
+and its latency is four where `vpaddd`'s is one: a super-block's eight
+sub-blocks went from an eight-cycle chain to a thirty-two cycle one. The
+strip kernel does not care because it has eight accumulators and their chains
+interleave; the single-vector kernel has one.
+
+Rotating four accumulators and folding them at the end of each block puts the
+chain back to eight cycles and does beat the original -- 0.507 s against
+0.517 at one thread. **At the worker count the program actually uses it is a
+wash**: five alternated rounds read 0.183 s against 0.185, three better, one
+worse, one level, and a 1419-token prompt through the untouched strip kernel
+moves as much either way. Not kept.
+
+That is the same shape as `### The weight's sign, moved onto the activation`
+found for the eight-bit kernel: instructions removed from a generating path
+do not show, because generating is not what this processor is short of
+instructions for. **The strip kernels are, and that is where the same
+instruction paid six and a half and eight and a half per cent.**
+
+**Q6_K's strip kernel has not had it and has the largest ratio left.** A
+thirty-two element byte product there spans *two* of its sixteen-element
+halves, which have different scales, so it ends in two masked multiply-adds
+rather than one -- five instructions where the four-bit kernel had four.
+`vpdpwssd` takes a full register operand as well as a broadcast one, so a
+thirty-two byte table entry holding one half's factor in four lanes and the
+other's in the next four would collapse all five to two. It is a quarter of a
+four-bit model's prompt and the whole of a six-bit one's. Named, not built.
+
 ### The strip's scale, kept whole
 
 The section below prices llama.cpp's repack at nothing here and names this

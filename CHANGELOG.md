@@ -5,6 +5,56 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **`vpdpwssd` in the single-vector k-quant kernel is worth nothing, and why
+  is worth more than the change.** It removes three of the four innermost
+  instructions, and the first attempt was **4.5 % fewer instructions and 3 %
+  slower**: `vpdpwssd` accumulates, so it sits on the dependency chain at
+  latency four where `vpaddd` sat at one, taking a super-block from an
+  eight-cycle chain to thirty-two. The strip kernels have eight accumulators
+  and do not care; this one has one. Rotating four accumulators puts the
+  chain back and beats the original at one thread (0.507 s against 0.517),
+  but at the worker count the program uses it is a wash over five alternated
+  rounds. Not kept.
+
+  Same shape as the eight-bit kernel's sign trick: instructions removed from
+  a *generating* path do not show. The strip kernels are what this processor
+  is short of instructions for — which is why the same instruction paid 6.5 %
+  and 8.7 % there.
+
+- **Q6_K's strip kernel has the largest ratio left.** A 32-element byte
+  product spans two of its 16-element halves, which have different scales, so
+  it ends in two masked multiply-adds — five instructions where the four-bit
+  kernel had four. `vpdpwssd` takes a full register operand as well as a
+  broadcast one, so a 32-byte entry holding one half's factor in four lanes
+  and the other's in the next four collapses all five to two. A quarter of a
+  four-bit model's prompt and the whole of a six-bit one's. Named, not built.
+
+- **`vpdpwssd` in the single-vector k-quant kernel is worth nothing, and why
+  is worth more than the change.** It removes three of the four innermost
+  instructions, and the first attempt was **4.5 % fewer instructions and 3 %
+  slower**: `vpdpwssd` accumulates, so it sits on the dependency chain at
+  latency four where `vpaddd` sat at one, taking a super-block from an
+  eight-cycle chain to thirty-two. The strip kernels have eight accumulators
+  and do not care; this one has one. Rotating four accumulators puts the
+  chain back and beats the original at one thread (0.507 s against 0.517),
+  but at the worker count the program uses it is a wash over five alternated
+  rounds. Not kept.
+
+  Same shape as the eight-bit kernel's sign trick: instructions removed from
+  a *generating* path do not show. The strip kernels are what this processor
+  is short of instructions for — which is why the same instruction paid 6.5 %
+  and 8.7 % there.
+
+- **Q6_K's strip kernel has the largest ratio left.** A 32-element byte
+  product spans two of its 16-element halves, which have different scales, so
+  it ends in two masked multiply-adds — five instructions where the four-bit
+  kernel had four. `vpdpwssd` takes a full register operand as well as a
+  broadcast one, so a 32-byte entry holding one half's factor in four lanes
+  and the other's in the next four collapses all five to two. A quarter of a
+  four-bit model's prompt and the whole of a six-bit one's. Named, not built.
+
 ### Changed
 
 - **The five-bit strip kernel keeps its scale whole too** — the same
