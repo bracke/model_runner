@@ -8125,6 +8125,66 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The repack, priced and refused
+
+The section below names llama.cpp's eight-row interleaved Q4_K layout as the
+one identified change worth 1.44 times on its own prompt, and leaves it
+unbuilt. It stays unbuilt, and this is why.
+
+**What the repack is.** `block_q4_Kx8` holds eight rows' Q4_K blocks
+interleaved -- their scales adjacent, their quants woven eight bytes at a
+time -- and `ggml_gemm_q4_K_8x8_q8_K` multiplies against it. Two things could
+make that faster than reading eight rows from where they lie: the weights
+arrive as one sequential stream instead of eight strided ones, and one nibble
+unpack serves several rows at once.
+
+**The first was measured and is worth about one per cent.** The strip kernel
+here reads two rows a panel. Pointing the second row's weight loads at the
+first row's bytes leaves every instruction in place and halves the weight
+traffic -- the answers are wrong and the time is the question:
+
+| Q4_K_M | two streams | one stream |
+| --- | ---: | ---: |
+| 110-token prompt, one thread | 2.215 s | 2.304 s |
+| 1419-token prompt, eight threads | 6.861 s | 6.775 s |
+
+Nothing, either way. **The weights are not what this kernel is waiting for**,
+and an interleaved layout that exists to make their arrival sequential is
+buying a thing that is already free.
+
+**What it is waiting for is instructions.** At one thread a 110-token prompt
+executes 39.8 thousand million instructions in 10.9 thousand million cycles
+-- an IPC of 3.65, which is a core doing nothing but retiring work. Counted
+against llama.cpp on the same prompt at the same thread count, in the same
+units:
+
+| per element-product, one thread | instructions |
+| --- | ---: |
+| the byte instruction's floor | 0.031 |
+| llama.cpp, repacked | 0.16 |
+| model_runner | 0.35 |
+
+Both are far above the floor and llama.cpp is 2.2 times closer to it. The
+distance is scale plumbing, not weight traffic: this kernel spends four
+instructions on every sub-block of every vector of every row -- a zeroed
+accumulator, the byte dot product, **a convert, and a scaled multiply-add**
+-- and carries a floating-point scale table with an entry for every
+combination of the three.
+
+**So the change that is worth making is the one already made twice
+elsewhere**, and not the layout: keep the sub-block factor a whole number,
+multiply the integer dot product by it, and convert once a super-block. In
+the strip kernel the factor does not depend on the vector, so the scale table
+collapses from one entry per sub-block, row and vector to one per sub-block
+and row -- a quarter of its size and a quarter of the prologue that fills it.
+That is named here rather than built, with the same rule the repack was named
+under: the estimate is eleven per cent of the dot loop and most of a prologue
+that an ablation puts at seven per cent of the prompt.
+
+The repack may still be the right change for a kernel shaped like
+llama.cpp's unrepacked one, which reads a single row at a time; this one
+already reads two, which is where the first tranche of that 1.44 went.
+
 ### The same sixteen sums, formed a thousand times
 
 The section above vectorized the six-bit k-quant's *weight* prologue and a

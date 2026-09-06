@@ -5688,6 +5688,57 @@
 # load: 0.83 for the benchmark and the alternation, under 1.10 for the A/B
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-06, the repack, priced and refused. No source changed.
+#
+#   The entry above names llama.cpp's eight-row interleaved Q4_K layout as
+#   worth 1.44 times on its own prompt and leaves it unbuilt. It stays
+#   unbuilt. Two mechanisms could make it pay and both were measured.
+#
+#   THE SEQUENTIAL WEIGHT STREAM IS WORTH ABOUT ONE PER CENT. The strip
+#   kernel reads two rows a panel. Pointing the second row's weight loads at
+#   the first row's bytes leaves every instruction in place and halves the
+#   weight traffic -- wrong answers, and the time is the question:
+#
+#     Q4_K 110 prompt, one thread     two streams 2.215 s  one 2.304
+#     Q4_K 1419 prompt, eight threads             6.861    one 6.775
+#
+#   Nothing either way. An interleaved layout that exists to make the
+#   weights arrive sequentially is buying something already free here.
+#
+#   WHAT IT IS WAITING FOR IS INSTRUCTIONS. One thread, 110-token prompt:
+#   39.81e9 instructions in 10.90e9 cycles, an IPC of 3.65. Counted against
+#   llama.cpp on the same prompt at one thread, three repetitions each
+#   (llama-bench also warms up, so its count covers about four passes and
+#   this is a ratio rather than a reading):
+#
+#     llama.cpp   72.63e9 instructions, 6.30 s
+#     this        117.73e9 instructions, 7.04 s
+#
+#   Per element-product: the byte instruction's floor is 0.031, llama.cpp
+#   is at about 0.16, this program at about 0.35. Both far above the floor,
+#   llama.cpp 2.2 times closer to it. The distance is scale plumbing, not
+#   weight traffic.
+#
+#   SO THE CHANGE WORTH MAKING IS THE ONE ALREADY MADE TWICE ELSEWHERE.
+#   This kernel spends four instructions on every sub-block of every vector
+#   of every row -- vpxor, vpdpbusd, vcvtdq2ps, vfmadd231ps -- and carries a
+#   floating-point scale table indexed by all three. Keeping the sub-block
+#   factor a whole number and converting once a super-block removes the
+#   convert; and in the strip kernel the factor does not depend on the
+#   vector, so the table collapses to one entry per sub-block and row, a
+#   quarter of its size and a quarter of the prologue that fills it.
+#
+#   Estimated at eleven per cent of the dot loop plus most of a prologue an
+#   earlier ablation put at seven per cent of the prompt. Named rather than
+#   built, under the same rule the repack was named under.
+#
+#   The repack may still be right for a kernel shaped like llama.cpp's
+#   unrepacked one, which reads a single row at a time. This one reads two,
+#   which is where the first tranche of that 1.44 went.
+#
+# load: under 1.20 throughout
+# model: TinyLlama-1.1B-Chat Q4_K_M
+
 kernels 98AF73BE9A9BD5F9 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

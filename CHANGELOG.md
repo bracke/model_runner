@@ -5,6 +5,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **llama.cpp's eight-row Q4_K repack, priced and refused.** Its two possible
+  mechanisms were measured separately. **The sequential weight stream is worth
+  about one per cent**: pointing the strip kernel's second row at the first
+  row's bytes halves the weight traffic with every instruction left in place,
+  and a 110-token prompt reads 2.304 s against 2.215 at one thread, a
+  1419-token prompt 6.775 against 6.861 at eight. **The weights are not what
+  this kernel waits for.**
+
+  What it waits for is instructions — IPC 3.65 at one thread, and per
+  element-product this program spends about 0.35 instructions against
+  llama.cpp's 0.16 and the byte instruction's floor of 0.031. The distance is
+  scale plumbing. The change worth making is therefore the one already made
+  twice elsewhere — keep the sub-block factor a whole number and convert once
+  a super-block, which in the strip kernel also collapses the scale table from
+  one entry per sub-block, row *and* vector to one per sub-block and row.
+  Named with its estimate, not built. No source changed.
+
 ### Changed
 
 - **The six-bit k-quant's activation half-sums are hoisted out of the
