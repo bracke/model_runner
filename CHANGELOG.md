@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The five-bit single-vector kernel's prologue loop is inside its insertion
+  too**, on two cursors instead of an Ada loop that ran once a block.
+  Bit-exact. **Thirty-two generated tokens read 1.8955 s against 2.027 at one
+  thread (6.5 %), four of four on the same side with the ranges not touching
+  — and nothing at all at eight**, where the four-bit kernel still showed two
+  per cent. The five-bit file is 746 MB against 636, so it meets the memory
+  wall at a lower rate of arithmetic and the instructions removed have nowhere
+  to show.
+
+  Second time in this work that a per-core gain has not survived the worker
+  count, same reason both times. Kept: fewer instructions for the same
+  answers, never worse, what a run with fewer workers gets, and it makes the
+  two kernels the same shape.
+
+
 - **The four-bit single-vector kernel's per-block prologue loop is inside its
   insertion**, as the dot product's always has been. It was called once a
   block from Ada and paid the call each time — counter, bound, and six

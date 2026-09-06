@@ -8206,8 +8206,27 @@ suggests, which is the same thing `### The weight's sign, moved onto the
 activation` found for the eight-bit kernel. The gap to llama.cpp goes 1.22 to
 **1.19** at eight threads and 2.28 to **2.10** per core.
 
-The same loop is still outside the insertion in the five-bit single-vector
-kernel, which is the same change again.
+**The five-bit single-vector kernel has had the same change**, and it says
+something the four-bit one did not.
+
+| Q5_K_M, thirty-two generated | before | after | |
+| --- | ---: | ---: | ---: |
+| one thread | 2.027 s | 1.8955 s | **6.5 %** |
+| eight threads | 0.677 s | 0.678 s | a wash |
+
+Four alternated rounds, four of four on the same side at one thread with the
+ranges not touching -- 1.856 to 1.919 against 2.019 to 2.035 -- and **nothing
+at all at eight**, where the four-bit kernel still showed two per cent. The
+five-bit file is 746 megabytes against the four-bit's 636, so it reaches the
+memory wall at a lower rate of arithmetic and the instructions removed have
+nowhere to show. Bit-exact either way, and the four-bit kernel is the control
+and level.
+
+That is the second time in this section that a per-core gain has not survived
+the worker count, and it is the same reason both times. **It is kept anyway**:
+it is fewer instructions for the same answers, it never measures worse, it is
+what a run with fewer workers gets, and it makes the two kernels the same
+shape.
 
 ### The same instruction in the other kernel, and why it does nothing there
 
