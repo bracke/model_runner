@@ -6121,6 +6121,68 @@
 # load: 1.49 for the benchmark and the sitting, under 1.20 for the A/B
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M and Q8_0
 
+# 2026-09-06, the widest gap is now the device, and it is one number in the
+# shader. No source changed.
+#
+#   With the processor's k-quant kernels done, both backends taken again.
+#   The processor is level or ahead except a generated token; the device
+#   prompt is 1.5 times behind and is now the widest gap in this file.
+#
+#     TinyLlama Q8_0                ours      llama.cpp
+#       processor 1419 prompt      283.6      ~263        ahead
+#       processor generating        36.7      39.3        1.07 behind
+#       device 110 prompt          1279       1680        1.31 behind
+#       device 1419 prompt         1210.8     1826        1.51 behind
+#       device generating           50.2      56.4        1.12 behind
+#     Q4_K device: 110 prompt 1196 against 1538, 1419 prompt 1214 against
+#       1675, generating 74.1 against 87.6
+#
+#   The device prompt row has swung 1.4 times on clock state before, so it
+#   was taken alternated in one window: 1.172, 1.174, 1.169 s against
+#   llama-bench 1850.6, 1826.1, 1811.2, the part at 1758 to 1779 MHz
+#   throughout. Not the clock this time.
+#
+#   BOTH SIDES USE THE SAME INSTRUCTION ON THE SAME PART. llama.cpp reports
+#   "matrix cores: KHR_coopmat" and this shader has used
+#   GL_KHR_cooperative_matrix at 16x16x16 since it was written. The shape
+#   around it differs:
+#
+#                                  ours         llama.cpp mul_mm.comp
+#       invocations a workgroup    64 (one)     256 (four subgroups)
+#       tile a workgroup           32 x 128     64 x 64
+#       tile a subgroup            32 x 128     32 x 32
+#       accumulators a subgroup    16           4
+#
+#   AND THE REGISTER FILE SAYS WHAT THAT COSTS. RADV_DEBUG=shaderstats on
+#   this program reports two pipelines at 256 vector registers -- the
+#   ceiling -- and two at 168. The pair at the ceiling are the wide matrix
+#   compilations with sixteen accumulators and the 168 pair the narrow ones
+#   with four, which is what the accumulator count predicts: sixteen
+#   accumulators is sixty-four registers before an operand fragment. At the
+#   ceiling the part runs one wave to a lane group and has nothing to hide a
+#   memory latency behind.
+#
+#   THE TILE SWEEP DID NOT LOOK HERE. It moved TILE_R, TILE_V and KCH and
+#   found one free parameter already at its best. The workgroup's width is a
+#   fourth constant it never touched, and the one llama.cpp differs in. A
+#   narrower tile alone does not help -- that sweep measured 32x64 as five
+#   per cent worse than 32x128, because a batch is a hundred and twenty-eight
+#   vectors and a smaller tile is more dispatches. What is wanted is the same
+#   workgroup tile over four subgroups: the dispatch count kept and the
+#   accumulators quartered.
+#
+#   Not built. The staging loop maps sixty-four lanes onto thirty-two rows by
+#   hand -- sixteen values apiece, four bytes to a word -- and spreading it
+#   over two hundred and fifty-six means rewriting the decode rather than
+#   changing a constant, which is the boundary that sweep drew for itself.
+#
+#   Also seen: a 110-token device prompt reported the part at 800 MHz for
+#   its whole length, mean of 2700. That is the section on a prompt too
+#   short to wake the machine, still true.
+#
+# load: around 1.0 to 1.5; the alternated device rounds at 1758-1779 MHz
+# model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+
 kernels 67408AEFEAB84F30 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

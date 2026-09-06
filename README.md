@@ -8125,6 +8125,65 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The widest gap is now the device, and it is one number in the shader
+
+With the processor's k-quant kernels done, the comparison was taken again
+across both backends. The processor rows are level or ahead except a
+generating token; **the device prompt is 1.5 times behind and is now the
+widest gap in the file.**
+
+| TinyLlama Q8_0 | model_runner | llama.cpp | |
+| --- | ---: | ---: | --- |
+| processor, 1419-token prompt | 283.6 t/s | ~263 | ahead |
+| processor, generating | 36.7 t/s | 39.3 | 1.07 behind |
+| device, 110-token prompt | 1279 t/s | 1680 | 1.31 behind |
+| **device, 1419-token prompt** | **1210.8 t/s** | **1826** | **1.51 behind** |
+| device, generating | 50.2 t/s | 56.4 | 1.12 behind |
+
+The device prompt row has swung 1.4 times on clock state before in this file,
+so it was taken alternated in one window: 1.172, 1.174 and 1.169 s against
+llama-bench's 1850.6, 1826.1 and 1811.2 tokens a second, with the part
+reporting 1758 to 1779 MHz throughout. It is not the clock this time.
+
+**Both sides use the same instruction on the same part.** llama.cpp's Vulkan
+backend reports `matrix cores: KHR_coopmat` and this shader has used
+`GL_KHR_cooperative_matrix` at sixteen by sixteen by sixteen since it was
+written. What differs is the shape around it:
+
+| | this shader | llama.cpp's `mul_mm.comp` |
+| --- | --- | --- |
+| invocations a workgroup | 64 -- **one subgroup** | 256 -- four |
+| tile a workgroup | 32 x 128 | 64 x 64 |
+| tile a subgroup | 32 x 128 | 32 x 32 |
+| accumulators a subgroup | **16** | 4 |
+
+**And the register file says what that costs.** Asked for its shader
+statistics, this program's pipelines report two at **256 vector registers --
+the ceiling** -- and two at 168; the ceiling pair are the wide matrix
+compilations with sixteen accumulators, and the 168 pair the narrow ones with
+four. Sixteen accumulators is sixty-four registers before a single operand
+fragment, and at the ceiling a part runs one wave to a lane group and has
+nothing to hide a memory latency behind.
+
+**`### The tile sweep, and why there was almost nothing to sweep` above did
+not look here.** It moved `TILE_R`, `TILE_V` and `KCH` -- three constants at
+the top of the file -- and found one free parameter already at its best. The
+workgroup's width is a fourth constant it never touched, and it is the one
+llama.cpp differs in. A narrower tile alone does not help, which that sweep
+measured: 32 by 64 was five per cent *worse* than 32 by 128, because a batch
+is a hundred and twenty-eight vectors and a smaller tile is more dispatches
+for the same work. **What is wanted is the same workgroup tile spread over
+four subgroups**, which keeps the dispatch count and quarters the
+accumulators.
+
+It is not built, and the reason is the one that sweep gave for its own
+boundary: the staging loop maps sixty-four lanes onto thirty-two rows by
+hand, sixteen values apiece and four bytes to a word, and spreading it over
+two hundred and fifty-six means rewriting the decode rather than changing a
+constant. That is named here with what it is worth -- the widest gap left,
+one and a half times on a device prompt -- and with the measurement that says
+where it comes from.
+
 ### Where the gap is after all of that
 
 Nine changes into this line of work, the comparison is worth taking again

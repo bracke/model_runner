@@ -5,6 +5,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Measured
+
+- **The widest gap is now the device prompt, and it is the shader's workgroup
+  width.** Taken alternated in one window, a 1419-token Q8_0 device prompt
+  reads 1210.8 t/s against llama.cpp's ~1826 — **1.51× behind**, with the part
+  at 1758–1779 MHz throughout, so not the clock this time.
+
+  Both sides use `KHR_coopmat` at 16×16×16 on the same part. What differs is
+  the shape: **this shader runs one subgroup of 64 invocations holding sixteen
+  accumulators; llama.cpp runs four subgroups holding four each.**
+  `RADV_DEBUG=shaderstats` reports two of this program's pipelines at **256
+  vector registers — the ceiling** — and two at 168, which is exactly what
+  sixteen accumulators against four predicts. At the ceiling the part runs one
+  wave to a lane group and has nothing to hide a memory latency behind.
+
+  The earlier tile sweep moved `TILE_R`, `TILE_V` and `KCH` and found nothing;
+  the workgroup's width is a fourth constant it never touched. A narrower tile
+  alone does not help (that sweep measured 32×64 as 5 % *worse*). What is
+  wanted is the same workgroup tile over four subgroups. Not built: the
+  staging loop maps 64 lanes onto 32 rows by hand, and spreading it over 256
+  means rewriting the decode. Named with what it is worth.
+
 ### Changed
 
 - **The five-bit single-vector kernel's prologue loop is inside its insertion
