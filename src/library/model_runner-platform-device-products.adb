@@ -139,6 +139,11 @@ package body Model_Runner.Platform.Device.Products is
    --  tile that is not full, on purpose and at a fifth of its speed if it
    --  had; what the rounding invents is zeroed by the copying kernel and
    --  written to room the result buffer is given for it.
+   --  Columns a tile reads at a time: the narrow one a chunk, the wide one
+   --  a chunk for each of its four lane groups.
+   function Tile_Step (Count : Natural) return Positive
+   is (if Narrowed (Count) then 32 else 128);
+
    function Whole_Tiles (Count : Natural) return Natural
    is ((Count + Tile_Width (Count) - 1) / Tile_Width (Count)
        * Tile_Width (Count));
@@ -490,12 +495,19 @@ package body Model_Runner.Platform.Device.Products is
        --  wide tile and refused the narrow one must not be given a batch
        --  the narrow one would have answered.
        and then Tile_Pipeline (Item, Packing, Count) /= Null_Handle
+       --  The width the tile steps in. The wide tile decodes four chunks of
+       --  thirty-two at once -- one for each of its lane groups -- so its
+       --  step is a hundred and twenty-eight where the narrow tile's is
+       --  thirty-two. A hidden width is a multiple of a hundred and
+       --  twenty-eight in every model this has been shown, and one that is
+       --  not takes the row product for its batches rather than a tile that
+       --  would read past the end of a row.
        and then ((Packing in Values_F16 | Values_BF16
-                  and then Columns mod 32 = 0)
+                  and then Columns mod Tile_Step (Count) = 0)
                  or else (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0
                                      | Packed_Q5_1 | Packed_Q8_0
                                      | Packed_IQ4_NL
-                          and then Columns mod 32 = 0)
+                          and then Columns mod Tile_Step (Count) = 0)
                  or else (Packing in Super_Packing
                           and then Columns mod 256 = 0)));
 

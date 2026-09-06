@@ -8176,13 +8176,49 @@ for the same work. **What is wanted is the same workgroup tile spread over
 four subgroups**, which keeps the dispatch count and quarters the
 accumulators.
 
-It is not built, and the reason is the one that sweep gave for its own
-boundary: the staging loop maps sixty-four lanes onto thirty-two rows by
-hand, sixteen values apiece and four bytes to a word, and spreading it over
-two hundred and fifty-six means rewriting the decode rather than changing a
-constant. That is named here with what it is worth -- the widest gap left,
-one and a half times on a device prompt -- and with the measurement that says
-where it comes from.
+**It is built, and the decode did not have to be rewritten after all.** The
+sweep's boundary was real -- the staging maps sixty-four lanes onto thirty-two
+rows by hand, sixteen values apiece and four bytes to a word -- but it only
+binds if all four lane groups have to share one chunk. They do not. Each
+group decodes *its own* thirty-two columns, four chunks go into shared memory
+at once, and then all four groups read the whole of what the four wrote. The
+decode keeps its shape exactly and stops being a quarter of the invocations'
+work.
+
+**A probe came first and is worth keeping.** Four subgroups with the staging
+left on sixty-four lanes -- paying four times over on the decode to find out
+whether the accumulators were the wall -- ran five and a half per cent slower
+and dropped the matrix pipelines from **168 vector registers to 64**. Losing
+only five and a half while paying four times for a sixth of the work is what
+said the rest had gained, and that the chunked staging would collect it.
+
+| device, 1419-token prompt | one subgroup | four |
+| --- | ---: | ---: |
+| Q8_0 | 1.1595 s | 1.093 s | 
+| Q4_K_M | 1.181 s | 1.066 s |
+| Q8_0, 110-token prompt | 0.0875 s | 0.080 s |
+| Q8_0, generating | 1.2535 s | 1.2485 s |
+
+Four alternated rounds: **5.6 per cent on the eight-bit long prompt, 9.7 on
+the four-bit one and 8.6 on the short one**, with the ranges not touching on
+all three. Generating is the control -- it goes through the row product, not
+this shader -- and stays level. The digests do not move. And the part
+reported *lower* clocks in the faster rounds, 1702 to 1729 MHz against 1761
+to 1792, so the gain is not the window.
+
+**What it costs is a wider step.** The wide tile now reads a hundred and
+twenty-eight columns at a time where it read thirty-two, so a width that is
+not a multiple of that takes the row product for its batches rather than a
+tile that would read past the end of a row. Every hidden and feed-forward
+width in every model this has been shown is a multiple of a hundred and
+twenty-eight; the guard is there because "has been shown" is not "is".
+
+**Where it leaves the device.** The eight-bit long prompt goes from 1.51
+times behind llama.cpp to **1.43**, the short one from 1.31 to **1.17**, and
+a generated token is 1.09. The four-bit long prompt is 1.26. This is a
+partial shape rather than llama.cpp's: it has the four subgroups and four
+accumulators, and still a thirty-two by a hundred and twenty-eight workgroup
+tile where llama.cpp uses sixty-four by sixty-four.
 
 ### Where the gap is after all of that
 

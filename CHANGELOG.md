@@ -5,6 +5,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The matrix shader runs four subgroups where it ran one**, so each holds
+  four cooperative-matrix accumulators instead of sixteen — llama.cpp's shape
+  on this part. The staging did not have to be rewritten: each lane group
+  decodes **its own** thirty-two columns, four chunks go into shared memory
+  at once, and all four groups then read the whole of what the four wrote.
+  Register use on those pipelines falls **168 → 64**.
+
+  Four alternated rounds: **Q8_0's 1419-token device prompt 1.093 s against
+  1.1595 (5.6 %), Q4_K's 1.066 against 1.181 (9.7 %), Q8_0's 110-token 0.080
+  against 0.0875 (8.6 %)** — ranges not touching on all three. Generating is
+  the control (row product) and stays level; digests unchanged; the part
+  reported *lower* clocks in the faster rounds, so the gain is not the window.
+
+  The gap to llama.cpp on the device goes **1.51 → 1.43** on the long prompt
+  and **1.31 → 1.17** on the short one.
+
+  The wide tile now reads 128 columns at a time rather than 32, so `Tile_Step`
+  guards it: a width that is not a multiple of 128 takes the row product for
+  its batches. Every hidden and feed-forward width in every model this has
+  been shown is a multiple of 128.
+
 ### Measured
 
 - **The widest gap is now the device prompt, and it is the shader's workgroup

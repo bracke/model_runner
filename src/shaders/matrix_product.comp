@@ -80,7 +80,26 @@
 //  workgroup of more than one would need each of them told which part of
 //  the tile it owns; one is simpler and measured faster than two or four
 //  at every tile shape tried.
+//  Four subgroups where there was one.
+//
+//  The tile is unchanged and so is the work; what changes is how many lane
+//  groups share it. One subgroup holding sixteen accumulators asks for two
+//  hundred and fifty-six vector registers, which is the ceiling, and a
+//  kernel at the ceiling runs one wave to a lane group with nothing to hide
+//  a memory latency behind. Four subgroups of four accumulators is the
+//  shape llama.cpp's matrix kernel uses on this part.
+//
+//  The staging below still runs on sixty-four invocations, because the
+//  decode is written sixteen values to a lane. That is a probe rather than
+//  the finished shape: it pays four times over on the decode to find out
+//  whether the accumulators were the wall.
+#ifdef NARROW
 layout(local_size_x = 64) in;
+const uint SUBS = 1u;
+#else
+layout(local_size_x = 256) in;
+const uint SUBS = 4u;
+#endif
 
 layout(std430, binding = 0) readonly  buffer Weights { uint      w[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float     y[]; };
@@ -149,7 +168,7 @@ const uint KCH    = 32u;
 //  weight matrix comes from shared memory and is used eight times, where
 //  a vector matrix comes from memory and is used twice.
 const uint AR = TILE_R / 16u;
-const uint AV = TILE_V / 16u;
+const uint AV = TILE_V / 16u / SUBS;
 
 //  The step a row takes in the shared tile, which is wider than the step
 //  it holds. A sixteen-by-sixteen load out of shared memory reads sixteen
@@ -168,7 +187,11 @@ const uint AV = TILE_V / 16u;
 const uint WT_PAD    = 4u;
 const uint WT_STRIDE = KCH + WT_PAD;
 
-shared float16_t wt[TILE_R * WT_STRIDE];
+//  One chunk a lane group. All four decode at once, each its own
+//  thirty-two columns, and then all four read the whole of what the four
+//  wrote: the decode keeps its shape -- sixteen values to a lane, four
+//  bytes to a word -- and stops being a quarter of the invocations' work.
+shared float16_t wt[SUBS * TILE_R * WT_STRIDE];
 
 //  The two formats this decodes, numbered as Weight_Packing'Pos numbers
 //  them, which is the same numbering row_product.comp is given.
@@ -311,7 +334,10 @@ int q3k_scale (uint at, uint which) {
 
 void main() {
     uint row0 = gl_WorkGroupID.x * TILE_R;
-    uint vec0 = gl_WorkGroupID.y * TILE_V;
+
+    //  This lane group's quarter of the tile's vectors.
+    uint vec0 = gl_WorkGroupID.y * TILE_V
+                + (gl_LocalInvocationID.x >> 6u) * (TILE_V / SUBS);
 
     //  Nothing here asks how long the batch is. The host rounds it up to a
     //  whole tile and zeroes what the rounding invents, so every workgroup
@@ -352,16 +378,20 @@ void main() {
                  : (shape.columns / 256u) * block);
 #endif
 
-    for (uint k0 = 0u; k0 < shape.columns; k0 += KCH) {
+    for (uint kb = 0u; kb < shape.columns; kb += KCH * SUBS) {
         barrier();
+
+        uint k0 = kb + (gl_LocalInvocationID.x >> 6u) * KCH;
 
         //  Sixty-four invocations decode thirty-two rows of the step,
         //  half a row each: sixteen values apiece, taken four bytes to a
         //  word.
         {
+            uint chunk   = gl_LocalInvocationID.x >> 6u;
             uint half_of = gl_LocalInvocationID.x & 1u;
-            uint r       = gl_LocalInvocationID.x >> 1u;
-            uint into    = r * WT_STRIDE + half_of * 16u;
+            uint r       = (gl_LocalInvocationID.x & 63u) >> 1u;
+            uint into    = chunk * TILE_R * WT_STRIDE
+                           + r * WT_STRIDE + half_of * 16u;
             uint row     = shape.base + (row0 + r) * rb;
 
 #ifdef MORE_FORMATS
@@ -952,15 +982,20 @@ void main() {
 
         barrier();
 
-        for (uint kk = 0u; kk < KCH; kk += 16u) {
+        for (uint step = 0u; step < KCH * SUBS; step += 16u) {
+            uint chunk = step / KCH;
+            uint kk    = step - chunk * KCH;
+
             coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
                 a[AR];
             coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
                 b[AV];
 
             for (uint i = 0u; i < AR; ++i) {
-                coopMatLoad(a[i], wt, i * 16u * WT_STRIDE + kk, WT_STRIDE,
-                            gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(a[i], wt,
+                            chunk * TILE_R * WT_STRIDE
+                            + i * 16u * WT_STRIDE + kk,
+                            WT_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
             }
 
             //  Column major with the batch's own stride is the transpose
@@ -969,7 +1004,7 @@ void main() {
             //  is where the batch already keeps it.
             for (uint j = 0u; j < AV; ++j) {
                 coopMatLoad(b[j], x,
-                            (vec0 + j * 16u) * shape.columns + k0 + kk,
+                            (vec0 + j * 16u) * shape.columns + kb + step,
                             shape.columns,
                             gl_CooperativeMatrixLayoutColumnMajor);
             }
