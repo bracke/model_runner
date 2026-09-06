@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **llama.cpp's shared-memory staging for the activation, refused four ways
+  — and the gap it was chasing withdrawn.** Its `load_b_to_shmem` takes eight
+  halves in one instruction; filling a tile a half at a time is one two-byte
+  load per invocation, and widening to four took a 1419-token device prompt
+  from 2.055 s to 0.948. Shared-memory footprint is the other axis: 128
+  columns of 128 vectors is 34 KB and leaves one group of lanes in flight
+  where 9 KB leaves seven. **The best of four shapes is still 0.948 s against
+  0.757 for no staging at all** — llama.cpp stages 64 vectors over a 64-row
+  tile in ~10 KB; this shader would stage 128 over 32 rows.
+
+- **The "device prompt is 1.51× behind" figure is withdrawn.** Taken again by
+  the same alternated method on the same binaries, this program reads **1785
+  t/s against llama.cpp's 1755** — ahead. The same commit reads 1.083–1.098 s
+  in one sitting and 0.745–0.763 in the next with no lower reported clock.
+  **This program's device prompt swings by half and llama.cpp's does not**, so
+  the honest statement is a range, not a ratio. Every relative A/B stands
+  (each was alternated inside its own sitting); the absolute figures and the
+  GB/s and TFLOP/s derived from them are withdrawn. Finding what puts this
+  program in a bad window is worth more than any shape tried here.
+
+
 - **llama.cpp's 64×64 matrix tile, built and refused.** With four subgroups
   already in place it changes nothing about the accumulators — 2×2 lane groups
   over 64 rows and 64 vectors gives each the same 32×32 and the same four. It

@@ -6329,6 +6329,64 @@
 # load: figures taken from the alternated rounds above
 # model: TinyLlama-1.1B-Chat Q8_0
 
+# 2026-09-06, the staging refused four ways, and the device gap withdrawn.
+# No source changed.
+#
+#   llama.cpp fills a shared tile with its activation and loads the matrix
+#   fragment from there; load_b_to_shmem takes eight halves in one
+#   instruction and never fewer than two. This shader loads the fragment
+#   from the batch directly. Four ways of doing it llama.cpp's way, against
+#   the same alternated baseline, Q8_0 1419-token device prompt:
+#
+#     no staging                                    0.757 s
+#     staged, 32-column window, four halves a load  0.948
+#     staged, 128-column window, four halves        1.608
+#     staged, 32-column window, one half a load     2.055
+#     staged, 128-column window, one half           4.073
+#
+#   Four alternated rounds for the first pair: base 0.745 0.762 0.763,
+#   staged 0.942 0.944 0.952 0.953; Q4_K base 0.745 0.737 0.751 against
+#   0.971 0.968 0.977 0.984; 110-token base 0.063 0.063 0.066 against 0.083
+#   0.086 0.086 0.086. Generating is the control and level. Digest
+#   1a26d24d33b8957b throughout.
+#
+#   THE LADDER IS THE LESSON. Filling the tile a half at a time is one
+#   two-byte load an invocation; four halves took it from 2.055 to 0.948, so
+#   more than half the cost was the width of the load and not the copy. The
+#   window matters through shared memory: 128 columns of 128 vectors is
+#   thirty-four kilobytes, which leaves one group of lanes in flight where
+#   nine kilobytes leaves seven.
+#
+#   AND THE SHAPE IS WHY IT STILL LOSES. llama.cpp stages sixty-four vectors
+#   by thirty-two columns for both operands, about ten kilobytes, and pays
+#   it over a sixty-four row tile. This shader would stage a hundred and
+#   twenty-eight vectors and pay it over thirty-two rows: twice the tile and
+#   half the rows to amortize against.
+#
+#   THE GAP IT WAS CHASING WAS A WINDOW. The row that started this read 1.51
+#   times behind, alternated against llama-bench with the part at 1758-1779
+#   MHz. Taken again the same way on the same binaries:
+#
+#     Q8_0 1419 device prompt    that window   this one
+#       model_runner             1211 t/s      1785 t/s
+#       llama.cpp                1826          1755
+#
+#   Ours: 0.762, 0.817, 0.795 s at 1763-1841 MHz. llama.cpp: 1752.0, 1764.9,
+#   1755.1. This program's device prompt swings by half and llama.cpp's does
+#   not: the same commit read 1.083-1.098 s in one sitting and 0.745-0.763 in
+#   the next, and the reported clock was no lower in the slow one. What it is
+#   has not been found.
+#
+#   So the device prompt is not a ratio but a range: ahead of llama.cpp in a
+#   good window, half again behind in a bad one, and the variance is this
+#   program's alone. Every relative measurement in the entries above stands,
+#   each having been alternated inside its own sitting; the absolute figures
+#   they quote, and the 12.9 against 36.6 GB/s and 2.68 against 3.81 TFLOP/s
+#   worked out from them, were taken in a bad window and are withdrawn.
+#
+# load: under 1.20; the device at 1763-1841 MHz
+# model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+
 kernels 67408AEFEAB84F30 src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,

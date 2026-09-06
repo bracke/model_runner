@@ -8125,6 +8125,66 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The device gap was a window, and the staging that chased it
+
+Two things came out of chasing llama.cpp's shared-memory staging, and the
+second is a correction to the first.
+
+**The staging does not pay here, in four shapes.** llama.cpp fills a shared
+tile with its activation and loads the matrix fragment from there;
+`load_b_to_shmem` takes eight halves in one instruction and never fewer than
+two. This shader loads the fragment from the batch directly. Four ways of
+doing it llama.cpp's way, all against the same alternated baseline:
+
+| Q8_0, 1419-token device prompt | |
+| --- | ---: |
+| no staging | 0.757 s |
+| staged, 32-column window, four halves a load | 0.948 s |
+| staged, 128-column window, four halves a load | 1.608 s |
+| staged, 32-column window, one half a load | 2.055 s |
+| staged, 128-column window, one half a load | 4.073 s |
+
+Each step of that ladder is a lesson and the first is the sharpest: **filling
+the tile a half at a time is one two-byte load an invocation**, and moving to
+four halves took it from 2.055 to 0.948 -- more than half the cost was the
+width of the load, not the copy. The window matters because of what it takes
+of shared memory: a hundred and twenty-eight columns of a hundred and
+twenty-eight vectors is thirty-four kilobytes, which leaves one group of
+lanes in flight where nine kilobytes leaves seven. And at the end of the
+ladder the best staging is still a quarter behind not staging at all.
+
+**The reason is the tile's shape, and it is the same reason the sixty-four by
+sixty-four tile lost.** llama.cpp stages sixty-four vectors by thirty-two
+columns for both operands, about ten kilobytes, and pays it over the rows of
+a sixty-four row tile. This shader would stage a hundred and twenty-eight
+vectors and pay it over thirty-two rows -- twice the tile and half the rows
+to amortize it against. The piece does not transfer because the shape around
+it does not.
+
+**And the gap it was chasing was a window.** The row that started this read
+1.51 times behind, taken alternated against llama-bench with the part at 1758
+to 1779 MHz. Taken again, the same way, on the same binaries:
+
+| Q8_0, 1419-token device prompt | that window | this one |
+| --- | ---: | ---: |
+| model_runner | 1211 t/s | **1785 t/s** |
+| llama.cpp | 1826 t/s | 1755 t/s |
+
+**This program's device prompt swings by half; llama.cpp's does not.** The
+same commit read 1.083 to 1.098 s in one sitting and 0.745 to 0.763 in the
+next, and the reported clock was 1758 to 1779 MHz in the slow one and 1763 to
+1841 in the fast -- so it is not the clock the part reports. What it is has
+not been found.
+
+So the honest statement of the device prompt is not a ratio but a range: it
+is ahead of llama.cpp in a good window and half again behind in a bad one,
+and **the variance is this program's alone**. Every relative measurement in
+the three sections above stands -- each was alternated inside its own sitting
+-- but the absolute figures they quote, and the bandwidth and arithmetic
+rates worked out from them, were taken in a bad window and are withdrawn.
+Finding what puts this program in a bad window is worth more than any of the
+shapes tried here.
+
 ### The widest gap is now the device, and it is one number in the shader
 
 With the processor's k-quant kernels done, the comparison was taken again
