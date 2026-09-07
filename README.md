@@ -8188,6 +8188,73 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The exclusions redone against selectivity, and what is left
+
+The section below establishes the constraint the hunt should have started
+from: **llama.cpp is not affected by the window, so whatever causes it cannot
+be shared hardware.** Everything excluded before it was excluded by
+measurement for being shared -- the clock, the power budget, the thermal
+state, the memory bandwidth, the load, the page cache. The constraint
+disposes of all of them at once, and leaves only what differs between two
+processes on one machine in the same minutes: their code, their shaders,
+their allocations, or driver state belonging to their own context.
+
+Redone on that footing, with per-process measurements rather than
+machine-wide ones.
+
+**Where each process puts its weights.** Read from `/proc/<pid>/fdinfo` while
+each was running the same prompt:
+
+| | VRAM | GTT |
+| --- | ---: | ---: |
+| this program | 78 MB | 1.17 GB |
+| llama.cpp | 70 MB | 1.13 GB |
+
+The same, and both mostly in system memory through GTT. **Excluded**, this
+time by a number that belongs to the process rather than to the machine.
+
+**Which queue each submits to -- a real difference, and the only one found.**
+This device offers three queue families:
+
+| family | flags | queues |
+| --- | --- | ---: |
+| 0 | graphics, compute, transfer, sparse | 1 |
+| 1 | compute, transfer, sparse | 4 |
+| 2 | sparse | 1 |
+
+This program takes **the first family with the compute bit**, which is family
+zero -- the universal queue, the one a desktop compositor draws on.
+llama.cpp calls `ggml_vk_find_queue_family_index` with compute *required* and
+graphics *avoided*, which takes family one. So one program shares a queue
+with the screen and the other does not, and that is exactly the shape a
+selective cause has to have.
+
+**It is not the cause, on the one test that could be run for it.** The change
+is four lines and was made: prefer a compute family without the graphics bit,
+fall back to any. Digest unchanged, and level in a fast window -- 0.745,
+0.767, 0.788 s against 0.747, 0.774, 0.807. Then family zero was loaded from
+another process with work chosen to occupy the queue and compute almost
+nothing, a small model generating on the device. If the queue were the
+mechanism the compute-family build would have been immune:
+
+| | quiet | under a family-0 load |
+| --- | --- | --- |
+| family 0, as it is | 0.742 s | 0.845, 0.792 s |
+| family 1, compute only | 0.741 s | 0.835, 0.854 s |
+
+Both lose about a tenth and neither is spared. **Reverted**, because a change
+whose only argument is a hypothesis its own test did not support is an
+unmeasured change, and this page had already published one of those today.
+
+**What is left is the allocation granularity.** This program makes 219
+`AMDGPU_GEM_CREATE` calls for one prompt where llama.cpp makes 60 -- three
+and a half times as many objects for the same gigabyte. That is per-process,
+it is the kind of thing that would be sensitive to how fragmented the GTT
+happens to be, and fragmentation is the sort of state that persists across a
+process exiting and starting again, which the window does and nothing else
+found so far does. **It is untested**: fragmenting the GTT deliberately is
+not something this sitting found a way to do.
+
 ### A display-controller correlation, and why it cannot be the answer
 
 **Withdrawn as published.** What follows was written as a finding and is

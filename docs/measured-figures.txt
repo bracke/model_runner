@@ -16658,3 +16658,68 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # and read twenty-nine between 0.692 and 0.773 s and one at 1.054, against a
 # dozen consecutive at 1.08 that afternoon. The slow window is a state and
 # not a spread. That is what makes one sitting's device ratio worthless.
+
+# 2026-09-07  The exclusions redone against selectivity
+# ------------------------------------------------------
+#
+# The entry above establishes the constraint: llama.cpp is not affected by
+# the window, so the cause is not shared hardware. That disposes at once of
+# the clock, the power budget, the thermal state, the memory bandwidth, the
+# load and the page cache -- every one of which was excluded here by
+# measurement, one sitting at a time. What remains is what differs between
+# two processes on one machine in the same minutes.
+#
+# PLACEMENT, EXCLUDED PROPERLY. /proc/<pid>/fdinfo while each ran the prompt:
+#
+#                    drm-memory-vram    drm-memory-gtt
+#   this program           80,032 KiB      1,223,784 KiB
+#   llama.cpp              71,720 KiB      1,187,004 KiB
+#
+# The same, and both mostly in system memory through GTT. The earlier
+# exclusion of "memory placement" used machine-wide totals; this one uses a
+# number that belongs to the process, which is what the constraint asks for.
+#
+# THE QUEUE: A REAL SELECTIVE DIFFERENCE. This device's families:
+#
+#   0   graphics | compute | transfer | sparse    1 queue
+#   1   compute | transfer | sparse               4 queues
+#   2   sparse                                    1 queue
+#
+# This program takes the first family with the compute bit -- family 0, the
+# universal queue, the one a desktop compositor draws on. llama.cpp calls
+# ggml_vk_find_queue_family_index with compute required and graphics avoided
+# and gets family 1. One program shares a queue with the screen and the other
+# does not. That is the shape a selective cause has to have, and it is the
+# only difference of that shape found.
+#
+# AND IT IS NOT THE CAUSE, on the one test that could be run. The change is
+# four lines -- prefer a compute family without the graphics bit, fall back
+# to any -- and it was made. Digest unchanged. Level in a fast window:
+#
+#   family 0    0.745   0.767   0.788 s
+#   family 1    0.747   0.774   0.807 s
+#
+# Then family 0 was loaded from another process with work chosen to occupy
+# the queue and compute almost nothing -- a small model generating on the
+# device. If the queue were the mechanism the compute-family build would be
+# spared:
+#
+#                        quiet      under a family-0 load
+#   family 0             0.742 s    0.845   0.792 s
+#   family 1             0.741 s    0.835   0.854 s
+#
+# Both lose about a tenth and neither is spared. REVERTED: a change whose
+# only argument is a hypothesis its own test did not support is an unmeasured
+# change, and one of those was published here already today.
+#
+# WHAT IS LEFT IS ALLOCATION GRANULARITY. One prompt:
+#
+#   this program   219 AMDGPU_GEM_CREATE
+#   llama.cpp       60
+#
+# Three and a half times the objects for the same gigabyte. It is
+# per-process, it is the kind of thing that would be sensitive to how
+# fragmented the GTT is, and fragmentation persists across a process exiting
+# and starting again -- which the window does, and which no other candidate
+# found so far does. UNTESTED: this sitting found no way to fragment the GTT
+# deliberately.

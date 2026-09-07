@@ -7,6 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The exclusions redone against selectivity: placement out, the queue is a
+  real difference but not the cause, and what is left is allocation
+  granularity.** The entry below establishes that llama.cpp is unaffected by
+  the window, so the cause cannot be shared hardware -- which disposes at
+  once of everything excluded before it by measurement. Redone with
+  per-process numbers:
+
+  **Placement, excluded properly.** Read from `/proc/<pid>/fdinfo` while each
+  program ran the same prompt: this program holds 78 MB of VRAM and 1.17 GB
+  of GTT, llama.cpp 70 MB and 1.13 GB. The same, and both mostly in system
+  memory.
+
+  **The queue, a real selective difference.** This device offers family 0
+  (graphics, compute, transfer; one queue), family 1 (compute, transfer;
+  four) and family 2 (sparse). This program takes the first family with the
+  compute bit -- family 0, the universal queue a compositor draws on --
+  where llama.cpp asks for compute while avoiding graphics and gets family 1.
+  One program shares a queue with the screen and the other does not, which is
+  the shape a selective cause must have.
+
+  **But not the cause, on the one test available.** The four-line change was
+  made: digest unchanged, level in a fast window (0.745, 0.767, 0.788 s
+  against 0.747, 0.774, 0.807). Then family 0 was loaded from another process
+  with work that occupies the queue and computes almost nothing. Quiet, both
+  read 0.742 and 0.741; under the load, family 0 read 0.845 and 0.792 and
+  family 1 read 0.835 and 0.854. Neither is spared. **Reverted** -- a change
+  whose only argument is a hypothesis its own test did not support is an
+  unmeasured change, and one of those was published here already today.
+
+  **What is left is allocation granularity**: 219 `AMDGPU_GEM_CREATE` calls
+  for one prompt against llama.cpp's 60, three and a half times the objects
+  for the same gigabyte. Per-process, plausibly sensitive to how fragmented
+  the GTT is, and fragmentation persists across a process restart -- which
+  the window does and nothing else found so far does. Untested.
+
 - **A display-controller correlation, withdrawn the day it was published.**
   The claim was that a `dcn31_program_compbuf_size` timeout flips the device
   prompt between 0.75 s and 1.08 -- pairs of the event before the slow
