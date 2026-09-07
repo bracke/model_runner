@@ -17150,3 +17150,69 @@ outside 37B64E5011D81374 src/shaders/row_product.comp src/shaders/matrix_product
 #                          a round of seventeen choose the same kernel
 #   query blocking         QUERIES is one in every kernel a round can take
 #   the prompt phase       at one round the two counts are level
+
+# 2026-09-07  The split-k attention kernel, built and refused
+# -----------------------------------------------------------
+#
+# llama.cpp has flash_attn_split_k_reduce.comp and this had no counterpart:
+# one query against a long cache, cut into slices with a workgroup each and a
+# reduce to put them back together. The entry above names it as the thing the
+# many-sequence case wants. It was built, it is correct, and it is worth
+# nothing on this part.
+#
+# THE ARGUMENT FOR IT was arithmetic. A generated token at a 1419-token
+# context attends over about thirty-two megabytes of cache -- twenty-two
+# layers, keys and values, two hundred and fifty-six components, two bytes --
+# and takes 2.3 milliseconds doing it. That is fourteen gigabytes a second
+# where the part gives sixty, and one query is one workgroup a head, thirty-
+# two of them on twelve compute units.
+#
+# WHAT WAS BUILT:
+#
+#   attention.comp with SPLIT_K   the slice from gl_WorkGroupID.z; the walk
+#                                 covers that slice's share of the range,
+#                                 rounded to a whole lane's width; instead of
+#                                 dividing it writes the unnormalized blend
+#                                 with its own maximum and denominator
+#   attention_join.comp           takes the largest maximum, rescales each
+#                                 slice by exp (m - M), divides once
+#   the partials                  a region of the result buffer bound at
+#                                 four, with a barrier between the two
+#                                 dispatches
+#
+# IT IS RIGHT. Digest 7ec6b755e53e16b4 at one, four, eight, sixteen and
+# thirty-two slices: the same answer the unsplit walk gives, at every count.
+#
+# AND IT BUYS NOTHING, sixty-four tokens at a 1419-token context:
+#
+#   no split       1.361   1.399 s
+#   four slices    1.386   1.388
+#   eight          1.388   1.391
+#   sixteen        1.395   1.392
+#   thirty-two     1.415   1.416
+#
+# Level at four and slowly worse above it, which is the join's own dispatch
+# being paid for and nothing bought. Reverted.
+#
+# THE PREMISE WAS WRONG AND THE MEASUREMENT IS WHAT SAYS SO. Thirty-two
+# workgroups is not thirty-two threads: each is a workgroup's width, so the
+# walk already had some eight thousand invocations for twelve compute units.
+# The part was never short of work to schedule, and whatever holds attention
+# to fourteen gigabytes a second -- the dependent read of a key before its
+# score, the serial shape of a running softmax -- is not a thing more
+# workgroups fix. COUNTING WORKGROUPS AND CALLING IT OCCUPANCY IS THE
+# MISTAKE.
+#
+# TWO THINGS LEARNED ON THE WAY, both worth writing down.
+#
+#   The fifth binding in a sequence is a WINDOW on the result buffer --
+#   Offset => Places (Index).At_Byte, Extent => that step's own room -- not
+#   the buffer itself. An absolute offset into it is meaningless and out of
+#   bounds, which is what the first wrong answer was.
+#
+#   The second wrong answer was an edit that silently did nothing: a fallback
+#   in the patching script dedented its anchor, so the inner replacement no
+#   longer matched and the write-out was never changed. The shader compiled
+#   with SPLIT_K still wrote the normalized answer and the join read a region
+#   nothing had written. The digest caught it; making the join inert and
+#   watching the answer come back right is what located it.

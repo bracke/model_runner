@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The split-k attention kernel, built and refused.** llama.cpp has
+  `flash_attn_split_k_reduce.comp` and this had no counterpart: one query
+  against a long cache, cut into slices with a workgroup each and a reduce to
+  put them back. The argument was arithmetic -- a generated token at a
+  1419-token context attends over about 32 MB of cache in 2.3 ms, which is
+  **14 GB/s where the part gives 60**, and one query is thirty-two workgroups
+  on twelve compute units.
+
+  Built: `attention.comp` gains a `SPLIT_K` compilation taking its slice from
+  `gl_WorkGroupID.z`, walking that slice's share of the range and writing the
+  **unnormalized** blend with its own maximum and denominator beside it; a new
+  `attention_join.comp` takes the largest maximum, rescales each slice by
+  `exp (m - M)` and divides once. Partials live in a region of the result
+  buffer bound at four, with a barrier between the two dispatches.
+
+  **It is right** -- digest `7ec6b755e53e16b4` at one, four, eight, sixteen
+  and thirty-two slices, the same answer the unsplit walk gives -- **and it
+  buys nothing**: no split 1.361 and 1.399 s, four slices 1.386 and 1.388,
+  eight 1.388 and 1.391, sixteen 1.395 and 1.392, thirty-two 1.415 and 1.416.
+  Level at four and slowly worse above it. **Reverted.**
+
+  The premise was wrong. Thirty-two workgroups is not thirty-two threads:
+  each is a workgroup's width, so the walk already had some eight thousand
+  invocations for twelve compute units. Whatever holds attention to 14 GB/s
+  -- the dependent read of a key before its score, the serial shape of a
+  running softmax -- is not something more workgroups fix. **Counting
+  workgroups and calling it occupancy is the mistake.**
+
 - **Why a round cannot take the matrix attention kernel, and a correction.**
   The entry below calls `Attend_Kernel`'s `if not Rounding` guard "a whole
   kernel the many-sequence case cannot reach", as though it were arbitrary.

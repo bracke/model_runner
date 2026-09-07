@@ -8205,6 +8205,58 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The split-k attention kernel, built and refused
+
+llama.cpp has `flash_attn_split_k_reduce.comp` and this has no counterpart:
+one query against a long cache, cut into slices with a workgroup each and a
+reduce to put them back together. The section below names it as the thing
+the many-sequence case wants. It was built, it is correct, and it is worth
+nothing on this part.
+
+**The argument for it was arithmetic.** A generated token at a 1419-token
+context attends over about thirty-two megabytes of cache -- twenty-two
+layers, two of keys and values, two hundred and fifty-six components, two
+bytes -- and takes 2.3 milliseconds doing it, which is **fourteen gigabytes
+a second where the part gives sixty**. One query is one workgroup a head,
+thirty-two of them on twelve compute units, and that looked like too few.
+
+**What was built.** `attention.comp` gains a `SPLIT_K` compilation: the
+slice comes from `gl_WorkGroupID.z`, the walk covers that slice's share of
+the range rounded to a whole lane's width, and instead of dividing at the
+end it writes the **unnormalized** blend with its own maximum and its own
+denominator beside it. A new `attention_join.comp` reads the slices back,
+takes the largest maximum, rescales each by `exp (m - M)` and divides once
+-- which is exactly what a softmax splits on. The partials go in a region of
+the result buffer bound at four, and the two dispatches have a barrier
+between them.
+
+**It is right.** The digest is `7ec6b755e53e16b4` at one, four, eight,
+sixteen and thirty-two slices -- the same answer the unsplit walk gives, at
+every count.
+
+**And it buys nothing:**
+
+| | 64 tokens at a 1419-token context |
+| --- | --- |
+| no split | 1.361, 1.399 s |
+| four slices | 1.386, 1.388 s |
+| eight | 1.388, 1.391 s |
+| sixteen | 1.395, 1.392 s |
+| thirty-two | 1.415, 1.416 s |
+
+Level at four and slowly worse above it, which is the join's own dispatch
+being paid for and nothing bought. **Reverted.**
+
+**The premise was wrong, and the measurement is what says so.** Thirty-two
+workgroups is not thirty-two threads: each is a workgroup's width, so the
+walk already has some eight thousand invocations for twelve compute units.
+The part was never short of work to schedule, and whatever holds attention
+to fourteen gigabytes a second -- the dependent read of a key before its
+score, the serial shape of a running softmax -- is not a thing more
+workgroups fix. Counting workgroups and calling it occupancy is the mistake,
+and it is the same shape as the one two entries below: **a number that looks
+like a bottleneck is not one until something that would move it does.**
+
 ### Why a round cannot take the matrix attention kernel, and a correction
 
 The section below ends by calling `Attend_Kernel`'s `if not Rounding` guard
