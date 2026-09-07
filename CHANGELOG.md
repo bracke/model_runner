@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **llama.cpp's mat-vec shape, built two ways and refused.** The gap left
+  after the sitting is the device's generated token, 50.8 tokens a second
+  against 55.5, and 89 per cent of that token is `row_product` -- voiding it
+  takes sixty-four tokens from 1.211 s to 0.129. `mul_mat_vec.comp` puts a
+  whole subgroup on a row-group with `K_PER_ITER = 8` consecutive elements a
+  thread and reduces with `subgroupAdd`; this puts eight lanes on a row, each
+  taking every eighth block, and reduces through shared memory and one
+  barrier. At eight lanes a row a sixty-four-wide wave walks eight disjoint
+  streams of about 270 bytes where theirs walks one contiguous stream, which
+  is a real mechanism for a real difference.
+
+  **The reduction alone**, `subgroupClusteredAdd` over clusters of eight:
+  1.317, 1.309 and 1.317 s against 1.241, 1.275 and 1.275 -- three per cent
+  slower, worse in three of three. The barrier was never the cost; it is one
+  at the end of a workgroup, and the clustered add spends three shuffle steps
+  on all sixty-four lanes where the shared path spends one store each.
+
+  **And the streams**, with the lane count swept now that the reduction pays
+  for a wide one and `Row_Lanes` moved with it: eight 1.243 and 1.280 s,
+  sixteen 1.274 and 1.274, thirty-two 1.323 and 1.325, sixty-four -- one row
+  a wave -- 1.271 and 1.283. Nothing at any width. Digest
+  `448c2ed68ec342ee` throughout; both halves reverted.
+
+  The eight-lane shape was arrived at here by measurement and the shape
+  llama.cpp arrived at by its own route is not better on this part. So the
+  device's generated token keeps its nine per cent, and the three things that
+  could have explained it are now all measured: the small kernels are 0.53 ms
+  of work and 0.16 of dispatch against a 19.7 ms token, the submission count
+  is 23 a token here against llama.cpp's 28, and the kernel shape is above.
+
 - **A measurement sitting: two instruments fixed and all seven figure groups
   re-measured.** Taken in a window verified stable first -- four readings of
   the 1419-token device prompt inside two per cent, and no display events for

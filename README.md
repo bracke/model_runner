@@ -8205,6 +8205,74 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### llama.cpp's mat-vec shape, built two ways and refused
+
+The gap the sitting above leaves is the device's generated token: 50.8 tokens
+a second against llama.cpp's 55.5, and this file's own ablation says where
+that token is -- **void `row_product` and sixty-four tokens go from 1.211 s
+to 0.129**, so 89 per cent of a generated token is that one kernel. Both
+sides are bound by the weight bytes: about 56 GB/s here against 61 there.
+
+**The two kernels are shaped differently, and the difference reads like a
+memory argument.** `mul_mat_vec.comp` puts a whole subgroup on a row-group,
+gives each thread `K_PER_ITER = 8` consecutive elements and `NUM_ROWS`
+accumulators, and reduces with `subgroupAdd` -- shared memory only where
+subgroups are missing. This puts **eight lanes on a row**, each taking every
+eighth block, and reduces through shared memory and one workgroup barrier.
+At eight lanes a row a sixty-four-wide wave here covers eight rows, so it
+walks **eight disjoint streams of about two hundred and seventy bytes**;
+theirs walks one contiguous stream. One long stream is friendlier to DRAM
+than eight short ones, which is a real mechanism for a real difference.
+
+It is not this one. Both halves were built.
+
+**The reduction alone**, `subgroupClusteredAdd` over clusters of eight in
+place of the shared array and the barrier -- which the shader's own note
+declines on the grounds that it needs a Vulkan 1.1 instance, though this
+program already ships `attention_subgroups` compiled exactly that way and
+picks it at run time:
+
+| | sixty-four tokens on the device |
+| --- | --- |
+| shared memory, as it is | 1.241, 1.275, 1.275 s |
+| clustered subgroup add | 1.317, 1.309, 1.317 s |
+
+**Three per cent slower, worse in three of three.** The barrier was never the
+cost: it is one barrier at the end of a workgroup, not one per block, and the
+clustered add spends three shuffle-and-add steps on all sixty-four lanes
+where the shared path spends one store on each and eight loads on one in
+eight.
+
+**And the streams**, which is what the reduction was only ever the enabler
+for. With the clustered add paying for the wider reduction, the lane count
+per row sweeps freely -- and the host constant `Row_Lanes` moves with it, so
+both sides agree:
+
+| lanes a row | sixty-four tokens |
+| --- | --- |
+| **eight, as it is** | **1.243, 1.280 s** |
+| sixteen | 1.274, 1.274 s |
+| thirty-two | 1.323, 1.325 s |
+| sixty-four -- one row a wave | 1.271, 1.283 s |
+
+Nothing at any width, and thirty-two is worse. Digest `448c2ed68ec342ee`
+throughout all of it, both halves reverted.
+
+**What that says about the eight-lane shape is worth keeping.** It was
+arrived at here by measurement -- one invocation a row spent transactions it
+did not have, dividing inside a block decoded the scale eight times -- and
+the shape llama.cpp arrived at by its own route is not better on this part.
+Two programs reached different answers and both are right about their own
+machine, which is the second time this file has found that and the first time
+it has been able to say so with the other shape built and running.
+
+**So the device's generated token keeps its nine per cent**, and the three
+things that could have explained it are now all measured: the small kernels
+are 0.53 ms of work and 0.16 of dispatch a token against a 19.7 ms token, the
+submission count is 23 a token here against llama.cpp's 28, and the kernel
+shape is above. What is left is the arithmetic inside the kernel, and this
+page has no reading that says it is wrong.
+
 ### Allocation granularity, tested and not it -- and the point to stop
 
 The section below ends on the last candidate that satisfied the selectivity
