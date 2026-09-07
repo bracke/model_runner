@@ -1644,20 +1644,20 @@ tests speed --model MODEL --backend device
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
 | 6-token prompt, 12 generated | 0.346 s | **0.242 s** |
-| -- evaluating the prompt | 0.040 s | 0.027 s |
+| -- evaluating the prompt | 0.041 s | 0.026 s |
 | -- generating | 0.305 s | **0.215 s** |
-| -- processor time | 1.81 s | **0.07 s** |
-| 110-token prompt, one token | 0.310 s | **0.127 s** |
-| -- evaluating the prompt | 0.282 s | **0.105 s** |
-| -- processor time | 2.33 s | **0.04 s** |
+| -- processor time | 1.79 s | **0.05 s** |
+| 110-token prompt, one token | 0.314 s | **0.102 s** |
+| -- evaluating the prompt | 0.286 s | **0.082 s** |
+| -- processor time | 2.33 s | **0.02 s** |
 
 All the cells were taken in one sitting on 2026-09-07, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
 version of this table before last. The second row used to say "nothing
 generated" and the command it names generates one token, so it says that now
 and carries the prompt on a line of its own. The device column carries what
-share of each run the part had work to do, and these two runs are fed 42 and
-28 per cent: both are short, and a short run is mostly the host. See
+share of each run the part had work to do, and these two runs are fed 40 and
+27 per cent: both are short, and a short run is mostly the host. See
 `### What a device figure is really measuring` below.
 
 **That cell read 0.098 s, then 0.122, 0.100, 0.099, 0.102 and the 0.103
@@ -6623,9 +6623,9 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 381.9 t/s | 38.0 t/s |
+| model_runner, processor | 384.6 t/s | 37.9 t/s |
 | llama.cpp, processor | 397.6 t/s | 40.7 t/s |
-| model_runner, device | 1392.4 t/s | 53.2 t/s |
+| model_runner, device | 1641.8 t/s | 52.9 t/s |
 | llama.cpp, device | 1663.1 t/s | 58.5 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
@@ -6645,19 +6645,23 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **318.2 t/s** | 38.0 t/s |
+| model_runner, processor | **314.6 t/s** | 37.9 t/s |
 | llama.cpp, processor | 319.3 t/s | 40.7 t/s |
-| model_runner, device | 1419.0 t/s | 53.2 t/s |
+| model_runner, device | **1990.2 t/s** | 52.9 t/s |
 | llama.cpp, device | 1897.5 t/s | 58.5 t/s |
 
 **The processor's long prompt is level and its generated token is within
-seven per cent**, 318.2 against 319.3 at 1419 tokens and 1.07 behind
-generating. **The device's two prompts are 1.19 and 1.34 behind**, and its
-generated token 1.10.
+seven per cent**, 314.6 against 319.3 at 1419 tokens and 1.07 behind
+generating. **The device's long prompt is now ahead** -- 1990.2 against
+1897.5 -- **and its short one level**, 1641.8 against 1663.1, where the two
+were 1.34 and 1.19 behind before `### The copy of record, owed rather than
+sent`. Its generated token is 1.11 behind and untouched by that change.
 
-**The device's long prompt is the row that moved, and the commit that
-published it cannot reproduce it either.** It read 1800.8 t/s -- 0.788 s --
-when it was last published and reads 1419.0 here, 1.000 s, while llama.cpp's
+**The device's long prompt was the row that moved, and the commit that
+published it could not reproduce it either.** It read 1800.8 t/s -- 0.788 s
+-- when it was last published and read 1419.0, 1.000 s, before the change
+two sections above; the figures in the table are that change and the
+paragraph below is about the reading it replaced. Against llama.cpp's
 own device row on the same file in the same sitting went the other way,
 1754.5 to 1897.5. So the commit whose README carries the 1800.8 was built
 into a worktree beside this one and the two were alternated, three readings
@@ -6866,9 +6870,9 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.288 s
-and 64 in 1.686 s on the processor, 0.079 s and 1.202 s on the device, and
-the long prompt in 4.459 s and 1.000 s, medians of three as everywhere else
+speed` reports seconds and this table reports rates: 110 tokens in 0.286 s
+and 64 in 1.690 s on the processor, 0.067 s and 1.210 s on the device, and
+the long prompt in 4.510 s and 0.713 s, medians of three as everywhere else
 here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -8242,6 +8246,64 @@ part sharing fifteen watts with a device. To generate faster on this machine
 one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
+
+### The copy of record, owed rather than sent
+
+`--budget` on a device prompt said READING_OUT was a fifth of it, which made
+no sense: a prompt reads out one position and that is one matrix against one
+vector. The phase is charged at the end of the call, so what it was holding
+was everything after the last layer -- and what is after the last layer is
+the host's copy of the cache being brought up to date out of the device's.
+
+Two reads a layer, twenty-two layers, and for a 1419-token prompt about
+sixty-four megabytes, each read waited on. **Nothing in an ordinary run looks
+at those bytes.** The device attends out of its own block; the host's copy
+exists for three readers and none of them is what `run` does: attention on
+the processor, saving a context, and rolling one.
+
+So it is owed instead of sent. A session records the range of positions the
+device has written and its copy has not been given; `Settle_Cache` fetches
+them, and the three readers call it before they read. There is no eviction to
+lose them to -- a block is granted once and a session keeps it until it
+closes -- so a range recorded is still on the device when it is asked for.
+`Adopt` and `Reset` clear it instead of fetching, because a context replaced
+or dropped is one nothing will read.
+
+**It is owed only where every layer of the call deferred**, and only for a
+batch. A layer that did not defer wrote the host's copy itself and may not
+have written the device's, so fetching that layer's range back would put
+whatever the block holds over a good copy; and a round's rows belong to
+different sessions, which is a range each rather than one. Both fall back to
+fetching at the end of the call, as before.
+
+Alternated, three readings each, at a load under one:
+
+| | sent at the end | owed | |
+| --- | ---: | ---: | ---: |
+| device, 1419-token prompt | 0.997, 1.000, 1.004 s | **0.700, 0.704, 0.711** | **1.42** |
+| device, 110-token prompt | 0.079, 0.082, 0.079 s | **0.067, 0.069, 0.070** | **1.16** |
+| device, 64 generated | 1.296, 1.325, 1.332 s | 1.284, 1.320, 1.336 | -- |
+
+and the part goes from **fed 84 to 86 per cent of the long prompt to 91 to
+92**, which is the same statement from the other side: what it was waiting
+for was the host reading bytes back.
+
+**Every digest is unchanged and a saved session is byte-identical.** Four
+scenarios were run against a binary with the old behaviour and compared: a
+plain prompt, a context shift, saving a context and restoring one. The shift
+is worth naming because the processor and the device disagree after one --
+they disagree the same way with the fetch eager, so that is the two
+arithmetics and not this.
+
+**What it does to the comparison** is the whole of the device prompt gap.
+Against `llama-bench` on the same file: the 1419-token prompt reads **1990.2
+t/s against 1897.5**, ahead where it was 1.34 behind, and the 110-token one
+1641.8 against 1663.1, level where it was 1.19 behind. The generated token is
+untouched at 1.11 behind -- it defers nothing, having one position to write.
+
+llama.cpp keeps no host copy at all: its cache lives on the device and is
+read back only by the state-save path. This is that arrangement with the copy
+kept, because three things here read it, and paid for only when they do.
 
 ### The eight-row weight layout, built
 

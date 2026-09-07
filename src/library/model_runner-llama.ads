@@ -1080,7 +1080,7 @@ package Model_Runner.Llama is
    --  @param Status Success, Lifecycle_Invalid_State, or
    --    Memory_Allocation_Failed.
    procedure Snapshot
-     (Item   : Session;
+     (Item   : in out Session;
       Source : Model'Class;
       Into   : out Model_Runner.Bytes.Byte_Array_Access;
       Status : out Model_Runner.Errors.Error_Info);
@@ -1424,6 +1424,25 @@ private
       --  host holds is the copy of record either way, so a session turned
       --  out of its block loses nothing but the copy.
       Seat       : Integer := -1;
+
+      --  Positions the device has written into its own block and the host's
+      --  copy has not been given yet, counted from Owed_At and none when
+      --  Owed_Count is zero.
+      --
+      --  The host's copy used to be brought up to date at the end of every
+      --  call, which is what "the copy of record" above meant: two reads a
+      --  layer, twenty-two layers, sixty-four megabytes for a long prompt,
+      --  and a wait on each of them. Nothing read those bytes for a run that
+      --  neither saves its context nor rolls it, so they are fetched when
+      --  something is about to read them instead -- which is
+      --  Settle_Cache, and the three places that call it.
+      --
+      --  There is no eviction to lose them to: a block is granted once and
+      --  a session keeps it until it closes, so a range recorded here is
+      --  still on the device when it is asked for.
+      Owed_At    : Natural := 0;
+      Owed_Count : Natural := 0;
+
       --  The committed keys and values, in one precision or the other.
       --  Exactly one pair is allocated; the other stays null, which is what
       --  the reads below test rather than carrying a converted copy.

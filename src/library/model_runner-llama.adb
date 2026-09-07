@@ -3522,6 +3522,77 @@ package body Model_Runner.Llama is
        else Element_Count (Item.Seat)
             * (Item.Keys.all'Length + Item.Values.all'Length));
 
+   --  Give the host's copy of the cache the positions the device wrote.
+   --
+   --  A device that computed a layer wrote its keys and values into its own
+   --  block and nothing else. The host keeps a copy because three things
+   --  read it -- attention on the processor, saving a context, and rolling
+   --  one -- and none of those is what a run ordinarily does, so the copy is
+   --  brought up to date when one of them is about to happen rather than at
+   --  the end of every call.
+   --
+   --  What that is worth is the whole of the difference between reading a
+   --  1419-token prompt on the device in 1.000 seconds and in 0.705: two
+   --  reads a layer, twenty-two layers, sixty-four megabytes and a wait on
+   --  each, for bytes nothing was going to look at.
+   --
+   --  @param Item Session whose copy may be behind.
+   procedure Settle_Cache (Item : in out Session) is
+   begin
+      if Item.Owed_Count = 0 then
+         return;
+      end if;
+
+      --  Cleared first. A read that fails leaves the copy as wrong as it
+      --  was and asking again would fail the same way; what a caller sees
+      --  is the refusal the reader itself reports.
+      declare
+         Source : constant access Model'Class := Item.Owner;
+
+         Settings : constant Configuration := Source.Settings;
+
+         KV_Width : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Head_Size);
+         V_Width  : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Value_Size);
+
+         Span  : constant Element_Count := Element_Count (Item.Owed_Count);
+         First : constant Element_Count := Element_Count (Item.Owed_At);
+
+         Read : Boolean := True;
+      begin
+         Item.Owed_Count := 0;
+
+         for Index in Source.Layers.all'Range loop
+            declare
+               Layer_Keys : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * KV_Width;
+
+               Layer_Vals : constant Element_Count :=
+                 Element_Count (Index) * Element_Count (Item.Context)
+                 * V_Width;
+
+               Base : constant Element_Count := Layer_Keys + First * KV_Width;
+               V_At : constant Element_Count := Layer_Vals + First * V_Width;
+            begin
+               Model_Runner.Backend.Device.Get_Cache
+                 (Block_Base (Item) + Base,
+                  Item.Keys.all (Base .. Base + Span * KV_Width - 1), Read);
+
+               if Read then
+                  Model_Runner.Backend.Device.Get_Cache
+                    (Block_Base (Item) + Item.Keys.all'Length + V_At,
+                     Item.Values.all (V_At .. V_At + Span * V_Width - 1),
+                     Read);
+               end if;
+
+               exit when not Read;
+            end;
+         end loop;
+      end;
+   end Settle_Cache;
+
    --  Put one position's keys and values where a device can read them.
    --
    --  Said by both evaluators, because a model must attend the same way
@@ -3608,7 +3679,7 @@ package body Model_Runner.Llama is
    --  @param Window This layer's sliding window, or zero for none, which a
    --    batch needs because every position of it has its own first.
    procedure Attend_There
-     (Item       : Session;
+     (Item       : in out Session;
       Source     : Model'Class;
       Query      : Real_Array;
       Heads      : Element_Count;
@@ -3640,6 +3711,9 @@ package body Model_Runner.Llama is
 
       Took : Boolean;
    begin
+      --  What the device wrote and the host was owed, before this reads it.
+      Settle_Cache (Item);
+
       Model_Runner.Backend.Device.Attend
         (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
          Source.Settings.Group_Size, Natural (First), Natural (Last),
@@ -4802,7 +4876,7 @@ package body Model_Runner.Llama is
    --------------
 
    procedure Snapshot
-     (Item   : Session;
+     (Item   : in out Session;
       Source : Model'Class;
       Into   : out B.Byte_Array_Access;
       Status : out E.Error_Info)
@@ -4844,6 +4918,11 @@ package body Model_Runner.Llama is
          At_Byte := At_Byte + 4;
       end Put_Bits;
    begin
+      --  What the device wrote and the host was owed, which this
+      --  reads: the copy is brought up to date where it is used
+      --  rather than at the end of every call.
+      Settle_Cache (Item);
+
       Into := null;
       Status := E.Success;
 
@@ -5087,6 +5166,11 @@ package body Model_Runner.Llama is
 
       Held : Element_Count := 0;
    begin
+      --  What the host is about to be given is the copy of record,
+      --  so whatever the device was owed for is no longer owed: the
+      --  positions it wrote are the ones being replaced.
+      Item.Owed_Count := 0;
+
       Status := E.Success;
 
       if Item.Current not in Ready | Evaluating_Prompt | Generating
@@ -5663,6 +5747,11 @@ package body Model_Runner.Llama is
 
       Moved : Natural;
    begin
+      --  What the device wrote and the host was owed, which this
+      --  reads: the copy is brought up to date where it is used
+      --  rather than at the end of every call.
+      Settle_Cache (Item);
+
       Status := E.Success;
 
       if Item.Current = Closed or else Item.Current = Failed then
@@ -5821,6 +5910,10 @@ package body Model_Runner.Llama is
 
    procedure Reset (Item : in out Session) is
    begin
+      --  A context dropped is a context nothing will read, so the
+      --  device owes the host nothing for it.
+      Item.Owed_Count := 0;
+
       --  Only the logical contents are invalidated. The cache and scratch
       --  buffers stay allocated so that a reset costs nothing and the next
       --  turn does not have to plan memory again.
@@ -8231,8 +8324,36 @@ package body Model_Runner.Llama is
       --  device's, for the layers that did not send it back a step at a
       --  time. The same bytes; the difference is that the batch did not
       --  wait on any of them.
+      --  Whether the host's copy can simply be owed rather than fetched.
+      --
+      --  Every layer of this call has to have deferred, and it has to be a
+      --  batch rather than a round: a layer that did not defer wrote the
+      --  host's copy itself and may not have written the device's, so
+      --  fetching that layer's range back would overwrite a good copy with
+      --  whatever the block happens to hold; and a round's rows belong to
+      --  different sessions, which is a range each rather than one.
+      declare
+         Owing : constant Boolean :=
+           Deferring and then not Rounding
+           and then (for all Index in Source.Layers.all'Range =>
+                       Deferred (Index));
+      begin
+         if Owing then
+            if Item.Owed_Count = 0 then
+               Item.Owed_At := Item.Committed;
+               Item.Owed_Count := Natural (Count);
+            else
+               --  Two calls' ranges are consecutive, so the union is the
+               --  first of the earlier and the last of the later.
+               Item.Owed_Count :=
+                 Natural'Max (Item.Owed_At + Item.Owed_Count,
+                              Item.Committed + Natural (Count))
+                 - Item.Owed_At;
+            end if;
+         end if;
+
       for Index in Source.Layers.all'Range loop
-         if Deferred (Index) then
+         if Deferred (Index) and then not Owing then
             declare
                Layer_Keys : constant Element_Count :=
                  Element_Count (Index) * Element_Count (Item.Context)
@@ -8308,6 +8429,7 @@ package body Model_Runner.Llama is
             end;
          end if;
       end loop;
+      end;
 
       if E.Is_Error (Status) then
          Release;

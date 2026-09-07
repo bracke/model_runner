@@ -7,6 +7,47 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The host's copy of the cache, owed rather than sent -- and the device's
+  prompt goes from a third behind llama.cpp to ahead of it.** `--budget` on a
+  device prompt put READING_OUT at a fifth of it, which cannot be what it
+  says: a prompt reads out one position. The phase is charged at the end of
+  the call, so what it held was the host's copy of the key and value cache
+  being brought up to date out of the device's -- two reads a layer,
+  twenty-two layers, about sixty-four megabytes for a 1419-token prompt, each
+  waited on.
+
+  **Nothing in an ordinary run reads those bytes.** The device attends out of
+  its own block; the host's copy has three readers and none of them is what
+  `run` does -- attention on the processor, saving a context, rolling one. So
+  a session now records the range of positions it is owed and `Settle_Cache`
+  fetches them, called by those three before they read. There is no eviction
+  to lose them to: a block is granted once and kept until the session closes.
+  `Adopt` and `Reset` clear the range instead, a context replaced or dropped
+  being one nothing will read.
+
+  Owed only where every layer of the call deferred, and only for a batch: a
+  layer that did not defer wrote the host's copy itself and may not have
+  written the device's, and a round's rows belong to different sessions.
+  Both keep the fetch.
+
+  Alternated, three readings each, at a load under one: **the device's
+  1419-token prompt 0.997/1.000/1.004 s to 0.700/0.704/0.711, 1.42 times**;
+  its 110-token prompt 0.079/0.082/0.079 to 0.067/0.069/0.070, 1.16; a
+  generated token untouched, having one position to write. The part goes from
+  **fed 84 to 86 per cent of the long prompt to 91 to 92**.
+
+  **Against llama.cpp the device's long prompt is now ahead** -- 1990.2 t/s
+  against `llama-bench`'s 1897.5, where it was 1.34 behind -- **and its short
+  one level**, 1641.8 against 1663.1, from 1.19 behind. Every digest is
+  unchanged and a saved session is byte-identical: four scenarios were run
+  against a binary with the old behaviour and compared, a plain prompt, a
+  context shift, saving and restoring.
+
+  Found by reading llama.cpp's Vulkan backend, which keeps no host copy at
+  all -- its cache lives on the device and is read back only when the state
+  is saved. This is that arrangement with the copy kept, because three things
+  here read it, and paid for only when they do.
+
 - **A measurement sitting: all seven figure groups retaken, and one number
   that moved the wrong way.** They had been stale since the panel work
   began, and could not be restamped while an unfinished MXFP4 change sat in
