@@ -17099,3 +17099,54 @@ outside 37B64E5011D81374 src/shaders/row_product.comp src/shaders/matrix_product
 # whole kernel the many-sequence case cannot reach. llama.cpp answers the
 # same case with flash attention and a split-k reduce. It is the first thing
 # to look at next.
+
+# 2026-09-07  Why a round cannot take the matrix attention kernel
+# ---------------------------------------------------------------
+#
+# The entry above calls Attend_Kernel's "if not Rounding" guard a whole
+# kernel the many-sequence case cannot reach, as though it were arbitrary
+# and waiting to be lifted. It is structural, and the shader says so in one
+# line. attention_matrix.comp walks the cache once for a whole block of
+# query rows:
+#
+#   for (uint base = first_min; base <= last_max; base += BC) {
+#       ...  k_at + (base + n * 16u) * shape.kv_width + d0 ...
+#
+# ONE KEY TILE, staged into shared memory, shared by all BR rows of the
+# block. That is the point of it: sixteen queries against one cache, which
+# is what a prompt is.
+#
+# A ROUND IS THE OTHER SHAPE. Every row is a different member with its own
+# cache at its own base -- which is what the per-row table at the end of the
+# cache buffer exists to say -- so the rows of a block cannot share a tile.
+# Lifting the guard would mean one row a block, and a sixteen-by-sixteen
+# matrix instruction with one useful row is not worth reaching.
+#
+# So the guard is right and the entry above is corrected. What the
+# many-sequence case wants is the other kernel: one query against a long
+# cache, parallelized over the cache rather than over the queries. That is
+# llama.cpp's flash_attn_split_k_reduce.comp and it has no counterpart here.
+#
+# AND THE STEP AT SEVENTEEN IS NARROWED BUT STILL OPEN. It is per round
+# rather than per prompt:
+#
+#   max-tokens    16 members    17 members
+#   1             0.046 s       0.049 s
+#   4             0.176         0.149
+#   32            1.418         1.162
+#
+# At one round the two are level and seventeen is the slower, which is the
+# seventeenth member's own work and nothing else. The marginal round costs
+# 43 milliseconds at sixteen members and 33 at seventeen.
+#
+# EXCLUDED SO FAR, each by measurement or by reading:
+#
+#   the product kernel     a probe printing the decision for every step
+#                          gives the same matrix-and-row split at both
+#   the submission count   5266 AMDGPU_CS at seventeen against 4462 at
+#                          sixteen, and seventeen is the faster one
+#   the row width          per-count pipelines above eight change nothing
+#   the attention kernel   Rounding is Table > 0, so a round of sixteen and
+#                          a round of seventeen choose the same kernel
+#   query blocking         QUERIES is one in every kernel a round can take
+#   the prompt phase       at one round the two counts are level

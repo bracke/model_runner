@@ -8205,6 +8205,52 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### Why a round cannot take the matrix attention kernel, and a correction
+
+The section below ends by calling `Attend_Kernel`'s `if not Rounding` guard
+**"a whole kernel the many-sequence case cannot reach"**, as though it were
+an arbitrary restriction waiting to be lifted. It is not. It is structural,
+and the shader says so in one line.
+
+`attention_matrix.comp` walks the cache once for a whole block of query rows:
+
+```glsl
+for (uint base = first_min; base <= last_max; base += BC) {
+    ...  k_at + (base + n * 16u) * shape.kv_width + d0 ...
+```
+
+**One key tile, staged into shared memory, shared by all `BR` rows of the
+block.** That is the whole point of it -- sixteen queries against one cache,
+which is what a prompt is. A round is the other shape: every row is a
+different member with **its own cache at its own base**, so the rows of a
+block cannot share a tile at all. Lifting the guard would mean one row a
+block, and a sixteen-by-sixteen matrix instruction with one useful row is
+not worth reaching.
+
+**So the entry below is corrected**: the guard is right, and the many-
+sequence case does not want that kernel. What it wants is the other shape --
+one query against a long cache, parallelized over the cache rather than over
+the queries, which is llama.cpp's `flash_attn_split_k_reduce.comp` and has
+no counterpart here.
+
+**And the step at seventeen is narrowed but still open.** It is per round
+rather than per prompt: at one round sixteen and seventeen members read
+0.046 and 0.049 s, which is the seventeenth member's own work and nothing
+else; at four rounds they read 0.176 and 0.149, and at thirty-two 1.418 and
+1.162. The marginal round costs **43 ms at sixteen members and 33 at
+seventeen**.
+
+Excluded so far, each by measurement or by reading:
+
+| | |
+| --- | --- |
+| the product kernel | a probe gives the same matrix-and-row split at both |
+| the submission count | 5266 calls at seventeen against 4462 at sixteen |
+| the row kernel's width | per-count pipelines above eight change nothing |
+| the attention kernel | `Rounding` is `Table > 0`, so the choice is the same |
+| query blocking | `QUERIES` is one in every kernel a round can take |
+| the prompt phase | at one round the two counts are level |
+
 ### The same idea above eight, refused -- and a step in the round curve
 
 The section below fills in a row pipeline for every count from one to eight,

@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Why a round cannot take the matrix attention kernel, and a correction.**
+  The entry below calls `Attend_Kernel`'s `if not Rounding` guard "a whole
+  kernel the many-sequence case cannot reach", as though it were arbitrary.
+  It is structural. `attention_matrix.comp` walks the cache once for a whole
+  block of query rows -- `for (uint base = first_min; base <= last_max; base
+  += BC)`, one key tile staged into shared memory and shared by all `BR`
+  rows -- which is sixteen queries against one cache, and that is what a
+  prompt is. **A round is the other shape**: every row is a different member
+  with its own cache at its own base, so the rows of a block cannot share a
+  tile. Lifting the guard would mean one row a block, and a sixteen-by-
+  sixteen matrix instruction with one useful row is not worth reaching. The
+  guard is right; what the many-sequence case wants is the other kernel --
+  one query against a long cache, parallelized over the cache rather than
+  the queries, which is llama.cpp's `flash_attn_split_k_reduce.comp` and has
+  no counterpart here.
+
+  **And the step at seventeen is narrowed but still open.** It is per round
+  rather than per prompt: at one round sixteen and seventeen members read
+  0.046 and 0.049 s -- the seventeenth member's own work and nothing else --
+  at four rounds 0.176 and 0.149, and at thirty-two 1.418 and 1.162. The
+  marginal round costs 43 ms at sixteen members and 33 at seventeen. Now
+  excluded: the product kernel (same split at both), the submission count
+  (5266 against 4462, and seventeen is faster), the row kernel's width
+  (per-count pipelines above eight change nothing), the attention kernel
+  (`Rounding` is `Table > 0`, so the choice is identical), query blocking
+  (`QUERIES` is one in every kernel a round can take), and the prompt phase.
+
 - **The same idea above eight, refused -- and a step in the round curve at
   seventeen.** Filling in a row pipeline for every count from one to eight
   was worth eighteen per cent at five members, so the obvious next move is
