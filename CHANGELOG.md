@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+### Added
+
+- **A four-wide row kernel, and the row shader's width as a specialization
+  constant.** llama.cpp compiles its mat-vec once for every column count from
+  one to eight and indexes them by it; this program had one, eight and
+  sixteen, so a round of two sequences ran on the eight-wide kernel and
+  carried eight accumulators to answer two. It showed as a step the weights
+  do not explain -- one member 21.5 ms a round, two members 29.3, over
+  weights read once either way.
+
+  Three alternated rounds, mark unchanged at every count: two members 0.931,
+  0.972 and 0.968 s become **0.715, 0.736 and 0.736**; three 0.976, 0.992,
+  0.995 become **0.773, 0.768, 0.774**; four 1.028, 1.032, 1.032 become
+  **0.815, 0.815, 0.814**. **Twenty-one to twenty-three per cent, better in
+  nine of nine.** One, eight and sixteen members are untouched and a plain
+  generated token still reads `448c2ed68ec342ee`. Against llama.cpp in the
+  same sitting, two sequences go from 1.42 times behind to 1.09 and four from
+  1.32 to 1.04.
+
+  The size limit made it a better change than it started as: a fourth
+  compiled copy of `row_product.comp` put the generated Ada over the megabyte
+  this repository accepts -- 96 KB of SPIR-V a copy, four copies differing by
+  one integer -- so the width became `layout(constant_id = 1) const uint
+  GROUP`, fixed when the pipeline is made. The loops still unroll, the arrays
+  still have a constant size, one module serves every width, and
+  `model_runner-shaders.ads` goes from 1054 KB to **767**.
+
+### Measured
+
 - **llama.cpp's own per-op profile, and the workgroup width it implies.**
   `GGML_VK_PERF_LOGGER=1` makes llama.cpp print what each operation of a
   generated token cost it. Two things fall out that this page had been

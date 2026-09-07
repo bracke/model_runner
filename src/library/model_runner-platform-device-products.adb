@@ -453,6 +453,8 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Half_Group_Line
        elsif Count = 1 and then Item.Single_Line /= Null_Handle
        then Item.Single_Line
+       elsif Count <= Quad_Group and then Item.Quad_Line /= Null_Handle
+       then Item.Quad_Line
        elsif Count > Batch_Group and then Item.Wide_Line /= Null_Handle
        then Item.Wide_Line
        else Item.Pipeline);
@@ -464,6 +466,8 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Group (Item : Engine; Count : Natural) return Positive
    is (if Count > Batch_Group and then Item.Wide_Line /= Null_Handle
        then Wide_Group
+       elsif Count in 2 .. Quad_Group and then Item.Quad_Line /= Null_Handle
+       then Quad_Group
        else Batch_Group);
 
    --  Which of the four tiles answers this format at this width. Null when
@@ -1347,43 +1351,6 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Shader := Made;
-
-         --  And the same source compiled for a batch of one. Allowed to
-         --  fail on its own: a device that takes the wide kernel and
-         --  refuses the narrow one runs every batch on the wide one, which
-         --  is what every device did until now.
-         declare
-            Narrow : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Single;
-         begin
-            Request.Size := Interfaces.C.size_t (Narrow'Length * 4);
-            Request.Code := Narrow'Address;
-
-            if Create (Item.Logical, Request'Address, Null_Handle,
-                       Made'Access) = 0
-            then
-               Item.Single := Made;
-            end if;
-         end;
-
-
-
-         --  And a third time for a batch between the two, allowed to fail
-         --  on its own for the same reason: without it those counts run
-         --  two dispatches of eight, which is what they did until now.
-         declare
-            Wider : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Wide;
-         begin
-            Request.Size := Interfaces.C.size_t (Wider'Length * 4);
-            Request.Code := Wider'Address;
-
-            if Create (Item.Logical, Request'Address, Null_Handle,
-                       Made'Access) = 0
-            then
-               Item.Wider := Made;
-            end if;
-         end;
       end;
 
       --  The second kernel's module.
@@ -1741,13 +1708,48 @@ package body Model_Runner.Platform.Device.Products is
          Item.Layout := Made;
       end;
 
-      --  And the pipeline.
+      --  And the pipelines, all from the one module.
+      --
+      --  Five of them, differing only in the two constants the shader takes:
+      --  how wide a workgroup is and how many vectors an invocation carries.
+      --  They were five modules until the fourth one put the generated Ada
+      --  over the size this repository accepts, which was the right thing to
+      --  be told -- ninety-six kilobytes of SPIR-V a copy, and the copies
+      --  differed by one integer.
       declare
          Create : constant Create_Pipelines_Call :=
            To_Create_Pipelines (Point ("vkCreateComputePipelines"));
 
          Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
          Request : aliased Compute_Pipeline_Info;
+
+         type Told_Entries is array (1 .. 2) of aliased Specialization_Entry;
+         type Told_Values is array (1 .. 2) of aliased C.unsigned;
+
+         Entries : aliased Told_Entries :=
+           [(Which => 0, At_Was => 0, Span => 4),
+            (Which => 1, At_Was => 4, Span => 4)];
+
+         Values : aliased Told_Values := [Group_Size, Batch_Group];
+         Told   : aliased Specialization_Info;
+
+         --  Made and reported rather than made and required: a device that
+         --  refuses one of the narrower shapes runs every count on the one
+         --  before it, which is what every device did before that shape
+         --  existed. Only the first is a fault.
+         procedure Line (Width, Group : C.unsigned; Into : out Address);
+
+         procedure Line (Width, Group : C.unsigned; Into : out Address) is
+         begin
+            Values := [Width, Group];
+            Request.Stage.Specialized := Told'Address;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Into := Made;
+            end if;
+         end Line;
       begin
          if Create = null then
             C.Strings.Free (Name);
@@ -1755,72 +1757,30 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         Told.Count := 2;
+         Told.Entries := Entries (Entries'First)'Address;
+         Told.Span := 8;
+         Told.Values := Values (Values'First)'Address;
+
          Request.Stage.Module := Item.Shader;
          Request.Stage.Name := Name;
          Request.Layout := Item.Layout;
 
-         if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                    Null_Handle, Made'Access) /= 0
-         then
+         Line (Group_Size, Batch_Group, Item.Pipeline);
+
+         if Item.Pipeline = Null_Handle then
             C.Strings.Free (Name);
             Close (Item);
             return;
          end if;
 
-         Item.Pipeline := Made;
-
-         --  And the narrow one, against the same layout. A refusal here is
-         --  not a fault either.
-         if Item.Single /= Null_Handle then
-            Request.Stage.Module := Item.Single;
-
-            if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                       Null_Handle, Made'Access) = 0
-            then
-               Item.Single_Line := Made;
-            end if;
-         end if;
-
-         --  And the same words again at half the width, which is a
-         --  specialization constant and not another module.
-         if Item.Single /= Null_Handle then
-            declare
-               Entry_One : aliased Specialization_Entry;
-               Told      : aliased Specialization_Info;
-               Width     : aliased C.unsigned := Half_Group;
-            begin
-               Entry_One.Which := 0;
-               Entry_One.At_Was := 0;
-               Told.Entries := Entry_One'Address;
-               Told.Values := Width'Address;
-
-               Request.Stage.Module := Item.Single;
-               Request.Stage.Specialized := Told'Address;
-
-               if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                          Null_Handle, Made'Access) = 0
-               then
-                  Item.Half_Group_Line := Made;
-               end if;
-
-               Request.Stage.Specialized := Null_Handle;
-            end;
-         end if;
-
-         --  And the wider one, on the same terms.
-         if Item.Wider /= Null_Handle then
-            Request.Stage.Module := Item.Wider;
-
-            if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                       Null_Handle, Made'Access) = 0
-            then
-               Item.Wide_Line := Made;
-            end if;
-         end if;
+         Line (Group_Size, 1, Item.Single_Line);
+         Line (Half_Group, 1, Item.Half_Group_Line);
+         Line (Group_Size, Quad_Group, Item.Quad_Line);
+         Line (Group_Size, Wide_Group, Item.Wide_Line);
 
          C.Strings.Free (Name);
       end;
-
       --  And the second kernel's pipeline, against the same layout.
       declare
          Create : constant Create_Pipelines_Call :=
@@ -2441,6 +2401,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Line, "vkDestroyPipeline");
       Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
+      Give_Back (Item.Quad_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -2454,9 +2415,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
       Give_Back (Item.Set_Layout, "vkDestroyDescriptorSetLayout");
-      Give_Back (Item.Single, "vkDestroyShaderModule");
 
-      Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");

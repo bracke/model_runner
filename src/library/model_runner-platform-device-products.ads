@@ -61,6 +61,12 @@ package Model_Runner.Platform.Device.Products is
    --  there.
    Wide_Group : constant := 16;
 
+   --  And the width between the single kernel and the eight-wide one. The
+   --  eight-wide kernel carries eight accumulators whatever it is given, so
+   --  two vectors pay for eight; llama.cpp compiles one of these for every
+   --  count from one to eight, and this is the same idea at one more grain.
+   Quad_Group : constant := 4;
+
    --  Query positions one workgroup of the tiled attention kernel answers.
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
    --  and the two have to agree: this decides how many workgroups the
@@ -1115,7 +1121,6 @@ private
       --  shared memory for a reduction seven eighths of which is discarded.
       --  Null if the device refused it, which leaves a batch of one on the
       --  wide kernel exactly as before.
-      Single     : System.Address := System.Null_Address;
 
 
       --  And a third time with WIDER, which sets its group to sixteen. A
@@ -1124,7 +1129,9 @@ private
       --  the model, which is what made a round of nine cost what a round of
       --  sixteen costs. Null if the device refused it, which puts those
       --  counts back on two passes and changes nothing else.
-      Wider      : System.Address := System.Null_Address;
+
+      --  And the four-wide one, for the counts between the single kernel
+      --  and the eight-wide one.
 
       --  And the sixth: the same tile, compiled from the same source with
       --  MORE_FORMATS, decoding the eight formats the fourth leaves out.
@@ -1179,6 +1186,7 @@ private
       Single_Line : System.Address := System.Null_Address;
       Half_Group_Line : System.Address := System.Null_Address;
       Wide_Line   : System.Address := System.Null_Address;
+      Quad_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;

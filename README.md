@@ -1634,12 +1634,12 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.370 s | **0.262 s** |
-| -- evaluating the prompt | 0.047 s | 0.033 s |
-| -- generating | 0.319 s | **0.230 s** |
-| -- processor time | 1.90 s | **0.07 s** |
-| 110-token prompt, nothing generated | 0.359 s | **0.094 s** |
-| -- processor time | 2.78 s | **0.01 s** |
+| 6-token prompt, 12 generated | 0.365 s | **0.257 s** |
+| -- evaluating the prompt | 0.045 s | 0.032 s |
+| -- generating | 0.319 s | **0.226 s** |
+| -- processor time | 1.89 s | **0.07 s** |
+| 110-token prompt, nothing generated | 0.360 s | **0.090 s** |
+| -- processor time | 2.72 s | **0.02 s** |
 
 All six cells were taken in one sitting on 2026-09-06, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
@@ -6611,10 +6611,10 @@ sides, with llama.cpp at `95b8e33e1`:
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **315.2 t/s** | 37.2 t/s |
-| llama.cpp, processor | 294.0 t/s | 39.3 t/s |
-| model_runner, device | 1195.7 t/s | 50.8 t/s |
-| llama.cpp, device | 1552.2 t/s | 55.5 t/s |
+| model_runner, processor | 307.3 t/s | 37.2 t/s |
+| llama.cpp, processor | **370.7 t/s** | 39.7 t/s |
+| model_runner, device | 1235.9 t/s | 50.6 t/s |
+| llama.cpp, device | 1621.4 t/s | 55.8 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6633,27 +6633,27 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **275.7 t/s** | 37.2 t/s |
-| llama.cpp, processor | 255.4 t/s | 39.3 t/s |
-| model_runner, device | **1835.7 t/s** | 50.8 t/s |
-| llama.cpp, device | 1814.1 t/s | 55.5 t/s |
+| model_runner, processor | **270.4 t/s** | 37.2 t/s |
+| llama.cpp, processor | 247.8 t/s | 39.7 t/s |
+| model_runner, device | **1831.0 t/s** | 50.6 t/s |
+| llama.cpp, device | 1756.2 t/s | 55.8 t/s |
 
-**The processor is ahead on both prompts and within six per cent
-generating**, which is where this comparison has been going for thirty-odd
-sittings: 1.07 times ahead on the short prompt, 1.08 on the long one, and
-1.06 behind a generated token. **The device's long prompt is level and
-slightly ahead for the first time**, 1835.7 against 1814.1, and its
-generated token is 1.09 behind.
+**The processor's long prompt is ahead and its generated token is within
+seven per cent**, 1.09 times ahead at 1419 tokens and 1.07 behind
+generating. **The device's long prompt is ahead**, 1831.0 against 1756.2,
+and its generated token is 1.10 behind.
 
-**The device's short prompt is the one row out of line**, 1.30 behind, and
-it is the row this file trusts least: `### A prompt too short to wake the
-machine` below is about it, and across sittings this program has read
-1527.8, 1486.5, 1549.3, 1506.8, 1182.8, 1571.4, 1571.4, 1571.4, 1549.3,
-1617.6, 1486.5 and now 1195.7 on it. A tenth of a second of work never
-brings the part above about 1.5 GHz -- this sitting's line says 1021 MHz of
-2700 -- and where inside that low band the clock happens to sit decides the
-cell. The long prompt is the row every change here is judged on, for that
-reason.
+**The two short-prompt rows are the ones out of line**, and they are the
+rows this file trusts least. `### A prompt too short to wake the machine`
+below is about the device one: across sittings this program has read 1527.8,
+1486.5, 1549.3, 1506.8, 1182.8, 1571.4, 1571.4, 1571.4, 1549.3, 1617.6,
+1486.5, 1195.7 and now 1235.9 on it, because a tenth of a second of work
+never brings the part above about 1.5 GHz -- this sitting's line says 1109
+of 2700 -- and where inside that low band the clock sits decides the cell.
+The processor's short row moves on the other side as well: `llama-bench`
+read 294.0 on it last sitting and 370.7 in this one, on the same binary and
+the same file. **A hundred and ten tokens is too short a measurement for
+either program**, which is what the long prompt is the judged row for.
 
 **The device prompt rows read 1182.8 and 1211.8 for one commit, and that was
 a slow window rather than the code.** The commit before this one published
@@ -6845,13 +6845,13 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 800.3 t/s rather
-than 294.0 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 643.3 t/s rather
+than 370.7 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
-The device generating row was the noisiest here for a long time: 50.8 t/s
-now, against 51.4, 50.2, 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+The device generating row was the noisiest here for a long time: 50.6 t/s
+now, against 50.8, 51.4, 50.2, 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the
@@ -8204,6 +8204,46 @@ part sharing fifteen watts with a device. To generate faster on this machine
 one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
+
+### One kernel width llama.cpp has and this did not, worth a fifth
+
+llama.cpp compiles its mat-vec kernel **once for every column count from one
+to eight** and indexes them by it -- `pipeline_dequant_mul_mat_vec_f32_f32
+[wg][type][num_cols-1]`, with `mul_mat_vec_max_cols = 8`. This program had
+three widths: one, eight and sixteen. So a round of two sequences ran on the
+eight-wide kernel, carrying eight accumulators and reading the activation
+for all of them to answer two.
+
+**It shows in the round curve as a step the weights do not explain.** One
+member costs 21.5 ms a round and two cost 29.3, over weights that are read
+once either way.
+
+**A four-wide kernel closes most of it.** Three alternated rounds, and the
+mark unchanged at every count:
+
+| members | eight-wide | four-wide | |
+| --- | --- | --- | --- |
+| two | 0.931, 0.972, 0.968 s | **0.715, 0.736, 0.736 s** | 23 % |
+| three | 0.976, 0.992, 0.995 s | **0.773, 0.768, 0.774 s** | 22 % |
+| four | 1.028, 1.032, 1.032 s | **0.815, 0.815, 0.814 s** | 21 % |
+
+Better in nine of nine. One, eight and sixteen members are untouched within
+noise, and a plain generated token still reads `448c2ed68ec342ee`. Against
+llama.cpp in the same sitting the two-sequence round goes from 1.42 times
+behind to 1.09, and four from 1.32 to 1.04.
+
+**And the size limit is what made it a better change than it started as.**
+A fourth compiled copy of `row_product.comp` put the generated Ada over the
+megabyte this repository accepts -- ninety-six kilobytes of SPIR-V a copy,
+four copies differing by one integer. So the width became a **specialization
+constant** instead, `layout(constant_id = 1) const uint GROUP`, fixed when
+the pipeline is made: the loops still unroll, the arrays still have a
+constant size, and one module now serves every width.
+`model_runner-shaders.ads` goes from 1054 KB to **767**, and the engine
+makes five pipelines from one module where it made five from four.
+
+That is llama.cpp's idea -- a kernel per column count -- arrived at from the
+other end, and the repository's own rule is what pushed it there.
 
 ### llama.cpp's own per-op profile, and the workgroup width it implies
 

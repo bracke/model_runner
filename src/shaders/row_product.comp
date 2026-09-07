@@ -68,6 +68,8 @@
 //  llama.cpp declares its own the same way, as local_size_x_id.
 layout(local_size_x_id = 0, local_size_x = 256) in;
 
+layout(constant_id = 1) const uint GROUP = 8u;
+
 layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
@@ -143,13 +145,19 @@ const uint FMT_IQ4_XS = 14u;
 //  invented. Sixteen accumulators and sixteen kilobytes of shared memory
 //  buy one pass instead of two. That is a trade of occupancy against
 //  bandwidth and the measurement is what settles it, not the arithmetic.
-#ifdef SINGLE
-const uint GROUP = 1u;
-#elif defined(WIDER)
-const uint GROUP = 16u;
-#else
-const uint GROUP = 8u;
-#endif
+//  How many vectors an invocation carries, as a specialization constant
+//  rather than four compiled copies of this file.
+//
+//  It was four modules -- one, four, eight and sixteen -- and each of them
+//  is ninety-six kilobytes of SPIR-V in the generated Ada, which put that
+//  file over the size this repository accepts. A specialization constant is
+//  fixed when the pipeline is made, so the loops below still unroll and the
+//  arrays below still have a constant size; what it costs is nothing and
+//  what it saves is three copies of every format's decoder.
+//
+//  llama.cpp compiles one of these for every count from one to eight and
+//  indexes them by it. One module that takes the count is the same idea
+//  without the four hundred kilobytes.
 
 //  Invocations that share one row.
 //
