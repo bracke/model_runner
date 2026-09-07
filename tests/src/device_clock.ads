@@ -99,6 +99,29 @@ package Device_Clock is
    --    host said nothing.
    function Shown (Of_Reading : Reading) return String;
 
+   --  Sample, or stop sampling, without ending the watch.
+   --
+   --  A reading is meant to answer about the same region the wall time does,
+   --  and on the path that repeats a run it did not: the watcher was started
+   --  before the first pass and stopped after the last, so it counted the
+   --  model being loaded and the gaps between passes as part of what it was
+   --  reporting on. That is why the share it printed depended on how many
+   --  repeats were asked for -- 31 per cent at one, 72 at three, 86 at nine
+   --  and 87 at fifteen, on a run whose wall did not move -- which makes two
+   --  figures taken with different repeat counts not comparable, and this
+   --  number exists to be compared.
+   --
+   --  A flag rather than an entry, because an entry is a rendezvous: a
+   --  caller turning sampling on would wait for the watcher to come round to
+   --  its accept, up to one sampling interval, and that wait would land
+   --  inside the region being timed.
+   --
+   --  On at Start, so a caller that never says otherwise gets what it got
+   --  before.
+   --
+   --  @param On True to sample, False to hold.
+   procedure Sample (On : Boolean);
+
    --  Watch the device while something else runs.
    --
    --  A single look says nothing here: the clock moves between one dispatch

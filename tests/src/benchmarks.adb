@@ -1805,22 +1805,36 @@ package body Benchmarks is
          return;
       end if;
 
-      if not Anyway and then Wait = 0
-        and then not Host_Load.Quiet_Enough
-      then
-         IO.Put_Line
-           (IO.Standard_Error,
-            "the machine is at a load of "
-            & Model_Runner.Text.Image (Started_At, 2)
-            & ", above the "
-            & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
-            & " a figure worth publishing needs; wait, or pass --anyway "
-            & "for the shape of the answer");
+      if not Anyway and then Wait = 0 then
+         declare
+            Quiet      : Boolean;
+            Reading    : Long_Float;
+            Processors : Boolean;
+         begin
+            Host_Load.Look (Quiet, Reading, Processors);
 
-         --  A failure, not a quiet nothing: a caller that asked for figures
-         --  and got none should hear about it from the exit status too.
-         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-         return;
+            if not Quiet then
+               IO.Put_Line
+                 (IO.Standard_Error,
+                  (if Processors
+                   then "the machine has "
+                     & Model_Runner.Text.Image (Reading, 2)
+                     & " processors busy, above the "
+                   else "the machine is at a load of "
+                     & Model_Runner.Text.Image (Reading, 2)
+                     & ", above the ")
+                  & Model_Runner.Text.Image
+                      (Long_Float (Host_Load.Too_Busy), 2)
+                  & " a figure worth publishing needs; wait, or pass "
+                  & "--anyway for the shape of the answer");
+
+               --  A failure, not a quiet nothing: a caller that asked for
+               --  figures and got none should hear about it from the exit
+               --  status too.
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+         end;
       end if;
 
       IO.Put_Line ("kernel benchmarks, single task, "

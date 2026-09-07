@@ -356,6 +356,11 @@ package body Speed_Run is
          begin
             Watch.Start (Watching);
 
+            --  Held until a pass is actually running, so that what the
+            --  reading answers about is the region the wall is taken
+            --  around rather than the loading and the gaps between passes.
+            Device_Clock.Sample (False);
+
             for Pass in 1 .. Repeats loop
                declare
                   Session : L.Session;
@@ -412,6 +417,28 @@ package body Speed_Run is
                   Request.Draft_Tokens :=
                     (if Drafting then Draft_Tokens else 0);
 
+                  --  Before the clock is read, because turning it on is
+                  --  the only thing here that could cost the region it is
+                  --  about.
+                  --
+                  --  And on the last pass only. What dilutes this
+                  --  reading is inside the generation rather than around
+                  --  it: the first pass uploads the weights and builds the
+                  --  pipelines, and the part stands idle for most of that.
+                  --  Counting every pass made the share depend on how many
+                  --  repeats were asked for -- 31 per cent at one, 72 at
+                  --  three, 86 at nine and 87 at fifteen, on a run whose
+                  --  wall did not move -- so two figures taken with
+                  --  different repeat counts could not be compared, and
+                  --  comparing is the whole of what this number is for.
+                  --
+                  --  The last pass is warm whatever the count is, which
+                  --  makes it the same measurement at three repeats and at
+                  --  fifteen: 85, 88 and 89 across those, against 31 for a
+                  --  single pass that has no warm one to prefer and
+                  --  honestly reports a cold run.
+                  Device_Clock.Sample (Pass = Repeats);
+
                   Started := Ada.Real_Time.Clock;
                   Spent_At := Host_Load.Processor_Seconds;
                   Gen.Generate
@@ -428,6 +455,8 @@ package body Speed_Run is
                   Walls (Pass) :=
                     Ada.Real_Time.To_Duration
                       (Ada.Real_Time.Clock - Started);
+
+                  Device_Clock.Sample (False);
 
                   --  Around the same region the wall is taken around, so
                   --  the two answer about the same work. Taken across the

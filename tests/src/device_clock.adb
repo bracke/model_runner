@@ -149,6 +149,20 @@ package body Device_Clock is
         & "/device/gpu_busy_percent"
       else "");
 
+   --  Whether the watcher is counting what it sees. One flag for the
+   --  package rather than one for each watcher, because the spec says one
+   --  caller uses a watcher at a time.
+   Taking : Boolean := True with Atomic;
+
+   ------------
+   -- Sample --
+   ------------
+
+   procedure Sample (On : Boolean) is
+   begin
+      Taking := On;
+   end Sample;
+
    --------------
    -- Offered --
    --------------
@@ -317,6 +331,7 @@ package body Device_Clock is
    begin
       accept Start (Watching : Boolean) do
          Awake := Watching;
+         Taking := True;
       end Start;
 
       if not Awake then
@@ -359,7 +374,8 @@ package body Device_Clock is
             delay Every;
 
             declare
-               Now : constant Reading := Look;
+               Now : constant Reading :=
+                 (if Taking then Look else (others => <>));
             begin
                if Now.Seen then
                   Got.Seen := True;

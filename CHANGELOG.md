@@ -7,6 +7,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **A measurement sitting: two instruments fixed and all seven figure groups
+  re-measured.** Taken in a window verified stable first -- four readings of
+  the 1419-token device prompt inside two per cent, and no display events for
+  an hour.
+
+  **The fed share now means the same thing at any repeat count.** It read 31
+  per cent at one repeat, 72 at three, 86 at nine and 87 at fifteen on a run
+  whose wall did not move, because the first pass uploads the weights and
+  builds the pipelines with the part standing idle, and every pass was
+  counted. It now samples the last pass only -- warm whatever the count is --
+  and reads 85, 88 and 89 across three, nine and fifteen. A single pass has
+  no warm one to prefer and honestly reports a cold run at 32.
+
+  **`tests benchmark` no longer prints one instrument against another's
+  bound.** It decides on busy processors and printed the minute's average, so
+  a machine turned away was told it was "at a load of 1.58, above the 1.50".
+  It now reads "the machine has 3.39 processors busy, above the 1.50", which
+  is what `tests speed` was taught last week.
+
+  **What moved in the figures.** The seven-worker 1419-token prompt is
+  **9.540 s to 5.221**, which is this month's kernel work arriving in the
+  table that measures it; a generated token's modelled cost is **15.911 ms to
+  11.371**, and the same token at `--arith f32` is now **6.9 times** it rather
+  than 4.9; a prompt token is 5.453 ms to 3.860. The reference backend is
+  sixty-seven times the `cpu` one rather than sixty-two. Generating is done
+  adding workers at **three** shares now rather than four. And the device's
+  1419-token prompt is **level with llama.cpp and slightly ahead for the
+  first time**, 1835.7 against 1814.1.
+
+  **And the Amdahl fit is withdrawn.** The worker table used to read a
+  fifteen per cent serial fraction off its own first two rows. A worker count
+  is not a core count here -- the submitting task takes a share, so one
+  worker is one core and two workers is three -- and fitting across that step
+  returns a negative serial fraction. The table now carries a cores-busy
+  column so the arithmetic can be checked, and the paragraph that derived a
+  54/46 split from the old fit says instead what the rows support: seven
+  workers reach 4.85 times one, on 7.66 cores.
+
+  The device's short prompt reads 1195.7 t/s, at the low end of the twelve
+  readings this file has of it, and the section that keeps it explains why:
+  a tenth of a second never brings the part above about 1.5 GHz, and this
+  sitting's line says 1021 MHz of 2700.
+
 - **Allocation granularity, tested and not it -- and the point to stop
   chasing the window.** The last candidate satisfying the selectivity
   constraint was that this program makes 219 `AMDGPU_GEM_CREATE` calls for a
