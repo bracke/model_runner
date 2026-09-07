@@ -5979,6 +5979,22 @@ have been false.
 
 ### A generated token on the device is sixty-seven submissions
 
+**It is twenty-three now, and this heading is kept because the number in it
+is what the section argued from.** Counted again with a probe in `Hand_Over`
+on 2026-09-07: a six-token prompt and one generated token is 46 submissions,
+twelve generated is 299, so a generated token is **(299 - 46) / 11 = 23** --
+one a layer and one over, which is what `### A layer, in one submission`
+below made it and this section predates. A 1419-token prompt is 92 for three
+batches of twenty-two layers and the reading-out around them, which is the
+same rate.
+
+What is left of the item this section named is therefore the step from one a
+layer to one a token: the pricing below reads fifteen per cent for the first
+step and twenty-two for both, so about seven per cent of a generated token
+remains in it. Recording a token means a sequence of some two hundred and
+twenty steps where `Sequence_Limit` is thirty-two, which is what makes it a
+change rather than a constant.
+
 The device generates at 1.41 times the other runtime and had had no work at
 all this sitting. Where its token goes, from `--budget`: **feeding 63.1 per
 cent, projecting 16.9, attending 12.6**, reading out 4.8, normalizing 1.2,
