@@ -9,6 +9,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A row pipeline for every count from one to eight, and the round curve
+  stops going backwards.** The entry below makes the kernel's width a
+  specialization constant, which made this nearly free: llama.cpp compiles
+  its mat-vec once for every column count from one to eight, and with the
+  width a constant the pipeline is told, so can this -- one
+  `vkCreateComputePipeline` each and not one more word of SPIR-V.
+
+  What the gaps cost was a step and a curve that went backwards: a column is
+  worth about 1.3 ms inside a width, and the fifth cost eight, because five
+  sequences ran on the eight-wide kernel and paid for eight. **Five members
+  came out slower than four** -- 150.1 tokens a second against 158.2.
+
+  Alternated three rounds against the four widths, every mark unchanged at
+  one through eight and at sixteen: two members 0.720, 0.736, 0.738 s become
+  0.700, 0.702, 0.719; five 1.061, 1.069, 1.070 become **0.868, 0.871,
+  0.871**; six 1.098, 1.105, 1.107 become **0.994, 0.999, 1.001**; seven
+  1.161, 1.169, 1.180 become **1.091, 1.094, 1.099**. Eighteen per cent at
+  five, nine and a half at six, six and a half at seven, better in twelve of
+  twelve. The curve now reads 46.4, 93.0, 130.8, 157.6, 180.4, 193.0, 204.9,
+  213.5 and 355.1 tokens a second at one to eight and sixteen members, and
+  nothing falls below the count before it.
+
 - **A four-wide row kernel, and the row shader's width as a specialization
   constant.** llama.cpp compiles its mat-vec once for every column count from
   one to eight and indexes them by it; this program had one, eight and

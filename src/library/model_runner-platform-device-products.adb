@@ -451,10 +451,9 @@ package body Model_Runner.Platform.Device.Products is
       Packing : Weight_Packing := Values_F32) return Address
    is (if Half_Grouped (Item, Packing, Count)
        then Item.Half_Group_Line
-       elsif Count = 1 and then Item.Single_Line /= Null_Handle
-       then Item.Single_Line
-       elsif Count <= Quad_Group and then Item.Quad_Line /= Null_Handle
-       then Item.Quad_Line
+       elsif Count in Row_Line_Array'Range
+         and then Item.Row_Lines (Count) /= Null_Handle
+       then Item.Row_Lines (Count)
        elsif Count > Batch_Group and then Item.Wide_Line /= Null_Handle
        then Item.Wide_Line
        else Item.Pipeline);
@@ -466,8 +465,9 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Group (Item : Engine; Count : Natural) return Positive
    is (if Count > Batch_Group and then Item.Wide_Line /= Null_Handle
        then Wide_Group
-       elsif Count in 2 .. Quad_Group and then Item.Quad_Line /= Null_Handle
-       then Quad_Group
+       elsif Count in Row_Line_Array'Range
+         and then Item.Row_Lines (Count) /= Null_Handle
+       then Count
        else Batch_Group);
 
    --  Which of the four tiles answers this format at this width. Null when
@@ -1774,9 +1774,11 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Line (Group_Size, 1, Item.Single_Line);
+         for Count in Row_Line_Array'Range loop
+            Line (Group_Size, C.unsigned (Count), Item.Row_Lines (Count));
+         end loop;
+
          Line (Half_Group, 1, Item.Half_Group_Line);
-         Line (Group_Size, Quad_Group, Item.Quad_Line);
          Line (Group_Size, Wide_Group, Item.Wide_Line);
 
          C.Strings.Free (Name);
@@ -2399,9 +2401,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
       Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
-      Give_Back (Item.Single_Line, "vkDestroyPipeline");
+      for Count in Row_Line_Array'Range loop
+         Give_Back (Item.Row_Lines (Count), "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
-      Give_Back (Item.Quad_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");

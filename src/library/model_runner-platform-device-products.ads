@@ -61,11 +61,15 @@ package Model_Runner.Platform.Device.Products is
    --  there.
    Wide_Group : constant := 16;
 
-   --  And the width between the single kernel and the eight-wide one. The
-   --  eight-wide kernel carries eight accumulators whatever it is given, so
-   --  two vectors pay for eight; llama.cpp compiles one of these for every
-   --  count from one to eight, and this is the same idea at one more grain.
-   Quad_Group : constant := 4;
+   --  A pipeline for every count the row kernel answers directly.
+   --
+   --  The eight-wide kernel carries eight accumulators whatever it is given,
+   --  so a round of five paid for eight: 33.3 milliseconds against the 27.7
+   --  the columns are worth, and five sequences came out slower than four.
+   --  llama.cpp compiles its mat-vec once for every count from one to eight
+   --  and indexes them by it; with the width a specialization constant here
+   --  the same thing is a pipeline each and no more words.
+   type Row_Line_Array is array (1 .. Batch_Group) of System.Address;
 
    --  Query positions one workgroup of the tiled attention kernel answers.
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
@@ -1183,10 +1187,14 @@ private
       Bundle_Line : System.Address := System.Null_Address;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
-      Single_Line : System.Address := System.Null_Address;
+      --  One for every count a round may bring, up to the eight-wide
+      --  kernel, indexed by that count. A pipeline is cheap now the words
+      --  are one module and the width is a constant it is told; what these
+      --  buy is that a round of five stops paying for eight.
+      Row_Lines : Row_Line_Array := [others => System.Null_Address];
+
       Half_Group_Line : System.Address := System.Null_Address;
       Wide_Line   : System.Address := System.Null_Address;
-      Quad_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;
