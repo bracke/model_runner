@@ -8188,64 +8188,58 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
-### What flips the window is on the display controller, not the compute one
+### A display-controller correlation, and why it cannot be the answer
 
-Twelve causes were excluded before this one and four ablations found nothing,
-because the thing that moves a device prompt here by forty per cent is not in
-the compute path at all. The kernel says so, and had been saying so all along:
+**Withdrawn as published.** What follows was written as a finding and is
+kept as a mistake, because the objection to it is one sentence long and it
+should have been asked before any of it was written down.
 
-```
-amdgpu 0000:c6:00.0: [drm] REG_WAIT timeout 1us * 100 tries
-  - dcn31_program_compbuf_size line:141
-```
+The claim was that a `dcn31_program_compbuf_size` timeout in the display
+controller flips the device prompt between 0.75 s and 1.08 -- pairs of the
+event preceding the slow window, singles leaving it fast, six for six.
 
-DCN 3.1 is the display controller, `compbuf` is its compression buffer, and
-`REG_WAIT timeout` means the programming did not take. Twenty-four of them in
-three days, and they come in exactly two shapes: **pairs about eleven seconds
-apart**, and **singles**. Every flip that can be dated lines up:
+**llama.cpp is not affected by the window.** It read 1815 tokens a second in
+the slow sitting and 1763 in the fast one, measured alternated against this
+program in the same minutes. A display controller shares one memory
+controller with everything on the die: whatever it does to this program it
+does to llama.cpp as well. **A cause on shared hardware cannot be selective,
+and this one is selective, so it is not on shared hardware.** That is the
+whole of it, and it disposes of the clock, the power budget, the thermal
+state and the memory bandwidth in the same breath -- every one of which was
+excluded by measurement earlier, and could have been excluded by this
+argument on the first day.
 
-| event | shape | the device prompt after it |
-| --- | --- | --- |
-| Sep 04 14:12:32 + 14:12:43 | pair | slow -- 0.829 s, then 1.155 |
-| Sep 06 19:48:10 | single | fast, 0.755 to 0.760 s |
-| Sep 06 20:52:57 + 20:53:08 | pair | **slow, 1.075 to 1.131 s, two hours** |
-| Sep 06 23:07:28 | single | **fast, 0.744 to 0.814 s** |
-| Sep 07 00:00:11 | single | fast |
-| Sep 07 02:22:44 | single | fast, and measured live across it |
+The correlation was also worth less than it looked. Twenty-four events in
+seventy-two hours is one every three hours, so almost any moment has one an
+hour or two behind it; and twenty-nine of thirty readings are fast, so
+"a single, and it stayed fast" is very nearly a description of the
+background rather than of anything. What remained was two pairs before two
+slow windows. Two points.
 
-**Six for six: a pair precedes the slow window and a single leaves it fast.**
-The eleven-second spacing is the same in every pair, which reads like a fixed
-sequence rather than a coincidence -- a blank and a wake, or a two-stage mode
-set. This host has two HDMI outputs connected and enabled.
+**What survives is the constraint, and it is worth more than the guess.**
+Whatever flips the window must be something that differs between two
+processes on one machine in the same minutes -- this program's code, its
+shaders, its allocations, or driver state that belongs to its own context.
+It cannot be the part, the memory, the clock or the screen. Everything
+excluded so far was excluded for being shared; the search should have been
+narrowed to what is not, and was not.
 
-The last row is the only one watched as it happened. A detector took the
-1419-token device prompt once a minute for half an hour and the event fell in
-the middle of it: 0.697 and 0.710 s before, 0.727 and 0.733 after. A single,
-and no flip -- which confirms only the negative half of the rule, because no
-pair occurred while anything was watching.
+The one thing that does not fit even that is the persistence: the state
+survives this program exiting and starting again, which leaves either
+something on disk or something the driver keeps per-device rather than
+per-context. The shader cache was cleared in the slow window and it stayed
+slow, which rules out the obvious member of the first class.
 
-**And the same half hour settles what kind of thing the window is.** Thirty
-readings, twenty-nine of them between 0.692 and 0.773 s and one at 1.054,
-against a dozen consecutive readings at 1.08 that afternoon. **The slow window
-is a state and not a spread**: it arrives, it stays for hours, and it leaves.
-The one stray reading has no display event within two hours of it and is
-something else.
+**One measurement from that sitting survives the retraction**, because it
+does not depend on the cause at all. A detector took the 1419-token device
+prompt once a minute for half an hour: twenty-nine readings between 0.692
+and 0.773 s and one at 1.054, against a dozen consecutive readings at 1.08
+that afternoon. **The slow window is a state and not a spread** -- it
+arrives, it stays for hours, and it leaves. That is worth knowing whatever
+causes it, and it is what makes a single sitting's device ratio worthless.
 
-**What this is not.** It is not the display taking memory bandwidth: the
-aggregate reads 45.5 GB/s in the fast state against 45.1 in the slow one, and
-a single thread reads more in the fast state than in the slow, which is the
-wrong sign for a fixed reservation. It is not proven causal either -- and the
-honest reason is that this could not be tested here. `kscreen-doctor` and
-`wlr-randr` are not installed on this host, so a reconfiguration cannot be
-triggered from a shell, and blanking somebody's screen to see what happens is
-not a thing to do to their desktop uninvited.
-
-**The test that would settle it** is to toggle a display off and on while a
-loop takes the 1419-token device prompt once a minute, and watch whether the
-wall steps from 0.75 to 1.08 and stays there. If it does, the rule to publish
-beside every device figure is not about load or clock or temperature but
-about what the screen did, and this file's rule against a one-window ratio
-becomes a rule about looking at `dmesg` first.
+The display events are still in `dmesg` and still unexplained; they are
+simply not this, and no amount of them would be.
 
 ### The small dispatches cost one per cent, and the window moved again
 

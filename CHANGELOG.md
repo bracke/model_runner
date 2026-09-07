@@ -7,34 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
-- **What flips the window is on the display controller.** Twelve causes were
-  excluded and four ablations found nothing, because the thing that moves a
-  device prompt here by forty per cent is not in the compute path. The kernel
-  had been saying so: `amdgpu ... REG_WAIT timeout - dcn31_program_compbuf_size`
-  -- DCN 3.1 failing to program its compression buffer. Twenty-four in three
-  days, in two shapes, **pairs about eleven seconds apart** and **singles**,
-  and every datable flip lines up: Sep 04 14:12:32+43 a pair, and this file's
-  0.829 s morning became 1.155 that evening; Sep 06 19:48:10 a single, fast;
-  Sep 06 20:52:57+20:53:08 a pair, and two hours of 1.075 to 1.131; Sep 06
-  23:07:28 a single, and 0.744 to 0.814 again; Sep 07 00:00:11 a single, fast;
-  Sep 07 02:22:44 a single, watched live -- 0.697 and 0.710 s before it, 0.727
-  and 0.733 after. **Six for six: a pair precedes the slow window, a single
-  leaves it fast.** Only the last was observed as it happened, and it is a
-  single, so only the negative half is confirmed.
+- **A display-controller correlation, withdrawn the day it was published.**
+  The claim was that a `dcn31_program_compbuf_size` timeout flips the device
+  prompt between 0.75 s and 1.08 -- pairs of the event before the slow
+  window, singles leaving it fast, six for six. **llama.cpp is not affected
+  by the window**: 1815 tokens a second in the slow sitting and 1763 in the
+  fast one, alternated against this program in the same minutes. A display
+  controller shares one memory controller with everything on the die, so
+  whatever it does to this program it does to llama.cpp too. A cause on
+  shared hardware cannot be selective, and this one is selective. That
+  disposes of the clock, the power budget, the thermal state and the memory
+  bandwidth in the same sentence -- all of which were excluded by
+  measurement over three sittings and could have been excluded by this
+  argument on the first day.
 
-  The same half hour settles what kind of thing the window is: thirty readings
-  a minute apart, twenty-nine between 0.692 and 0.773 s and one at 1.054,
-  against a dozen consecutive at 1.08 that afternoon. **The slow window is a
-  state, not a spread.**
+  The correlation was thin as well: twenty-four events in seventy-two hours
+  is one every three, so almost any moment has one behind it, and
+  twenty-nine of thirty readings are fast, so "a single, and it stayed fast"
+  describes the background. What was left was two pairs before two slow
+  windows.
 
-  What it is not: the display taking bandwidth. The aggregate reads 45.5 GB/s
-  in the fast state against 45.1 in the slow, and one thread reads *more* in
-  the fast state, which is the wrong sign for a fixed reservation. And it is
-  not proven causal -- `kscreen-doctor` and `wlr-randr` are not installed
-  here, so a reconfiguration cannot be triggered from a shell, and blanking
-  somebody's screen uninvited is not a way to find out. The test that would
-  settle it is to toggle a display while a loop takes the prompt once a
-  minute.
+  **What survives is the constraint**: whatever flips the window differs
+  between two processes on one machine in the same minutes -- this program's
+  code, its shaders, its allocations, or driver state belonging to its own
+  context. Not the part, the memory, the clock or the screen. And one
+  measurement survives with it, because it does not depend on the cause:
+  thirty readings a minute apart, twenty-nine between 0.692 and 0.773 s and
+  one at 1.054, against a dozen consecutive at 1.08 that afternoon. **The
+  slow window is a state, not a spread.**
 
 - **The small dispatches cost one per cent -- and there was no fifth of a
   prompt to find, because the window moved again.** The entries below chase a

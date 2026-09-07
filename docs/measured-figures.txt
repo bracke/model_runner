@@ -16610,3 +16610,51 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 #
 # IF IT HOLDS, the rule to carry beside a device figure is not about load or
 # clock or temperature. It is: look at what the screen did.
+
+# 2026-09-07  The display-controller finding, withdrawn
+# -----------------------------------------------------
+#
+# The entry above says a dcn31_program_compbuf_size timeout flips the device
+# prompt between 0.75 s and 1.08 -- pairs of the event before the slow
+# window, singles leaving it fast, six for six. It is wrong, and one sentence
+# disposes of it.
+#
+#   LLAMA.CPP IS NOT AFFECTED BY THE WINDOW. It read 1815 tokens a second in
+#   the slow sitting and 1763 in the fast one, alternated against this
+#   program in the same minutes.
+#
+# A display controller shares one memory controller with everything on the
+# die. Whatever it does to this program it does to llama.cpp as well. A cause
+# on shared hardware cannot be selective, and this one is selective.
+#
+# The same argument disposes of the clock, the power budget, the thermal
+# state and the memory bandwidth -- every one of which was excluded here by
+# measurement, over three sittings, and every one of which could have been
+# excluded by this argument on the first day. That is the lesson worth more
+# than the twelve exclusions: ASK WHAT THE CAUSE MUST EXPLAIN BEFORE
+# MEASURING WHETHER IT DOES. The window is selective; a shared cause is not.
+#
+# The correlation was thin on its own terms too. Twenty-four events in
+# seventy-two hours is one every three hours, so almost any moment has one an
+# hour or two behind it. Twenty-nine of thirty readings are fast, so "a
+# single, and it stayed fast" is a description of the background. What was
+# left was two pairs before two slow windows: two points.
+#
+# WHAT SURVIVES IS THE CONSTRAINT. Whatever flips the window is something
+# that differs between two processes on one machine in the same minutes --
+# this program's code, its shaders, its allocations, or driver state that
+# belongs to its own context. It is not the part, the memory, the clock or
+# the screen. Every cause excluded so far was excluded for being shared; the
+# search should have been narrowed to what is not, and was not.
+#
+# The awkward fact for that constraint is the persistence: the state survives
+# this program exiting and starting again. That leaves something on disk or
+# something the driver keeps per-device rather than per-context. The shader
+# cache was cleared in the slow window and it stayed slow, which rules out
+# the obvious member of the first class.
+#
+# AND ONE MEASUREMENT SURVIVES, because it does not depend on the cause: a
+# detector took the 1419-token device prompt once a minute for half an hour
+# and read twenty-nine between 0.692 and 0.773 s and one at 1.054, against a
+# dozen consecutive at 1.08 that afternoon. The slow window is a state and
+# not a spread. That is what makes one sitting's device ratio worthless.
