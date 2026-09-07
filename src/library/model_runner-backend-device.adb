@@ -61,6 +61,20 @@ package body Model_Runner.Backend.Device is
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
 
+   --  Which packing a format is uploaded and decoded as.
+   --
+   --  Declared here because Describe asks it as well: what the backend says
+   --  it reads is what this has an arm for, and a second list would be a
+   --  second place for the two to disagree.
+   --
+   --  @param Format Element format as the file names it.
+   --  @param Packing The shader's name for that layout.
+   --  @param Known False when the shader has no branch for it.
+   procedure Packing_Of
+     (Format  : Model_Runner.GGUF.Tensor_Type;
+      Packing : out Products.Weight_Packing;
+      Known   : out Boolean);
+
    --------------
    -- Describe --
    --------------
@@ -86,13 +100,32 @@ package body Model_Runner.Backend.Device is
       --  load and four bytes a weight afterwards, which for a k-quant model
       --  is four times the memory it was quantized to avoid.
       --
-      --  Read from Is_Supported rather than listed here, because a list here
-      --  is a second copy of one: the two lists that have to agree are the
-      --  shader's branches and this, and the test that compares them
-      --  multiplies a matrix in each format on the device.
+      --  Read from the mapping that reaches the shader's branches rather
+      --  than listed here, because a list here is a second copy of one: the
+      --  two lists that have to agree are the shader's branches and this,
+      --  and the test that compares them multiplies a matrix in each format
+      --  on the device.
+      --
+      --  It used to be read from Is_Supported, which says what the program
+      --  reads rather than what the shader does. Those were the same set for
+      --  as long as the two decoders were written together, and MXFP4 is
+      --  where they parted: it arrived with an Ada decoder and no shader
+      --  branch, and this claimed it. A model carrying one then passed the
+      --  loader's check and was refused inside the first product instead --
+      --  as a missing capability, with no tensor named, because a view
+      --  arriving there carries none. Asked of Packing_Of it is refused
+      --  where every other format a backend cannot take is refused: while
+      --  the model loads, by name, with the backend named.
       Result.Formats := [others => False];
       for Format in Model_Runner.GGUF.Tensor_Type loop
-         Result.Formats (Format) := Model_Runner.GGUF.Is_Supported (Format);
+         declare
+            Packing : Products.Weight_Packing;
+            Known   : Boolean;
+         begin
+            Packing_Of (Format, Packing, Known);
+            Result.Formats (Format) := Known;
+            pragma Unreferenced (Packing);
+         end;
       end loop;
 
       --  A packed row begins at a block boundary and a block is not four
@@ -281,7 +314,7 @@ package body Model_Runner.Backend.Device is
 
    --  How the device should read a view's bytes, and whether it can.
    procedure Packing_Of
-     (Weight  : T.View;
+     (Format  : Model_Runner.GGUF.Tensor_Type;
       Packing : out Products.Weight_Packing;
       Known   : out Boolean) is
    begin
@@ -292,7 +325,7 @@ package body Model_Runner.Backend.Device is
       --  program reads. The others in Tensor_Type are the ones the parser
       --  recognizes and nothing here decodes -- Q8_1, Q8_K -- and a model in
       --  one of those is refused before it reaches a backend at all.
-      case Weight.Format is
+      case Format is
          when Model_Runner.GGUF.Type_F32     =>
             Packing := Products.Values_F32;
          when Model_Runner.GGUF.Type_F16     =>
@@ -405,7 +438,7 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Packing_Of (Weight, Packing, Known);
+      Packing_Of (Weight.Format, Packing, Known);
       if not Known then
          --  A missing capability rather than an unsupported format, and the
          --  difference is which of them can be said. The format message
@@ -669,7 +702,7 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Packing_Of (Weight, Packing, Known);
+      Packing_Of (Weight.Format, Packing, Known);
       if not Known then
          return;
       end if;
@@ -817,19 +850,19 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Packing_Of (Weight, Packing, Known);
+      Packing_Of (Weight.Format, Packing, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Gate, Gate_P, Known);
+      Packing_Of (Gate.Format, Gate_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Up, Up_P, Known);
+      Packing_Of (Up.Format, Up_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Down, Down_P, Known);
+      Packing_Of (Down.Format, Down_P, Known);
       if not Known then
          return;
       end if;
@@ -1012,7 +1045,7 @@ package body Model_Runner.Backend.Device is
             Packing : Products.Weight_Packing;
             Known   : Boolean;
          begin
-            Packing_Of (This, Packing, Known);
+            Packing_Of (This.Format, Packing, Known);
             if not Known then
                Status := E.Make (E.Backend_Capability_Missing);
                E.Add_Text
@@ -1197,7 +1230,7 @@ package body Model_Runner.Backend.Device is
             Packing : Products.Weight_Packing;
             Known   : Boolean;
          begin
-            Packing_Of (This, Packing, Known);
+            Packing_Of (This.Format, Packing, Known);
 
             if not Known
               or else This.Base = System.Null_Address
@@ -1436,31 +1469,31 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Packing_Of (Query, Q_P, Known);
+      Packing_Of (Query.Format, Q_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Key, K_P, Known);
+      Packing_Of (Key.Format, K_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Value, V_P, Known);
+      Packing_Of (Value.Format, V_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Weight, Packing, Known);
+      Packing_Of (Weight.Format, Packing, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Gate, Gate_P, Known);
+      Packing_Of (Gate.Format, Gate_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Up, Up_P, Known);
+      Packing_Of (Up.Format, Up_P, Known);
       if not Known then
          return;
       end if;
-      Packing_Of (Down, Down_P, Known);
+      Packing_Of (Down.Format, Down_P, Known);
       if not Known then
          return;
       end if;
@@ -1750,7 +1783,7 @@ package body Model_Runner.Backend.Device is
             Packing : Products.Weight_Packing;
             Known   : Boolean;
          begin
-            Packing_Of (This, Packing, Known);
+            Packing_Of (This.Format, Packing, Known);
             if not Known then
                Status := E.Make (E.Backend_Capability_Missing);
                E.Add_Text

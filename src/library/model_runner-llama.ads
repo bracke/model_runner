@@ -409,7 +409,23 @@ package Model_Runner.Llama is
    --  be representable and is rounded to the nearest one that is. It halves
    --  the copy. Whether that trade is worth taking is a measurement, and
    --  the README carries it.
-   type Repack_Mode is (No_Repack, To_F32, To_BF16);
+   --
+   --  To_Rows is not that kind of copy at all. It decodes nothing: the
+   --  four-bit k-quant's weight matrices are written out again in the same
+   --  bytes, eight rows interleaved, so that a lane of the product's
+   --  accumulator is a row rather than an eighth of one. The copy is the
+   --  same size as what it copies, nothing is rounded, and every other
+   --  format in the file is left where it lies. What it is for is the
+   --  kernel it lets a prompt take -- eight rows against eight vectors,
+   --  where the row-major layout allows eight against four -- and
+   --  Model_Runner.Quantization.Interleave describes the arrangement.
+   --
+   --  It is the one repacking mode that says nothing about the numbers and
+   --  everything about their order, which is why it is a mode here rather
+   --  than a thing done to every model that could take it: it costs a
+   --  second copy of the weights, and a caller who cannot spare that should
+   --  not have it forced on them.
+   type Repack_Mode is (No_Repack, To_F32, To_BF16, To_Rows);
 
    --  How a session stores the keys and values it has committed.
    --
@@ -470,7 +486,8 @@ package Model_Runner.Llama is
    is (case Item is
          when No_Repack => "none",
          when To_F32    => "f32",
-         when To_BF16   => "bf16");
+         when To_BF16   => "bf16",
+         when To_Rows   => "rows");
 
    --  Load, validate and prepare a model from an open byte source.
    --

@@ -496,7 +496,8 @@ package body Model_Runner.Backend.CPU is
       if not Quantizing
         or else Vector = null
         or else Count = 0
-        or else not QI.Packs_Vectors (Weight.Format, Count)
+        or else not QI.Packs_Vectors
+                     (Weight.Format, Count, Weight.Interleaved)
         or else not QI.Is_Packable (Columns)
         or else Vector.all'Length < Elements
       then
@@ -633,7 +634,8 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       if Quantizing
-        and then QI.Packs_Vectors (Weight.Format, Count)
+        and then QI.Packs_Vectors
+                   (Weight.Format, Count, Weight.Interleaved)
         and then QI.Is_Packable (Columns)
         and then Vector.all'Length >= Elements
       then

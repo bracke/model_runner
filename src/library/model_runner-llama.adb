@@ -8,6 +8,7 @@ with Model_Runner.Arithmetic;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Text;
+with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
 
@@ -927,7 +928,8 @@ package body Model_Runner.Llama is
       declare
          Seen : constant Model_Runner.GGUF.Tensor_Type :=
            (case Repack is
-              when No_Repack => Containers.Tensor_Format (Source, Index),
+              when No_Repack | To_Rows =>
+                Containers.Tensor_Format (Source, Index),
               when To_F32    => Model_Runner.GGUF.Type_F32,
               when To_BF16   => Model_Runner.GGUF.Type_BF16);
       begin
@@ -2322,6 +2324,215 @@ package body Model_Runner.Llama is
          end if;
       end;
 
+      --  Or write them out again in panels, if that was what was asked.
+      --
+      --  A different kind of copy from the two below: nothing is decoded,
+      --  the bytes are the file's own in another order, and the copy is the
+      --  size of what it copies. Only the four-bit k-quant is written this
+      --  way and only where the row count divides by the panel; everything
+      --  else in the file is left where it lies, so the file's own bytes
+      --  stay mapped and are never released here.
+      if Repack = To_Rows then
+         P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
+
+         declare
+            Needed : B.Byte_Count := 0;
+
+            --  The lookup tables are left alone. A row of a panel is a
+            --  gather, and these three are read a row at a time and
+            --  multiplied by nothing: interleaving them would pay the
+            --  gather on every token to buy a kernel none of them reaches.
+            function Is_Lookup (Where : View_Access) return Boolean
+            is (Where = Item.Embeddings'Unchecked_Access
+                or else Where = Item.Positions'Unchecked_Access
+                or else Where = Item.Segments'Unchecked_Access);
+
+            function To_Panel return View_List is
+               Whole : constant View_List := Matrices (Item);
+               Room  : View_List (Whole'Range);
+               Count : Natural := 0;
+            begin
+               for Where of Whole loop
+                  if not Is_Lookup (Where)
+                    and then Model_Runner.Quantization.Interleave.Interleaves
+                               (Where.all.Format, Where.all.Rows,
+                                Where.all.Columns)
+                  then
+                     Count := Count + 1;
+                     Room (Count) := Where;
+                  end if;
+               end loop;
+
+               return Room (1 .. Count);
+            end To_Panel;
+
+            Held : constant View_List := To_Panel;
+         begin
+            --  A model with nothing to interleave keeps every view it has
+            --  and allocates nothing, which is the honest answer for a file
+            --  in another format rather than a diagnostic: the flag says
+            --  what to do with four-bit weights and this file has none.
+            if Held'Length > 0 then
+               for Where of Held loop
+                  Needed := Needed
+                    + Model_Runner.Quantization.Interleave.Panel_Bytes
+                        (Where.all.Format, Where.all.Rows,
+                         Where.all.Columns / 256);
+               end loop;
+
+               Mem.Check_Allocation
+                 (Item.Accounting, Mem.Converted_Weights,
+                  Interfaces.Unsigned_64 (Needed), Status);
+               if E.Is_Error (Status) then
+                  Fail (Status);
+                  return;
+               end if;
+
+               B.Allocate (Needed, Item.Repacked);
+               if Item.Repacked = null then
+                  Fail (E.Make (E.Memory_Allocation_Failed));
+                  return;
+               end if;
+
+               Mem.Record_Allocation
+                 (Item.Accounting, Mem.Converted_Weights,
+                  Interfaces.Unsigned_64 (Needed));
+               Mem.Record_Conversion
+                 (Item.Accounting, Interfaces.Unsigned_64 (Needed));
+
+               declare
+                  Bases : array (Held'Range) of B.Byte_Count :=
+                    [others => 0];
+
+                  --  The same queue the decoding pass uses and for the same
+                  --  reason: the matrices differ by a factor of ten in size
+                  --  and a split by count is not a split of the work.
+                  protected Shared is
+                     procedure Take (Index : out Natural);
+                     procedure Note (Reason : E.Error_Info);
+                     function Reason return E.Error_Info;
+                  private
+                     Next : Natural := Held'First;
+                     Bad  : E.Error_Info := E.Success;
+                  end Shared;
+
+                  protected body Shared is
+                     procedure Take (Index : out Natural) is
+                     begin
+                        if Next > Held'Last or else E.Is_Error (Bad) then
+                           Index := 0;
+                        else
+                           Index := Next;
+                           Next := Next + 1;
+                        end if;
+                     end Take;
+
+                     procedure Note (Reason : E.Error_Info) is
+                     begin
+                        if E.Is_Ok (Bad) then
+                           Bad := Reason;
+                        end if;
+                     end Note;
+
+                     function Reason return E.Error_Info is (Bad);
+                  end Shared;
+
+                  procedure Panel_One (Which : Positive) is
+                     Where : constant View_Access := Held (Which);
+                     Taken : Boolean;
+
+                     Source : B.Byte_Array (1 .. Where.all.Span)
+                       with Import, Address => Where.all.Base;
+                  begin
+                     Model_Runner.Quantization.Interleave.Build
+                       (Format => Where.all.Format,
+                        Source => Source,
+                        From   => Where.all.Offset,
+                        Target => Item.Repacked.all,
+                        Into   => Bases (Which),
+                        Rows   => Where.all.Rows,
+                        Blocks => Where.all.Columns / 256,
+                        Ok     => Taken);
+
+                     if not Taken then
+                        Shared.Note (E.Make (E.Internal_Invariant_Violated));
+                     end if;
+                  end Panel_One;
+
+                  task type Panelling;
+
+                  task body Panelling is
+                     Which : Natural;
+                  begin
+                     loop
+                        Shared.Take (Which);
+                        exit when Which = 0;
+                        Panel_One (Which);
+
+                        if C.Is_Cancelled (Cancel) then
+                           Shared.Note (E.Make (E.Generation_Cancelled));
+                        end if;
+                     end loop;
+                  exception
+                     when others =>
+                        Shared.Note (E.Make (E.Internal_Invariant_Violated));
+                  end Panelling;
+               begin
+                  declare
+                     Running : B.Byte_Count := 0;
+                  begin
+                     for Index in Held'Range loop
+                        Bases (Index) := Running;
+                        Running := Running
+                          + Model_Runner.Quantization.Interleave.Panel_Bytes
+                              (Held (Index).all.Format,
+                               Held (Index).all.Rows,
+                               Held (Index).all.Columns / 256);
+                     end loop;
+                  end;
+
+                  declare
+                     Team : array (1 .. Positive'Min (Threads, Held'Length))
+                       of Panelling;
+                     pragma Unreferenced (Team);
+                  begin
+                     null;
+                  end;
+
+                  declare
+                     Trouble : constant E.Error_Info := Shared.Reason;
+                  begin
+                     if E.Is_Error (Trouble) then
+                        Fail (Trouble);
+                        return;
+                     end if;
+                  end;
+
+                  for Index in Held'Range loop
+                     declare
+                        Fresh : T.View;
+                     begin
+                        T.Make_Panels
+                          (Format  => Held (Index).all.Format,
+                           Rows    => Held (Index).all.Rows,
+                           Columns => Held (Index).all.Columns,
+                           Data    => Item.Repacked,
+                           Offset  => Bases (Index),
+                           Result  => Fresh,
+                           Status  => Status);
+                        if E.Is_Error (Status) then
+                           Fail (Status);
+                           return;
+                        end if;
+
+                        Held (Index).all := Fresh;
+                     end;
+                  end loop;
+               end;
+            end if;
+         end;
+      end if;
+
       --  Decode the weight matrices once, if that was asked for.
       --
       --  Every matrix then refers into a second buffer holding binary32,
@@ -2330,7 +2541,7 @@ package body Model_Runner.Llama is
       --  follows is the same arithmetic on the same numbers. What it costs
       --  is four bytes a weight against about one, which is why it is asked
       --  for rather than done.
-      if Repack /= No_Repack then
+      if Repack = To_F32 or else Repack = To_BF16 then
          P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
 
          declare

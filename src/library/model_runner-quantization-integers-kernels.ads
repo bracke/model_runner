@@ -82,6 +82,11 @@ package Model_Runner.Quantization.Integers.Kernels is
    --  @param Sums Rows * Count accumulators, row major, added to.
    --  @param Ok True when every range the call reads lay inside what it was
    --    given, which is proved once before the loops suppress their checks.
+   --  @param Interleaved Whether Data holds the weights a panel of rows at
+   --    a time. Only the four-bit k-quant is ever written that way, and
+   --    only by the pass that was asked to; every other format and every
+   --    model read as its file stores it leaves this False and reaches the
+   --    same kernels it always did.
    procedure Rows
      (Format    : Model_Runner.GGUF.Tensor_Type;
       Data      : Model_Runner.Bytes.Byte_Array;
@@ -97,6 +102,7 @@ package Model_Runner.Quantization.Integers.Kernels is
       Stride    : Element_Count;
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
-      Ok        : out Boolean);
+      Ok        : out Boolean;
+      Interleaved : Boolean := False);
 
 end Model_Runner.Quantization.Integers.Kernels;

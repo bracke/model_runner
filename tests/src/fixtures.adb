@@ -1457,6 +1457,108 @@ package body Fixtures is
       return Result;
    end Encode_IQ4_NL;
 
+   --  MXFP4's own sixteen: the E2M1 values at twice their size, so that a
+   --  level is a whole number and the scale carries the halving. Written out
+   --  here as well as in the decoder, for the reason the levels above are.
+   Fours : constant array (0 .. 15) of Integer :=
+     [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
+   --  The level nearest a value, in units of the scale. Two of the sixteen
+   --  are zero and the comparison is strict, so a zero takes the first of
+   --  them and the other is written by nothing here.
+   function Nearest_Four (Value : N.Real) return Interfaces.Unsigned_8 is
+      Best : Integer := 0;
+      Gap  : N.Real := abs Value;
+   begin
+      for Index in 1 .. 15 loop
+         declare
+            Here : constant N.Real := abs (Value - N.Real (Fours (Index)));
+         begin
+            if Here < Gap then
+               Gap := Here;
+               Best := Index;
+            end if;
+         end;
+      end loop;
+
+      return Interfaces.Unsigned_8 (Best);
+   end Nearest_Four;
+
+   --  The exponent one block of thirty-two wants.
+   --
+   --  Unlike every other format here there is nothing to choose: the scale
+   --  is two to a power, so the question is only which power, and the answer
+   --  is the smallest whose top level -- twelve, the table's largest --
+   --  reaches the block's largest magnitude. The engine reads the byte as
+   --  two to itself less a hundred and twenty-eight, and so does this.
+   function Exponent_Of (Values : N.Real_Array) return Interfaces.Unsigned_8 is
+      Extreme : N.Real := 0.0;
+      Wanted  : N.Real;
+      Steps   : Integer;
+   begin
+      for Value of Values loop
+         Extreme := N.Real'Max (Extreme, abs Value);
+      end loop;
+
+      if Extreme = 0.0 then
+         return 0;
+      end if;
+
+      Wanted := Extreme / 12.0;
+
+      --  The exponent attribute puts a value in [2**(E-1), 2**E), so E - 1
+      --  is the largest power at or below it and E - 1 or E is the smallest
+      --  at or above it, depending on whether it sat exactly on the lower.
+      Steps := N.Real'Exponent (Wanted) - 1;
+      if 2.0 ** Steps < Wanted then
+         Steps := Steps + 1;
+      end if;
+
+      return Interfaces.Unsigned_8
+        (Integer'Max (0, Integer'Min (255, Steps + 128)));
+   end Exponent_Of;
+
+   function Encode_MXFP4 (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 32;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 17 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 32;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 17;
+
+            Span  : constant N.Real_Array := Values (First .. First + 31);
+            Power : constant Interfaces.Unsigned_8 := Exponent_Of (Span);
+            Step  : constant N.Real := 2.0 ** (Integer (Power) - 128);
+         begin
+            Result (At_Byte) := Power;
+
+            --  Element j is the low nibble of byte j and element j + 16 the
+            --  high one, which is the layout the legacy four-bit blocks use
+            --  and the layout the decoder reads.
+            for J in 0 .. 15 loop
+               declare
+                  Lower : constant Interfaces.Unsigned_8 :=
+                    Nearest_Four
+                      (Span (Span'First + N.Element_Count (J)) / Step);
+                  Upper : constant Interfaces.Unsigned_8 :=
+                    Nearest_Four
+                      (Span (Span'First + N.Element_Count (J) + 16) / Step);
+               begin
+                  Result (At_Byte + 1 + B.Byte_Count (J)) :=
+                    Lower or Interfaces.Shift_Left (Upper, 4);
+               end;
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_MXFP4;
+
    function Encode_IQ4_XS (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_16;

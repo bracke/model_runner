@@ -5,6 +5,188 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A measurement sitting: all seven figure groups retaken, and one number
+  that moved the wrong way.** They had been stale since the panel work
+  began, and could not be restamped while an unfinished MXFP4 change sat in
+  the same tree. That change is finished, so the tree is one piece of work
+  and the duty is payable.
+
+  Load 0.18 at the start and under one before each row that needs it; the
+  device rows taken again after a wait when an earlier pass had let it climb
+  to three. What moved: **the twelve-token figure 0.370 s to 0.348** and its
+  processor time 1.90 to 1.81; **every row of the kernel table five to eight
+  per cent lower**, the reading before it having been taken on a part that
+  had not settled; `reference` against `cpu` 67 times to 64; drafting
+  0.370/1.414/3.260 s to 0.347/1.320/2.968; share scaling eight above seven
+  by nine per cent pinned and ten unpinned, both signs still in its history;
+  and the llama.cpp table retaken on both sides in one sitting, where **the
+  processor rows are now level** -- 318.2 t/s against 319.3 at 1419 tokens.
+
+  **One change of code came out of it.** MXFP4 entered the kernel table at
+  0.98 nanoseconds an element, half again the slowest format in it. The cause
+  was not its arithmetic: its nibble is an index into a table of levels,
+  which is exactly the shape the wide decoder compilation exists for, and it
+  had not been added to the four formats sent there. On the list it reads
+  **0.59**, ahead of IQ4_NL. Writing its power-of-two scale as a bit pattern
+  rather than `2.0 ** (e - 128)` was tried first and bought nothing
+  measurable; it is kept for being exact and for being what llama.cpp does.
+
+  **And one row moved, so the commit that published it was built and
+  alternated against this tree.** The device's 1419-token prompt read 1800.8
+  t/s -- 0.788 s -- when last published and reads **1419.0**, 1.000 s, now,
+  while llama.cpp's own device row on the same file in the same sitting went
+  the other way, 1754.5 to 1897.5. A worktree at that commit, placed beside
+  the sibling crates so the path pins resolve, reads **0.990, 0.998 and
+  1.007 s against this tree's 0.992, 0.997 and 1.003** -- identical,
+  alternated, three readings each at a load under one. Nor is it the shape of
+  the run: the same prompt with one token after it, twelve and sixty-four,
+  reads 1.000, 1.006 and 0.996, so the part's warming over a longer run does
+  not reach the prompt phase before it; and the part reports itself fed 84 to
+  86 per cent, so it is not a starved window.
+
+  What is left is the host, and neither file says which part of it. **The
+  figure is not reproducible on its own code** -- which is a stronger answer
+  than "unexplained", and is exactly what the duty exists to establish: what
+  moved, and was it us. It was not us.
+
+- **MXFP4, finished.** The decoder, the type code and the block description
+  were in the tree; what was missing is everything that reads what they
+  produce. The checklist named two of the gaps and the sweep found the one
+  that mattered.
+
+  **A fixture encoder**, so something independent can write a file in it: an
+  exponent byte and sixteen of nibbles, the levels the format names at twice
+  their size with the scale carrying the halving, and the one exponent whose
+  top level clears the block's largest magnitude -- there is nothing to
+  choose, the scale being a power of two.
+
+  **And a reader in the reference transformer**, which is what the checklist
+  could not ask for and the count could. With the fixture alone the sweep ran
+  39234 sequences where its arithmetic wanted 47687 and reported *unlearned
+  2546*: the reference declined every model in the new format, so the engine
+  decoded it and nothing compared what it decoded. With the reference reading
+  it too the sweep runs **41780 sequences, unlearned 0, outside tolerance 0**
+  -- the two implementations agree about MXFP4 to the same 2.2E-05 the other
+  fifteen agree to.
+
+  **The device claimed it and could not read it.** `Describe` derived its
+  format list from `GGUF.Is_Supported`, which says what the *program* reads;
+  the shader has no MXFP4 branch. Those were the same set for as long as the
+  Ada decoder and the shader were written together, and this is where they
+  parted: a model carrying MXFP4 passed the loader's check and was refused
+  inside the first product instead, as a missing capability with no tensor
+  named -- because a view arriving there carries none. The list now comes
+  from `Packing_Of`, the mapping that reaches the branches, so it is refused
+  where every other format a backend cannot take is refused: while the model
+  loads, by name, with the backend named. **Two tests asserted the equality
+  in both directions and so passed while the claim was wrong**; both now ask
+  the direction that matters -- nothing claimed that is not read.
+
+  **What is not built is the shader branch.** MXFP4 is a thirty-two element
+  nibble block like IQ4_NL and would be a short branch in each of the two
+  format-decoding shaders, but the package is written whole: sixteen
+  compiled objects, four of them variants of the matrix product under
+  `MORE_FORMATS` and `NARROW`, and the recipe in this README no longer names
+  them all. Recompiling them on a reconstructed recipe is a change nothing
+  here would catch if a flag were wrong.
+
+  Support matrix and README rows added; the published conformance figures are
+  the run above.
+
+- **The three k-quants a "_M" file is made of, in eight-row panels, and the
+  kernels that read them.** `### Where llama.cpp's four-bit advantage
+  actually is` priced this from the outside and left it named rather than
+  built: llama.cpp repacks Q4_K at load into `block_q4_Kx8` and multiplies it
+  with `ggml_gemv_q4_K_8x8_q8_K`, and turning that off with `-nr` cost it
+  1.44 times on a prompt. It is built now, as **`--repack rows`**.
+
+  It is not a wider strip of the kernel that was there. The panel layout
+  arranges the quants so a thirty-two byte load holds four consecutive
+  elements of each of eight rows, four bytes to a lane, and `vpdpbusd`
+  against those four activations broadcast as one word leaves lane L holding
+  row L -- **nothing is reduced horizontally at all**, and the eight
+  accumulators a strip can hold now cover eight rows against eight vectors
+  where they covered two rows against four. A prompt reads the matrix half as
+  many times.
+
+  Alternated three rounds against three, TinyLlama-1.1B-Chat Q4_K_M, seven
+  workers: **the 110-token prompt 0.381 s to 0.214, 1.77 times**; the
+  1419-token prompt 5.34 s to 3.79, **1.40**; a generated token 0.172 s to
+  0.186, **seven per cent slower**; loading 0.065 s to 0.420. Every greedy
+  digest unchanged. **Both prompts are now ahead of llama.cpp on this
+  format** -- 513.9 and 374.2 t/s against `llama-bench`'s 444.0 and 371.2,
+  from 288.7 and 265.5. The short prompt was 1.54 behind before this and the
+  long one 1.40 behind.
+
+  **The scale prologue is the finding.** Built with the four-bit format's
+  six-bit fields unpacked in the kernel, the prompt was already 1.37 ahead
+  and a generated token was *forty per cent behind*: one vector has nothing
+  to amortize a prologue over, and it measured two and a half times what the
+  kernel cost. The panel stores them unpacked instead, a byte each, sub-block
+  major -- one `vpmovzxbd` a sub-block, and that panel block grows from 1152
+  bytes to 1184 for it. **The first version had put the work back into the
+  kernel it was repacking to avoid.**
+
+  **The five-bit format is the four-bit layout with a run of fifth bits**,
+  and the same kernel with eight instructions more in the unpack -- its block
+  is the four-bit block with `qh` inserted and it pairs elements the same
+  way, so the permutation is one procedure with a flag. A `Q5_K_M` file's
+  short prompt reads 0.391, 0.393 and 0.399 s as stored and **0.232, 0.228
+  and 0.230 with the flag, 1.71 times**, where panelling only its six-bit
+  tensors had been worth 1.16; its long prompt 5.46 and 5.56 s to 3.92 and
+  3.95, and its generated token 0.248 to 0.266. Digest unchanged.
+
+  **And the six-bit format is half the reason it is worth anything.** With
+  only Q4_K in panels the prompt was 1.37 ahead and a profile put
+  `Rows_By_Strips_Q6K` at **a quarter of it** -- a "_M" file's output
+  projection and about half its feed-forward are Q6_K, and they were the only
+  thing left read a row at a time. Its unpack is the harder one: four bits in
+  one run and two in another, eleven instructions a group against three, and
+  the two bits four groups to a byte so one load serves four shifts.
+  Panelled, its share fell from 25.2 to 8.7 per cent. Its panel block is 1680
+  bytes -- the eight rows' 210 each and not one more, because its sub-block
+  scales are already whole bytes.
+
+  The seven per cent left on a generated token is the bytes, on a path
+  `### Generating is at the memory wall` puts at eighty-nine per cent of a
+  ceiling. Processor time falls either way, 4.00 s to 2.83 -- a program
+  waiting more and working less. Serving several sequences is a wash. Which
+  is why it is a flag.
+
+  **And blocking the batch inside the kernel was built and refused.** What
+  streams now is the activation, not the weights: a panel is a few kilobytes
+  and serves the whole batch, so the batch's length times the row's width is
+  read once a panel. From the outside that shows -- the long prompt reads
+  3.761 and 3.817 s at `--batch-size 512` and 3.526 and 3.567 at 192 -- so
+  the same blocking was done inside, a hundred and twenty-eight vectors a
+  sweep. Two binaries alternated, three rounds each: without it 3.535, 3.808
+  and 3.774 s, with it 3.697, 3.654 and 3.657. Overlapping, and the best
+  reading is the one without. Reverted; the batch-size reading is recorded
+  and not acted on, because it moves a default chosen for other reasons.
+
+  A row count that does not divide by eight is left where it lies; and
+  the embedding, position and segment tables are left alone on purpose, being
+  read a row at a time and multiplied by nothing.
+
+  **And the point to stop.** A long prompt now reads 58.0 per cent in the
+  five-bit panel kernel, 8.5 in the six-bit one, 15.3 in attention, 3.8 in
+  the dispatching procedure and 3.1 in the pool's waiting, with nothing else
+  above one and a half; the four-bit file is the same shape. Two thirds of a
+  prompt is two kernels at sixteen to twenty-one multiply-accumulates an
+  instruction, and the one arrangement left that would shorten their unpack
+  is worth about two instructions in thirty-two -- three per cent, against a
+  spread of two to three. That is under what a sitting here can tell apart.
+
+  **The other published figure groups are stale and are not re-recorded
+  here.** Every one of the seven but `tokenizer` lists
+  `model_runner-quantization-decoders.adb`, which an unfinished MXFP4 change
+  in the same tree has already moved; recording a fingerprint now would bless
+  that change as measured along with this one. The figures above are taken
+  and stated, and `docs/measured-figures.txt` keeps a group of its own for
+  them.
+
 ### Measured
 
 - **The split-k attention kernel, built and refused.** llama.cpp has

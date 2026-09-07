@@ -59,9 +59,11 @@ package body Model_Runner.Quantization.Integers is
 
    function Packs_Vectors
      (Format : Model_Runner.GGUF.Tensor_Type;
-      Count  : Element_Count) return Boolean
+      Count  : Element_Count;
+      Interleaved : Boolean := False) return Boolean
    is (Has_Integer_Kernel (Format)
        and then (Format = G.Type_Q8_0
+                 or else Interleaved
                  or else Count = 1
                  or else Count >= 4));
 
@@ -501,7 +503,8 @@ package body Model_Runner.Quantization.Integers is
       Stride    : Element_Count;
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
-      Ok        : out Boolean) is
+      Ok        : out Boolean;
+      Interleaved : Boolean := False) is
    begin
       --  One source, three compilations, and the host decides which. Each
       --  is entered only where the host says it has the instructions, which
@@ -513,15 +516,15 @@ package body Model_Runner.Quantization.Integers is
       if Deeper then
          Deep.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, Halves, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok, Interleaved);
       elsif Wider then
          Wide.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, Halves, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok, Interleaved);
       else
          Plain.Rows
            (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-            Totals, Halves, First, Stride, Count, Sums, Ok);
+            Totals, Halves, First, Stride, Count, Sums, Ok, Interleaved);
       end if;
    end Accumulate_Rows;
 

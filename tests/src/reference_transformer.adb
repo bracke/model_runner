@@ -742,6 +742,45 @@ package body Reference_Transformer is
       return Scale * Long_Float (IQ4_Levels (Level));
    end Decode_IQ4_NL;
 
+   --  MXFP4's own sixteen: the E2M1 values at twice their size, so that a
+   --  level is a whole number and the scale carries the halving.
+   MX_Levels : constant array (0 .. 15) of Integer :=
+     [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
+   --  One element of an MXFP4 block: thirty-two elements in seventeen bytes,
+   --  one exponent byte and sixteen laid out as IQ4_NL lays its nibbles out.
+   --
+   --  The scale is a power of two and the byte is its exponent, biased by a
+   --  hundred and twenty-seven -- and by one more here, because the levels
+   --  above are twice the values the format names. That is the whole of what
+   --  makes this format different from the one above it: no half to widen,
+   --  no table of irregular levels, and a scale that cannot be anything but
+   --  a power of two.
+   function Decode_MXFP4
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 32);
+      Within : constant Natural := Index mod 32;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 17;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Scale  : constant Long_Float :=
+        2.0 ** (Byte_At (At_Block) - 128);
+      Packed : constant Natural :=
+        Byte_At (At_Block + 1 + Interfaces.Unsigned_64 (Within mod 16));
+      Level  : constant Natural :=
+        (if Within < 16 then Packed mod 16 else Packed / 16);
+   begin
+      return Scale * Long_Float (MX_Levels (Level));
+   end Decode_MXFP4;
+
    --  One element of an IQ4_XS super-block: two hundred and fifty-six
    --  elements in eight sub-blocks of thirty-two, one half-precision scale
    --  for the block and six bits of scale for each sub-block, four of them
@@ -900,6 +939,7 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_Q3_K
                         | Model_Runner.GGUF.Type_IQ4_NL
                         | Model_Runner.GGUF.Type_IQ4_XS
+                        | Model_Runner.GGUF.Type_MXFP4
          then
             return null;
          end if;
@@ -1056,6 +1096,16 @@ package body Reference_Transformer is
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 136
                             * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_MXFP4
+                  then
+                     Result (Row, Column) :=
+                       Decode_MXFP4
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 17
+                            * Interfaces.Unsigned_64 (Columns / 32),
                           Column);
                   else
                      Result (Row, Column) :=

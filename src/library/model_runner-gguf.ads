@@ -126,6 +126,7 @@ package Model_Runner.GGUF is
       Type_Q8_K,
       Type_IQ4_NL,
       Type_IQ4_XS,
+      Type_MXFP4,
       Type_BF16,
       Type_Unknown);
 

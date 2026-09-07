@@ -17,6 +17,7 @@ with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Quantization;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Grammar;
@@ -1165,6 +1166,13 @@ package body Model_Runner.CLI.Execute is
                declare
                   Repacked : Interfaces.Unsigned_64 := 0;
                   Exact    : Interfaces.Unsigned_64 := 0;
+
+                  --  And what the panel layout would need, which is a
+                  --  different question with a much smaller answer: it
+                  --  copies only the four-bit k-quant's matrices and the
+                  --  copy is a fiftieth larger than what it copies, so a
+                  --  file with none of that format reports the file itself.
+                  Panels   : Interfaces.Unsigned_64 := 0;
                begin
                   --  A matrix already in the target format is not copied,
                   --  so a file that is binary32 throughout needs nothing --
@@ -1189,6 +1197,29 @@ package body Model_Runner.CLI.Execute is
                              + Containers.Tensor_Elements (Container, Index)
                                * 4;
                         end if;
+
+                        --  Asked of the shape as well as the format,
+                        --  because a row count that is not a whole number
+                        --  of panels is left where it lies.
+                        if Model_Runner.Quantization.Interleave.Interleaves
+                             (Containers.Tensor_Format (Container, Index),
+                              N.Element_Count
+                                (Containers.Tensor_Elements (Container, Index)
+                                 / Containers.Tensor_Dimension
+                                     (Container, Index, 1)),
+                              N.Element_Count
+                                (Containers.Tensor_Dimension
+                                   (Container, Index, 1)))
+                        then
+                           Panels := Panels
+                             + Containers.Tensor_Elements (Container, Index)
+                               / 256
+                               * Interfaces.Unsigned_64
+                                   (Model_Runner.Quantization.Interleave
+                                      .Panel_Row_Bytes
+                                        (Containers.Tensor_Format
+                                           (Container, Index)));
+                        end if;
                      end if;
                   end loop;
 
@@ -1209,6 +1240,13 @@ package body Model_Runner.CLI.Execute is
                      T.Image
                        (Long_Long_Integer
                           (Repacked
+                           + Containers.Tensor_Data_Bytes (Container))),
+                     Pres.Answer);
+                  Pres.Put_Field
+                    (Screen, "cli.inspect.label.repacked_rows",
+                     T.Image
+                       (Long_Long_Integer
+                          (Panels
                            + Containers.Tensor_Data_Bytes (Container))),
                      Pres.Answer);
                end;

@@ -1506,15 +1506,22 @@ package body Tests.Inference_Cases is
          --  the backend's own test because this is the level a user meets it
          --  at: a format the loader lets through and the shader has no
          --  branch for is a model that runs and answers wrongly.
+         --
+         --  One direction, not both. The program may read a format the
+         --  shader does not -- MXFP4 is one, and arrived that way -- and
+         --  such a model is refused on the device while it loads, by name.
+         --  What may not happen is the other direction, and that is what
+         --  this asks.
          declare
             Said : constant Model_Runner.Backend.Capabilities :=
               Model_Runner.Backend.Device.Describe;
          begin
             for Format in Model_Runner.GGUF.Tensor_Type loop
-               Assert (Model_Runner.Backend.Supports (Said, Format)
-                       = Model_Runner.GGUF.Is_Supported (Format),
-                       "the device backend and the program disagree about "
-                       & Model_Runner.GGUF.Type_Name (Format));
+               Assert (not Model_Runner.Backend.Supports (Said, Format)
+                       or else Model_Runner.GGUF.Is_Supported (Format),
+                       "the device backend claims "
+                       & Model_Runner.GGUF.Type_Name (Format)
+                       & ", which the program does not read");
             end loop;
          end;
 

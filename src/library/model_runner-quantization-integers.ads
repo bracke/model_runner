@@ -120,10 +120,15 @@ package Model_Runner.Quantization.Integers is
    --
    --  @param Format Weight format.
    --  @param Count Vectors in the product.
+   --  @param Interleaved Whether the weights are laid out a panel of rows
+   --    at a time, which the four-bit k-quant's panel kernel answers every
+   --    count from -- and has to, because a matrix in panels has no other
+   --    kernel to fall to but the floating-point one.
    --  @return Whether to quantize the activations for it.
    function Packs_Vectors
      (Format : Model_Runner.GGUF.Tensor_Type;
-      Count  : Element_Count) return Boolean;
+      Count  : Element_Count;
+      Interleaved : Boolean := False) return Boolean;
 
    --  Whether this format's activations are quantized a super-block at a
    --  time rather than a block at a time.
@@ -346,6 +351,10 @@ package Model_Runner.Quantization.Integers is
    --  @param Ok True when the format has an integer kernel, every row lay
    --    wholly inside Data, and every element the call would read lay inside
    --    Values and its two tables.
+   --  @param Interleaved Whether Data holds the weights a panel of rows at
+   --    a time rather than a row at a time, which the pass that writes such
+   --    a copy sets and nothing else does. See
+   --    Model_Runner.Quantization.Interleave.
    procedure Accumulate_Rows
      (Format    : Model_Runner.GGUF.Tensor_Type;
       Data      : Model_Runner.Bytes.Byte_Array;
@@ -361,6 +370,17 @@ package Model_Runner.Quantization.Integers is
       Stride    : Element_Count;
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
-      Ok        : out Boolean);
+      Ok        : out Boolean;
+      Interleaved : Boolean := False);
+
+   --  Rows a call takes at once when the weights are laid out in panels.
+   --
+   --  A tile has to be a whole number of panels, and past that nothing
+   --  decides it: the kernel walks a panel at a time and a row's blocks
+   --  first to last, so unlike the row-major tile this one changes no
+   --  answer. Thirty-two is four panels and is what a share boundary
+   --  already falls on; one panel, which is the reading Wanted_Tile makes
+   --  for a single vector, measured level with it.
+   Panel_Tile : constant := 32;
 
 end Model_Runner.Quantization.Integers;

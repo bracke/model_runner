@@ -4,6 +4,7 @@ with Interfaces;
 
 with Model_Runner.Arithmetic;
 with Model_Runner.Quantization;
+with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Tensors is
 
@@ -217,10 +218,72 @@ package body Model_Runner.Tensors is
             Base    => Base,
             Span    => Span,
             Offset  => Offset,
-            Length  => B.Byte_Count (A.Value (Total)));
+            Length  => B.Byte_Count (A.Value (Total)),
+            Interleaved => False);
          Status := E.Success;
       end;
    end Make;
+
+   --------------------
+   -- Make_Panels --
+   --------------------
+
+   procedure Make_Panels
+     (Format  : G.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Data    : B.Byte_Array_Access;
+      Offset  : B.Byte_Count;
+      Result  : out View;
+      Status  : out E.Error_Info)
+   is
+      package IL renames Model_Runner.Quantization.Interleave;
+
+      Per_Block : constant Element_Count :=
+        Element_Count (G.Block_Elements (Format));
+   begin
+      Result := Empty_View;
+
+      if Data = null then
+         Status := E.Make (E.Tensor_Out_Of_Bounds);
+         return;
+      end if;
+
+      if not IL.Interleaves (Format, Rows, Columns) then
+         Status := E.Make (E.Tensor_Format_Unsupported);
+         E.Add_Text (Status, "format", G.Type_Name (Format),
+                     E.Param_Identifier);
+         return;
+      end if;
+
+      declare
+         Total : constant B.Byte_Count :=
+           IL.Panel_Bytes (Format, Rows, Columns / Per_Block);
+      begin
+         if Offset + Total > B.Byte_Count (Data.all'Length) then
+            Status := E.Make (E.Tensor_Out_Of_Bounds);
+            E.Add_Integer
+              (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);
+            E.Add_Integer
+              (Status, "size", Long_Long_Integer (Total), E.Param_Bytes);
+            E.Add_Integer
+              (Status, "available",
+               Long_Long_Integer (Data.all'Length), E.Param_Bytes);
+            return;
+         end if;
+
+         Result :=
+           (Format      => Format,
+            Rows        => Rows,
+            Columns     => Columns,
+            Base        => Data.all'Address,
+            Span        => B.Byte_Count (Data.all'Length),
+            Offset      => Offset,
+            Length      => Total,
+            Interleaved => True);
+         Status := E.Success;
+      end;
+   end Make_Panels;
 
    --------------
    -- Row_Dot --
@@ -242,6 +305,49 @@ package body Model_Runner.Tensors is
         or else Vector'Length /= Item.Columns
       then
          return 0.0;
+      end if;
+
+      --  A row of a panel is a gather, and this is the reader that pays for
+      --  it: the row is put back the way the file had it and then computed
+      --  the ordinary way. Nothing on the product's path comes through here
+      --  -- the kernel reads the panels where they are -- so the copy is a
+      --  test's cost or a refusal's, not a token's.
+      if Item.Interleaved then
+         declare
+            Held : B.Byte_Array (1 .. Item.Span)
+              with Import, Address => Item.Base;
+
+            Row_Span : constant B.Byte_Count := Row_Bytes (Item);
+            Alone    : B.Byte_Array (0 .. Row_Span - 1);
+            Taken    : Boolean;
+         begin
+            Model_Runner.Quantization.Interleave.Extract_Row
+              (Format => Item.Format,
+               Source => Held,
+               From   => Item.Offset,
+               Row    => Row,
+               Blocks => Item.Columns / Per_Block,
+               Target => Alone,
+               Ok     => Taken);
+
+            if not Taken then
+               return 0.0;
+            end if;
+
+            Q.Accumulate_Dot
+              (Format  => Item.Format,
+               Data    => Alone,
+               Offset  => 0,
+               Blocks  => Item.Columns / Per_Block,
+               Vectors => Vector,
+               First   => Vector'First,
+               Stride  => Item.Columns,
+               Count   => 1,
+               Sums    => Sums,
+               Ok      => Ok);
+         end;
+
+         return (if Ok then Real (Sums (0)) else 0.0);
       end if;
 
       --  The same kernel the matrix product uses, with one input vector, so
@@ -294,6 +400,45 @@ package body Model_Runner.Tensors is
          Status := E.Make (E.Tensor_Out_Of_Bounds);
          E.Add_Integer (Status, "row", Long_Long_Integer (Row));
          E.Add_Integer (Status, "rows", Long_Long_Integer (Item.Rows));
+         return;
+      end if;
+
+      --  As in Row_Dot: a panel's row is assembled first and decoded from
+      --  the assembled copy, so every reader below this line sees the layout
+      --  the file had.
+      if Item.Interleaved then
+         declare
+            Held : B.Byte_Array (1 .. Item.Span)
+              with Import, Address => Item.Base;
+
+            Row_Span : constant B.Byte_Count := Row_Bytes (Item);
+            Alone    : B.Byte_Array (0 .. Row_Span - 1);
+            Taken    : Boolean;
+         begin
+            Model_Runner.Quantization.Interleave.Extract_Row
+              (Format => Item.Format,
+               Source => Held,
+               From   => Item.Offset,
+               Row    => Row,
+               Blocks => Item.Columns / Per_Block,
+               Target => Alone,
+               Ok     => Taken);
+
+            if Taken then
+               Q.Decode_Blocks
+                 (Item.Format, Alone, 0, Item.Columns / Per_Block,
+                  Target, Ok);
+            else
+               Ok := False;
+            end if;
+         end;
+
+         if not Ok then
+            Status := E.Make (E.Tensor_Out_Of_Bounds);
+            return;
+         end if;
+
+         Status := E.Success;
          return;
       end if;
 
@@ -407,6 +552,59 @@ package body Model_Runner.Tensors is
 
       Blocks := Item.Columns / Per_Block;
 
+      --  A panel's row is put back where it was before it is read, for the
+      --  same reason Row_Dot does it and at the same cost. This is the path
+      --  a kernel refusal falls to, so it has to be able to read a matrix
+      --  the kernel could not -- and a matrix in panels read as though it
+      --  were in rows is not a refusal but wrong answers, which is what it
+      --  gave before this was here.
+      if Item.Interleaved then
+         declare
+            Whole : B.Byte_Array (1 .. Item.Span)
+              with Import, Address => Item.Base;
+
+            Row_Span : constant B.Byte_Count := Row_Bytes (Item);
+            Alone    : B.Byte_Array (0 .. Row_Span - 1);
+            Taken    : Boolean;
+         begin
+            for Row in First .. Last loop
+               Sums := [others => 0.0];
+
+               Model_Runner.Quantization.Interleave.Extract_Row
+                 (Format => Item.Format,
+                  Source => Whole,
+                  From   => Item.Offset,
+                  Row    => Row,
+                  Blocks => Blocks,
+                  Target => Alone,
+                  Ok     => Taken);
+
+               if Taken then
+                  Q.Accumulate_Dot
+                    (Format  => Item.Format,
+                     Data    => Alone,
+                     Offset  => 0,
+                     Blocks  => Blocks,
+                     Vectors => Vectors,
+                     First   => Vectors'First,
+                     Stride  => Item.Columns,
+                     Count   => Count,
+                     Sums    => Sums,
+                     Ok      => Ok);
+               else
+                  Ok := False;
+               end if;
+
+               for Which in 0 .. Count - 1 loop
+                  Target (Target'First + Which * Item.Rows + Row) :=
+                    (if Ok then Real (Sums (Which)) else 0.0);
+               end loop;
+            end loop;
+         end;
+
+         return;
+      end if;
+
       --  Declared once around the row loop rather than once a row: an
       --  overlay costs nothing to enter, and nothing to leave, but saying so
       --  once reads better than saying it for every row.
@@ -492,7 +690,15 @@ package body Model_Runner.Tensors is
 
          --  How many rows to take at once, which depends on how many
          --  vectors there are: see Wanted_Tile.
-         Wanted : constant Element_Count := QI.Wanted_Tile (Count);
+         --
+         --  Except where the weights are in panels, which fixes it at four
+         --  of them. A panel's rows are summed the same way whatever tile
+         --  they arrive in, so unlike the row-major tile this one changes no
+         --  answer -- and one panel for a token, which is what Wanted_Tile's
+         --  reading would suggest, measured level with four.
+         Wanted : constant Element_Count :=
+           (if Item.Interleaved then QI.Panel_Tile
+            else QI.Wanted_Tile (Count));
 
          At_Row : Element_Count := First;
       begin
@@ -509,8 +715,24 @@ package body Model_Runner.Tensors is
                QI.Accumulate_Rows
                  (Format    => Item.Format,
                   Data      => Held,
+
+                  --  Where the tile begins, which the layout decides. A
+                  --  panel is eight rows and a tile is a whole number of
+                  --  them, so a tile's first byte is its first panel's --
+                  --  and a panel block is not a row block, so the step is
+                  --  not the row's either.
                   Offset    =>
-                    Item.Offset + B.Byte_Count (At_Row) * Row_Bytes (Item),
+                    (if Item.Interleaved
+                     then Item.Offset
+                          + B.Byte_Count
+                              (At_Row
+                               / Model_Runner.Quantization.Interleave
+                                   .Panel_Rows)
+                            * B.Byte_Count (Blocks)
+                            * Model_Runner.Quantization.Interleave
+                                .Block_Bytes (Item.Format)
+                     else Item.Offset
+                          + B.Byte_Count (At_Row) * Row_Bytes (Item)),
                   Row_Bytes => Row_Bytes (Item),
                   Rows      => Here,
                   Blocks    => Blocks,
@@ -522,7 +744,8 @@ package body Model_Runner.Tensors is
                   Stride    => Item.Columns,
                   Count     => Count,
                   Sums      => Tiled,
-                  Ok        => Ok);
+                  Ok        => Ok,
+                  Interleaved => Item.Interleaved);
 
                --  A tile the integer path refuses is a tile nobody has
                --  computed, and the range is all or nothing: reporting it

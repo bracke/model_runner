@@ -28,6 +28,14 @@ package body Model_Runner.Quantization.Decoders is
      [-127, -104, -83, -65, -49, -35, -22, -10,
          1,   13,  25,  38,  53,  69,  89, 113];
 
+   --  MXFP4's own sixteen, which are the E2M1 floating-point values at twice
+   --  their size: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and the same again negated.
+   --  Doubling them keeps the table whole, and the scale below carries the
+   --  halving -- which is why the exponent is read as two to the e less a
+   --  hundred and twenty-eight rather than a hundred and twenty-seven.
+   Fours : constant array (0 .. 15) of Integer :=
+     [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
    --  Read one byte of a block. The caller has already checked that the whole
    --  block lies inside Data.
    function Raw
@@ -174,6 +182,68 @@ package body Model_Runner.Quantization.Decoders is
                      Target (Target'First + Element_Count (J) + 16) :=
                        D * Real
                              (Levels
+                                (Integer
+                                   (Interfaces.Shift_Right (Packed, 4))));
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_MXFP4 =>
+            --  Thirty-two elements in seventeen bytes: one exponent byte,
+            --  then sixteen of nibbles laid out as Q4_0 lays them -- the low
+            --  nibble of byte j is element j and the high nibble is element
+            --  j plus sixteen.
+            --
+            --  The scale is a power of two rather than a half. The byte is
+            --  an E8M0 exponent, so the multiplier is two to the byte less a
+            --  hundred and twenty-eight: less a hundred and twenty-seven for
+            --  the exponent's own bias, and one more because the table above
+            --  holds twice each value. That is one expression for every byte
+            --  including zero and one, where a bit pattern would need two.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               --  The scale is a bit pattern, not a power to compute.
+               --  Two to the byte less a hundred and twenty-eight has a
+               --  biased exponent of the byte less one and no mantissa, so
+               --  the whole of it is a shift -- and the two bytes below that
+               --  are subnormal, where the shift is of the leading bit
+               --  instead. This is what llama.cpp's E8M0 conversion does and
+               --  it is exact where a power taken at run time need not be.
+               --
+               --  It bought nothing measurable and is kept for being the
+               --  right way to say it: written as `2.0 ** (Integer - 128)`
+               --  this format read 0.98 nanoseconds an element, and written
+               --  this way it read 0.98 as well. What the format was
+               --  actually short of was the wide compilation -- its nibble
+               --  is an index into a table, which is the shape that
+               --  compilation exists for, and it was not on the list. On it,
+               --  0.59.
+               Bits : constant Interfaces.Unsigned_32 :=
+                 (if Raw (Data, Offset) < 2
+                  then Interfaces.Shift_Left
+                         (16#0020_0000#, Natural (Raw (Data, Offset)))
+                  else Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Raw (Data, Offset)) - 1,
+                          23));
+
+               D : constant Real := N.From_Bits (Bits);
+
+               Base : constant B.Byte_Index := Data'First + Offset + 1;
+            begin
+               for J in 0 .. 15 loop
+                  declare
+                     Packed : constant Interfaces.Unsigned_8 :=
+                       Data (Base + B.Byte_Count (J));
+                  begin
+                     Target (Target'First + Element_Count (J)) :=
+                       D * Real (Fours (Integer (Packed and 16#0F#)));
+                     Target (Target'First + Element_Count (J) + 16) :=
+                       D * Real
+                             (Fours
                                 (Integer
                                    (Interfaces.Shift_Right (Packed, 4))));
                   end;

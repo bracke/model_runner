@@ -60,6 +60,20 @@ package Model_Runner.Tensors is
 
       Offset  : Model_Runner.Bytes.Byte_Count := 0;
       Length  : Model_Runner.Bytes.Byte_Count := 0;
+
+      --  Whether the bytes are laid out a panel of rows at a time rather
+      --  than a row at a time.
+      --
+      --  Set only by the pass that writes such a copy, and only for a
+      --  format and a shape Model_Runner.Quantization.Interleave accepts.
+      --  Everything about the view but the order of the bytes is what it
+      --  was: the same format, the same shape, the same length, and the
+      --  same values decoded out of it -- so this is not a second kind of
+      --  view but a note about where inside it a row is.
+      --
+      --  Make cannot set it, because a view is made from a file's bytes and
+      --  a file never holds this order.
+      Interleaved : Boolean := False;
    end record;
 
    Empty_View : constant View := (others => <>);
@@ -149,6 +163,33 @@ package Model_Runner.Tensors is
       Columns : Element_Count;
       Base    : System.Address;
       Span    : Model_Runner.Bytes.Byte_Count;
+      Offset  : Model_Runner.Bytes.Byte_Count;
+      Result  : out View;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Build a view over weights written a panel of rows at a time.
+   --
+   --  The same view the other two make, over the layout
+   --  Model_Runner.Quantization.Interleave describes: the same format, the
+   --  same shape, the same values -- and a different number of bytes and a
+   --  different place inside them for a row, which is why it is a
+   --  constructor of its own rather than a flag on one of theirs. Nothing
+   --  reading a file can produce this, so nothing that reads a file calls
+   --  it.
+   --
+   --  @param Format Element format; the four-bit k-quant and nothing else.
+   --  @param Rows Number of rows; a whole number of panels.
+   --  @param Columns Contiguous elements per row.
+   --  @param Data Buffer holding the panels.
+   --  @param Offset Byte position of the first panel.
+   --  @param Result Constructed view; empty on failure.
+   --  @param Status Success, Tensor_Invalid_Shape,
+   --    Tensor_Format_Unsupported or Tensor_Out_Of_Bounds.
+   procedure Make_Panels
+     (Format  : Model_Runner.GGUF.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Data    : Model_Runner.Bytes.Byte_Array_Access;
       Offset  : Model_Runner.Bytes.Byte_Count;
       Result  : out View;
       Status  : out Model_Runner.Errors.Error_Info);

@@ -18,6 +18,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.Tensors;
 
 with Fixtures;
@@ -322,6 +323,254 @@ package body Tests.Backend_Cases is
       B.Free (Storage);
    end Batched_Product_Matches_Serial;
 
+   --  The two panelled k-quants, against the row layout each is a
+   --  rearrangement of.
+   --
+   --  Two things are asked, and they are different questions. A row taken
+   --  back out of a panel has to be the row that went in, exactly -- the
+   --  layout moves bytes and touches no value, so anything but equality
+   --  there is a permutation written down wrong. And the product has to say
+   --  what the row-major product says to a tolerance, not exactly: the two
+   --  kernels sum a row's blocks in the same order and a block's sub-blocks
+   --  in the same order, but one keeps eight partial sums in binary32 to the
+   --  end of the row and the other keeps a whole number to the end of the
+   --  block, so the roundings are not the same roundings.
+   --
+   --  Every batch shape the dispatcher can take is asked for, because the
+   --  panel kernel has three of them: one vector, whole strips of eight, and
+   --  a remainder taken from the end of the batch so that it overlaps the
+   --  strip before it. That last one is where a lane could be added twice,
+   --  and a count of thirteen is what would show it.
+   procedure Panelled_Product_Says_What_Rows_Say
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package IL renames Model_Runner.Quantization.Interleave;
+
+      --  Five panels, which is neither a whole number of row tiles nor an
+      --  even count of them: the last tile of the product is eight rows and
+      --  the one before it is thirty-two.
+      Tall : constant N.Element_Count := 40;
+
+      --  Two super-blocks, so a row is more than one and the block loop is
+      --  a loop.
+      Wide : constant N.Element_Count := 512;
+
+      --  Counts the row-major side also computes by the integer kernel, so
+      --  the two answers differ only in where they round.
+      Counts : constant array (1 .. 6) of N.Element_Count :=
+        [1, 5, 8, 13, 16, 24];
+
+      --  And the two the row-major side has no integer kernel for. A panel
+      --  matrix answers every count, because a refusal there falls to the
+      --  floating-point path rather than to another kernel; the row-major
+      --  one refuses two and three and is computed in binary32 throughout.
+      --  So this pair is a comparison between two arithmetics rather than
+      --  between two layouts, and it is held to the bound that comparison
+      --  has everywhere else in this file.
+      Few : constant array (1 .. 2) of N.Element_Count := [2, 3];
+
+      Values  : constant N.Real_Array :=
+        Fixtures.Sequence (Tall * Wide, 5501, 1.0);
+
+      --  Every format a "_M" file is made of, because the panel layout has
+      --  an arrangement for each and a kernel for each: the four-bit one
+      --  pairs two sub-blocks in a byte, the five-bit one adds a run of
+      --  fifth bits to that, and the six-bit one splits every quant between
+      --  two runs.
+      Formats : constant array (1 .. 3) of G.Tensor_Type :=
+        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K];
+
+      Plain   : B.Byte_Array_Access;
+      Panels  : B.Byte_Array_Access;
+
+      Direct   : T.View;
+      Panelled : T.View;
+
+      Status : E.Error_Info;
+      Built  : Boolean;
+
+      Worst  : N.Real := 0.0;
+      Coarse : N.Real := 0.0;
+
+      --  What the two products may differ by. The kernels round in
+      --  different places and the values here run to about thirty, so this
+      --  is a part in a hundred thousand of the largest of them.
+      Bound : constant N.Real := 1.0E-3;
+
+      --  And what a quantized activation may differ from a binary32 one by,
+      --  which is three orders larger and is the point of the mode.
+      Loose : constant N.Real := 5.0E-1;
+
+      --  One batch shape, both ways, keeping the largest difference.
+      procedure Compare (Batch : N.Element_Count; Into : in out N.Real) is
+         Inputs    : T.Real_Array_Access;
+         Rows_Way  : T.Real_Array_Access;
+         Panel_Way : T.Real_Array_Access;
+      begin
+         T.Allocate (Wide * Batch, Inputs);
+         T.Allocate (Tall * Batch, Rows_Way);
+         T.Allocate (Tall * Batch, Panel_Way);
+         Inputs.all := Fixtures.Sequence (Wide * Batch, 991, 1.0);
+
+         CPU.Dispatch_Batch (null, Direct, Inputs, Batch, Rows_Way, Status);
+         Assert (E.Is_Ok (Status), "the row-major product failed");
+
+         CPU.Dispatch_Batch (null, Panelled, Inputs, Batch, Panel_Way, Status);
+         Assert (E.Is_Ok (Status), "the panel product failed");
+
+         for Index in 0 .. Tall * Batch - 1 loop
+            Into :=
+              N.Real'Max
+                (Into, abs (Rows_Way.all (Index) - Panel_Way.all (Index)));
+         end loop;
+
+         T.Free (Inputs);
+         T.Free (Rows_Way);
+         T.Free (Panel_Way);
+      end Compare;
+
+      --  Everything below, for one of the two formats. The shape and the
+      --  bytes a row takes differ; nothing else about the question does.
+      procedure Try (Shape : G.Tensor_Type) is
+         Native : constant N.Element_Count :=
+           (if G."=" (Shape, G.Type_Q4_K) then 144
+            elsif G."=" (Shape, G.Type_Q5_K) then 176
+            else 210);
+      begin
+         declare
+            Bytes : constant B.Byte_Array :=
+              (if G."=" (Shape, G.Type_Q4_K)
+               then Fixtures.Encode_Q4_K (Values)
+               elsif G."=" (Shape, G.Type_Q5_K)
+               then Fixtures.Encode_Q5_K (Values)
+               else Fixtures.Encode_Q6_K (Values));
+         begin
+            B.Allocate (Bytes'Length, Plain);
+            Plain.all := Bytes;
+         end;
+
+         B.Allocate (IL.Panel_Bytes (Shape, Tall, Wide / 256), Panels);
+
+         T.Make (Shape, Tall, Wide, Plain, 0, Direct, Status);
+         Assert (E.Is_Ok (Status), "the row-major weight view was refused");
+
+         Assert (IL.Interleaves (Shape, Tall, Wide),
+                 "this shape should be one the panel layout accepts");
+
+         IL.Build
+           (Format => Shape,
+            Source => Plain.all,
+            From   => 0,
+            Target => Panels.all,
+            Into   => 0,
+            Rows   => Tall,
+            Blocks => Wide / 256,
+            Ok     => Built);
+         Assert (Built, "the panel layout could not be written");
+
+         T.Make_Panels (Shape, Tall, Wide, Panels, 0, Panelled, Status);
+         Assert (E.Is_Ok (Status), "the panel weight view was refused");
+
+         --  The permutation, byte for byte. A row taken back out of a panel is
+         --  the row that went in -- not close to it: the layout moves bytes and
+         --  the scales out of their six-bit fields and back, and every one of
+         --  those is reversible or the layout is written down wrong.
+         declare
+            use type Interfaces.Unsigned_8;
+
+            Row_Span : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Wide / 256)
+              * Model_Runner.Bytes.Byte_Count (Native);
+            Alone : B.Byte_Array (0 .. Row_Span - 1);
+            Bad   : Boolean := False;
+            Off   : N.Element_Count := 0;
+         begin
+            for Row in N.Element_Count range 0 .. Tall - 1 loop
+               IL.Extract_Row
+                 (Format => Shape,
+                  Source => Panels.all,
+                  From   => 0,
+                  Row    => Row,
+                  Blocks => Wide / 256,
+                  Target => Alone,
+                  Ok     => Built);
+               Assert (Built, "a row could not be taken out of its panel");
+
+               for Index in Alone'Range loop
+                  if Alone (Index)
+                     /= Plain.all (Plain.all'First
+                                   + Model_Runner.Bytes.Byte_Count (Row)
+                                     * Row_Span + Index)
+                    and then not Bad
+                  then
+                     Bad := True;
+                     Off := Row;
+                  end if;
+               end loop;
+            end loop;
+
+            Assert (not Bad,
+                    "row" & N.Element_Count'Image (Off)
+                    & " comes out of its panel as different bytes");
+         end;
+
+         --  And the same thing asked of the decoder, which is the path a
+         --  refusal falls to.
+         declare
+            Was : N.Real_Array (0 .. Wide - 1);
+            Now : N.Real_Array (0 .. Wide - 1);
+            Off : N.Element_Count := 0;
+            Bad : Boolean := False;
+         begin
+            for Row in N.Element_Count range 0 .. Tall - 1 loop
+               T.Dequantize_Row (Direct, Row, Was, Status);
+               Assert (E.Is_Ok (Status), "a row of the row-major view");
+               T.Dequantize_Row (Panelled, Row, Now, Status);
+               Assert (E.Is_Ok (Status), "a row of the panel view");
+
+               for Index in Was'Range loop
+                  if Was (Index) /= Now (Index) and then not Bad then
+                     Bad := True;
+                     Off := Row;
+                  end if;
+               end loop;
+            end loop;
+
+            Assert (not Bad,
+                    "row" & N.Element_Count'Image (Off)
+                    & " decodes differently out of a panel");
+         end;
+
+         --  And the product, at every shape the kernel has a path for.
+         CPU.Use_Integer_Activations (True);
+
+         for Batch of Counts loop
+            Compare (Batch, Worst);
+         end loop;
+
+         for Batch of Few loop
+            Compare (Batch, Coarse);
+         end loop;
+
+         CPU.Use_Integer_Activations (False);
+
+         B.Free (Plain);
+         B.Free (Panels);
+      end Try;
+   begin
+      for Which of Formats loop
+         Try (Which);
+      end loop;
+
+      Assert (Worst <= Bound,
+              "the panel product differs by " & N.Real'Image (Worst));
+      Assert (Coarse <= Loose,
+              "the panel product at two and three vectors differs by "
+              & N.Real'Image (Coarse));
+   end Panelled_Product_Says_What_Rows_Say;
+
    --  More workers than rows is legal: the surplus workers get nothing and the
    --  result is still complete.
    procedure More_Workers_Than_Rows
@@ -513,26 +762,42 @@ package body Tests.Backend_Cases is
       Assert (Model_Runner.Backend.Backend_Name (Said.Kind) = "device",
               "wrong backend name");
 
-      --  Every format the program reads, and nothing else. The shader used
-      --  to decode three of the fifteen and now decodes all of them, so the
-      --  two halves of this are the same statement said twice: what is
-      --  claimed must be supported, and what is supported must be claimed.
+      --  Every format the shader decodes, and nothing else.
       --
-      --  The second half is the one that matters. A format claimed here and
-      --  not decoded takes a model past the loader's check and into the
-      --  shader, which reads its bytes as something they are not -- a wrong
-      --  answer rather than a refusal, and nothing downstream can tell.
-      --  Q8_1 and Q8_K are the two the parser recognizes and no kernel in
-      --  this program decodes; they are refused before any backend is asked.
+      --  The half that matters is that nothing is claimed which is not
+      --  decoded: a format claimed here and not decoded takes a model past
+      --  the loader's check and into the shader, which reads its bytes as
+      --  something they are not -- a wrong answer rather than a refusal, and
+      --  nothing downstream can tell.
+      --
+      --  What this may not be asked against is Is_Supported, which says what
+      --  the *program* reads. The two were the same set for as long as the
+      --  Ada decoder and the shader were written together; MXFP4 is where
+      --  they parted, and asking the wrong one of them made this test pass
+      --  while the backend claimed a format its shader has no branch for.
+      --  Q8_1 and Q8_K are recognized by the parser and decoded by nothing
+      --  here; they are refused before any backend is asked.
       for Format in G.Tensor_Type loop
-         Assert (Model_Runner.Backend.Supports (Said, Format)
-                 = G.Is_Supported (Format),
-                 "the device backend "
-                 & (if Model_Runner.Backend.Supports (Said, Format)
-                    then "claims " & G.Type_Name (Format)
-                         & ", which this program does not read"
-                    else "disclaims " & G.Type_Name (Format)
-                         & ", which the shader has a branch for"));
+         Assert (not Model_Runner.Backend.Supports (Said, Format)
+                 or else G.Is_Supported (Format),
+                 "the device backend claims " & G.Type_Name (Format)
+                 & ", which this program does not read at all");
+      end loop;
+
+      --  And the formats it must have: every one the fixture can build a
+      --  model in and the device sweep multiplies, which is the list the
+      --  conformance run crosses with the reference transformer.
+      for Format in G.Tensor_Type loop
+         if Format in G.Type_F32 | G.Type_F16 | G.Type_BF16
+                    | G.Type_Q4_0 | G.Type_Q4_1 | G.Type_Q5_0 | G.Type_Q5_1
+                    | G.Type_Q8_0 | G.Type_IQ4_NL
+                    | G.Type_Q2_K | G.Type_Q3_K | G.Type_Q4_K
+                    | G.Type_Q5_K | G.Type_Q6_K | G.Type_IQ4_XS
+         then
+            Assert (Model_Runner.Backend.Supports (Said, Format),
+                    "the device backend disclaims " & G.Type_Name (Format)
+                    & ", which the shader has a branch for");
+         end if;
       end loop;
 
       Assert (Said.Supports_Matrix_Vector,
@@ -2099,6 +2364,7 @@ package body Tests.Backend_Cases is
                  Base => Weights.all'Address,
                  Span => Model_Runner.Bytes.Byte_Count (Weights.all'Length),
                  Offset => 0,
+                 Interleaved => False,
                  Length => Model_Runner.Bytes.Byte_Count
                              (Weights.all'Length));
 
@@ -2255,6 +2521,7 @@ package body Tests.Backend_Cases is
          Base => Held.all'Address,
          Span => Model_Runner.Bytes.Byte_Count (Held.all'Length),
          Offset => 0,
+         Interleaved => False,
          Length => Model_Runner.Bytes.Byte_Count (Held.all'Length));
    begin
       Model_Runner.Backend.Device.Close;
@@ -2602,6 +2869,7 @@ package body Tests.Backend_Cases is
             Base => Held (Which).all'Address,
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
             Offset => 0,
+            Interleaved => False,
             Length =>
               Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
       end loop;
@@ -2790,6 +3058,7 @@ package body Tests.Backend_Cases is
             Base => Held (Which).all'Address,
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
             Offset => 0,
+            Interleaved => False,
             Length =>
               Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
       end loop;
@@ -3198,6 +3467,10 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Parallel_Matches_Serial'Access,
          "a parallel product equals the serial one exactly");
+      Register_Routine
+        (T, Panelled_Product_Says_What_Rows_Say'Access,
+         "a four-, five- or six-bit weight in panels decodes to the rows "
+         & "it was made of and multiplies to what those rows multiply to");
       Register_Routine
         (T, More_Workers_Than_Rows'Access,
          "more workers than rows still produces a complete result");

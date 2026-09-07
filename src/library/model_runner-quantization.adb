@@ -318,6 +318,7 @@ package body Model_Runner.Quantization is
             if Wide_Available
               and then Format in G.Type_Q5_0 | G.Type_Q5_1
                                | G.Type_IQ4_NL | G.Type_IQ4_XS
+                               | G.Type_MXFP4
             then
                Wide.Decode_Span
                  (Format, Data, Offset, Count, Width, Per, Target, Ok);
@@ -471,7 +472,7 @@ package body Model_Runner.Quantization is
                 | G.Type_Q8_0 | G.Type_Q4_1 | G.Type_Q5_0 | G.Type_Q5_1
                 | G.Type_Q2_K | G.Type_Q3_K
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K
-                | G.Type_IQ4_NL | G.Type_IQ4_XS);
+                | G.Type_IQ4_NL | G.Type_IQ4_XS | G.Type_MXFP4);
 
    -------------------
    -- Decode_Block --

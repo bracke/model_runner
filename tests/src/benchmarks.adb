@@ -108,6 +108,15 @@ package body Benchmarks is
                Data (Data'First + Block * Width + 1) := 16#30#;
             end loop;
 
+         when G.Type_MXFP4 =>
+            --  The exponent byte, which names a power of two rather than a
+            --  half. An arbitrary one is two to the hundred and twenty-fifth
+            --  as often as anything else, and a row of those sums to an
+            --  infinity the benchmark would be timing instead of the decode.
+            for Block in 0 .. Blocks - 1 loop
+               Data (Data'First + Block * Width) := 16#80#;
+            end loop;
+
          when G.Type_Q4_1 | G.Type_Q5_1 =>
             for Block in 0 .. Blocks - 1 loop
                Data (Data'First + Block * Width + 1) := 16#30#;
@@ -1857,6 +1866,7 @@ package body Benchmarks is
       Measure ("q6_k Row_Dot", G.Type_Q6_K, True);
       Measure ("iq4nl Row_Dot", G.Type_IQ4_NL, True);
       Measure ("iq4xs Row_Dot", G.Type_IQ4_XS, True);
+      Measure ("mxfp4 Row_Dot", G.Type_MXFP4, True);
       Measure ("f16  Row_Dot", G.Type_F16, True);
       Measure ("bf16 Row_Dot", G.Type_BF16, True);
       Measure ("f32  Row_Dot", G.Type_F32, True);

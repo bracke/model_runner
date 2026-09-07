@@ -31,6 +31,7 @@ validation, runtime execution, structured error handling and AUnit coverage.
 | Q5_1 | 32 | 24 | Implemented; a fifth bit apart, with a minimum |
 | IQ4_NL | 32 | 18 | Non-linear four-bit: a nibble indexes a table of sixteen levels rather than naming a number, spaced finely near zero. Nibble layout as Q4_0 |
 | IQ4_XS | 256 | 136 | The same levels over a super-block, with a six-bit scale for each sub-block of 32 split between a nibble and a two-bit field and signed by an offset of 32 |
+| MXFP4 | 32 | 17 | Microscaling four-bit: a nibble indexes eight magnitudes and their negatives -- the E2M1 values -- and the block's scale is one byte holding a power of two rather than a half. Nibble layout as Q4_0. Read on the processor and on the reference backend; the device shader has no branch for it, so a model carrying it is refused there while it loads |
 | Q8_1, Q8_K | — | — | Recognized by the parser, rejected before preparation. Neither is a way weights are stored: both are intermediates ggml builds inside its own dot products |
 | Everything else | — | — | Rejected: `MR-GGUF-0017` |
 

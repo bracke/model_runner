@@ -262,6 +262,20 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_IQ4_NL (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as MXFP4: blocks of 32 in 17 bytes, one exponent byte
+   --  and sixteen of nibbles, where a nibble indexes the format's own eight
+   --  magnitudes and their negatives.
+   --
+   --  The scale is a power of two and nothing else, which is what makes the
+   --  encoding shorter to write than the others and coarser than they are:
+   --  there is no factor to choose that just reaches the block's largest
+   --  value, only the smallest exponent whose top level clears it. Every
+   --  element then takes the nearest level.
+   --
+   --  @param Values Values to encode; a whole number of 32-element blocks.
+   --  @return The encoded bytes.
+   function Encode_MXFP4 (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode values as IQ4_XS: superblocks of 256 in 136 bytes -- one
    --  half-precision scale, a six-bit scale for each of eight sub-blocks
    --  split between a nibble and a two-bit field, then 128 bytes of the same
