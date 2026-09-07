@@ -8205,6 +8205,64 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### llama.cpp's own per-op profile, and the workgroup width it implies
+
+`GGML_VK_PERF_LOGGER=1` makes llama.cpp print what each operation of a
+generated token cost it, which is the comparison this page has been making
+by subtraction. One token of TinyLlama Q8_0 on this part, its numbers:
+
+| | count x each | total | share |
+| --- | --- | ---: | ---: |
+| `MUL_MAT_VEC` m=5632 k=2048 | 44 x 190.1 us | 8364 us | 42 % |
+| `MUL_MAT_ADD MUL_MAT_VEC` m=2048 k=5632 | 22 x 189.3 | 4166 | 21 % |
+| `MUL_MAT_VEC` m=2048 k=2048 | 23 x 72.5 | 1668 | 8.4 % |
+| `MUL_MAT_ADD MUL_MAT_VEC` m=2048 k=2048 | 21 x 79.0 | 1660 | 8.3 % |
+| `MUL_MAT_VEC` m=32000 k=2048 | 1 x 1026.8 | 1027 | 5.2 % |
+| `FLASH_ATTN_EXT` | 22 x 51.0 | 1122 | 5.6 % |
+| `MUL_MAT_VEC` m=256 k=2048 | 44 x 13.3 | 586 | 2.9 % |
+| `RMS_NORM_MUL` | 45 x 12.9 | 582 | 2.9 % |
+| `ROPE`, `ROPE_VIEW_SET_ROWS`, `SET_ROWS`, `GLU`, `ADD` | | 730 | 3.7 % |
+
+**Two things fall out of it that this page had been guessing at.** Their
+products are eighty-eight per cent of a token, which is what the ablation
+here says of `row_product` at eighty-nine -- the two programs spend their
+tokens the same way. And **their small operations are 6.6 per cent of a
+token against this program's 3.5**, measured the same way, so the fusion they
+have and this does not -- `RMS_NORM_MUL`, `ROPE_VIEW_SET_ROWS`, `GLU` -- is
+not a thing this program is losing to. It is already ahead there.
+
+**The one shape that stands out is `m=256`**: 78.7 GFLOP/s where the others
+reach 115 to 128. Those are the key and value projections, and a narrow
+output is an occupancy problem. Here it is worse on paper: a 256-wide
+workgroup at eight lanes a row covers thirty-two rows, so `m=256` is **eight
+workgroups on a part with twelve compute units**, where llama.cpp on AMD
+takes `DMMV_WG_SIZE_SUBGROUP` -- a workgroup of one subgroup, one row --
+and gets two hundred and fifty-six of them. The heuristic that widens
+workgroups for small `m` is guarded to NVIDIA and Intel; on AMD they always
+take the narrow one.
+
+**Built, and refused.** The width is already a specialization constant here,
+so this is one number on each side -- the pipeline and the dispatch that
+sizes it:
+
+| workgroup | sixty-four tokens on the device |
+| --- | --- |
+| **256, as it is** | **1.223, 1.279, 1.280 s** |
+| 128 | 1.278, 1.307, 1.316 s |
+| 64 -- one subgroup | 1.315, 1.323, 1.315 s |
+
+Narrower is worse, monotonically. Whatever the eight idle compute units cost
+on the key and value projections, it is less than what the wider workgroup
+buys everywhere else -- and those projections are 2.9 per cent of a token
+even in llama.cpp's own profile.
+
+**And the first version of that table was a lie the digest caught.** Setting
+the specialization without moving the dispatch divisor left the kernel
+computing a quarter of the rows, and it read **0.394 s against 1.277** -- a
+three-fold win, and the digest `73bc61a56838f703` against
+`448c2ed68ec342ee`. That is the whole reason every table on this page carries
+one.
+
 ### llama.cpp's mat-vec shape, built two ways and refused
 
 The gap the sitting above leaves is the device's generated token: 50.8 tokens

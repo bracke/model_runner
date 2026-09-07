@@ -16900,3 +16900,60 @@ outside 4350C8E4423027FD src/shaders/row_product.comp src/shaders/matrix_product
 #
 # What is left is the arithmetic inside the kernel, and there is no reading
 # here that says it is wrong.
+
+# 2026-09-07  llama.cpp's per-op profile, and the workgroup width
+# ---------------------------------------------------------------
+#
+# GGML_VK_PERF_LOGGER=1 makes llama.cpp print what each operation of a
+# generated token cost it. One token of TinyLlama Q8_0 on this part:
+#
+#   MUL_MAT_VEC m=5632 k=2048           44 x 190.1 us   8364 us   42 %
+#   MUL_MAT_ADD MUL_MAT_VEC m=2048 k=5632  22 x 189.3   4166      21 %
+#   MUL_MAT_VEC m=2048 k=2048           23 x  72.5      1668      8.4 %
+#   MUL_MAT_ADD MUL_MAT_VEC m=2048 k=2048  21 x  79.0   1660      8.3 %
+#   MUL_MAT_VEC m=32000 k=2048           1 x 1026.8     1027      5.2 %
+#   FLASH_ATTN_EXT                      22 x  51.0      1122      5.6 %
+#   MUL_MAT_VEC m=256 k=2048            44 x  13.3       586      2.9 %
+#   RMS_NORM_MUL                        45 x  12.9       582      2.9 %
+#   ROPE, ROPE_VIEW_SET_ROWS, SET_ROWS, GLU, ADD          730      3.7 %
+#
+# TWO THINGS FALL OUT THAT THIS FILE HAD BEEN GUESSING AT.
+#
+#   Its products are 88 per cent of a token; the ablation here puts
+#   row_product at 89. The two programs spend their tokens the same way.
+#
+#   Its small operations are 6.6 per cent of a token against this program's
+#   3.5, measured the same way. The fusion it has and this does not --
+#   RMS_NORM_MUL, ROPE_VIEW_SET_ROWS, GLU -- is not a thing this program is
+#   losing to; it is already ahead there.
+#
+# THE ONE SHAPE THAT STANDS OUT is m=256 at 78.7 GFLOP/s where the others
+# reach 115 to 128 -- the key and value projections, where a narrow output is
+# an occupancy problem. On paper it is worse here: a 256-wide workgroup at
+# eight lanes a row covers thirty-two rows, so m=256 is eight workgroups on
+# twelve compute units, where llama.cpp on AMD always takes a workgroup of
+# one subgroup, one row, and gets two hundred and fifty-six. Its heuristic
+# for widening workgroups at small m is guarded to NVIDIA and Intel.
+#
+# BUILT AND REFUSED. The width is a specialization constant already, so this
+# is one number on the pipeline and one on the dispatch that sizes it:
+#
+#   256, as it is         1.223   1.279   1.280 s
+#   128                   1.278   1.307   1.316
+#   64, one subgroup      1.315   1.323   1.315
+#
+# Narrower is worse, monotonically. Whatever the idle compute units cost on
+# the key and value projections is less than the wider workgroup buys
+# everywhere else, and those projections are 2.9 per cent of a token in
+# llama.cpp's own profile.
+#
+# AND THE FIRST VERSION OF THAT TABLE WAS A LIE THE DIGEST CAUGHT. Setting
+# the specialization without moving the dispatch divisor left the kernel
+# computing a quarter of the rows:
+#
+#   256                   1.213   1.277   1.277 s   448c2ed68ec342ee
+#   128, divisor unmoved  0.719   0.757   0.772     c7985f314505888a
+#   64,  divisor unmoved  0.394   0.432   0.439     73bc61a56838f703
+#
+# A three-fold win and a different answer. That is what every table on this
+# page carries a digest for.

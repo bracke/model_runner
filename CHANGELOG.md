@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **llama.cpp's own per-op profile, and the workgroup width it implies.**
+  `GGML_VK_PERF_LOGGER=1` makes llama.cpp print what each operation of a
+  generated token cost it. Two things fall out that this page had been
+  guessing at: **its products are 88 per cent of a token** where the ablation
+  here puts `row_product` at 89, so the two spend their tokens the same way;
+  and **its small operations are 6.6 per cent against this program's 3.5**,
+  so the fusion it has and this does not -- `RMS_NORM_MUL`,
+  `ROPE_VIEW_SET_ROWS`, `GLU` -- is not something this program is losing to.
+
+  The one shape that stands out in its profile is `m=256`, the key and value
+  projections, at 78.7 GFLOP/s where the others reach 115 to 128. On paper it
+  is worse here: a 256-wide workgroup at eight lanes a row covers 32 rows, so
+  `m=256` is **eight workgroups on twelve compute units**, where llama.cpp on
+  AMD always takes a workgroup of one subgroup, one row, and gets 256 of them
+  -- its heuristic for widening workgroups at small `m` is guarded to NVIDIA
+  and Intel.
+
+  **Built and refused**, the width being a specialization constant already:
+  256 reads 1.223, 1.279 and 1.280 s over sixty-four tokens, 128 reads 1.278,
+  1.307 and 1.316, and 64 -- one subgroup -- reads 1.315, 1.323 and 1.315.
+  Narrower is worse, monotonically. Whatever the idle compute units cost on
+  those projections is less than the wider workgroup buys elsewhere, and the
+  projections are 2.9 per cent of a token in llama.cpp's own numbers.
+
+  **The first version of that table was a lie the digest caught.** Setting
+  the specialization without moving the dispatch divisor left the kernel
+  computing a quarter of the rows, and it read 0.394 s against 1.277 -- a
+  three-fold win, with digest `73bc61a56838f703` against
+  `448c2ed68ec342ee`. That is what every table on the page carries a digest
+  for.
+
 - **llama.cpp's mat-vec shape, built two ways and refused.** The gap left
   after the sitting is the device's generated token, 50.8 tokens a second
   against 55.5, and 89 per cent of that token is `row_product` -- voiding it
