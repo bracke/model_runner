@@ -16545,3 +16545,68 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # entries did with it are worth nothing. It stays what it was offered as -- a
 # flag for starved against fed -- and its window still wants narrowing to the
 # evaluation.
+
+# 2026-09-07  What flips the window, and it is the display controller
+# -------------------------------------------------------------------
+#
+# Twelve causes excluded across three sittings and four ablations that found
+# nothing, because the thing that moves a device prompt here by forty per
+# cent is not in the compute path. The kernel had been saying so all along:
+#
+#   amdgpu 0000:c6:00.0: [drm] REG_WAIT timeout 1us * 100 tries
+#     - dcn31_program_compbuf_size line:141
+#
+# DCN 3.1 is the display controller, compbuf is its compression buffer, and
+# REG_WAIT timeout means the programming did not take. Twenty-four of them in
+# three days, in exactly two shapes: PAIRS about eleven seconds apart, and
+# SINGLES. The spacing inside a pair is the same every time -- 32/43, 52:57
+# and 53:08, 05:10:52 and 05:11:03, 20:23:16 and 20:23:28, 08:42:37 and
+# 08:42:48 -- which reads like a fixed sequence rather than chance. This host
+# has two HDMI outputs connected and enabled.
+#
+# EVERY DATABLE FLIP LINES UP:
+#
+#   Sep 04 14:12:32 + 14:12:43   pair     slow: 0.829 s morning, 1.155 evening
+#   Sep 06 19:48:10              single   fast: 0.755 to 0.760
+#   Sep 06 20:52:57 + 20:53:08   pair     SLOW: 1.075 to 1.131, two hours
+#   Sep 06 23:07:28              single   FAST: 0.744 to 0.814
+#   Sep 07 00:00:11              single   fast
+#   Sep 07 02:22:44              single   fast, watched live
+#
+# Six for six: a pair precedes the slow window, a single leaves it fast.
+#
+# THE ONE WATCHED LIVE. A detector took the 1419-token device prompt once a
+# minute for half an hour, and 02:22:44 fell in the middle of it:
+#
+#   02:21:33  0.697      02:23:44  0.727
+#   02:22:37  0.710      02:24:48  0.733
+#
+# A single, and no flip. That confirms the negative half of the rule only --
+# no pair occurred while anything was watching, and until one does this is a
+# correlation with six points and not a mechanism.
+#
+# AND THE SAME HALF HOUR SAYS WHAT KIND OF THING THE WINDOW IS. Thirty
+# readings a minute apart: twenty-nine between 0.692 and 0.773 s and one at
+# 1.054, against a dozen consecutive readings at 1.08 that afternoon. THE
+# SLOW WINDOW IS A STATE AND NOT A SPREAD -- it arrives, it stays for hours,
+# it leaves. The single stray reading has no display event within two hours
+# of it and is something else again.
+#
+# WHAT IT IS NOT. Not the display taking memory bandwidth: the aggregate
+# reads 45.5 GB/s in the fast state against 45.1 in the slow, and one thread
+# reads 42.3 against 35.9 -- more in the fast state, which is the wrong sign
+# for a fixed reservation. Not thermal, not the processor's clock or
+# governor, not the load, not device or system memory pressure, not the page
+# cache, not the binary, not the shader cache, not prior processor or device
+# work, not the fence spin, the submission count, the pipeline depth, the
+# batch size or the small dispatches. All of those were measured.
+#
+# THE TEST THAT WOULD SETTLE IT is to toggle a display off and on while a
+# loop takes the 1419-token device prompt once a minute, and watch the wall
+# step from 0.75 to 1.08 and stay. It could not be run here: kscreen-doctor
+# and wlr-randr are not installed, so a reconfiguration cannot be triggered
+# from a shell, and blanking somebody's screen to see what happens is not a
+# thing to do to their desktop uninvited.
+#
+# IF IT HOLDS, the rule to carry beside a device figure is not about load or
+# clock or temperature. It is: look at what the screen did.

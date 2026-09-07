@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **What flips the window is on the display controller.** Twelve causes were
+  excluded and four ablations found nothing, because the thing that moves a
+  device prompt here by forty per cent is not in the compute path. The kernel
+  had been saying so: `amdgpu ... REG_WAIT timeout - dcn31_program_compbuf_size`
+  -- DCN 3.1 failing to program its compression buffer. Twenty-four in three
+  days, in two shapes, **pairs about eleven seconds apart** and **singles**,
+  and every datable flip lines up: Sep 04 14:12:32+43 a pair, and this file's
+  0.829 s morning became 1.155 that evening; Sep 06 19:48:10 a single, fast;
+  Sep 06 20:52:57+20:53:08 a pair, and two hours of 1.075 to 1.131; Sep 06
+  23:07:28 a single, and 0.744 to 0.814 again; Sep 07 00:00:11 a single, fast;
+  Sep 07 02:22:44 a single, watched live -- 0.697 and 0.710 s before it, 0.727
+  and 0.733 after. **Six for six: a pair precedes the slow window, a single
+  leaves it fast.** Only the last was observed as it happened, and it is a
+  single, so only the negative half is confirmed.
+
+  The same half hour settles what kind of thing the window is: thirty readings
+  a minute apart, twenty-nine between 0.692 and 0.773 s and one at 1.054,
+  against a dozen consecutive at 1.08 that afternoon. **The slow window is a
+  state, not a spread.**
+
+  What it is not: the display taking bandwidth. The aggregate reads 45.5 GB/s
+  in the fast state against 45.1 in the slow, and one thread reads *more* in
+  the fast state, which is the wrong sign for a fixed reservation. And it is
+  not proven causal -- `kscreen-doctor` and `wlr-randr` are not installed
+  here, so a reconfiguration cannot be triggered from a shell, and blanking
+  somebody's screen uninvited is not a way to find out. The test that would
+  settle it is to toggle a display while a loop takes the prompt once a
+  minute.
+
 - **The small dispatches cost one per cent -- and there was no fifth of a
   prompt to find, because the window moved again.** The entries below chase a
   fifth of a device prompt through the submission count, the barriers and the
