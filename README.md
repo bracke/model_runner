@@ -8188,6 +8188,50 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### Allocation granularity, tested and not it -- and the point to stop
+
+The section below ends on the last candidate that satisfied the selectivity
+constraint: this program makes 219 `AMDGPU_GEM_CREATE` calls for one prompt
+where llama.cpp makes 60, one buffer for every weight matrix against a few
+large ones suballocated. It is per-process, and fragmentation is the only
+mechanism found so far that would survive a process exiting and starting
+again, which the window does.
+
+**Two ways at it, and neither reproduces the window.**
+
+Sequentially: eighteen loads of assorted models on the device -- 169 MB, 461,
+608, 638, 747 -- each allocating its own two hundred objects and freeing them
+on exit. Before, 0.733, 0.743 and 0.764 s; after, 0.757, 0.791 and 0.800.
+About five per cent, which is not a forty per cent flip and is inside what
+this row does anyway.
+
+Concurrently, which is what actually fragments an allocator: three rounds of
+four processes each holding a different model on the device at once, killed
+out of order so their frees interleave -- twelve allocations of about a
+gigabyte in two hundred pieces each, torn down in a pattern that leaves
+holes. Before, 0.751, 0.745 and 0.802 s; after, 0.752, 0.816 and 0.799.
+**Nothing.**
+
+So the allocation count is a real difference between the two programs and it
+is not the trigger, on the two ways this sitting could push it.
+
+**And that is where this stops.** The constraint left four candidates: the
+placement, the queue, the allocation granularity and the shaders. The
+placement is excluded by a per-process measurement, the queue by a targeted
+load that spared neither build, the granularity by the two paragraphs above,
+and the shaders were excluded before the constraint was found -- four
+orchestration ablations, identical digests, and the same device-busy time as
+llama.cpp on the same work. **The window is unexplained, and this page has
+spent three sittings and two retractions on it.**
+
+What is worth doing instead is what does not depend on knowing the cause. The
+rule is already written down: **do not publish a device ratio from one
+window.** The instruments to go with it are known and unbuilt -- the fed
+share wants its sampling narrowed to the evaluation, and `tests benchmark`
+still prints the load average against a bound measured in busy processors.
+Both live inside figure-group fingerprints and want a measurement sitting,
+and a verified-stable window is exactly when to take one.
+
 ### The exclusions redone against selectivity, and what is left
 
 The section below establishes the constraint the hunt should have started

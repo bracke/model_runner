@@ -16723,3 +16723,55 @@ outside 58F80D90820166E7 src/shaders/row_product.comp src/shaders/matrix_product
 # and starting again -- which the window does, and which no other candidate
 # found so far does. UNTESTED: this sitting found no way to fragment the GTT
 # deliberately.
+
+# 2026-09-07  Allocation granularity, tested and not it
+# ------------------------------------------------------
+#
+# The last candidate that satisfied the selectivity constraint: this program
+# makes 219 AMDGPU_GEM_CREATE calls for one prompt where llama.cpp makes 60
+# -- one buffer for every weight matrix against a few large ones
+# suballocated. Per-process, and fragmentation is the only mechanism found
+# that would survive a process exiting and starting again, which the window
+# does.
+#
+# SEQUENTIALLY. Eighteen loads of assorted models on the device -- 169 MB,
+# 461, 608, 638, 747 -- each allocating its own two hundred objects and
+# freeing them on exit:
+#
+#   before   0.733   0.743   0.764 s
+#   after    0.757   0.791   0.800 s
+#
+# About five per cent. Not a forty per cent flip, and inside what this row
+# does on its own.
+#
+# CONCURRENTLY, which is what actually fragments an allocator. Three rounds
+# of four processes each holding a different model on the device at once,
+# killed out of order so their frees interleave -- twelve allocations of
+# about a gigabyte in two hundred pieces each, torn down to leave holes:
+#
+#   before   0.751   0.745   0.802 s
+#   after    0.752   0.816   0.799 s
+#
+# Nothing. The allocation count is a real difference between the two programs
+# and it is not the trigger, on the two ways available here.
+#
+# AND THAT IS WHERE THIS STOPS. The constraint left four candidates:
+#
+#   placement     excluded by a per-process measurement (fdinfo)
+#   queue         a real difference, family 0 against family 1, but a load
+#                 aimed at family 0 spared neither build
+#   granularity   the two tests above
+#   shaders       excluded before the constraint was found: four
+#                 orchestration ablations, identical digests, and the same
+#                 device-busy time as llama.cpp on the same work
+#
+# The window is unexplained. Three sittings and two retractions, and the
+# useful part of it is not a cause but a discipline: DO NOT PUBLISH A DEVICE
+# RATIO FROM ONE WINDOW.
+#
+# WHAT IS WORTH BUILDING does not depend on the cause. The fed share wants
+# its sampling window narrowed to the evaluation rather than the whole run,
+# and tests benchmark still prints a load average against a bound measured in
+# busy processors. Both sit inside figure-group fingerprints, so both want a
+# measurement sitting -- and a verified-stable window, of the kind this
+# sitting's detector demonstrated, is exactly when to take one.

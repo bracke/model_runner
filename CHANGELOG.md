@@ -7,6 +7,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Allocation granularity, tested and not it -- and the point to stop
+  chasing the window.** The last candidate satisfying the selectivity
+  constraint was that this program makes 219 `AMDGPU_GEM_CREATE` calls for a
+  prompt where llama.cpp makes 60, one buffer per weight matrix against a few
+  suballocated. Two ways at it, neither reproducing the window. Sequentially,
+  eighteen loads of assorted models each allocating two hundred objects and
+  freeing them: 0.733, 0.743, 0.764 s before and 0.757, 0.791, 0.800 after --
+  five per cent, not forty. Concurrently, which is what actually fragments an
+  allocator, three rounds of four processes holding different models on the
+  device at once and killed out of order so their frees interleave: 0.751,
+  0.745, 0.802 before and 0.752, 0.816, 0.799 after. **Nothing.**
+
+  **That is where this stops.** The constraint left four candidates. The
+  placement is excluded by a per-process measurement, the queue by a targeted
+  load that spared neither build, the granularity by the above, and the
+  shaders were excluded before the constraint was found -- four orchestration
+  ablations, identical digests, and the same device-busy time as llama.cpp on
+  the same work. The window is unexplained, after three sittings and two
+  retractions.
+
+  What is worth doing instead does not depend on the cause. The rule is
+  already written: **do not publish a device ratio from one window.** The
+  instruments to go with it are known and unbuilt -- the fed share wants its
+  sampling narrowed to the evaluation, and `tests benchmark` still prints a
+  load average against a bound measured in busy processors. Both sit inside
+  figure-group fingerprints and want a measurement sitting.
+
 - **The exclusions redone against selectivity: placement out, the queue is a
   real difference but not the cause, and what is left is allocation
   granularity.** The entry below establishes that llama.cpp is unaffected by
