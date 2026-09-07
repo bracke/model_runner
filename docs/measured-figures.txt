@@ -17046,3 +17046,56 @@ outside 37B64E5011D81374 src/shaders/row_product.comp src/shaders/matrix_product
 #
 # Five members is 180.4 where it was 150.1, and nothing between one and
 # sixteen falls below the count before it.
+
+# 2026-09-07  Per-count widths above eight, refused; and a step at seventeen
+# --------------------------------------------------------------------------
+#
+# Filling in a row pipeline for every count from one to eight was worth
+# eighteen per cent at five members, so the obvious next move is nine to
+# fifteen, which all take the sixteen-wide kernel and pay for sixteen.
+#
+# IT BUYS NOTHING. Three alternated rounds, marks unchanged:
+#
+#   members   to eight                  to sixteen
+#   nine      1.208  1.225  1.213 s     1.220  1.214  1.220 s
+#   ten       1.269  1.280  1.261       1.251  1.266  1.281
+#   twelve    1.333  1.326  1.355       1.318  1.337  1.327
+#   fifteen   1.439  1.405  1.409       1.393  1.422  1.412
+#
+# Fully overlapping. A probe printing the kernel decision for every step says
+# why: above eight the products that matter go through the MATRIX kernel
+# rather than the row one, so the row kernel's width stops being what the
+# count is paying for. Reverted.
+#
+# WHAT THE PROBE FOUND INSTEAD IS A STEP AT SEVENTEEN. Milliseconds a token,
+# three rounds each:
+#
+#   members            15     16     17     18
+#   1419-token prompt  2.89   2.86   2.10   1.97
+#   110-token prompt   2.18   2.01   1.88   1.78
+#   6-token prompt     2.22   2.04   1.93   1.85
+#
+# Twenty-six per cent, and only with a long prompt. The short-prompt rows
+# walk down smoothly through the same counts, so it is not the products and
+# not the round driver: it is ATTENTION OVER THE CACHE, which is the only
+# thing a long prompt makes big.
+#
+# TWO CANDIDATES ARE ALREADY EXCLUDED:
+#
+#   the product kernel   a probe printing the matrix-or-row decision for
+#                        every step gives the same split at sixteen and at
+#                        seventeen
+#   the submissions      seventeen makes 5266 AMDGPU_CS calls against
+#                        sixteen's 4462, and seventeen is the faster one
+#
+# AND READING THE CHOOSER TURNS UP A CONSTRAINT WORTH ITS OWN LINE.
+# Attend_Kernel opens with
+#
+#   if not Rounding and then Attends_By_Matrix (...)
+#
+# so A ROUND NEVER TAKES THE MATRIX ATTENTION KERNEL AT ALL, whatever its
+# size: it falls to the bundled one or the halved one. That is not the
+# sixteen-to-seventeen step, which happens inside the rounds, but it is a
+# whole kernel the many-sequence case cannot reach. llama.cpp answers the
+# same case with flash attention and a split-k reduce. It is the first thing
+# to look at next.

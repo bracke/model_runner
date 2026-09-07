@@ -8205,6 +8205,56 @@ one has to read fewer bytes, which is a choice about quantization and not
 about kernels. A machine with more bandwidth per core than this one would
 reward more shares, and this file's sweep would want running again there.
 
+### The same idea above eight, refused -- and a step in the round curve
+
+The section below fills in a row pipeline for every count from one to eight,
+after llama.cpp, and it was worth eighteen per cent at five members. The
+obvious next move is to keep going: counts nine to fifteen all take the
+sixteen-wide kernel and pay for sixteen.
+
+**It buys nothing.** Extending the pipelines to sixteen, three alternated
+rounds, marks unchanged:
+
+| members | to eight | to sixteen |
+| --- | --- | --- |
+| nine | 1.208, 1.225, 1.213 s | 1.220, 1.214, 1.220 s |
+| ten | 1.269, 1.280, 1.261 s | 1.251, 1.266, 1.281 s |
+| twelve | 1.333, 1.326, 1.355 s | 1.318, 1.337, 1.327 s |
+| fifteen | 1.439, 1.405, 1.409 s | 1.393, 1.422, 1.412 s |
+
+Fully overlapping. A probe says why: above eight the products that matter go
+through the **matrix** kernel rather than the row one, so the row kernel's
+width stops being what the count is paying for. Reverted.
+
+**What the probe found instead is a step at seventeen.** Milliseconds a
+token, three rounds:
+
+| members | 15 | 16 | 17 | 18 |
+| --- | ---: | ---: | ---: | ---: |
+| 1419-token prompt | 2.89 | 2.86 | **2.10** | 1.97 |
+| 110-token prompt | 2.18 | 2.01 | 1.88 | 1.78 |
+| 6-token prompt | 2.22 | 2.04 | 1.93 | 1.85 |
+
+**Twenty-six per cent, and only with a long prompt.** The short-prompt rows
+walk down smoothly through the same counts, so it is not the products and
+not the round driver: it is attention over the cache, which is the only
+thing a long prompt makes big.
+
+**Two candidates are already excluded.** It is not which kernel the products
+take -- a probe printing that decision for every step gives the same
+matrix-and-row split at sixteen and at seventeen. And it is not the
+submission count: seventeen members make 5266 submissions where sixteen make
+4462, and seventeen is the faster one.
+
+**And reading the chooser turns up a constraint worth its own line.**
+`Attend_Kernel` opens with `if not Rounding and then Attends_By_Matrix`, so
+**a round never takes the matrix attention kernel at all**, whatever its
+size -- it falls to the bundled or halved one. That is not the sixteen-to-
+seventeen step, which happens inside the rounds, but it is a whole kernel
+that the many-sequence case is currently unable to reach, and llama.cpp
+answers the same case with flash attention and a split-k reduce. It is the
+first thing to look at next.
+
 ### A kernel for every count, and the round curve stops going backwards
 
 The section below adds a four-wide kernel and makes the width a

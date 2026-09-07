@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **The same idea above eight, refused -- and a step in the round curve at
+  seventeen.** Filling in a row pipeline for every count from one to eight
+  was worth eighteen per cent at five members, so the obvious next move is
+  nine to fifteen, which all take the sixteen-wide kernel. **It buys
+  nothing**: three alternated rounds with the marks unchanged, nine 1.208,
+  1.225, 1.213 s against 1.220, 1.214, 1.220; ten 1.269, 1.280, 1.261
+  against 1.251, 1.266, 1.281; twelve and fifteen the same story, fully
+  overlapping. A probe says why -- above eight the products that matter go
+  through the matrix kernel rather than the row one, so the row width stops
+  being what the count pays for. Reverted.
+
+  **What the probe found instead is a step at seventeen.** Milliseconds a
+  token over three rounds: with a 1419-token prompt, 2.89 at fifteen
+  members, 2.86 at sixteen, **2.10 at seventeen**, 1.97 at eighteen. With a
+  110-token prompt the same counts read 2.18, 2.01, 1.88 and 1.78, and with
+  a six-token prompt 2.22, 2.04, 1.93 and 1.85 -- **smooth**. So the step is
+  not the products and not the round driver; it is attention over the cache,
+  which is the only thing a long prompt makes big.
+
+  Two candidates are excluded. Not which kernel the products take: a probe
+  printing that decision for every step gives the same split at sixteen and
+  seventeen. Not the submission count: seventeen makes 5266 submissions
+  against sixteen's 4462 and is the faster one.
+
+  And reading the chooser turns up a constraint worth its own line.
+  `Attend_Kernel` opens with `if not Rounding and then Attends_By_Matrix`,
+  so **a round never takes the matrix attention kernel at all**, whatever
+  its size. That is not the step, which happens inside the rounds, but it is
+  a whole kernel the many-sequence case cannot reach, and llama.cpp answers
+  the same case with flash attention and a split-k reduce.
+
 ### Added
 
 - **A row pipeline for every count from one to eight, and the round curve
