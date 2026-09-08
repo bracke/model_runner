@@ -8214,6 +8214,103 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The legacy four-bit format in eight-row panels, and its generated token goes four times to one
+
+The section below put `Q4_0` on the integer path and ended by naming what it
+had not done: the eight-row panel, which `Interleave` already builds for
+three k-quants and which llama.cpp reaches for this format with
+`ggml_repack_q4_0_to_q4_0_8_bl` and `ggml_gemv_q4_0_8x8_q8_0`. That is this
+section. `--repack rows` now takes `Q4_0` matrices too.
+
+**The layout is the smallest of the four and the only one that grows
+nothing.** A panel block is 144 bytes -- the eight rows' eighteen each, not
+one more -- because this format packs nothing that has to be taken out:
+
+```
+   0 ..  15   the eight rows' block scales, half precision
+  16 .. 143   the eight rows' quants, interleaved
+```
+
+The quants are grouped as the k-quant's are, byte 4L + M of a thirty-two
+byte group being row L's element M of four, with the pairing this format's
+own nibble gives: group C holds elements 4C to 4C + 3 in its low nibbles and
+4C + 16 to 4C + 19 in its high ones, four groups to a block against the
+k-quant's thirty-two.
+
+**But the kernel is not the k-quant's kernel with a shorter loop, and one
+number is why: this format's block is thirty-two elements where the
+k-quant's is two hundred and fifty-six.** A k-quant block converts to
+floating point once per two hundred and fifty-six elements and everything
+between is integer. Here that conversion happens eight times as often per
+element, so the kernel is arranged around making it cheap rather than around
+making the dot product cheap. Three things follow.
+
+*The block loop is inside the insertion*, as the single-vector k-quant
+kernel's is, so a strip's eight running sums stay in registers from a row's
+first block to its last instead of being stored and reloaded eight times as
+often as the k-quant stores them.
+
+*The whole block is unpacked before any vector reads it.* Four groups, low
+nibbles and high, masked once into `ymm24` through `ymm31` and held there
+while all eight vectors of the strip walk past. That is what makes a
+vector's turn one pointer, one broadcast and eight dot products -- and it is
+only possible because a block this small fits in eight registers, which the
+k-quant's does not.
+
+*And the format's centring is the accumulator's starting value.* Every quant
+is a nibble meaning itself less eight, so a block's true sum is the byte dot
+product less eight times the activation's own total over that block. Rather
+than subtract that at the end, the accumulator is **loaded** with the
+negative of it before the first product: one broadcast, where the k-quant's
+minimum takes four multiply-accumulates.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`,
+TinyLlama-1.1B-Chat `Q4_0`:**
+
+| | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 0.564, 0.565, 0.559 s | 0.251, 0.260, 0.250 s | **2.23x** |
+| prompt, 1419 | 8.458, 8.109 s | 4.011, 3.988 s | **2.04x** |
+| generating, 17 | 0.957, 0.952, 0.950 s | 0.279, 0.279, 0.278 s | **3.42x** |
+| generating, 64 | 3.900, 3.885 s | 1.177, 1.182 s | **3.30x** |
+| loading | 0.065 s | 0.400 s | |
+
+Every round on the same side, ranges nowhere near touching, and the digests
+unchanged: `61fda0268954d85b` at 110 tokens, `7ec6b755e53e16b4` at 1419, on
+both layouts and in every round. Conformance is 41780 sequences and 0
+outside tolerance, and the layout is held byte for byte by
+`Panelled_Product_Says_What_Rows_Say`, which now runs a fourth format
+through it.
+
+**The generated token is where this pays, and that was not the expectation.**
+The panel layout was built for prompts -- eight vectors against a reading of
+the weights where the row-major kernel gets four -- and on the k-quants that
+is what it does, buying 1.77 on a prompt and losing three per cent
+generating. Here it buys 2.2 on a prompt and **3.3 generating**, because the
+thing it replaced was not a strip kernel at all: with one vector the
+row-major path had no `Q4_0` kernel of its own and took the generic four-row
+tile, which unpacks a block's nibbles into a buffer in Ada before any
+assembly runs. The panel kernel never writes a quant to memory.
+
+**Against llama.cpp** at `95b8e33e1`, same file, eight threads, same sitting:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 tokens | 440.0 t/s | 508.2 t/s | 1.16x |
+| prompt, 1419 tokens | 355.8 t/s | 400.7 t/s | **1.13x** |
+| generating, 64 tokens | 54.4 t/s | 72.9 t/s | **1.34x** |
+
+**The whole of the `Q4_0` gap, in two days**: the prompt from 18.3 times
+behind to 1.13, and the generated token from 4.4 to 1.34. Neither was a new
+instruction. The first was a format missing from a list of four and the
+second was a layout that existed for three other formats.
+
+**What is not built, still.** `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K` are
+on the floating-point path and are named rather than measured. Of those,
+`Q4_1` is the one this section makes cheap to reach: it is this block with a
+minimum beside the scale, and the minimum's term is a second broadcast into
+the same accumulator.
+
 ### The legacy four-bit format was on the floating-point path, and is not now
 
 `Has_Integer_Kernel` named four formats: `Q8_0`, `Q4_K`, `Q5_K`, `Q6_K`. The
@@ -8231,7 +8328,7 @@ same file and eight threads:
 | --- | ---: | ---: | ---: |
 | prompt, 110 tokens | 27.8 t/s | 508.2 t/s | **18.3x** |
 | prompt, 1419 tokens | 24.4 t/s | 400.7 t/s | 16.4x |
-| generating, 64 tokens | 62.0 t/s | 72.9 t/s | 1.18x |
+| generating, 64 tokens | 16.5 t/s | 72.9 t/s | 4.42x |
 
 Eighteen times is the largest gap to llama.cpp this file records -- the
 two-bit format, the next worst, is 7.7 -- and a profile says the whole of it
@@ -8270,7 +8367,18 @@ sequences and 0 outside tolerance.
 | --- | ---: | ---: | ---: |
 | prompt, 110 tokens | 193.3 t/s | 508.2 t/s | 2.63x |
 | prompt, 1419 tokens | 174.7 t/s | 400.7 t/s | **2.29x** |
-| generating, 64 tokens | 65.4 t/s | 72.9 t/s | 1.12x |
+| generating, 64 tokens | 16.5 t/s | 72.9 t/s | 4.20x |
+
+**BOTH GENERATING ROWS READ 62.0 AND 65.4 t/s WHEN THIS WAS FIRST
+PUBLISHED, and they were arrived at by dividing sixty-four by the seconds a
+run took.** That run stops at seventeen: this model reaches its
+end-of-sequence token there, `tests speed` says so on the same line as the
+time, and the file two sections above has a paragraph warning about exactly
+this. The seconds in the alternated table were right and the ratio between
+them was right; the two rates and the two gaps derived from them were the
+same arithmetic done with the wrong numerator. Corrected here to seventeen,
+which puts the generating gap at four times rather than one -- and makes the
+section below, which closes it, the more worth having.
 
 **What the remaining 2.3 is, and it is not a mystery.** `Q8_0` is level with
 llama.cpp because it has `Rows_By_Strips`, an assembly kernel that holds two
@@ -8280,7 +8388,8 @@ one two sections above describes for the four-bit k-quant --
 `ggml_repack_q4_0_to_q4_0_8_bl` and `ggml_gemv_q4_0_8x8_q8_0`, the same
 eight-row panel -- and `Interleave` already builds panels for three formats.
 `Q4_0` would be the simplest of the four: one scale a block and no minimum
-to unpack at all.
+to unpack at all. **It was built the next day and the section above is
+where it is measured.**
 
 **The five formats still on the floating-point path are named rather than
 built**: `Q4_1` and `Q5_1` carry a minimum per block, `Q5_0` and `Q5_1` keep
@@ -8479,6 +8588,15 @@ Q4_K_M, seven workers, `--backend cpu`:
 | prompt, 110 tokens | 0.380, 0.385, 0.377 s | **0.216, 0.212, 0.215** | **1.77** |
 | prompt, 1419 tokens | 5.240, 5.392, 5.400 s | **3.774, 3.782, 3.821** | **1.40** |
 | generating, 10 tokens | 0.172, 0.172, 0.173 s | 0.185, 0.186, 0.186 | 0.93 |
+
+**The long prompt's `--repack rows` cell read 3.517 and 3.549 s when this
+table was confirmed on 2026-09-08**, twice and outside the range above,
+against a stored column that was inside it. Nothing in that day's change
+touches this path beyond one comparison per call, so what moved is most
+likely where the linker put the loop: a kernel was added to the same
+compilation unit. The cell is left as it was taken and the two later
+readings are written down beside it, because a figure that moves without a
+cause named is worth more visible than tidy.
 | loading | 0.065 s | 0.420 s | |
 
 **The digests are what they were** -- `28a6276b280b324e` on the short prompt,
@@ -8550,8 +8668,11 @@ spread of two to three. That is under what a sitting here can tell apart, and
 **What is not built is every other format.** The eight-bit one is already
 level with llama.cpp and has no minimum to correct for; the two-bit and
 three-bit ones are shapes of their own and are what a `Q2_K` file is; the
-non-linear ones read a table. A row count that does not divide by eight is
-left where it lies, which no matrix in any model here is. The embedding
+non-linear ones read a table. **The legacy four-bit format was on that list
+and came off it** -- see `### The legacy four-bit format in eight-row
+panels` above, where it turns out to be the format the layout pays best on,
+for a reason that has nothing to do with prompts. A row count that does not
+divide by eight is left where it lies, which no matrix in any model here is. The embedding
 table, the position table and the segment table are left alone on purpose:
 they are read a row at a time and multiplied by nothing, so interleaving them
 would pay a gather on every token to buy a kernel none of them reaches.

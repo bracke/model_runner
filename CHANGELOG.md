@@ -7,33 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **The legacy four-bit format was on the floating-point path, and is not
-  now -- a Q4_0 prompt goes from 18.3 times behind llama.cpp to 2.3.**
-  `Has_Integer_Kernel` named four formats -- `Q8_0`, `Q4_K`, `Q5_K`, `Q6_K`
-  -- and the engine reads sixteen. Everything else fell to `Accumulate_Dot`
-  and multiplied in binary32, and nothing said so. A profile put **93.6 per
-  cent of a Q4_0 prompt in that one procedure**: not a slow kernel, the
-  wrong one.
+- **The legacy four-bit format in eight-row panels -- its prompt goes to
+  1.13 times llama.cpp and its generated token from 4.4 times behind to
+  1.34.** `--repack rows` now takes `Q4_0` matrices as well as the three
+  k-quants. A panel block is 144 bytes, the eight rows' eighteen each and
+  not one more, because this format packs nothing that has to be taken out.
 
-  `Q4_0` is `Q8_0`'s block in every respect the integer tile cares about --
-  thirty-two elements behind one half-precision scale, no minimum, no
-  sub-blocks -- and differs in a nibble where there is a byte and a centring
-  of eight where there is one of 128. Both are per-format decisions the
-  generic four-row tile already makes, so no kernel was written: the tile
-  learned the nibble, the bias became a constant, and the two branches that
-  are genuinely `Q8_0`-shaped were told to say so.
+  **The kernel is not the k-quant's with a shorter loop.** A `Q4_0` block is
+  thirty-two elements where a k-quant's is two hundred and fifty-six, so the
+  conversion to floating point happens eight times as often per element and
+  the kernel is arranged around making *that* cheap. The block loop is
+  inside the insertion so a strip's eight running sums stay in registers; the
+  whole block is unpacked into `ymm24` through `ymm31` before any vector
+  reads it, so a vector's turn is one pointer, one broadcast and eight dot
+  products; and the format's centring is the accumulator's **starting
+  value**, minus eight times the activation's block total loaded before the
+  first product rather than subtracted after the last.
 
   Alternated three rounds against three, `--backend cpu`: **the 110-token
-  prompt 4.069/3.915/3.964 s to 0.567/0.573/0.569, 6.97 times**; the
-  1419-token prompt 58.181 s to 8.121, 7.16; a generated token
-  1.032/1.044/1.020 to 0.984/0.979/0.975. The digests do not move on either
-  path -- `61fda0268954d85b` and `7ec6b755e53e16b4` -- which the two
-  arithmetics did not have to agree on. Conformance 41780 sequences, 0
-  outside tolerance.
+  prompt 0.564/0.565/0.559 s to 0.251/0.260/0.250, 2.23 times**; the
+  1419-token prompt 8.458/8.109 to 4.011/3.988, 2.04; **seventeen generated
+  tokens 0.957/0.952/0.950 to 0.279/0.279/0.278, 3.42**; sixty-four at a
+  1419-token context 3.900/3.885 to 1.177/1.182, 3.30. Digests unchanged on
+  both layouts and in every round. Conformance 41780 sequences, 0 outside
+  tolerance, and `Panelled_Product_Says_What_Rows_Say` runs a fourth format
+  through the byte-for-byte permutation check.
 
-  What remains is that `Q8_0` has an assembly kernel and `Q4_0` rides the
-  compiler. Five formats are still on the floating-point path -- `Q4_1`,
-  `Q5_0`, `Q5_1`, `Q2_K`, `Q3_K` -- and are named rather than built.
+  **The generated token is where it pays, and that was not the
+  expectation.** The layout was built for prompts and on the k-quants it
+  loses three per cent generating. Here it buys 3.3, because what it
+  replaced was not a strip kernel: with one vector `Q4_0` had no kernel of
+  its own and took the generic four-row tile, which unpacks a block's
+  nibbles into a buffer in Ada before any assembly runs.
 
 - **The host's copy of the cache, owed rather than sent -- and the device's
   prompt goes from a third behind llama.cpp to ahead of it.** `--budget` on a
@@ -257,6 +262,43 @@ Keep a Changelog and the project uses semantic versioning.
   them.
 
 ### Fixed
+
+- **Two published `Q4_0` generating rates were sixty-four divided by the
+  seconds a seventeen-token run took.** The model reaches its
+  end-of-sequence token at seventeen, `tests speed` says so on the same line
+  as the time, and `docs/measured-figures.txt` has a paragraph warning about
+  exactly this trap. The seconds and the ratio between them were right; the
+  rates and the two gaps to llama.cpp derived from them were not. 62.0 and
+  65.4 t/s become 16.5 and 17.4, and the generating gap becomes four times
+  rather than one.
+
+- **The legacy four-bit format was on the floating-point path, and is not
+  now -- a Q4_0 prompt goes from 18.3 times behind llama.cpp to 2.3.**
+  `Has_Integer_Kernel` named four formats -- `Q8_0`, `Q4_K`, `Q5_K`, `Q6_K`
+  -- and the engine reads sixteen. Everything else fell to `Accumulate_Dot`
+  and multiplied in binary32, and nothing said so. A profile put **93.6 per
+  cent of a Q4_0 prompt in that one procedure**: not a slow kernel, the
+  wrong one.
+
+  `Q4_0` is `Q8_0`'s block in every respect the integer tile cares about --
+  thirty-two elements behind one half-precision scale, no minimum, no
+  sub-blocks -- and differs in a nibble where there is a byte and a centring
+  of eight where there is one of 128. Both are per-format decisions the
+  generic four-row tile already makes, so no kernel was written: the tile
+  learned the nibble, the bias became a constant, and the two branches that
+  are genuinely `Q8_0`-shaped were told to say so.
+
+  Alternated three rounds against three, `--backend cpu`: **the 110-token
+  prompt 4.069/3.915/3.964 s to 0.567/0.573/0.569, 6.97 times**; the
+  1419-token prompt 58.181 s to 8.121, 7.16; a generated token
+  1.032/1.044/1.020 to 0.984/0.979/0.975. The digests do not move on either
+  path -- `61fda0268954d85b` and `7ec6b755e53e16b4` -- which the two
+  arithmetics did not have to agree on. Conformance 41780 sequences, 0
+  outside tolerance.
+
+  What remains is that `Q8_0` has an assembly kernel and `Q4_0` rides the
+  compiler. Five formats are still on the floating-point path -- `Q4_1`,
+  `Q5_0`, `Q5_1`, `Q2_K`, `Q3_K` -- and are named rather than built.
 
 - **A plain `alr build` left twenty-six style warnings behind and the
   release gate reads all of `obj`.** The release profile does not run

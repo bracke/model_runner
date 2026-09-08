@@ -378,9 +378,12 @@ package body Tests.Backend_Cases is
       --  an arrangement for each and a kernel for each: the four-bit one
       --  pairs two sub-blocks in a byte, the five-bit one adds a run of
       --  fifth bits to that, and the six-bit one splits every quant between
-      --  two runs.
-      Formats : constant array (1 .. 3) of G.Tensor_Type :=
-        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K];
+      --  two runs. And the legacy four-bit format, whose block is
+      --  thirty-two elements rather than a super-block -- which is the one
+      --  thing about this question that is not the same for all four, and
+      --  the reason nothing below says 256.
+      Formats : constant array (1 .. 4) of G.Tensor_Type :=
+        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0];
 
       Plain   : B.Byte_Array_Access;
       Panels  : B.Byte_Array_Access;
@@ -437,7 +440,13 @@ package body Tests.Backend_Cases is
          Native : constant N.Element_Count :=
            (if G."=" (Shape, G.Type_Q4_K) then 144
             elsif G."=" (Shape, G.Type_Q5_K) then 176
+            elsif G."=" (Shape, G.Type_Q4_0) then 18
             else 210);
+
+         --  Blocks in one row, which is not 256 elements for every format
+         --  the layout accepts.
+         Held : constant N.Element_Count :=
+           Wide / N.Element_Count (G.Block_Elements (Shape));
       begin
          declare
             Bytes : constant B.Byte_Array :=
@@ -445,13 +454,15 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_Q4_K (Values)
                elsif G."=" (Shape, G.Type_Q5_K)
                then Fixtures.Encode_Q5_K (Values)
+               elsif G."=" (Shape, G.Type_Q4_0)
+               then Fixtures.Encode_Q4_0 (Values)
                else Fixtures.Encode_Q6_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
             Plain.all := Bytes;
          end;
 
-         B.Allocate (IL.Panel_Bytes (Shape, Tall, Wide / 256), Panels);
+         B.Allocate (IL.Panel_Bytes (Shape, Tall, Held), Panels);
 
          T.Make (Shape, Tall, Wide, Plain, 0, Direct, Status);
          Assert (E.Is_Ok (Status), "the row-major weight view was refused");
@@ -466,7 +477,7 @@ package body Tests.Backend_Cases is
             Target => Panels.all,
             Into   => 0,
             Rows   => Tall,
-            Blocks => Wide / 256,
+            Blocks => Held,
             Ok     => Built);
          Assert (Built, "the panel layout could not be written");
 
@@ -481,7 +492,7 @@ package body Tests.Backend_Cases is
             use type Interfaces.Unsigned_8;
 
             Row_Span : constant Model_Runner.Bytes.Byte_Count :=
-              Model_Runner.Bytes.Byte_Count (Wide / 256)
+              Model_Runner.Bytes.Byte_Count (Held)
               * Model_Runner.Bytes.Byte_Count (Native);
             Alone : B.Byte_Array (0 .. Row_Span - 1);
             Bad   : Boolean := False;
@@ -493,7 +504,7 @@ package body Tests.Backend_Cases is
                   Source => Panels.all,
                   From   => 0,
                   Row    => Row,
-                  Blocks => Wide / 256,
+                  Blocks => Held,
                   Target => Alone,
                   Ok     => Built);
                Assert (Built, "a row could not be taken out of its panel");

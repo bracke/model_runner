@@ -2,7 +2,7 @@ with Model_Runner.Bytes;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
 
---  The four-bit k-quant's weights, eight rows interleaved.
+--  Quantized weights, eight rows interleaved.
 --
 --  What this is for. A row product reads one row's blocks and reduces the
 --  eight partial sums the byte dot product leaves; every row pays that
@@ -21,10 +21,15 @@ with Model_Runner.Numerics;
 --  which is why it is asked for rather than done -- Model_Runner.Llama's
 --  To_Rows is the request.
 --
---  This is what llama.cpp calls `block_q4_Kx8` and builds at load with
---  `ggml_repack_q4_K_to_q4_K_8_bl`; the layout below is not its layout,
---  because the instruction this engine's kernel uses is not the instruction
---  its kernel uses. What the two share is the idea and the eight.
+--  This is what llama.cpp calls `block_q4_Kx8` and `block_q4_0x8` and builds
+--  at load with `ggml_repack_q4_K_to_q4_K_8_bl` and its legacy counterpart;
+--  the layouts below are not its layouts, because the instruction this
+--  engine's kernel uses is not the instruction its kernel uses. What the two
+--  share is the idea and the eight.
+--
+--  Four formats are written here: the three k-quants a "_M" file is made of
+--  and the legacy four-bit format, whose layout is described last because it
+--  is the k-quant's with everything the k-quant packs taken away.
 --
 --  The four-bit layout. A panel is eight consecutive rows. For each
 --  super-block of the panel, 1184 bytes -- the eight rows' 144 each,
@@ -87,10 +92,11 @@ package Model_Runner.Quantization.Interleave is
    --  every accumulator and sixteen has no register to be.
    Panel_Rows : constant := 8;
 
-   --  Bytes one panel's super-block occupies, in each of the three layouts.
+   --  Bytes one panel's block occupies, in each of the four layouts.
    Panel_Block_Bytes : constant := 1184;
    Five_Block_Bytes  : constant := 1440;
    Six_Block_Bytes   : constant := 1680;
+   Legacy_Block_Bytes : constant := 144;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -116,6 +122,24 @@ package Model_Runner.Quantization.Interleave is
    Six_Factor_At : constant := 16;
    Six_Low_At    : constant := 144;
    Six_High_At   : constant := 1168;
+
+   --  The legacy four-bit layout, which is the smallest of the four and the
+   --  only one whose block is not a super-block: thirty-two elements behind
+   --  one half-precision scale, no minimum and no sub-blocks. A panel block
+   --  is 144 bytes, the eight rows' eighteen each and not one more, because
+   --  there is nothing packed here to take out:
+   --
+   --     0 ..  15   the eight rows' block scales, half precision, in order
+   --    16 .. 143   the eight rows' quants, interleaved
+   --
+   --  The quants are grouped as the k-quant's are -- byte 4L + M of a
+   --  thirty-two byte group is row L's element M of the four -- with the
+   --  pairing this format's own nibble gives: group C holds elements 4C to
+   --  4C + 3 in its low nibbles and 4C + 16 to 4C + 19 in its high ones,
+   --  four groups to a block. So the kernel's inner loop is the k-quant's
+   --  with a quarter of the trips.
+   Legacy_Scale_At  : constant := 0;
+   Legacy_Quants_At : constant := 16;
 
    --  Bytes a panel block occupies in the layout this format takes.
    --
@@ -148,10 +172,11 @@ package Model_Runner.Quantization.Interleave is
 
    --  Whether a matrix in this format and shape can be interleaved.
    --
-   --  The three k-quants a "_M" file is made of. A row count that is not a
-   --  whole number of panels is refused rather than padded, because a padded
-   --  panel is rows that do not exist and a kernel that has to know which
-   --  they are.
+   --  The three k-quants a "_M" file is made of, and the legacy four-bit
+   --  format a "Q4_0" file is entirely. A row count that is not a whole
+   --  number of panels is refused rather than padded, because a padded panel
+   --  is rows that do not exist and a kernel that has to know which they
+   --  are.
    --
    --  @param Format Weight format as the file holds it.
    --  @param Rows Rows the matrix holds.

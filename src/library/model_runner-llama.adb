@@ -2366,6 +2366,16 @@ package body Model_Runner.Llama is
                return Room (1 .. Count);
             end To_Panel;
 
+            --  Blocks in one row, which is not the same number for every
+            --  format the panel layout accepts: a super-block for the three
+            --  k-quants and thirty-two elements for the legacy four-bit one.
+            --  It was written 256 at all three of the places below, which
+            --  was right for as long as three formats were all there were.
+            function Blocks_Of (Where : View_Access) return Element_Count
+            is (Where.all.Columns
+                / Element_Count
+                    (Model_Runner.GGUF.Block_Elements (Where.all.Format)));
+
             Held : constant View_List := To_Panel;
          begin
             --  A model with nothing to interleave keeps every view it has
@@ -2377,7 +2387,7 @@ package body Model_Runner.Llama is
                   Needed := Needed
                     + Model_Runner.Quantization.Interleave.Panel_Bytes
                         (Where.all.Format, Where.all.Rows,
-                         Where.all.Columns / 256);
+                         Blocks_Of (Where));
                end loop;
 
                Mem.Check_Allocation
@@ -2451,7 +2461,7 @@ package body Model_Runner.Llama is
                         Target => Item.Repacked.all,
                         Into   => Bases (Which),
                         Rows   => Where.all.Rows,
-                        Blocks => Where.all.Columns / 256,
+                        Blocks => Blocks_Of (Where),
                         Ok     => Taken);
 
                      if not Taken then
@@ -2487,7 +2497,7 @@ package body Model_Runner.Llama is
                           + Model_Runner.Quantization.Interleave.Panel_Bytes
                               (Held (Index).all.Format,
                                Held (Index).all.Rows,
-                               Held (Index).all.Columns / 256);
+                               Blocks_Of (Held (Index)));
                      end loop;
                   end;
 

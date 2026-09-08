@@ -243,6 +243,22 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Taken     : out Boolean);
 
    --  A panel of eight rows against a strip of eight vectors, for the
+   --  legacy four-bit format laid out a panel at a time.
+   procedure Rows_By_Panels_Q40
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean);
+
+   --  A panel of eight rows against a strip of eight vectors, for the
    --  four-bit k-quant laid out a panel at a time.
    procedure Rows_By_Panels_Q4K
      (Data      : Model_Runner.Bytes.Byte_Array;
@@ -5328,6 +5344,515 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Taken := True;
    end Rows_By_Panels_Q4K;
 
+   ----------------------------
+   -- Rows_By_Panels_Q40 --
+   ----------------------------
+
+   --  What Rows_By_Panels_Q4K does for the four-bit k-quant, done for the
+   --  legacy four-bit format -- and the two are less alike than the layouts
+   --  are, because this format's block is thirty-two elements and the
+   --  k-quant's is two hundred and fifty-six.
+   --
+   --  That one number decides the shape of this kernel. A k-quant block
+   --  carries eight sub-block scales and one block scale, so the conversion
+   --  to floating point happens once for every two hundred and fifty-six
+   --  elements and everything between is integer. Here there is one scale
+   --  for every thirty-two, so the conversion happens eight times as often
+   --  per element and the kernel is arranged around making it cheap rather
+   --  than around making the dot product cheap.
+   --
+   --  Three things come out of that.
+   --
+   --  The block loop is inside the insertion, as the single-vector kernel's
+   --  is, because a strip's eight running sums have to stay in registers
+   --  from a row's first block to its last: written the other way they
+   --  would be stored and reloaded eight times as often as the k-quant
+   --  stores and reloads its own.
+   --
+   --  The whole block is unpacked into eight registers before any vector
+   --  reads it. A block is four groups of four elements, low nibbles and
+   --  high, and the eight vectors of a strip all want the same eight
+   --  vectors of quants -- so they are masked once and held in ymm24
+   --  through ymm31 while the strip walks past them. That is what makes a
+   --  vector's turn one pointer, one broadcast and eight dot products.
+   --
+   --  And the format's centring is the accumulator's starting value. Every
+   --  quant here is a nibble that means itself minus eight, so a block's
+   --  true sum is the byte dot product less eight times the activation's
+   --  own total over that block -- and rather than subtract that at the
+   --  end, the accumulator is loaded with the negative of it before the
+   --  first product. One broadcast where the k-quant's minimum takes four
+   --  multiply-accumulates, because this format has a minimum of one shape
+   --  and the k-quant's is eight of another.
+   --
+   --  This is what llama.cpp reaches with `ggml_gemv_q4_0_8x8_q8_0` over
+   --  its own `block_q4_0x8`. The eight is the same eight.
+   procedure Rows_By_Panels_Q40
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      package IL renames Model_Runner.Quantization.Interleave;
+
+      Panel : constant Element_Count := IL.Panel_Rows;
+      Strip : constant := 8;
+
+      Span  : constant B.Byte_Count := IL.Legacy_Block_Bytes;
+
+      --  Blocks one call of the insertion covers. A row is walked in chunks
+      --  of this many rather than in one pass, because the table below is
+      --  sixty-four bytes a block and a row of thirty-two thousand elements
+      --  is a thousand of them: chunking keeps the table inside the first
+      --  level cache and costs one extra load and store of the eight
+      --  running sums for every chunk.
+      Chunk_Room : constant := 128;
+
+      --  What the insertion reads for each block, in the order it reads it:
+      --  the eight vectors' activation scales, then the eight starting
+      --  values of their accumulators, which is minus eight times each
+      --  vector's activation total over the block. Sixteen words a block so
+      --  that both halves land on a thirty-two byte boundary.
+      type Band_Table is
+        array (0 .. Chunk_Room * 16 - 1) of N.Real with Alignment => 32;
+      type Mark_Table is
+        array (0 .. Chunk_Room * 16 - 1) of Interfaces.Integer_32;
+
+      --  The strip's eight running sums, eight rows apiece: what the
+      --  insertion loads at entry and stores at exit.
+      type Work_Table is
+        array (0 .. Strip * 8 - 1) of N.Real with Alignment => 32;
+
+      --  Where each vector of the strip reads. One pointer is live in the
+      --  insertion at a time -- the quants are in registers, so a vector's
+      --  turn needs only its own activations -- and this is where it comes
+      --  from.
+      type Feed_Table is array (0 .. Strip - 1) of System.Address;
+
+      type Vector_Places is array (0 .. Strip - 1) of Element_Count;
+
+      Bands : Band_Table;
+      Marks : Mark_Table with Import, Address => Bands'Address;
+      Work  : Work_Table;
+      Feeds : Feed_Table;
+
+      At_Vector : Element_Count := 0;
+
+      --  The vector a lane of the strip reads: its own where the batch
+      --  reaches that far, and the last real one where it does not.
+      function Held (Vector : Element_Count) return Element_Count
+      is (Element_Count'Min (At_Vector + Vector, Count - 1));
+
+      Places : Vector_Places;
+
+      Base   : B.Byte_Index;
+      At_Row : Element_Count;
+
+      --  Where a vector's activations for one block begin.
+      function Reading
+        (Vector : Element_Count; Block : Element_Count) return Element_Count
+      is (Values'First + First + Held (Vector) * Stride + Block * 32);
+
+      --  One pass of the strip over the panel that is standing, adding
+      --  lanes From through Last into the sums.
+      --
+      --  A batch that is not a whole number of strips takes its last strip
+      --  from the end rather than the ragged edge, as the k-quant's kernel
+      --  does: the lanes the two strips have in common are added once, by
+      --  the first of them.
+      procedure Run_Wide (From : Element_Count; Last : Element_Count) is
+         At_Block : Element_Count := 0;
+      begin
+         for Vector in Element_Count range 0 .. Strip - 1 loop
+            Places (Natural (Vector)) :=
+              (First + Held (Vector) * Stride) / Activation_Block;
+         end loop;
+
+         Work := [others => 0.0];
+
+         while At_Block < Blocks loop
+            declare
+               Chunk : constant Element_Count :=
+                 Element_Count'Min (Chunk_Room, Blocks - At_Block);
+               Head  : constant B.Byte_Index :=
+                 Base + B.Byte_Count (At_Block) * Span;
+            begin
+               for Vector in Element_Count range 0 .. Strip - 1 loop
+                  Feeds (Natural (Vector)) :=
+                    Values (Reading (Vector, At_Block))'Address;
+               end loop;
+
+               for Block in Element_Count range 0 .. Chunk - 1 loop
+                  for Vector in Element_Count range 0 .. Strip - 1 loop
+                     declare
+                        use type Interfaces.Integer_32;
+
+                        At_It : constant Element_Count :=
+                          Places (Natural (Vector)) + At_Block + Block;
+                     begin
+                        Bands
+                          (Natural (Block * 16 + Vector)) :=
+                            Scales (Scales'First + At_It);
+                        Marks
+                          (Natural (Block * 16 + 8 + Vector)) :=
+                            Interfaces.Integer_32 (-8)
+                            * Totals (Totals'First + At_It);
+                     end;
+                  end loop;
+               end loop;
+
+               System.Machine_Code.Asm
+                 (
+                  "vmovups 0(%0), %%ymm16" & LF &
+                  "vmovups 32(%0), %%ymm17" & LF &
+                  "vmovups 64(%0), %%ymm18" & LF &
+                  "vmovups 96(%0), %%ymm19" & LF &
+                  "vmovups 128(%0), %%ymm20" & LF &
+                  "vmovups 160(%0), %%ymm21" & LF &
+                  "vmovups 192(%0), %%ymm22" & LF &
+                  "vmovups 224(%0), %%ymm23" & LF &
+                  "vpcmpeqd %%ymm3, %%ymm3, %%ymm3" & LF &
+                  "vpsrlw $12, %%ymm3, %%ymm3" & LF &
+                  "vpsllw $8, %%ymm3, %%ymm2" & LF &
+                  "vpor %%ymm2, %%ymm3, %%ymm3" & LF &
+                  "movq %1, %%r11" & LF &
+                  "movq %2, %%r9" & LF &
+                  "xorq %%rdx, %%rdx" & LF &
+                  "movq %4, %%rcx" & LF &
+                  "1:" & LF &
+                  "vcvtph2ps 0(%%r11), %%ymm4" & LF &
+                  "vmovdqu 16(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vmovdqu 48(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm26" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vmovdqu 80(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm28" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm29" & LF &
+                  "vmovdqu 112(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm30" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm31" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpbroadcastd 32(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 0(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm16" & LF &
+                  "movq 8(%3), %%r10" & LF &
+                  "vpbroadcastd 36(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 4(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm17" & LF &
+                  "movq 16(%3), %%r10" & LF &
+                  "vpbroadcastd 40(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 8(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm18" & LF &
+                  "movq 24(%3), %%r10" & LF &
+                  "vpbroadcastd 44(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 12(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm19" & LF &
+                  "movq 32(%3), %%r10" & LF &
+                  "vpbroadcastd 48(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 16(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm20" & LF &
+                  "movq 40(%3), %%r10" & LF &
+                  "vpbroadcastd 52(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 20(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm21" & LF &
+                  "movq 48(%3), %%r10" & LF &
+                  "vpbroadcastd 56(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 24(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm22" & LF &
+                  "movq 56(%3), %%r10" & LF &
+                  "vpbroadcastd 60(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 28(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm23" & LF &
+                  "addq $144, %%r11" & LF &
+                  "addq $64, %%r9" & LF &
+                  "addq $32, %%rdx" & LF &
+                  "decq %%rcx" & LF &
+                  "jne 1b" & LF &
+                  "vmovups %%ymm16, 0(%0)" & LF &
+                  "vmovups %%ymm17, 32(%0)" & LF &
+                  "vmovups %%ymm18, 64(%0)" & LF &
+                  "vmovups %%ymm19, 96(%0)" & LF &
+                  "vmovups %%ymm20, 128(%0)" & LF &
+                  "vmovups %%ymm21, 160(%0)" & LF &
+                  "vmovups %%ymm22, 192(%0)" & LF &
+                  "vmovups %%ymm23, 224(%0)",
+                  Inputs   =>
+                    [System.Address'Asm_Input ("r", Work'Address),
+                     System.Address'Asm_Input ("r", Data (Head)'Address),
+                     System.Address'Asm_Input ("r", Bands'Address),
+                     System.Address'Asm_Input ("r", Feeds'Address),
+                     Element_Count'Asm_Input ("r", Chunk)],
+                  Clobber  =>
+                    "rcx,rdx,r9,r10,r11,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
+                    & "ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
+                    & "ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,"
+                    & "memory",
+                  Volatile => True);
+
+               At_Block := At_Block + Chunk;
+            end;
+         end loop;
+
+         for Vector in From .. Last loop
+            declare
+               At_It : constant Element_Count :=
+                 At_Row * Count + At_Vector + Vector;
+            begin
+               for Row in Element_Count range 0 .. Panel - 1 loop
+                  Sums (Sums'First + At_It + Row * Count) :=
+                    Sums (Sums'First + At_It + Row * Count)
+                    + N.Wide_Real
+                        (Work (Natural (Vector * Panel + Row)));
+               end loop;
+            end;
+         end loop;
+      end Run_Wide;
+
+      --  The same panel against one vector, which is what a generated token
+      --  multiplies. The strip above would read the weights once and do
+      --  eight times the arithmetic; this reads them once and does one.
+      procedure Run_One is
+         At_Block : Element_Count := 0;
+      begin
+         Places (0) := First / Activation_Block;
+         Work := [others => 0.0];
+
+         while At_Block < Blocks loop
+            declare
+               Chunk : constant Element_Count :=
+                 Element_Count'Min (Chunk_Room, Blocks - At_Block);
+               Head  : constant B.Byte_Index :=
+                 Base + B.Byte_Count (At_Block) * Span;
+            begin
+               Feeds (0) := Values (Reading (0, At_Block))'Address;
+
+               for Block in Element_Count range 0 .. Chunk - 1 loop
+                  declare
+                     use type Interfaces.Integer_32;
+
+                     At_It : constant Element_Count :=
+                       Places (0) + At_Block + Block;
+                  begin
+                     Bands (Natural (Block * 16)) :=
+                       Scales (Scales'First + At_It);
+                     Marks (Natural (Block * 16 + 8)) :=
+                       Interfaces.Integer_32 (-8)
+                       * Totals (Totals'First + At_It);
+                  end;
+               end loop;
+
+               System.Machine_Code.Asm
+                 (
+                  "vmovups 0(%0), %%ymm16" & LF &
+                  "vpcmpeqd %%ymm3, %%ymm3, %%ymm3" & LF &
+                  "vpsrlw $12, %%ymm3, %%ymm3" & LF &
+                  "vpsllw $8, %%ymm3, %%ymm2" & LF &
+                  "vpor %%ymm2, %%ymm3, %%ymm3" & LF &
+                  "movq %1, %%r11" & LF &
+                  "movq %2, %%r9" & LF &
+                  "xorq %%rdx, %%rdx" & LF &
+                  "movq %4, %%rcx" & LF &
+                  "1:" & LF &
+                  "vcvtph2ps 0(%%r11), %%ymm4" & LF &
+                  "vmovdqu 16(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vmovdqu 48(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm26" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vmovdqu 80(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm28" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm29" & LF &
+                  "vmovdqu 112(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm30" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm31" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpbroadcastd 32(%%r9), %%ymm6" & LF &
+                  "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm28, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm29, %%ymm6" & LF &
+                  "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm30, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm31, %%ymm6" & LF &
+                  "vmulps 0(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
+                  "vcvtdq2ps %%ymm6, %%ymm6" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm6, %%ymm16" & LF &
+                  "addq $144, %%r11" & LF &
+                  "addq $64, %%r9" & LF &
+                  "addq $32, %%rdx" & LF &
+                  "decq %%rcx" & LF &
+                  "jne 1b" & LF &
+                  "vmovups %%ymm16, 0(%0)",
+                  Inputs   =>
+                    [System.Address'Asm_Input ("r", Work'Address),
+                     System.Address'Asm_Input ("r", Data (Head)'Address),
+                     System.Address'Asm_Input ("r", Bands'Address),
+                     System.Address'Asm_Input ("r", Feeds'Address),
+                     Element_Count'Asm_Input ("r", Chunk)],
+                  Clobber  =>
+                    "rcx,rdx,r9,r10,r11,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
+                    & "ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
+                    & "ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,"
+                    & "memory",
+                  Volatile => True);
+
+               At_Block := At_Block + Chunk;
+            end;
+         end loop;
+
+         declare
+            At_It : constant Element_Count := At_Row * Count + At_Vector;
+         begin
+            for Row in Element_Count range 0 .. Panel - 1 loop
+               Sums (Sums'First + At_It + Row * Count) :=
+                 Sums (Sums'First + At_It + Row * Count)
+                 + N.Wide_Real (Work (Natural (Row)));
+            end loop;
+         end;
+      end Run_One;
+   begin
+      Taken := False;
+
+      if Rows = 0
+        or else Rows mod Panel /= 0
+        or else Blocks = 0
+        or else Count = 0
+        or else Sums'Length < Rows * Count
+        or else not B.Has_Room
+                      (Data, Offset,
+                       IL.Panel_Bytes (G.Type_Q4_0, Rows, Blocks))
+      then
+         return;
+      end if;
+
+      for At_Panel in Element_Count range 0 .. Rows / Panel - 1 loop
+         Base :=
+           Data'First + Offset
+           + B.Byte_Count (At_Panel) * B.Byte_Count (Blocks) * Span;
+         At_Row := At_Panel * Panel;
+
+         if Count = 1 then
+            At_Vector := 0;
+            Run_One;
+         else
+            for Which in Element_Count range 0 .. (Count / Strip) - 1 loop
+               At_Vector := Which * Strip;
+               Run_Wide (0, Strip - 1);
+            end loop;
+
+            if Count mod Strip /= 0 then
+               if Count < Strip then
+                  At_Vector := 0;
+                  Run_Wide (0, Count - 1);
+               else
+                  At_Vector := Count - Strip;
+                  Run_Wide (Strip - Count mod Strip, Strip - 1);
+               end if;
+            end if;
+         end if;
+      end loop;
+
+      Taken := True;
+   end Rows_By_Panels_Q40;
+
    --------------------------
    -- Rows_By_Strips_Q4K --
    --------------------------
@@ -7801,10 +8326,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  through Interleave.Extract_Row, so it is slow and it is right.
       if Interleaved then
          if not Deep
-           or else Per /= 256
+           or else (if Format = G.Type_Q4_0 then Per /= 32 else Per /= 256)
            or else (Format /= G.Type_Q4_K
                     and then Format /= G.Type_Q5_K
-                    and then Format /= G.Type_Q6_K)
+                    and then Format /= G.Type_Q6_K
+                    and then Format /= G.Type_Q4_0)
          then
             return;
          end if;
@@ -7815,9 +8341,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
             --  Eight sub-blocks to a block, and a scale and a total for
             --  each of them; the six-bit format keeps a scale for every
-            --  sixteen elements instead, so its own table is twice as long.
+            --  sixteen elements instead, so its own table is twice as long,
+            --  and the legacy four-bit format's block IS an activation
+            --  block, so its own is an eighth.
             Blocks_Reach : constant Element_Count :=
-              (First + (Count - 1) * Stride) / Activation_Block + Blocks * 8;
+              (First + (Count - 1) * Stride) / Activation_Block
+              + Blocks * (if Format = G.Type_Q4_0 then 1 else 8);
             Halves_Reach : constant Element_Count :=
               (First + (Count - 1) * Stride) / Activation_Half + Blocks * 16;
 
@@ -7833,7 +8362,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                return;
             end if;
 
-            if Format = G.Type_Q4_K or else Format = G.Type_Q5_K then
+            if Format = G.Type_Q4_0 then
+               if Totals'Length < Blocks_Reach then
+                  return;
+               end if;
+
+               Rows_By_Panels_Q40
+                 (Data, Offset, Rows, Blocks, Values, Scales, Totals,
+                  First, Stride, Count, Sums, Done);
+            elsif Format = G.Type_Q4_K or else Format = G.Type_Q5_K then
                if Totals'Length < Blocks_Reach then
                   return;
                end if;

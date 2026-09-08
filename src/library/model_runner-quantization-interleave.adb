@@ -27,6 +27,12 @@ package body Model_Runner.Quantization.Interleave is
    Five_High      : constant := 16;
    Five_Quants    : constant := 48;
 
+   --  And the legacy four-bit block, which is a scale and sixteen bytes of
+   --  nibbles. Element J is the low nibble of byte J and element J + 16 the
+   --  high one, which is the pairing the panel keeps.
+   Legacy_Row_Bytes : constant := 18;
+   Legacy_Quants    : constant := 2;
+
    Six_Row_Bytes : constant := 210;
    Six_Low       : constant := 0;
    Six_High      : constant := 128;
@@ -129,6 +135,7 @@ package body Model_Runner.Quantization.Interleave is
    is (if Format = G.Type_Q4_K then Panel_Block_Bytes
        elsif Format = G.Type_Q5_K then Five_Block_Bytes
        elsif Format = G.Type_Q6_K then Six_Block_Bytes
+       elsif Format = G.Type_Q4_0 then Legacy_Block_Bytes
        else 0);
 
    -----------------------
@@ -159,6 +166,7 @@ package body Model_Runner.Quantization.Interleave is
    is (if Format = G.Type_Q4_K then Row_Block_Bytes
        elsif Format = G.Type_Q5_K then Five_Row_Bytes
        elsif Format = G.Type_Q6_K then Six_Row_Bytes
+       elsif Format = G.Type_Q4_0 then Legacy_Row_Bytes
        else 0);
 
    ------------------
@@ -169,13 +177,20 @@ package body Model_Runner.Quantization.Interleave is
      (Format  : Model_Runner.GGUF.Tensor_Type;
       Rows    : Element_Count;
       Columns : Element_Count) return Boolean
-   is ((Format = G.Type_Q4_K
-        or else Format = G.Type_Q5_K
-        or else Format = G.Type_Q6_K)
-       and then Rows > 0
-       and then Rows mod Panel_Rows = 0
-       and then Columns > 0
-       and then Columns mod 256 = 0);
+   is (((Format = G.Type_Q4_K
+         or else Format = G.Type_Q5_K
+         or else Format = G.Type_Q6_K
+         or else Format = G.Type_Q4_0)
+        and then Rows > 0
+        and then Rows mod Panel_Rows = 0
+        and then Columns > 0)
+       and then
+
+       --  A whole number of the format's own blocks, which is a super-block
+       --  for the three k-quants and thirty-two elements for the legacy one.
+       (if Format = G.Type_Q4_0
+        then Columns mod 32 = 0
+        else Columns mod 256 = 0));
 
    --  One row's four-bit or five-bit super-block, written into its panel.
    --
@@ -254,6 +269,39 @@ package body Model_Runner.Quantization.Interleave is
          end loop;
       end if;
    end Build_Four;
+
+   --  And one row's legacy four-bit block, which is the shortest of the
+   --  four permutations because this format packs nothing.
+   --
+   --  Its scale goes where the k-quant's goes and its sixteen bytes of
+   --  nibbles go four at a time into four groups, exactly as the k-quant's
+   --  hundred and twenty-eight go into thirty-two. The pairing comes with
+   --  them: this format's byte holds element J and element J + 16 where the
+   --  k-quant's holds E and E + 32, so a group masked low is four elements
+   --  of the block's first half and the same group shifted is four of its
+   --  second.
+   procedure Build_Legacy
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At + Legacy_Scale_At + Lane * 2)     := Source (In_At);
+      Target (Out_At + Legacy_Scale_At + Lane * 2 + 1) := Source (In_At + 1);
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Legacy_Quants_At + Group * 32 + Lane * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Legacy_Quants + Group * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Build_Legacy;
 
    --  And one row's six-bit super-block.
    --
@@ -398,6 +446,10 @@ package body Model_Runner.Quantization.Interleave is
                            Build_Six
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
+                        elsif Format = G.Type_Q4_0 then
+                           Build_Legacy
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
                         else
                            Build_Four
                              (Source, In_At, Target, Out_At,
@@ -472,6 +524,30 @@ package body Model_Runner.Quantization.Interleave is
          end loop;
       end if;
    end Take_Four;
+
+   --  And one row of a legacy four-bit panel.
+   procedure Take_Legacy
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At)     := Source (In_At + Legacy_Scale_At + Lane * 2);
+      Target (Out_At + 1) := Source (In_At + Legacy_Scale_At + Lane * 2 + 1);
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Legacy_Quants + Group * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Legacy_Quants_At + Group * 32 + Lane * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Take_Legacy;
 
    --  And one row of a six-bit one.
    procedure Take_Six
@@ -577,6 +653,8 @@ package body Model_Runner.Quantization.Interleave is
          begin
             if Format = G.Type_Q6_K then
                Take_Six (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_Q4_0 then
+               Take_Legacy (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);
