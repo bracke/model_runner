@@ -27,11 +27,11 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Seven formats are written here: the three k-quants a "_M" file is made
---  of and the four legacy ones, whose layouts are described last because
---  they are the k-quant's with everything the k-quant packs taken away --
---  and, for the two that carry a fifth bit, with one thing added that no
---  k-quant has.
+--  Nine formats are written here: the three k-quants a "_M" file is made
+--  of, the four legacy ones, and the two- and three-bit k-quants. The
+--  legacy layouts are described before the last two because they are the
+--  four-bit k-quant's with everything it packs taken away -- and, for the
+--  two that carry a fifth bit, with one thing added that no k-quant has.
 --
 --  The four-bit layout. A panel is eight consecutive rows. For each
 --  super-block of the panel, 1184 bytes -- the eight rows' 144 each,
@@ -102,6 +102,8 @@ package Model_Runner.Quantization.Interleave is
    Least_Block_Bytes  : constant := 160;
    Fifth_Block_Bytes  : constant := 176;
    Fifth_Least_Block_Bytes : constant := 192;
+   Two_Block_Bytes   : constant := 800;
+   Three_Block_Bytes : constant := 912;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -202,6 +204,63 @@ package Model_Runner.Quantization.Interleave is
    Fifth_Least_Quants_At  : constant := 32;
    Fifth_Least_Fifths_At  : constant := 160;
 
+   --  The two-bit k-quant, which is what a "Q2_K" file is made of. A
+   --  super-block of 256 keeps sixteen sub-blocks of sixteen, and every one
+   --  of them carries both a scale and a minimum in four bits -- so this
+   --  format has twice the sub-blocks of the four-bit k-quant and half the
+   --  bits in a quant, and the panel is arranged for the first of those
+   --  rather than the second.
+   --
+   --  800 bytes, which is the first layout here that grows: the eight rows'
+   --  84 each is 672, and the difference is the sixteen scales and sixteen
+   --  minima taken out of their nibbles and written a byte apiece.
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 ..  31   the eight rows' block minima, likewise
+   --    32 .. 159   the sixteen sub-block scales, a byte each, sub-block
+   --                major
+   --   160 .. 287   the sixteen sub-block minima, the same way
+   --   288 .. 799   the quants, interleaved
+   --
+   --  A quant is two bits, so a byte holds four of them and one thirty-two
+   --  byte group covers SIXTEEN elements a row rather than eight. Byte
+   --  4L + M of group G holds row L's elements 16G + M, 16G + 4 + M,
+   --  16G + 8 + M and 16G + 12 + M, at bits 0-1, 2-3, 4-5 and 6-7 --
+   --  so one load and four shifts give the group's four runs of four
+   --  consecutive elements, which is what the byte dot product wants. And a
+   --  group is exactly a sub-block, which is why the scales above are
+   --  sub-block major: the kernel widens eight rows' scale for one group
+   --  out of eight consecutive bytes.
+   Two_Scale_At   : constant := 0;
+   Two_Least_At   : constant := 16;
+   Two_Factor_At  : constant := 32;
+   Two_Minimum_At : constant := 160;
+   Two_Quants_At  : constant := 288;
+
+   --  And the three-bit k-quant. Sixteen sub-blocks again, a six-bit signed
+   --  scale each and no minimum, with the quant's third bit in a run of its
+   --  own exactly as the five-bit legacy formats keep their fifth.
+   --
+   --  912 bytes against the eight rows' 110, which is 880: the difference
+   --  is the sixteen packed six-bit scales written a byte apiece.
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 .. 143   the sixteen sub-block scales, a signed byte each,
+   --                sub-block major
+   --   144 .. 655   the low two bits, interleaved, as the two-bit format
+   --                interleaves its whole quant
+   --   656 .. 911   the high bits, interleaved
+   --
+   --  The high bits are packed two groups to a run, because a group needs
+   --  only four of them a byte: byte 4L + M of run R holds row L's high bit
+   --  for element 32R + 4S + M at bit S and for element 32R + 16 + 4S + M
+   --  at bit 4 + S, S running nought to three. So one load of a run serves
+   --  two groups at four shifts each, and the shift is an immediate.
+   Three_Scale_At  : constant := 0;
+   Three_Factor_At : constant := 16;
+   Three_Low_At    : constant := 144;
+   Three_High_At   : constant := 656;
+
    --  Bytes a panel block occupies in the layout this format takes.
    --
    --  @param Format Weight format; one Interleaves accepts.
@@ -233,8 +292,9 @@ package Model_Runner.Quantization.Interleave is
 
    --  Whether a matrix in this format and shape can be interleaved.
    --
-   --  The three k-quants a "_M" file is made of, and the four legacy
-   --  formats a "Q4_0", "Q4_1", "Q5_0" or "Q5_1" file is entirely. A row count that is not a whole
+   --  Every format the panel kernels read: the three k-quants a "_M" file
+   --  is made of, the four legacy ones, and the two- and three-bit
+   --  k-quants. A row count that is not a whole
    --  number of panels is refused rather than padded, because a padded panel
    --  is rows that do not exist and a kernel that has to know which they
    --  are.

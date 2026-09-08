@@ -57,7 +57,9 @@ package body Model_Runner.Quantization.Integers is
        or else (Interleaved
                 and then (Format = G.Type_Q4_1
                           or else Format = G.Type_Q5_0
-                          or else Format = G.Type_Q5_1)));
+                          or else Format = G.Type_Q5_1
+                          or else Format = G.Type_Q2_K
+                          or else Format = G.Type_Q3_K)));
 
    --------------------
    -- Packs_Vectors --
@@ -81,7 +83,9 @@ package body Model_Runner.Quantization.Integers is
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
    is (Format = G.Type_Q4_K
        or else Format = G.Type_Q5_K
-       or else Format = G.Type_Q6_K);
+       or else Format = G.Type_Q6_K
+       or else Format = G.Type_Q2_K
+       or else Format = G.Type_Q3_K);
 
    ----------------------
    -- Quantize_Vectors --

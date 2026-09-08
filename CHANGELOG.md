@@ -7,6 +7,62 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The last two formats on the floating-point path, in eight-row panels --
+  `--repack rows` now covers every format the engine multiplies.** `Q2_K`
+  and `Q3_K` were what was left; both are in panels, which makes nine.
+
+  **They are not the legacy formats with a smaller quant.** A super-block
+  has **sixteen** sub-blocks rather than eight -- both scale sixteen
+  elements together -- so the panels take sixteen scales, and for `Q2_K`
+  sixteen minima, out of their nibbles at load time and write them a byte
+  apiece. That makes these the first two layouts here that **grow**: 800
+  bytes against the eight rows' 672, and 912 against 880. Every other panel
+  is exactly the size of the rows it holds.
+
+  **And a quant of two bits puts four elements in a byte**, so one
+  thirty-two byte group carries sixteen elements a row and the kernel takes
+  four weight vectors out of one load at shifts of nought, two, four and
+  six. A group is then exactly a sub-block, so its four dot products are
+  summed and multiplied by that sub-block's scale as a whole number, and one
+  conversion to floating point serves all sixteen.
+
+  `Q3_K`'s third bit is kept as the five-bit legacy formats keep their
+  fifth, a run packed so the shift is an immediate, two groups to a byte.
+  `Q2_K`'s minima and `Q3_K`'s signed scales are each a dot product of
+  sixteen pairs -- eight `vpdpwssd`, the instruction the four-bit k-quant
+  uses for its eight.
+
+  Alternated three rounds against three, `--backend cpu`. **`Q2_K`: the
+  110-token prompt 4.113/4.245/4.129 s to 0.251/0.261/0.254, 16.3 times**;
+  the 1419-token prompt 57.699 to 3.940, 14.6; sixty-four generated tokens
+  6.268/6.205/6.199 to 0.963/0.931/0.967, 6.53. **`Q3_K`: 2.661/2.627/2.608
+  to 0.228/0.241/0.229, 11.3 times**; 36.841 to 3.729, 9.9; generating
+  4.196/4.208/4.173 to 1.002/1.039/1.040, 4.10.
+
+  **Against llama.cpp, and the `Q2_K` row is the one that counts**: 438.2
+  t/s against 223.4 at 110 tokens, and llama.cpp *does* repack this format
+  -- `block_q2_Kx8` is in `repack.cpp`'s list -- so 1.96 times is one
+  eight-row kernel against another with no asterisk. `Q3_K` reads 482.5
+  against 265.5 and is not on that list, so it carries the same caveat
+  `Q4_1`, `Q5_0` and `Q5_1` do.
+
+  **What the panel path costs these two is a coarser activation**: both now
+  quantize a super-block at a time, as the other three k-quants already did,
+  because the kernel scales a whole super-block by one number. Measured,
+  that is worth nothing -- the largest difference between the panel product
+  and the floating-point one runs 0.078 to 0.104 across all nine formats,
+  and adding these two moved the maximum from 0.1039 to 0.1043.
+
+### Changed
+
+- **`Panel_Legacy_Kernels_Are_Exact` became
+  `Panel_Quantized_Kernels_Are_Exact`** and covers six kernels rather than
+  four, on activations constant across a whole super-block -- which
+  quantize without loss whichever way the caller groups them, so it holds
+  the two k-quants as tightly as the four legacy formats. The six agree to
+  6E-6, and it was checked by breaking it: `Q3_K`'s third bit at the wrong
+  shift fails by 66.1 and `Q2_K`'s minimum doubled by 1033.
+
 - **The two formats that keep a fifth bit, in eight-row panels -- and the
   shift that made them slow is decided at load time now.** `Q5_0` and
   `Q5_1` have been the two slowest rows of the kernel table for as long as
@@ -42,8 +98,6 @@ Keep a Changelog and the project uses semantic versioning.
   `Q5_1`, where their stored readings run from 0.56 to 4.2 seconds. And the
   kernel table did **not** move -- `Row_Dot` is the row product and still
   has the shift it always had; nothing reaches it for a matrix in panels.
-
-### Changed
 
 - **`Panel_Minimum_Term_Is_Exact` became
   `Panel_Legacy_Kernels_Are_Exact`** and now covers all four legacy panel

@@ -49,6 +49,24 @@ package body Model_Runner.Quantization.Interleave is
    Fifth_Least_High      : constant := 4;
    Fifth_Least_Quants    : constant := 8;
 
+   --  The two-bit k-quant's block as the file holds it: sixteen bytes of
+   --  paired four-bit scale and minimum, sixty-four of quants, then the two
+   --  half-precision numbers those nibbles are multiplied by.
+   Two_Row_Bytes : constant := 84;
+   Two_Scales    : constant := 0;
+   Two_Quants    : constant := 16;
+   Two_D         : constant := 80;
+   Two_Dmin      : constant := 82;
+
+   --  And the three-bit one's: the high bit of every quant first, then the
+   --  low two bits, then twelve bytes holding sixteen six-bit scales, then
+   --  the block's own scale.
+   Three_Row_Bytes : constant := 110;
+   Three_Hmask     : constant := 0;
+   Three_Quants    : constant := 32;
+   Three_Scales    : constant := 96;
+   Three_D         : constant := 108;
+
    Six_Row_Bytes : constant := 210;
    Six_Low       : constant := 0;
    Six_High      : constant := 128;
@@ -155,6 +173,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q4_1 then Least_Block_Bytes
        elsif Format = G.Type_Q5_0 then Fifth_Block_Bytes
        elsif Format = G.Type_Q5_1 then Fifth_Least_Block_Bytes
+       elsif Format = G.Type_Q2_K then Two_Block_Bytes
+       elsif Format = G.Type_Q3_K then Three_Block_Bytes
        else 0);
 
    -----------------------
@@ -189,6 +209,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q4_1 then Least_Row_Bytes
        elsif Format = G.Type_Q5_0 then Fifth_Row_Bytes
        elsif Format = G.Type_Q5_1 then Fifth_Least_Row_Bytes
+       elsif Format = G.Type_Q2_K then Two_Row_Bytes
+       elsif Format = G.Type_Q3_K then Three_Row_Bytes
        else 0);
 
    ------------------
@@ -205,7 +227,9 @@ package body Model_Runner.Quantization.Interleave is
          or else Format = G.Type_Q4_0
          or else Format = G.Type_Q4_1
          or else Format = G.Type_Q5_0
-         or else Format = G.Type_Q5_1)
+         or else Format = G.Type_Q5_1
+         or else Format = G.Type_Q2_K
+         or else Format = G.Type_Q3_K)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -295,6 +319,82 @@ package body Model_Runner.Quantization.Interleave is
          end loop;
       end if;
    end Build_Four;
+
+   --  The three-bit format's sixteen six-bit scales, which are packed in
+   --  twelve bytes by a scheme of their own: four bytes of low nibbles,
+   --  four more, then four bytes carrying every scale's top two bits, two
+   --  bits to a scale. What comes out is llama.cpp's `aux` shuffle, and the
+   --  value a kernel wants is this less thirty-two.
+   type Scale_Sixteen is array (0 .. 15) of Interfaces.Unsigned_8;
+
+   procedure Three_Places
+     (Packed : B.Byte_Array;
+      At_It  : B.Byte_Index;
+      Scale  : out Scale_Sixteen)
+   is
+      function Q (Index : Natural) return Interfaces.Unsigned_8
+      is (Packed (At_It + B.Byte_Count (Index)));
+   begin
+      for Index in 0 .. 3 loop
+         Scale (Index) :=
+           (Q (Index) and 16#0F#)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Q (8 + Index), 0) and 16#03#, 4);
+         Scale (Index + 4) :=
+           (Q (Index + 4) and 16#0F#)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Q (8 + Index), 2) and 16#03#, 4);
+         Scale (Index + 8) :=
+           Interfaces.Shift_Right (Q (Index), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Q (8 + Index), 4) and 16#03#, 4);
+         Scale (Index + 12) :=
+           Interfaces.Shift_Right (Q (Index + 4), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Q (8 + Index), 6) and 16#03#, 4);
+      end loop;
+   end Three_Places;
+
+   --  And its inverse, for putting a row back the way the file had it.
+   procedure Three_Pack
+     (Scale  : Scale_Sixteen;
+      Target : in out B.Byte_Array;
+      At_It  : B.Byte_Index)
+   is
+   begin
+      for Index in 0 .. 3 loop
+         Target (At_It + B.Byte_Count (Index)) :=
+           (Scale (Index) and 16#0F#)
+           or Interfaces.Shift_Left (Scale (Index + 8) and 16#0F#, 4);
+         Target (At_It + B.Byte_Count (Index) + 4) :=
+           (Scale (Index + 4) and 16#0F#)
+           or Interfaces.Shift_Left (Scale (Index + 12) and 16#0F#, 4);
+         Target (At_It + B.Byte_Count (Index) + 8) :=
+           Interfaces.Shift_Right (Scale (Index), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Scale (Index + 4), 4), 2)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Scale (Index + 8), 4), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Scale (Index + 12), 4), 6);
+      end loop;
+   end Three_Pack;
+
+   --  Where element E of a two- or three-bit super-block has its low bits:
+   --  the byte, and how far to shift it. Both formats pack them the same
+   --  way, in two halves of a hundred and twenty-eight with a shift that
+   --  steps every thirty-two.
+   procedure Low_Places
+     (Element : Element_Count;
+      At_Byte : out B.Byte_Count;
+      Shift   : out Natural)
+   is
+      Half : constant Element_Count := Element / 128;
+      Rest : constant Element_Count := Element mod 128;
+   begin
+      At_Byte := B.Byte_Count (Half * 32 + Rest mod 32);
+      Shift   := Natural (Rest / 32) * 2;
+   end Low_Places;
 
    --  And one row's legacy four-bit block, which is the shortest of the
    --  four permutations because this format packs nothing.
@@ -446,6 +546,173 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Build_Fifth;
+
+   --  One row's two-bit super-block, written into its panel.
+   --
+   --  The sixteen scales and sixteen minima come out of their nibbles here
+   --  and go a byte apiece, sub-block major, for the reason the four-bit
+   --  k-quant's do: a kernel wants eight rows' scale for one sub-block as
+   --  eight consecutive bytes, and unpacking that in the kernel is work
+   --  paid once a product instead of once a load.
+   --
+   --  And a quant is two bits, so a group of thirty-two bytes carries
+   --  sixteen elements a row rather than eight: byte 4L + M of group G
+   --  holds row L's elements 16G + M, 16G + 4 + M, 16G + 8 + M and
+   --  16G + 12 + M at the four pairs of bits, which is one load and four
+   --  shifts for four runs of four consecutive elements.
+   procedure Build_Two
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At + Two_Scale_At + Lane * 2)     :=
+        Source (In_At + Two_D);
+      Target (Out_At + Two_Scale_At + Lane * 2 + 1) :=
+        Source (In_At + Two_D + 1);
+      Target (Out_At + Two_Least_At + Lane * 2)     :=
+        Source (In_At + Two_Dmin);
+      Target (Out_At + Two_Least_At + Lane * 2 + 1) :=
+        Source (In_At + Two_Dmin + 1);
+
+      for Sub in B.Byte_Count range 0 .. 15 loop
+         declare
+            Packed : constant Interfaces.Unsigned_8 :=
+              Source (In_At + Two_Scales + Sub);
+         begin
+            Target (Out_At + Two_Factor_At + Sub * Panel_Rows + Lane) :=
+              Packed and 16#0F#;
+            Target (Out_At + Two_Minimum_At + Sub * Panel_Rows + Lane) :=
+              Interfaces.Shift_Right (Packed, 4);
+         end;
+      end loop;
+
+      for Group in Element_Count range 0 .. 15 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : Interfaces.Unsigned_8 := 0;
+            begin
+               for Step in Element_Count range 0 .. 3 loop
+                  declare
+                     At_Byte : B.Byte_Count;
+                     Shift   : Natural;
+                  begin
+                     Low_Places
+                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
+                     Packed := Packed
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right
+                               (Source (In_At + Two_Quants + At_Byte), Shift)
+                             and 16#03#,
+                             Natural (Step) * 2);
+                  end;
+               end loop;
+
+               Target
+                 (Out_At + Two_Quants_At + B.Byte_Count (Group) * 32
+                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
+            end;
+         end loop;
+      end loop;
+   end Build_Two;
+
+   --  And one row's three-bit super-block.
+   --
+   --  Its sixteen scales are six bits packed by a scheme of their own and
+   --  come out here as signed bytes; its low two bits go where the two-bit
+   --  format's whole quant goes; and its high bit goes into a run of its
+   --  own, two groups to a byte, so that one load serves two groups at four
+   --  shifts each and every shift is an immediate.
+   procedure Build_Three
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      Scale : Scale_Sixteen;
+   begin
+      Target (Out_At + Three_Scale_At + Lane * 2)     :=
+        Source (In_At + Three_D);
+      Target (Out_At + Three_Scale_At + Lane * 2 + 1) :=
+        Source (In_At + Three_D + 1);
+
+      Three_Places (Source, In_At + Three_Scales, Scale);
+
+      for Sub in B.Byte_Count range 0 .. 15 loop
+         Target (Out_At + Three_Factor_At + Sub * Panel_Rows + Lane) :=
+           Scale (Natural (Sub)) - 32;
+      end loop;
+
+      for Group in Element_Count range 0 .. 15 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : Interfaces.Unsigned_8 := 0;
+            begin
+               for Step in Element_Count range 0 .. 3 loop
+                  declare
+                     At_Byte : B.Byte_Count;
+                     Shift   : Natural;
+                  begin
+                     Low_Places
+                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
+                     Packed := Packed
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right
+                               (Source (In_At + Three_Quants + At_Byte),
+                                Shift)
+                             and 16#03#,
+                             Natural (Step) * 2);
+                  end;
+               end loop;
+
+               Target
+                 (Out_At + Three_Low_At + B.Byte_Count (Group) * 32
+                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
+            end;
+         end loop;
+      end loop;
+
+      for Run in Element_Count range 0 .. 7 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : Interfaces.Unsigned_8 := 0;
+            begin
+               for Pair in Element_Count range 0 .. 1 loop
+                  for Step in Element_Count range 0 .. 3 loop
+                     declare
+                        Element : constant Element_Count :=
+                          Run * 32 + Pair * 16 + Step * 4 + Place;
+
+                        Half : constant Element_Count := Element / 128;
+                        Rest : constant Element_Count := Element mod 128;
+
+                        Bit : constant Natural :=
+                          Natural (Half) * 4 + Natural (Rest / 32);
+
+                        Mask : constant Interfaces.Unsigned_8 :=
+                          Interfaces.Shift_Right
+                            (Source (In_At + Three_Hmask
+                                     + B.Byte_Count (Rest mod 32)),
+                             Bit)
+                          and 1;
+                     begin
+                        Packed := Packed
+                          or Interfaces.Shift_Left
+                               (Mask, Natural (Pair) * 4 + Natural (Step));
+                     end;
+                  end loop;
+               end loop;
+
+               Target
+                 (Out_At + Three_High_At + B.Byte_Count (Run) * 32
+                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
+            end;
+         end loop;
+      end loop;
+   end Build_Three;
 
    --  And one row's six-bit super-block.
    --
@@ -605,6 +872,14 @@ package body Model_Runner.Quantization.Interleave is
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row),
                               Least => Format = G.Type_Q5_1);
+                        elsif Format = G.Type_Q2_K then
+                           Build_Two
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
+                        elsif Format = G.Type_Q3_K then
+                           Build_Three
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
                         else
                            Build_Four
                              (Source, In_At, Target, Out_At,
@@ -803,6 +1078,153 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Take_Fifth;
 
+   --  One row of a two-bit panel, put back the way the file had it.
+   procedure Take_Two
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At + Two_D)     :=
+        Source (In_At + Two_Scale_At + Lane * 2);
+      Target (Out_At + Two_D + 1) :=
+        Source (In_At + Two_Scale_At + Lane * 2 + 1);
+      Target (Out_At + Two_Dmin)     :=
+        Source (In_At + Two_Least_At + Lane * 2);
+      Target (Out_At + Two_Dmin + 1) :=
+        Source (In_At + Two_Least_At + Lane * 2 + 1);
+
+      for Sub in B.Byte_Count range 0 .. 15 loop
+         Target (Out_At + Two_Scales + Sub) :=
+           Source (In_At + Two_Factor_At + Sub * Panel_Rows + Lane)
+           or Interfaces.Shift_Left
+                (Source (In_At + Two_Minimum_At + Sub * Panel_Rows + Lane),
+                 4);
+      end loop;
+
+      for Index in B.Byte_Count range 0 .. 63 loop
+         Target (Out_At + Two_Quants + Index) := 0;
+      end loop;
+
+      for Group in Element_Count range 0 .. 15 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : constant Interfaces.Unsigned_8 :=
+                 Source (In_At + Two_Quants_At + B.Byte_Count (Group) * 32
+                         + Lane * 4 + B.Byte_Count (Place));
+            begin
+               for Step in Element_Count range 0 .. 3 loop
+                  declare
+                     At_Byte : B.Byte_Count;
+                     Shift   : Natural;
+                  begin
+                     Low_Places
+                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
+                     Target (Out_At + Two_Quants + At_Byte) :=
+                       Target (Out_At + Two_Quants + At_Byte)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right
+                               (Packed, Natural (Step) * 2) and 16#03#,
+                             Shift);
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Take_Two;
+
+   --  And one row of a three-bit panel.
+   procedure Take_Three
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      Scale : Scale_Sixteen;
+   begin
+      Target (Out_At + Three_D)     :=
+        Source (In_At + Three_Scale_At + Lane * 2);
+      Target (Out_At + Three_D + 1) :=
+        Source (In_At + Three_Scale_At + Lane * 2 + 1);
+
+      for Sub in B.Byte_Count range 0 .. 15 loop
+         Scale (Natural (Sub)) :=
+           Source (In_At + Three_Factor_At + Sub * Panel_Rows + Lane) + 32;
+      end loop;
+
+      Three_Pack (Scale, Target, Out_At + Three_Scales);
+
+      for Index in B.Byte_Count range 0 .. 95 loop
+         Target (Out_At + Three_Hmask + Index) := 0;
+      end loop;
+
+      for Group in Element_Count range 0 .. 15 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : constant Interfaces.Unsigned_8 :=
+                 Source (In_At + Three_Low_At + B.Byte_Count (Group) * 32
+                         + Lane * 4 + B.Byte_Count (Place));
+            begin
+               for Step in Element_Count range 0 .. 3 loop
+                  declare
+                     At_Byte : B.Byte_Count;
+                     Shift   : Natural;
+                  begin
+                     Low_Places
+                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
+                     Target (Out_At + Three_Quants + At_Byte) :=
+                       Target (Out_At + Three_Quants + At_Byte)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Shift_Right
+                               (Packed, Natural (Step) * 2) and 16#03#,
+                             Shift);
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      for Run in Element_Count range 0 .. 7 loop
+         for Place in Element_Count range 0 .. 3 loop
+            declare
+               Packed : constant Interfaces.Unsigned_8 :=
+                 Source (In_At + Three_High_At + B.Byte_Count (Run) * 32
+                         + Lane * 4 + B.Byte_Count (Place));
+            begin
+               for Pair in Element_Count range 0 .. 1 loop
+                  for Step in Element_Count range 0 .. 3 loop
+                     declare
+                        Element : constant Element_Count :=
+                          Run * 32 + Pair * 16 + Step * 4 + Place;
+
+                        Half : constant Element_Count := Element / 128;
+                        Rest : constant Element_Count := Element mod 128;
+
+                        Bit : constant Natural :=
+                          Natural (Half) * 4 + Natural (Rest / 32);
+
+                        Held : constant Interfaces.Unsigned_8 :=
+                          Interfaces.Shift_Right
+                            (Packed, Natural (Pair) * 4 + Natural (Step))
+                          and 1;
+                     begin
+                        Target
+                          (Out_At + Three_Hmask
+                           + B.Byte_Count (Rest mod 32)) :=
+                          Target (Out_At + Three_Hmask
+                                  + B.Byte_Count (Rest mod 32))
+                          or Interfaces.Shift_Left (Held, Bit);
+                     end;
+                  end loop;
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Take_Three;
+
    --  And one row of a six-bit one.
    procedure Take_Six
      (Source : B.Byte_Array;
@@ -914,6 +1336,10 @@ package body Model_Runner.Quantization.Interleave is
             elsif Format = G.Type_Q5_0 or else Format = G.Type_Q5_1 then
                Take_Fifth (Source, In_At, Target, Out_At, Lane,
                            Least => Format = G.Type_Q5_1);
+            elsif Format = G.Type_Q2_K then
+               Take_Two (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_Q3_K then
+               Take_Three (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

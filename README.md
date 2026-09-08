@@ -8214,6 +8214,112 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The last two formats on the floating-point path, and sixteen sub-blocks instead of eight
+
+`Q2_K` and `Q3_K` were what was left. Every other quantized format the
+engine reads had a kernel; these two multiplied in binary32, and a `Q2_K`
+prompt was the largest gap this file still recorded after the four-bit one
+was closed. Both are in panels now, and `--repack rows` covers **nine
+formats** -- every one the engine can multiply.
+
+**These two are not the legacy formats with a smaller quant.** Two things
+about them are new here, and both change the shape of the kernel rather than
+its size.
+
+**A super-block has sixteen sub-blocks, not eight.** Both formats scale
+*sixteen* elements together where the four-bit k-quant scales thirty-two, so
+a 256-element super-block carries sixteen scales -- and `Q2_K` sixteen
+minima beside them. The panels take all of those out of their nibbles at
+load time and write them a byte apiece, sub-block major, which is why these
+are the first two layouts here that **grow**: 800 bytes against the eight
+rows' 672 for `Q2_K`, and 912 against 880 for `Q3_K`. Every other panel in
+this file is exactly the size of the rows it holds.
+
+**And a quant of two bits puts four elements in a byte.** One thirty-two
+byte group therefore carries *sixteen* elements a row where the four-bit
+formats' carries eight, and the kernel takes four weight vectors out of one
+load at shifts of nought, two, four and six -- four runs of four consecutive
+elements, which is four broadcast operands for the byte dot product. One
+load and seven logical operations for four vectors, against the four-bit
+formats' one load and three for two.
+
+**A group is then exactly a sub-block**, which is the arrangement that makes
+the rest cheap: the four dot products of a group are summed and multiplied
+by that sub-block's own scale as a *whole number*, sixteen of those land in
+the super-block's accumulator, and one conversion to floating point serves
+the lot.
+
+`Q3_K`'s third bit is kept the way the five-bit legacy formats keep their
+fifth -- a run of its own, packed so the kernel's shift is an immediate, two
+groups to a byte because a group needs only four bits. `Q2_K`'s sixteen
+minima and `Q3_K`'s sixteen signed scales both become a dot product of
+sixteen pairs against sixteen activation sums, which is eight `vpdpwssd`
+apiece: the same instruction the four-bit k-quant uses for its eight.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`:**
+
+| `Q2_K` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.113, 4.245, 4.129 s | 0.251, 0.261, 0.254 s | **16.3x** |
+| prompt, 1419 | 57.699 s | 3.940 s | **14.6x** |
+| generating, 64 | 6.268, 6.205, 6.199 s | 0.963, 0.931, 0.967 s | **6.53x** |
+
+| `Q3_K` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 2.661, 2.627, 2.608 s | 0.228, 0.241, 0.229 s | **11.3x** |
+| prompt, 1419 | 36.841 s | 3.729 s | **9.9x** |
+| generating, 64 | 4.196, 4.208, 4.173 s | 1.002, 1.039, 1.040 s | **4.10x** |
+
+**Against llama.cpp** at `95b8e33e1`, same files, eight threads, same
+sitting:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| `Q2_K` prompt, 110 | **438.2 t/s** | 223.4 t/s | 1.96x ahead |
+| `Q2_K` prompt, 1419 | **360.2 t/s** | 192.4 t/s | 1.87x ahead |
+| `Q2_K` generating, 64 | 68.7 t/s | 88.7 t/s | 1.29x behind |
+| `Q3_K` prompt, 110 | **482.5 t/s** | 265.5 t/s | 1.82x ahead |
+| `Q3_K` prompt, 1419 | **380.5 t/s** | 226.8 t/s | 1.68x ahead |
+| `Q3_K` generating, 64 | 63.9 t/s | 80.0 t/s | 1.25x behind |
+
+**The `Q2_K` row is the one that counts, and it is the only one of the four
+new formats where it does.** llama.cpp *does* repack this format --
+`block_q2_Kx8` is in `repack.cpp`'s list, beside `block_q4_0x8`,
+`block_q4_Kx8` and `block_iq4_nlx4` -- so 1.96 times is an eight-row layout
+against an eight-row layout, one kernel against another, with no asterisk.
+`Q3_K` is not on that list, so its 1.82 carries the same caveat `Q4_1`,
+`Q5_0` and `Q5_1` do.
+
+**The digests.** At 1419 tokens both formats give the same text on both
+paths -- `dee17622efd3e8e4` and `1c7ce9457370098f`. At 110 with sixty-four
+generated they do not: `93de44ac9034121e` against `0c4f875376192875` for
+`Q2_K` and `859092284f8cf1e9` against `0dfb3c821c67cf01` for `Q3_K`, each
+stable across all three rounds. **That is a coin landing, not a trend**, and
+it is why the kernels are held by the test below rather than by the digest.
+
+**What the panel path does cost these two is a coarser activation.** Both
+now quantize activations a super-block at a time rather than a block at a
+time, as the other three k-quants already did -- the kernel scales a whole
+super-block by one number, so the eight block scales inside it have to be
+one number. Measured, that is worth nothing: the largest difference between
+the panel product and the floating-point one runs 0.078 to 0.104 across all
+nine formats, and adding these two moved the maximum from 0.1039 to 0.1043.
+
+**How this is held.** `Panel_Quantized_Kernels_Are_Exact` now covers six
+kernels -- the four legacy ones and these two -- on activations constant
+across a whole super-block, which quantize to one level without loss
+whichever way the caller groups them. Both paths then see the same
+activations and the same dequantized weights and must agree to
+floating-point rounding: they agree to 6E-6. It was checked by breaking it:
+`Q3_K`'s third bit at a shift of two instead of three fails by 66.1, and
+`Q2_K`'s minimum doubled fails by 1033.
+
+**Nine formats, and the shape of the table.** A 110-token prompt now reads
+0.171 to 0.261 seconds for every quantized format the engine multiplies,
+against stored readings from 0.29 to 4.2. What is left of the difference is
+how many bytes a block holds and how much unpacking it takes, which is what
+a format is.
+
 ### The two formats that keep a fifth bit, and a shift decided at load time
 
 `Q5_0` and `Q5_1` have been the two slowest rows of `### Kernels` for as
@@ -8547,9 +8653,9 @@ behind to a fifth ahead, and the generated token from 4.4 times behind to
 instruction. The first was a format missing from a list of four and the
 second was a layout that existed for three other formats.
 
-**What is not built, still.** `Q2_K` and `Q3_K` are on the floating-point
-path and are named rather than measured. `Q4_1`, `Q5_0` and `Q5_1` were on
-that list for a day each; the sections above are where they went.
+**Nothing is left on that list.** `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K`
+were each on it for a day; the sections above are where they went. Every
+format the engine multiplies has a panel kernel.
 
 ### The legacy four-bit format was on the floating-point path, and is not now
 
@@ -8907,13 +9013,12 @@ spread of two to three. That is under what a sitting here can tell apart, and
 `### The eight-row weight layout` stops on it.
 
 **What is not built is every other format.** The eight-bit one is already
-level with llama.cpp and has no minimum to correct for; the two-bit and
-three-bit ones are shapes of their own and are what a `Q2_K` file is; the
-non-linear ones read a table. **The legacy four-bit format was on that list
-and came off it** -- see `### The legacy four-bit format in eight-row
-panels` above, where it turns out to be the format the layout pays best on,
-for a reason that has nothing to do with prompts. A row count that does not
-divide by eight is left where it lies, which no matrix in any model here is. The embedding
+level with llama.cpp and has no minimum to correct for; the non-linear ones
+read a table. **Every other format on that list came off it** -- the four
+legacy ones and the two- and three-bit k-quants, in the sections above --
+and this paragraph is kept only because it records what the list looked
+like. A row count that does not divide by eight is left where it lies, which
+no matrix in any model here is. The embedding
 table, the position table and the segment table are left alone on purpose:
 they are read a row at a time and multiplied by nothing, so interleaving them
 would pay a gather on every token to buy a kernel none of them reaches.

@@ -393,9 +393,14 @@ package body Tests.Backend_Cases is
       --  that bit as bit J of a word and the panel keeps it at a place the
       --  kernel's shift is an immediate for, so the round trip below is the
       --  only check that the packing and its inverse agree.
-      Formats : constant array (1 .. 7) of G.Tensor_Type :=
+      --  And the two- and three-bit k-quants, whose permutations are the
+      --  most rearranged of the nine: sixteen sub-blocks of packed scales
+      --  taken out to bytes, a quant of two bits that puts four elements in
+      --  a byte, and for the three-bit one a high bit kept two groups to a
+      --  byte. Nothing else here moves as much.
+      Formats : constant array (1 .. 9) of G.Tensor_Type :=
         [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0, G.Type_Q4_1,
-         G.Type_Q5_0, G.Type_Q5_1];
+         G.Type_Q5_0, G.Type_Q5_1, G.Type_Q2_K, G.Type_Q3_K];
 
       Plain   : B.Byte_Array_Access;
       Panels  : B.Byte_Array_Access;
@@ -456,6 +461,8 @@ package body Tests.Backend_Cases is
             elsif G."=" (Shape, G.Type_Q4_1) then 20
             elsif G."=" (Shape, G.Type_Q5_0) then 22
             elsif G."=" (Shape, G.Type_Q5_1) then 24
+            elsif G."=" (Shape, G.Type_Q2_K) then 84
+            elsif G."=" (Shape, G.Type_Q3_K) then 110
             else 210);
 
          --  Blocks in one row, which is not 256 elements for every format
@@ -477,6 +484,10 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_Q5_0 (Values)
                elsif G."=" (Shape, G.Type_Q5_1)
                then Fixtures.Encode_Q5_1 (Values)
+               elsif G."=" (Shape, G.Type_Q2_K)
+               then Fixtures.Encode_Q2_K (Values)
+               elsif G."=" (Shape, G.Type_Q3_K)
+               then Fixtures.Encode_Q3_K (Values)
                else Fixtures.Encode_Q6_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
@@ -582,6 +593,8 @@ package body Tests.Backend_Cases is
             if G."=" (Shape, G.Type_Q4_1)
               or else G."=" (Shape, G.Type_Q5_0)
               or else G."=" (Shape, G.Type_Q5_1)
+              or else G."=" (Shape, G.Type_Q2_K)
+              or else G."=" (Shape, G.Type_Q3_K)
             then
                Compare (Batch, Coarse);
             else
@@ -610,7 +623,7 @@ package body Tests.Backend_Cases is
               & N.Real'Image (Coarse));
    end Panelled_Product_Says_What_Rows_Say;
 
-   --  The four legacy panel kernels, exactly.
+   --  The six panel kernels that carry a quantized correction, exactly.
    --
    --  Every other check of these is a comparison against the floating-point
    --  path, where activation quantization is the largest error by three
@@ -626,9 +639,15 @@ package body Tests.Backend_Cases is
    --  minimum has the minimum as its whole answer and one that centres has
    --  the centring as its whole answer. A varied matrix exercises the
    --  quants themselves, which for the two five-bit formats means the fifth
-   --  bit: it is set for about half of them, and a kernel that took it from
-   --  the wrong place or the wrong shift would be wrong by the range.
-   procedure Panel_Legacy_Kernels_Are_Exact
+   --  bit and for the three-bit k-quant the third: they are set for about
+   --  half of them, and a kernel that took one from the wrong place or the
+   --  wrong shift would be wrong by the range.
+   --
+   --  A matrix flat across a whole super-block is what the two k-quants
+   --  need to have a quant of nought throughout, and it is what the legacy
+   --  formats get too: they scale thirty-two together, and a run constant
+   --  over two hundred and fifty-six is constant over that.
+   procedure Panel_Quantized_Kernels_Are_Exact
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T2);
@@ -637,17 +656,22 @@ package body Tests.Backend_Cases is
 
       Tall : constant N.Element_Count := 40;
       Wide : constant N.Element_Count := 512;
-      Held : constant N.Element_Count := Wide / 32;
 
       Batch : constant N.Element_Count := 8;
 
-      Shapes : constant array (1 .. 4) of G.Tensor_Type :=
-        [G.Type_Q4_0, G.Type_Q4_1, G.Type_Q5_0, G.Type_Q5_1];
+      Shapes : constant array (1 .. 6) of G.Tensor_Type :=
+        [G.Type_Q4_0, G.Type_Q4_1, G.Type_Q5_0, G.Type_Q5_1,
+         G.Type_Q2_K, G.Type_Q3_K];
 
       Worst : N.Real := 0.0;
 
       --  One format and one matrix, both ways.
       procedure Try (Shape : G.Tensor_Type; Flat : Boolean) is
+         --  Blocks in a row, which is a super-block for the two k-quants
+         --  and thirty-two elements for the four legacy formats.
+         Held : constant N.Element_Count :=
+           Wide / N.Element_Count (G.Block_Elements (Shape));
+
          Values : N.Real_Array (0 .. Tall * Wide - 1);
          Inputs : T.Real_Array_Access;
          Direct : T.View;
@@ -667,7 +691,8 @@ package body Tests.Backend_Cases is
                for Index in N.Element_Count range 0 .. 31 loop
                   Values (Row * Wide + Block * 32 + Index) :=
                     (if Flat
-                     then 0.5 + N.Real (Row) * 0.25 - N.Real (Block) * 0.125
+                     then 0.5 + N.Real (Row) * 0.25
+                          - N.Real (Block / 8) * 0.125
                      else N.Real ((Row * 7 + Block * 13
                                    + Index * 29) mod 61) * 0.125 - 3.75);
                end loop;
@@ -682,7 +707,11 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_Q4_1 (Values)
                elsif G."=" (Shape, G.Type_Q5_0)
                then Fixtures.Encode_Q5_0 (Values)
-               else Fixtures.Encode_Q5_1 (Values));
+               elsif G."=" (Shape, G.Type_Q5_1)
+               then Fixtures.Encode_Q5_1 (Values)
+               elsif G."=" (Shape, G.Type_Q2_K)
+               then Fixtures.Encode_Q2_K (Values)
+               else Fixtures.Encode_Q3_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
             Plain.all := Bytes;
@@ -711,16 +740,19 @@ package body Tests.Backend_Cases is
          T.Allocate (Tall * Batch, Rows_Way);
          T.Allocate (Tall * Batch, Panel_Way);
 
-         --  Constant a block, so they quantize to one level and back
-         --  without loss and neither path rounds them.
+         --  Constant across a super-block, so they quantize to one level
+         --  and back without loss whichever way the caller groups them: the
+         --  k-quants take one scale for two hundred and fifty-six and the
+         --  legacy formats one for thirty-two, and a run constant over the
+         --  wider is constant over the narrower.
          for Vector in 0 .. Batch - 1 loop
-            for Block in 0 .. Held - 1 loop
+            for Super in 0 .. Wide / 256 - 1 loop
                declare
                   Level : constant N.Real :=
-                    1.0 + N.Real (Vector) * 0.5 - N.Real (Block) * 0.0625;
+                    1.0 + N.Real (Vector) * 0.5 - N.Real (Super) * 0.25;
                begin
-                  for Index in N.Element_Count range 0 .. 31 loop
-                     Inputs.all (Vector * Wide + Block * 32 + Index) :=
+                  for Index in N.Element_Count range 0 .. 255 loop
+                     Inputs.all (Vector * Wide + Super * 256 + Index) :=
                        Level;
                   end loop;
                end;
@@ -761,8 +793,8 @@ package body Tests.Backend_Cases is
       --  centring of the wrong size or a fifth bit taken from the wrong
       --  shift fails it by the answer rather than by a part of it.
       Assert (Worst <= 1.0E-2,
-              "a legacy panel kernel differs by " & N.Real'Image (Worst));
-   end Panel_Legacy_Kernels_Are_Exact;
+              "a panel kernel differs by " & N.Real'Image (Worst));
+   end Panel_Quantized_Kernels_Are_Exact;
 
    --  More workers than rows is legal: the surplus workers get nothing and the
    --  result is still complete.
@@ -3665,9 +3697,10 @@ package body Tests.Backend_Cases is
          "a four-, five- or six-bit weight in panels decodes to the rows "
          & "it was made of and multiplies to what those rows multiply to");
       Register_Routine
-        (T, Panel_Legacy_Kernels_Are_Exact'Access,
-         "the four legacy panel kernels agree with the floating-point path "
-         & "exactly where the activations quantize without loss");
+        (T, Panel_Quantized_Kernels_Are_Exact'Access,
+         "the six panel kernels with a quantized correction agree with the "
+         & "floating-point path exactly where the activations quantize "
+         & "without loss");
       Register_Routine
         (T, More_Workers_Than_Rows'Access,
          "more workers than rows still produces a complete result");
