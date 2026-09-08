@@ -158,14 +158,18 @@ package Model_Runner.Quantization.Integers is
    --  rather than told: nothing about it depends on the host, and a format
    --  this answers False for is one the caller computes the other way.
    --
-   --  The layout is a parameter because one format has a kernel only in
-   --  panels. Q4_1 keeps a minimum a block and the row-major tile has no
-   --  place to put its term -- the tile's one correction is an integer
-   --  shared by every row of it, and this format's is a different number
-   --  for each -- where the panel kernel has eight lanes and a lane is a
-   --  row. Answering True for the row-major layout would quantize the
-   --  activations for a product that then declines to use them, which is
-   --  the whole cost of the packing and none of its benefit.
+   --  The layout is a parameter because three formats have a kernel only in
+   --  panels. Q4_1 and Q5_1 keep a minimum a block and the row-major tile
+   --  has no place to put its term -- the tile's one correction is an
+   --  integer shared by every row of it, and these formats' is a different
+   --  number for each -- where the panel kernel has eight lanes and a lane
+   --  is a row. Q5_0 has a centring the tile could carry but a fifth bit it
+   --  could not: the file keeps that bit as bit J of a word, so the shift
+   --  varies with the element, and only a layout that decides the shift at
+   --  load time makes it an immediate. Answering True for the row-major
+   --  layout would quantize the activations for a product that then
+   --  declines to use them, which is the whole cost of the packing and none
+   --  of its benefit.
    --
    --  @param Format Weight format.
    --  @param Interleaved Whether the weights are laid out a panel of rows

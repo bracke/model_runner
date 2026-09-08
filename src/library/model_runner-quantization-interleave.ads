@@ -27,10 +27,11 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Five formats are written here: the three k-quants a "_M" file is made of
---  and the two legacy four-bit ones, whose layouts are described last
---  because they are the k-quant's with everything the k-quant packs taken
---  away.
+--  Seven formats are written here: the three k-quants a "_M" file is made
+--  of and the four legacy ones, whose layouts are described last because
+--  they are the k-quant's with everything the k-quant packs taken away --
+--  and, for the two that carry a fifth bit, with one thing added that no
+--  k-quant has.
 --
 --  The four-bit layout. A panel is eight consecutive rows. For each
 --  super-block of the panel, 1184 bytes -- the eight rows' 144 each,
@@ -99,6 +100,8 @@ package Model_Runner.Quantization.Interleave is
    Six_Block_Bytes   : constant := 1680;
    Legacy_Block_Bytes : constant := 144;
    Least_Block_Bytes  : constant := 160;
+   Fifth_Block_Bytes  : constant := 176;
+   Fifth_Least_Block_Bytes : constant := 192;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -160,6 +163,45 @@ package Model_Runner.Quantization.Interleave is
    Least_Least_At  : constant := 16;
    Least_Quants_At : constant := 32;
 
+   --  And the two that carry a fifth bit. These are the two formats the
+   --  row product has always been slowest at, and the reason is where the
+   --  file keeps that bit: bit J of a thirty-two bit word, so the shift
+   --  that extracts it varies with the element and the loop will not
+   --  vectorize. A panel puts an end to that, because the shift can be
+   --  decided when the panel is written rather than when it is read.
+   --
+   --  The five-bit centred format, 176 bytes -- the eight rows'
+   --  twenty-two each, and not one more:
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 .. 143   the eight rows' low four bits, interleaved
+   --   144 .. 175   the eight rows' fifth bits, interleaved
+   --
+   --  The fifth bits are packed so that ONE thirty-two byte load serves the
+   --  whole block at four pairs of shifts. Byte 4L + M of the run holds row
+   --  L's fifth bits for the eight elements that share position M: bit 2C
+   --  belongs to element 4C + M and bit 2C + 1 to element 4C + M + 16,
+   --  which are exactly the two elements group C's byte 4L + M carries the
+   --  low nibbles of. So a group's turn is a shift that brings its bit to
+   --  position four and one three-input logical operation that folds it
+   --  into the nibble -- and the shift is an immediate, because the group
+   --  is unrolled.
+   Fifth_Scale_At  : constant := 0;
+   Fifth_Quants_At : constant := 16;
+   Fifth_Fifths_At : constant := 144;
+
+   --  And the five-bit format that keeps a minimum, 192 bytes, which is
+   --  the one above with sixteen more:
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 ..  31   the eight rows' block minima, likewise
+   --    32 .. 159   the eight rows' low four bits, interleaved
+   --   160 .. 191   the eight rows' fifth bits, interleaved
+   Fifth_Least_Scale_At   : constant := 0;
+   Fifth_Least_Minimum_At : constant := 16;
+   Fifth_Least_Quants_At  : constant := 32;
+   Fifth_Least_Fifths_At  : constant := 160;
+
    --  Bytes a panel block occupies in the layout this format takes.
    --
    --  @param Format Weight format; one Interleaves accepts.
@@ -191,8 +233,8 @@ package Model_Runner.Quantization.Interleave is
 
    --  Whether a matrix in this format and shape can be interleaved.
    --
-   --  The three k-quants a "_M" file is made of, and the two legacy
-   --  four-bit formats a "Q4_0" or "Q4_1" file is entirely. A row count that is not a whole
+   --  The three k-quants a "_M" file is made of, and the four legacy
+   --  formats a "Q4_0", "Q4_1", "Q5_0" or "Q5_1" file is entirely. A row count that is not a whole
    --  number of panels is refused rather than padded, because a padded panel
    --  is rows that do not exist and a kernel that has to know which they
    --  are.

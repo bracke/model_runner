@@ -54,7 +54,10 @@ package body Model_Runner.Quantization.Integers is
        or else Format = G.Type_Q4_K
        or else Format = G.Type_Q5_K
        or else Format = G.Type_Q6_K
-       or else (Interleaved and then Format = G.Type_Q4_1));
+       or else (Interleaved
+                and then (Format = G.Type_Q4_1
+                          or else Format = G.Type_Q5_0
+                          or else Format = G.Type_Q5_1)));
 
    --------------------
    -- Packs_Vectors --

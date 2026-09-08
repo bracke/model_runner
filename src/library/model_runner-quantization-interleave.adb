@@ -8,6 +8,7 @@ package body Model_Runner.Quantization.Interleave is
    use type B.Byte_Count;
    use type G.Tensor_Type;
    use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_32;
 
    --  What one row's super-block occupies, and where its parts are. Written
    --  out rather than asked of Model_Runner.GGUF, because the arithmetic
@@ -37,6 +38,16 @@ package body Model_Runner.Quantization.Interleave is
    --  a scale, a minimum and the same sixteen bytes of nibbles.
    Least_Row_Bytes : constant := 20;
    Least_Quants    : constant := 4;
+
+   --  And the two that carry a fifth bit, where the file keeps that bit as
+   --  bit J of a thirty-two bit word beside the nibbles.
+   Fifth_Row_Bytes : constant := 22;
+   Fifth_High      : constant := 2;
+   Fifth_Quants    : constant := 6;
+
+   Fifth_Least_Row_Bytes : constant := 24;
+   Fifth_Least_High      : constant := 4;
+   Fifth_Least_Quants    : constant := 8;
 
    Six_Row_Bytes : constant := 210;
    Six_Low       : constant := 0;
@@ -142,6 +153,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q6_K then Six_Block_Bytes
        elsif Format = G.Type_Q4_0 then Legacy_Block_Bytes
        elsif Format = G.Type_Q4_1 then Least_Block_Bytes
+       elsif Format = G.Type_Q5_0 then Fifth_Block_Bytes
+       elsif Format = G.Type_Q5_1 then Fifth_Least_Block_Bytes
        else 0);
 
    -----------------------
@@ -174,6 +187,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q6_K then Six_Row_Bytes
        elsif Format = G.Type_Q4_0 then Legacy_Row_Bytes
        elsif Format = G.Type_Q4_1 then Least_Row_Bytes
+       elsif Format = G.Type_Q5_0 then Fifth_Row_Bytes
+       elsif Format = G.Type_Q5_1 then Fifth_Least_Row_Bytes
        else 0);
 
    ------------------
@@ -188,7 +203,9 @@ package body Model_Runner.Quantization.Interleave is
          or else Format = G.Type_Q5_K
          or else Format = G.Type_Q6_K
          or else Format = G.Type_Q4_0
-         or else Format = G.Type_Q4_1)
+         or else Format = G.Type_Q4_1
+         or else Format = G.Type_Q5_0
+         or else Format = G.Type_Q5_1)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -197,6 +214,7 @@ package body Model_Runner.Quantization.Interleave is
        --  A whole number of the format's own blocks, which is a super-block
        --  for the three k-quants and thirty-two elements for the legacy one.
        (if Format = G.Type_Q4_0 or else Format = G.Type_Q4_1
+          or else Format = G.Type_Q5_0 or else Format = G.Type_Q5_1
         then Columns mod 32 = 0
         else Columns mod 256 = 0));
 
@@ -340,6 +358,94 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Build_Least;
+
+   --  And one row's block of either five-bit legacy format.
+   --
+   --  The nibbles go exactly where the four-bit formats' go. What is new is
+   --  the run of fifth bits, and it is the whole reason these two are worth
+   --  a panel: the file keeps them as bit J of a thirty-two bit word, so a
+   --  row product's shift varies with the element and the loop will not
+   --  vectorize. Written here, the shift is decided once and the kernel's
+   --  is an immediate.
+   --
+   --  Byte 4L + M of the run carries row L's fifth bits for the eight
+   --  elements that share position M: bit 2C for element 4C + M and bit
+   --  2C + 1 for element 4C + M + 16. Those are exactly the two elements
+   --  whose low nibbles sit in byte 4L + M of group C, so one load of the
+   --  run serves every group of the block at a shift apiece.
+   procedure Build_Fifth
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count;
+      Least  : Boolean)
+   is
+      Scale_At  : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Scale_At else Fifth_Scale_At);
+      Quants_At : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Quants_At else Fifth_Quants_At);
+      Fifths_At : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Fifths_At else Fifth_Fifths_At);
+
+      High   : constant B.Byte_Count :=
+        (if Least then Fifth_Least_High else Fifth_High);
+      Quants : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Quants else Fifth_Quants);
+
+      --  The four bytes the file keeps the fifth bits in, read as the one
+      --  little-endian word the format defines them to be.
+      Bits : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Source (In_At + High))
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (In_At + High + 1)), 8)
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (In_At + High + 2)), 16)
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (In_At + High + 3)), 24);
+
+      function Bit (Index : Natural) return Interfaces.Unsigned_8
+      is (Interfaces.Unsigned_8
+            (Interfaces.Shift_Right (Bits, Index) and 1));
+   begin
+      Target (Out_At + Scale_At + Lane * 2)     := Source (In_At);
+      Target (Out_At + Scale_At + Lane * 2 + 1) := Source (In_At + 1);
+
+      if Least then
+         Target (Out_At + Fifth_Least_Minimum_At + Lane * 2) :=
+           Source (In_At + 2);
+         Target (Out_At + Fifth_Least_Minimum_At + Lane * 2 + 1) :=
+           Source (In_At + 3);
+      end if;
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Quants_At + Group * 32 + Lane * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Quants + Group * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+
+      for Place in B.Byte_Count range 0 .. 3 loop
+         declare
+            Packed : Interfaces.Unsigned_8 := 0;
+         begin
+            for Group in 0 .. 3 loop
+               Packed := Packed
+                 or Interfaces.Shift_Left
+                      (Bit (Group * 4 + Natural (Place)), Group * 2)
+                 or Interfaces.Shift_Left
+                      (Bit (Group * 4 + Natural (Place) + 16),
+                       Group * 2 + 1);
+            end loop;
+
+            Target (Out_At + Fifths_At + Lane * 4 + Place) := Packed;
+         end;
+      end loop;
+   end Build_Fifth;
 
    --  And one row's six-bit super-block.
    --
@@ -492,6 +598,13 @@ package body Model_Runner.Quantization.Interleave is
                            Build_Least
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
+                        elsif Format = G.Type_Q5_0
+                          or else Format = G.Type_Q5_1
+                        then
+                           Build_Fifth
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row),
+                              Least => Format = G.Type_Q5_1);
                         else
                            Build_Four
                              (Source, In_At, Target, Out_At,
@@ -617,6 +730,79 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Take_Least;
 
+   --  And one row of a five-bit legacy panel, put back the way the file
+   --  had it -- the fifth bits gathered out of the four bytes they were
+   --  spread across and written as the word the format defines.
+   procedure Take_Fifth
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count;
+      Least  : Boolean)
+   is
+      Scale_At  : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Scale_At else Fifth_Scale_At);
+      Quants_At : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Quants_At else Fifth_Quants_At);
+      Fifths_At : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Fifths_At else Fifth_Fifths_At);
+
+      High   : constant B.Byte_Count :=
+        (if Least then Fifth_Least_High else Fifth_High);
+      Quants : constant B.Byte_Count :=
+        (if Least then Fifth_Least_Quants else Fifth_Quants);
+
+      Bits : Interfaces.Unsigned_32 := 0;
+   begin
+      Target (Out_At)     := Source (In_At + Scale_At + Lane * 2);
+      Target (Out_At + 1) := Source (In_At + Scale_At + Lane * 2 + 1);
+
+      if Least then
+         Target (Out_At + 2) :=
+           Source (In_At + Fifth_Least_Minimum_At + Lane * 2);
+         Target (Out_At + 3) :=
+           Source (In_At + Fifth_Least_Minimum_At + Lane * 2 + 1);
+      end if;
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Quants + Group * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Quants_At + Group * 32 + Lane * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+
+      for Place in B.Byte_Count range 0 .. 3 loop
+         declare
+            Packed : constant Interfaces.Unsigned_8 :=
+              Source (In_At + Fifths_At + Lane * 4 + Place);
+         begin
+            for Group in 0 .. 3 loop
+               Bits := Bits
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32
+                         (Interfaces.Shift_Right (Packed, Group * 2) and 1),
+                       Group * 4 + Natural (Place))
+                 or Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32
+                         (Interfaces.Shift_Right (Packed, Group * 2 + 1)
+                          and 1),
+                       Group * 4 + Natural (Place) + 16);
+            end loop;
+         end;
+      end loop;
+
+      for Index in B.Byte_Count range 0 .. 3 loop
+         Target (Out_At + High + Index) :=
+           Interfaces.Unsigned_8
+             (Interfaces.Shift_Right (Bits, Natural (Index) * 8) and 16#FF#);
+      end loop;
+   end Take_Fifth;
+
    --  And one row of a six-bit one.
    procedure Take_Six
      (Source : B.Byte_Array;
@@ -725,6 +911,9 @@ package body Model_Runner.Quantization.Interleave is
                Take_Legacy (Source, In_At, Target, Out_At, Lane);
             elsif Format = G.Type_Q4_1 then
                Take_Least (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_Q5_0 or else Format = G.Type_Q5_1 then
+               Take_Fifth (Source, In_At, Target, Out_At, Lane,
+                           Least => Format = G.Type_Q5_1);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

@@ -7,6 +7,56 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The two formats that keep a fifth bit, in eight-row panels -- and the
+  shift that made them slow is decided at load time now.** `Q5_0` and
+  `Q5_1` have been the two slowest rows of the kernel table for as long as
+  it has existed, and the reason was always written beside them: the file
+  keeps the fifth bit as bit *J* of a thirty-two bit word, so the shift
+  varies with the element and the loop will not vectorize.
+
+  The panel blocks are 176 and 192 bytes, the eight rows' twenty-two and
+  twenty-four each and not one more. **Thirty-two bytes of them are fifth
+  bits, and one load serves the whole block:** byte 4L + M of that run holds
+  row L's bits for the eight elements sharing position M, bit 2C for element
+  4C + M and bit 2C + 1 for element 4C + M + 16 -- exactly the two elements
+  whose low nibbles sit in byte 4L + M of group C. Each group then takes its
+  bit with an **immediate** shift, and `vpternlogd` folds it into the nibble
+  in one operation: sixteen instructions a block, shared by eight vectors.
+
+  Alternated three rounds against three, `--backend cpu`. **`Q5_0`: the
+  110-token prompt 3.978/4.022/3.999 s to 0.186/0.192/0.187, 21.1 times**;
+  the 1419-token prompt 57.845 to 3.124, 18.5; sixty-four generated tokens
+  6.698 to 1.335, 5.02. **`Q5_1`: 4.197/4.172/4.140 s to
+  0.185/0.185/0.185, 22.5 times**; 57.605 to 3.026, 19.0; generating 6.921/
+  6.915/6.953 to 1.285/1.289/1.290, 5.38. Every digest unchanged at both
+  lengths on both layouts.
+
+  Against llama.cpp: **591.4 t/s against 314.9** for `Q5_0` at 110 tokens
+  and **594.6 against 144.0** for `Q5_1`. As with `Q4_1`, llama.cpp repacks
+  neither -- `repack.cpp` builds `block_q4_0x8`, `block_q4_Kx8`,
+  `block_iq4_nlx4` and `block_q2_Kx8` and that is the list -- so this is the
+  eight-row layout against no layout.
+
+  **The four legacy formats have converged**: a 110-token prompt now reads
+  0.177, 0.177, 0.187 and 0.185 seconds for `Q4_0`, `Q4_1`, `Q5_0` and
+  `Q5_1`, where their stored readings run from 0.56 to 4.2 seconds. And the
+  kernel table did **not** move -- `Row_Dot` is the row product and still
+  has the shift it always had; nothing reaches it for a matrix in panels.
+
+### Changed
+
+- **`Panel_Minimum_Term_Is_Exact` became
+  `Panel_Legacy_Kernels_Are_Exact`** and now covers all four legacy panel
+  kernels on two matrices. Activations constant across each block of
+  thirty-two quantize without loss, so both paths see the same activations
+  and the same dequantized weights and must agree to floating-point
+  rounding rather than to the quantizer's tolerance -- three orders tighter
+  than any other check of these kernels. One matrix of repeated values
+  isolates each format's minimum or centring; one varied matrix exercises
+  the quants, which for the five-bit pair means the fifth bit. The four
+  agree to 6E-6, and the test was checked by breaking it twice: a fifth bit
+  taken at the wrong shift fails by 48.3, a doubled minimum by 19306.
+
 - **The four-bit format that keeps a minimum, in eight-row panels -- and
   three and a half times llama.cpp, which does not repack it.** `Q4_1` is
   `Q4_0`'s block with a second half-precision number in it, and it was the
@@ -39,8 +89,6 @@ Keep a Changelog and the project uses semantic versioning.
   encode with a quant of nought throughout, so the minimum is the whole
   answer. The two paths agree to 6E-6, and the test was checked by breaking
   it -- doubling the term fails it by 19306.
-
-### Changed
 
 - **`Q4_0`'s centring moved out of the accumulator and into the floating-
   point finish, which is worth 1.35 times.** Building `Q4_1` beside it made

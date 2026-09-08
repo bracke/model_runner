@@ -8214,6 +8214,118 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The two formats that keep a fifth bit, and a shift decided at load time
+
+`Q5_0` and `Q5_1` have been the two slowest rows of `### Kernels` for as
+long as that table has existed -- 0.52 and 0.55 nanoseconds an element
+against `Q4_0`'s 0.30 -- and the reason has always been written down beside
+them: the file keeps the fifth bit as **bit *J* of a thirty-two bit word**,
+so the shift that extracts it varies with the element, and a loop whose
+shift amount is data cannot be vectorized by an instruction set without a
+per-lane shift.
+
+**A panel ends that, and not by making the shift cheaper. By moving it to
+load time.**
+
+The two panel blocks are 176 and 192 bytes -- the eight rows' twenty-two and
+twenty-four each, and not one more:
+
+```
+  Q5_0    0 ..  15   the eight rows' block scales, half precision
+         16 .. 143   the eight rows' low four bits, interleaved
+        144 .. 175   the eight rows' fifth bits, interleaved
+
+  Q5_1    0 ..  15   the eight rows' block scales
+         16 ..  31   the eight rows' block minima
+         32 .. 159   the eight rows' low four bits, interleaved
+        160 .. 191   the eight rows' fifth bits, interleaved
+```
+
+**Thirty-two bytes of fifth bits, and one load of them serves the whole
+block.** Byte 4L + M of that run holds row L's fifth bits for the eight
+elements that share position M: bit 2C for element 4C + M and bit 2C + 1 for
+element 4C + M + 16. Those are exactly the two elements whose low nibbles
+sit in byte 4L + M of group C. So the kernel loads the run once and each
+group takes its bit with **an immediate shift** -- the group is unrolled, so
+the amount is a constant in the instruction stream rather than a value in a
+register, which is the whole of what the row product could not have.
+
+Folding the bit in is one instruction. `vpternlogd` takes three inputs and a
+truth table; with the nibble, the shifted run and a mask of one bit per byte
+it computes `a or (b and c)` in a single operation, which is what turning a
+four-bit quant into a five-bit one amounts to. **Sixteen instructions a
+block, shared by all eight vectors of a strip.**
+
+**Alternated three rounds against three, one sitting, `--backend cpu`,
+TinyLlama-1.1B-Chat requantized to each:**
+
+| `Q5_0` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 3.978, 4.022, 3.999 s | 0.186, 0.192, 0.187 s | **21.1x** |
+| prompt, 1419 | 57.845 s | 3.124 s | **18.5x** |
+| generating, 17 | 1.725, 1.724, 1.738 s | 0.320, 0.321, 0.319 s | **5.40x** |
+| generating, 64 | 6.698 s | 1.335 s | **5.02x** |
+
+| `Q5_1` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.197, 4.172, 4.140 s | 0.185, 0.185, 0.185 s | **22.5x** |
+| prompt, 1419 | 57.605 s | 3.026 s | **19.0x** |
+| generating, 64 | 6.921, 6.915, 6.953 s | 1.285, 1.289, 1.290 s | **5.38x** |
+
+**Every digest is unchanged, at both lengths and on both layouts** --
+`61fda0268954d85b` and `a5c0f9b2b89bbc68` for `Q5_0`, `90f72ad934240ff0`
+and `a5c0f9b2b89bbc68` for `Q5_1`. That is worth noting beside `Q4_1`, whose
+long-prompt digests *do* differ between its two paths: nothing about a
+digest matching is guaranteed when two arithmetics are compared, and it
+matching here is luck rather than evidence. The evidence is below.
+
+**Against llama.cpp** at `95b8e33e1`, same files, eight threads, same
+sitting:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| `Q5_0` prompt, 110 | **591.4 t/s** | 314.9 t/s | 1.88x ahead |
+| `Q5_0` prompt, 1419 | **454.2 t/s** | 253.6 t/s | 1.79x ahead |
+| `Q5_0` generating, 64 | 47.9 t/s | 59.2 t/s | 1.23x behind |
+| `Q5_1` prompt, 110 | **594.6 t/s** | 144.0 t/s | 4.13x ahead |
+| `Q5_1` prompt, 1419 | **468.9 t/s** | 124.8 t/s | 3.76x ahead |
+| `Q5_1` generating, 64 | 45.2 t/s | 54.2 t/s | 1.20x behind |
+
+The same caveat as the section below: **llama.cpp repacks neither of
+these.** `ggml-cpu/repack.cpp` builds `block_q4_0x8`, `block_q4_Kx8`,
+`block_iq4_nlx4` and `block_q2_Kx8`, and that is the list. So these are the
+eight-row layout against no layout, and the honest reading of 4.13 is that
+`Q5_1` is a format nobody optimized on either side until now.
+
+**The four legacy formats have converged**, which is the other thing these
+figures say. A 110-token prompt now reads 0.177, 0.177, 0.187 and 0.185
+seconds for `Q4_0`, `Q4_1`, `Q5_0` and `Q5_1` -- four formats whose stored
+readings run from 0.56 to 4.2 seconds. Once they share a layout and a kernel
+shape, what is left is how many bytes a block holds, and that is nearly the
+same for all four.
+
+**And the `### Kernels` table did not move**, which is the point worth
+keeping. `Q5_0` and `Q5_1` still read 0.52 and 0.55 nanoseconds an element
+there, still the two slowest rows, because `Row_Dot` is the row product and
+the row product still has the shift it always had. **Nothing reaches it for
+a matrix in panels.** A published figure that is still true and no longer
+describes what the program does is worth saying out loud rather than
+quietly restating.
+
+**How this is held.** `Panel_Legacy_Kernels_Are_Exact` compares all four
+legacy panel kernels against the floating-point path on activations that
+are **constant across each block of thirty-two** -- which quantize to one
+level and back without loss, so both paths see the same activations and the
+same dequantized weights and must agree to floating-point rounding rather
+than to the quantizer's tolerance. Two matrices: one whose blocks are a
+repeated value, where every quant is nought and a format's minimum or
+centring is its whole answer, and one varied, where about half the quants
+have their fifth bit set. The four agree to 6E-6.
+
+It was checked by breaking it. One group's fifth bit taken at a shift of one
+instead of two fails the test by 48.3 -- the range of the matrix -- and
+doubling the minimum's term fails it by 19306.
+
 ### The four-bit format that keeps a minimum, and a load at the head of a chain worth a third of a kernel
 
 `Q4_1` is `Q4_0`'s block with a second half-precision number in it: thirty-
@@ -8435,9 +8547,9 @@ behind to a fifth ahead, and the generated token from 4.4 times behind to
 instruction. The first was a format missing from a list of four and the
 second was a layout that existed for three other formats.
 
-**What is not built, still.** `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K` are on the
-floating-point path and are named rather than measured. `Q4_1` was on that
-list for a day; the section above is where it went.
+**What is not built, still.** `Q2_K` and `Q3_K` are on the floating-point
+path and are named rather than measured. `Q4_1`, `Q5_0` and `Q5_1` were on
+that list for a day each; the sections above are where they went.
 
 ### The legacy four-bit format was on the floating-point path, and is not now
 
