@@ -50,6 +50,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`MXFP4`'s panel keeps the exponent byte and the kernel converts it --
+  the panel is the size of its rows again and a generated token is a tenth
+  faster.** It was written with binary32 scales, four bytes a row, which
+  made it the one panel over a thirty-two-element block that did not fit the
+  rows it held: 160 bytes against 136. The kernel now widens the eight
+  bytes, shifts the biased exponent into place, shifts the leading bit for
+  the two subnormal exponents, compares and blends under a mask -- six
+  instructions a block.
+
+  | | binary32 scales | the exponent byte | |
+  | --- | ---: | ---: | ---: |
+  | prompt, 110 | 0.261, 0.264, 0.268 s | 0.262, 0.264, 0.265 s | a wash |
+  | prompt, 1419 | 4.118 s | 4.134 s | a wash |
+  | generating, 21 | 0.362, 0.363, 0.363 s | 0.325, 0.326, 0.326 s | **1.11x** |
+  | generating, 64 | 1.238 s | 1.125 s | **1.10x** |
+  | loading | 0.330 s | 0.289 s | |
+
+  **And it corrects the guess the section published an hour before it
+  made.** That section named the panel's extra bytes as the likely reason
+  this kernel was the only one to lose to llama.cpp. Removing them closed a
+  tenth of the generating gap and **none** of the prompt gap, so the prompt
+  gap stands unexplained: llama.cpp reads this format row-major, without a
+  repack, and still evaluates a prompt one and a sixth faster. That is the
+  one number in this run of sections that is not accounted for, and the
+  README says so rather than dressing it up.
+
+  Fifteen per cent less to read is worth a tenth of a generated token and
+  nothing on a prompt, which is what those two are: one vector against the
+  whole matrix is a read, eight vectors against one reading of it is
+  arithmetic. Digests unchanged at both lengths.
+
 - **`Panel_Quantized_Kernels_Are_Exact` measures against the size of the
   answers rather than absolutely.** Two things made the old absolute bound
   wrong once a ninth format arrived: these formats do not produce numbers of

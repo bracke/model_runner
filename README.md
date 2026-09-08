@@ -8225,13 +8225,16 @@ such in the section below. It has one now, and `--repack rows` covers
 
 **The scale is what makes this panel different from every other.** Two to
 the byte less 128 runs from 2^-128 to 2^127, and a half cannot hold either
-end, so this is the one layout here whose scales are **binary32**: 160 bytes
-against the eight rows' seventeen each. Every other panel over a
-thirty-two-element block is exactly the size of the rows it holds. The
-conversion is done once at load, by the bit pattern the decoder uses rather
-than a power taken at run time, so it is exact -- and the kernel **loads**
-eight floats where every other kernel here widens eight halves, which is one
-instruction fewer.
+end. **It was written as binary32 first** -- four bytes a row, 160 against
+the eight rows' seventeen each -- which made this the one panel over a
+thirty-two-element block that did not fit the rows it held, and the kernel
+that read it the only one to lose to llama.cpp.
+
+**So the panel keeps the byte and the kernel converts it**, which is six
+instructions a block: widen the eight bytes, shift the biased exponent into
+place, shift the leading bit for the two subnormal exponents, compare, and
+blend the two under a mask. The panel is 136 bytes, the size of its rows,
+and there is nothing here that is not the file's own bytes rearranged.
 
 **And the bias comes off in whole numbers**, where `IQ4_NL` takes it off as
 a floating-point term. That is a real difference and the table is why: this
@@ -8247,13 +8250,34 @@ only one of nine that reads zero.
 
 | | as stored | `--repack rows` | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 | 3.968, 4.025, 4.214 s | 0.261, 0.264, 0.268 s | **15.4x** |
-| prompt, 1419 | 57.221 s | 4.118 s | **13.9x** |
-| generating, 21 | 2.346, 2.344, 2.367 s | 0.362, 0.363, 0.363 s | **6.47x** |
-| generating, 64 | 7.404 s | 1.238 s | **5.98x** |
+| prompt, 110 | 3.968, 4.025, 4.214 s | 0.262, 0.264, 0.265 s | **15.4x** |
+| prompt, 1419 | 57.221 s | 4.134 s | **13.8x** |
+| generating, 21 | 2.346, 2.344, 2.367 s | 0.325, 0.326, 0.326 s | **7.20x** |
+| generating, 64 | 7.404 s | 1.125 s | **6.58x** |
 
 Digests unchanged on both paths at both lengths, `323e0f4ae1822664` and
 `00f047036c93974f`.
+
+**And the two panels measured against each other say something the first
+version of this section guessed wrong.** With four-byte scales the same runs
+read 0.261/0.264/0.268 s at 110 tokens, 4.118 s at 1419, and 0.362/0.363/
+0.363 and 1.238 s generating. Keeping the byte is:
+
+| | binary32 scales | the exponent byte | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 0.261, 0.264, 0.268 s | 0.262, 0.264, 0.265 s | a wash |
+| prompt, 1419 | 4.118 s | 4.134 s | a wash |
+| generating, 21 | 0.362, 0.363, 0.363 s | 0.325, 0.326, 0.326 s | **1.11x** |
+| generating, 64 | 1.238 s | 1.125 s | **1.10x** |
+| loading | 0.330 s | 0.289 s | |
+
+**Fifteen per cent less to read is worth a tenth of a generated token and
+nothing at all on a prompt**, which is exactly what those two are: one
+vector against the whole matrix is a read, and eight vectors against one
+reading of it is arithmetic. The six conversion instructions a block are
+free on a prompt because the prompt was never waiting for them, and the
+smaller panel is free on a prompt because the prompt was never waiting for
+the bytes either.
 
 **The file is a mixture and that has to be said**, because no dense `MXFP4`
 model exists to hand: `llama-quantize` writes this format only for a
@@ -8267,30 +8291,33 @@ sitting:
 
 | | this engine | llama.cpp | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 tokens | 421.5 t/s | **483.1 t/s** | 1.15x behind |
-| prompt, 1419 tokens | 344.6 t/s | **418.4 t/s** | 1.21x behind |
-| generating, 64 tokens | 51.7 t/s | **73.0 t/s** | 1.41x behind |
+| prompt, 110 tokens | 416.7 t/s | **483.1 t/s** | 1.16x behind |
+| prompt, 1419 tokens | 343.2 t/s | **418.4 t/s** | 1.22x behind |
+| generating, 64 tokens | 56.9 t/s | **73.0 t/s** | 1.28x behind |
 
 **This is the first of the eight formats panelled today where the panel
 path lands behind**, and it is worth being plain about rather than burying:
 llama.cpp does not repack `MXFP4` either -- it is not in `repack.cpp`'s list
 -- so this is an eight-row layout losing to a row-major kernel.
 
-**Two things are candidates and neither was chased.** The panel is 160 bytes
-where the block is 136, eighteen per cent more to read, and it is the only
-32-element panel here that grows at all; and the scale is four bytes a row
-where every other format's is two, which is thirty-two bytes a block of load
-against sixteen. Both point the same way -- this kernel reads more than its
-neighbours for the same arithmetic -- and the fix, if it is one, is to keep
-the exponent byte and convert it in the kernel: three instructions a block
-against sixteen bytes, and a panel that is exactly the size of its rows. The
-two subnormal exponents are what stands in the way, and they were not worth
-guessing about at the end of a long day.
+**One candidate was named and it has been tried.** The section first said
+the panel's eighteen per cent of extra bytes was the likely cause and that
+keeping the exponent byte would be the fix. Keeping it **closed a tenth of
+the generating gap and none of the prompt gap**, which says the extra bytes
+were never what the prompt was waiting for. So the prompt gap stands
+unexplained: llama.cpp reads this format row-major, without a repack, and
+still evaluates a prompt one and a sixth faster than an eight-row panel
+does. That is the one number in this run of sections that is not accounted
+for, and it is left that way rather than dressed up.
 
 **Twelve formats, and what the table looks like now.** A 110-token prompt
-reads 0.171 to 0.268 seconds for every quantized format the engine
+reads 0.171 to 0.265 seconds for every quantized format the engine
 multiplies, against stored readings from 0.29 to 4.2. `MXFP4` is the slowest
-of the twelve and the only one behind llama.cpp.
+of the twelve and the only one behind llama.cpp. **Every panel is now
+exactly the size of the rows it holds** except the two- and three-bit
+k-quants and the four-, five- and six-bit ones, which grow because they take
+packed sub-block scales out into bytes -- and those five buy the growth back
+many times over.
 
 ### The two formats whose nibble is not a number, and a table lookup that is one instruction
 

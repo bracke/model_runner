@@ -792,12 +792,11 @@ package body Model_Runner.Quantization.Interleave is
 
    --  One row's block-exponent block, written into its panel.
    --
-   --  The nibbles go exactly where IQ4_NL's go. What is done here and
-   --  nowhere else is the scale: the file keeps an E8M0 exponent byte and
-   --  the panel keeps the binary32 number it stands for, because two to the
-   --  byte less a hundred and twenty-eight does not fit in a half at either
-   --  end of its range. The conversion is the one the decoder does, a bit
-   --  pattern rather than a power taken at run time, so it is exact.
+   --  The shortest permutation here: the nibbles go where IQ4_NL's go and
+   --  the exponent byte goes where a half would, one byte a row rather than
+   --  two. Nothing is converted -- the kernel does that, because two to the
+   --  byte less a hundred and twenty-eight needs four bytes to write down
+   --  and one to say.
    procedure Build_Micro
      (Source : B.Byte_Array;
       In_At  : B.Byte_Index;
@@ -805,23 +804,8 @@ package body Model_Runner.Quantization.Interleave is
       Out_At : B.Byte_Index;
       Lane   : B.Byte_Count)
    is
-      Held : constant Interfaces.Unsigned_8 := Source (In_At);
-
-      --  Two to the byte less a hundred and twenty-eight has a biased
-      --  exponent of the byte less one and no mantissa; the two bytes below
-      --  that are subnormal, where what shifts is the leading bit.
-      Bits : constant Interfaces.Unsigned_32 :=
-        (if Held < 2
-         then Interfaces.Shift_Left (16#0020_0000#, Natural (Held))
-         else Interfaces.Shift_Left
-                (Interfaces.Unsigned_32 (Held) - 1, 23));
    begin
-      for Index in B.Byte_Count range 0 .. 3 loop
-         Target (Out_At + Micro_Scale_At + Lane * 4 + Index) :=
-           Interfaces.Unsigned_8
-             (Interfaces.Shift_Right (Bits, Natural (Index) * 8)
-              and 16#FF#);
-      end loop;
+      Target (Out_At + Micro_Scale_At + Lane) := Source (In_At);
 
       for Group in B.Byte_Count range 0 .. 3 loop
          declare
@@ -1418,8 +1402,7 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Take_Level;
 
-   --  And one row of a block-exponent panel, the scale taken back to the
-   --  exponent byte it came from.
+   --  And one row of a block-exponent panel.
    procedure Take_Micro
      (Source : B.Byte_Array;
       In_At  : B.Byte_Index;
@@ -1427,23 +1410,8 @@ package body Model_Runner.Quantization.Interleave is
       Out_At : B.Byte_Index;
       Lane   : B.Byte_Count)
    is
-      Bits : Interfaces.Unsigned_32 := 0;
    begin
-      for Index in B.Byte_Count range 0 .. 3 loop
-         Bits := Bits
-           or Interfaces.Shift_Left
-                (Interfaces.Unsigned_32
-                   (Source (In_At + Micro_Scale_At + Lane * 4 + Index)),
-                 Natural (Index) * 8);
-      end loop;
-
-      --  The two subnormal patterns stand for exponents nought and one;
-      --  every other is the biased exponent plus one.
-      Target (Out_At) :=
-        (if Bits = 16#0020_0000# then 0
-         elsif Bits = 16#0040_0000# then 1
-         else Interfaces.Unsigned_8
-                (Interfaces.Shift_Right (Bits, 23) + 1));
+      Target (Out_At) := Source (In_At + Micro_Scale_At + Lane);
 
       for Group in B.Byte_Count range 0 .. 3 loop
          declare

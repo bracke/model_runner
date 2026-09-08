@@ -108,7 +108,7 @@ package Model_Runner.Quantization.Interleave is
    Two_Block_Bytes   : constant := 800;
    Three_Block_Bytes : constant := 912;
    Level_Block_Bytes : constant := 1104;
-   Micro_Block_Bytes : constant := 160;
+   Micro_Block_Bytes : constant := 136;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -297,17 +297,19 @@ package Model_Runner.Quantization.Interleave is
    --  to that byte less a hundred and twenty-eight -- and the range of that
    --  runs from two to the minus hundred and twenty-eight to two to the
    --  hundred and twenty-seventh, which a half cannot hold at either end.
-   --  So this is the one panel here whose scales are binary32:
    --
-   --     0 ..  31   the eight rows' block scales, binary32
-   --    32 .. 159   the eight rows' quants, interleaved
+   --  SO THE PANEL KEEPS THE BYTE. It was written as binary32 first, four
+   --  bytes a row, which made this the one panel over a thirty-two element
+   --  block that did not fit the rows it held -- 160 bytes against 136 --
+   --  and the kernel that read it was the only one to lose to llama.cpp.
+   --  The exponent is converted in the kernel instead, six instructions a
+   --  block against a load of twice the width, and the panel is the size of
+   --  its rows again:
    --
-   --  160 bytes against the eight rows' seventeen each, which is the only
-   --  thing this format's panel costs that IQ4_NL's does not -- and the
-   --  kernel is one instruction shorter for it, loading eight floats where
-   --  the others widen eight halves.
+   --     0 ..   7   the eight rows' exponent bytes
+   --     8 .. 135   the eight rows' quants, interleaved
    Micro_Scale_At  : constant := 0;
-   Micro_Quants_At : constant := 32;
+   Micro_Quants_At : constant := 8;
 
    --  Bytes a panel block occupies in the layout this format takes.
    --

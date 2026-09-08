@@ -14311,31 +14311,40 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpsllw $8, %%ymm3, %%ymm2" & LF &
                   "vpor %%ymm2, %%ymm3, %%ymm3" & LF &
                   "vmovdqu (%5), %%ymm7" & LF &
+                  "vpcmpeqd %%ymm8, %%ymm8, %%ymm8" & LF &
+                  "vpsrld $31, %%ymm8, %%ymm8" & LF &
+                  "vpslld $1, %%ymm8, %%ymm9" & LF &
+                  "vpslld $21, %%ymm8, %%ymm10" & LF &
                   "movq %1, %%r11" & LF &
                   "movq %2, %%r9" & LF &
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  "vmovups 0(%%r11), %%ymm4" & LF &
-                  "vmovdqu 32(%%r11), %%ymm0" & LF &
+                  "vpmovzxbd 0(%%r11), %%ymm4" & LF &
+                  "vpsllvd %%ymm4, %%ymm10, %%ymm11" & LF &
+                  "vpsubd %%ymm8, %%ymm4, %%ymm5" & LF &
+                  "vpslld $23, %%ymm5, %%ymm5" & LF &
+                  "vpcmpd $5, %%ymm9, %%ymm4, %%k1" & LF &
+                  "vpblendmd %%ymm5, %%ymm11, %%ymm4%{%%k1%}" & LF &
+                  "vmovdqu 8(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
                   "vpshufb %%ymm24, %%ymm7, %%ymm24" & LF &
                   "vpshufb %%ymm25, %%ymm7, %%ymm25" & LF &
-                  "vmovdqu 64(%%r11), %%ymm0" & LF &
+                  "vmovdqu 40(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm26" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpshufb %%ymm26, %%ymm7, %%ymm26" & LF &
                   "vpshufb %%ymm27, %%ymm7, %%ymm27" & LF &
-                  "vmovdqu 96(%%r11), %%ymm0" & LF &
+                  "vmovdqu 72(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm28" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm29" & LF &
                   "vpshufb %%ymm28, %%ymm7, %%ymm28" & LF &
                   "vpshufb %%ymm29, %%ymm7, %%ymm29" & LF &
-                  "vmovdqu 128(%%r11), %%ymm0" & LF &
+                  "vmovdqu 104(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm30" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm31" & LF &
@@ -14453,7 +14462,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmulps 28(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
                   "vcvtdq2ps %%ymm6, %%ymm6" & LF &
                   "vfmadd231ps %%ymm5, %%ymm6, %%ymm23" & LF &
-                  "addq $160, %%r11" & LF &
+                  "addq $136, %%r11" & LF &
                   "addq $64, %%r9" & LF &
                   "addq $32, %%rdx" & LF &
                   "decq %%rcx" & LF &
@@ -14474,8 +14483,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      Element_Count'Asm_Input ("r", Chunk),
                      System.Address'Asm_Input ("r", Table'Address)],
                   Clobber  =>
-                    "rcx,rdx,r9,r10,r11,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
-                    & "ymm7,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
+                    "rcx,rdx,r9,r10,r11,k1,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
+                    & "ymm7,ymm8,ymm9,ymm10,ymm11,"
+     & "ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
                     & "ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,"
                     & "memory",
                   Volatile => True);
@@ -14538,31 +14548,40 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpsllw $8, %%ymm3, %%ymm2" & LF &
                   "vpor %%ymm2, %%ymm3, %%ymm3" & LF &
                   "vmovdqu (%5), %%ymm7" & LF &
+                  "vpcmpeqd %%ymm8, %%ymm8, %%ymm8" & LF &
+                  "vpsrld $31, %%ymm8, %%ymm8" & LF &
+                  "vpslld $1, %%ymm8, %%ymm9" & LF &
+                  "vpslld $21, %%ymm8, %%ymm10" & LF &
                   "movq %1, %%r11" & LF &
                   "movq %2, %%r9" & LF &
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  "vmovups 0(%%r11), %%ymm4" & LF &
-                  "vmovdqu 32(%%r11), %%ymm0" & LF &
+                  "vpmovzxbd 0(%%r11), %%ymm4" & LF &
+                  "vpsllvd %%ymm4, %%ymm10, %%ymm11" & LF &
+                  "vpsubd %%ymm8, %%ymm4, %%ymm5" & LF &
+                  "vpslld $23, %%ymm5, %%ymm5" & LF &
+                  "vpcmpd $5, %%ymm9, %%ymm4, %%k1" & LF &
+                  "vpblendmd %%ymm5, %%ymm11, %%ymm4%{%%k1%}" & LF &
+                  "vmovdqu 8(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
                   "vpshufb %%ymm24, %%ymm7, %%ymm24" & LF &
                   "vpshufb %%ymm25, %%ymm7, %%ymm25" & LF &
-                  "vmovdqu 64(%%r11), %%ymm0" & LF &
+                  "vmovdqu 40(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm26" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpshufb %%ymm26, %%ymm7, %%ymm26" & LF &
                   "vpshufb %%ymm27, %%ymm7, %%ymm27" & LF &
-                  "vmovdqu 96(%%r11), %%ymm0" & LF &
+                  "vmovdqu 72(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm28" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm29" & LF &
                   "vpshufb %%ymm28, %%ymm7, %%ymm28" & LF &
                   "vpshufb %%ymm29, %%ymm7, %%ymm29" & LF &
-                  "vmovdqu 128(%%r11), %%ymm0" & LF &
+                  "vmovdqu 104(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm30" & LF &
                   "vpsrlw $4, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm31" & LF &
@@ -14582,7 +14601,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmulps 0(%%r9)%{1to8%}, %%ymm4, %%ymm5" & LF &
                   "vcvtdq2ps %%ymm6, %%ymm6" & LF &
                   "vfmadd231ps %%ymm5, %%ymm6, %%ymm16" & LF &
-                  "addq $160, %%r11" & LF &
+                  "addq $136, %%r11" & LF &
                   "addq $64, %%r9" & LF &
                   "addq $32, %%rdx" & LF &
                   "decq %%rcx" & LF &
@@ -14596,8 +14615,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      Element_Count'Asm_Input ("r", Chunk),
                      System.Address'Asm_Input ("r", Table'Address)],
                   Clobber  =>
-                    "rcx,rdx,r9,r10,r11,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
-                    & "ymm7,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
+                    "rcx,rdx,r9,r10,r11,k1,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,"
+                    & "ymm7,ymm8,ymm9,ymm10,ymm11,"
+     & "ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
                     & "ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,"
                     & "memory",
                   Volatile => True);
