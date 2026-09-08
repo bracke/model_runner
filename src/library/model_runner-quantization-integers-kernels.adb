@@ -18268,4 +18268,376 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Ok := True;
    end Rows;
 
+   --  The same two, one element at a time.
+   --
+   --  Reached by the two compilations that may not name a five-hundred-and
+   --  -twelve bit register, and what they answer is what the insertion
+   --  answers: the operations are the same operations in the same order.
+   procedure Rounded_Plainly
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32);
+
+   procedure Packed_Plainly
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Scale   : out Model_Runner.Numerics.Real;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32;
+      Finite  : out Boolean);
+
+   procedure Rounded_Plainly
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32)
+   is
+      use type Interfaces.Integer_32;
+
+      Sum : Interfaces.Integer_32 := 0;
+   begin
+      Earlier := 0;
+
+      for Index in 0 .. Element_Count (Activation_Block) - 1 loop
+         declare
+            Scaled : constant N.Real :=
+              Vectors (Vectors'First + At_It + Index) * Inverse;
+
+            Near : constant Integer :=
+              Integer'Max
+                (-127,
+                 Integer'Min (127, Integer (N.Real'Rounding (Scaled))));
+         begin
+            Values (Values'First + At_Out + Index) := Byte_Signed (Near);
+            Sum := Sum + Interfaces.Integer_32 (Near);
+         end;
+
+         if Index = Element_Count (Activation_Half) - 1 then
+            Earlier := Sum;
+         end if;
+      end loop;
+
+      Total := Sum;
+   end Rounded_Plainly;
+
+   procedure Packed_Plainly
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Scale   : out Model_Runner.Numerics.Real;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32;
+      Finite  : out Boolean)
+   is
+      Largest : N.Real := 0.0;
+      Inverse : N.Real;
+   begin
+      Scale := 0.0;
+      Earlier := 0;
+      Total := 0;
+      Finite := True;
+
+      for Index in 0 .. Element_Count (Activation_Block) - 1 loop
+         declare
+            Value : constant N.Real :=
+              Vectors (Vectors'First + At_It + Index);
+         begin
+            if not N.Is_Finite (Value) then
+               Finite := False;
+               return;
+            elsif abs Value > Largest then
+               Largest := abs Value;
+            end if;
+         end;
+      end loop;
+
+      Scale := Largest / 127.0;
+      Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);
+
+      Rounded_Plainly
+        (Vectors, At_It, Inverse, Values, At_Out, Earlier, Total);
+   end Packed_Plainly;
+
+   --  A cache line of an activation is a vector, and this is what a block
+   --  of one costs.
+   --
+   --  Two procedures share the whole of their arithmetic and differ in
+   --  where the scale comes from, so the arithmetic is written once, as
+   --  text, and each of them says where its own numbers begin. Block_Pack
+   --  finds the block's own scale; Block_Round is given one, which is what
+   --  a k-quant's activation wants because its scale spans eight blocks.
+   --
+   --  THE ROUNDING IS THE PART THAT HAD TO BE EXACT. Ada rounds a tie away
+   --  from zero, which no rounding mode of the instruction offers, so it is
+   --  built: truncate, take the fraction the truncation left -- which is
+   --  exact, both being binary32 -- and add one carrying the value's own
+   --  sign wherever that fraction reaches a half. Every step is exact, so
+   --  this answers what the element-at-a-time loop answers, bit for bit,
+   --  and a test says so on both sides of a tie.
+   --
+   --  What it is for: a generated token quantizes its activation before
+   --  every one of its products, on the one task that has to finish before
+   --  any worker may begin, and a profile put that at two and a half per
+   --  cent of the token.
+
+   LF : constant Character := ASCII.LF;
+
+   --  Operands, the same in both: %0 the first half's sum, %1 the whole
+   --  block's, %2 the scale, %3 whether every number was finite, %4 the
+   --  activation, %5 the bytes, %6 an inverse scale a caller supplies.
+
+   --  zmm0 and zmm1 hold the block; leaves them scaled by zmm6.
+   Apply_Text : constant String :=
+     "vmulps %%zmm6, %%zmm0, %%zmm0"                & LF
+     & "vmulps %%zmm6, %%zmm1, %%zmm1"              & LF;
+
+   --  zmm0 and zmm1 hold the scaled block; stores its bytes and its sums.
+   Round_Text : constant String :=
+     "movl $0x3f000000, %%eax"                      & LF
+     & "vpbroadcastd %%eax, %%zmm5"                 & LF
+     & "movl $0x3f800000, %%eax"                    & LF
+     & "vpbroadcastd %%eax, %%zmm4"                 & LF
+     & "movl $0x80000000, %%eax"                    & LF
+     & "vpbroadcastd %%eax, %%zmm10"                & LF
+     & "movl $0x7fffffff, %%eax"                    & LF
+     & "vpbroadcastd %%eax, %%zmm7"                 & LF
+
+     --  Ties away from zero, built from a truncation.
+     & "vrndscaleps $0x0B, %%zmm0, %%zmm2"          & LF
+     & "vrndscaleps $0x0B, %%zmm1, %%zmm3"          & LF
+     & "vsubps %%zmm2, %%zmm0, %%zmm8"              & LF
+     & "vsubps %%zmm3, %%zmm1, %%zmm9"              & LF
+     & "vandps %%zmm7, %%zmm8, %%zmm8"              & LF
+     & "vandps %%zmm7, %%zmm9, %%zmm9"              & LF
+     & "vandps %%zmm10, %%zmm0, %%zmm11"            & LF
+     & "vandps %%zmm10, %%zmm1, %%zmm12"            & LF
+     & "vorps %%zmm4, %%zmm11, %%zmm11"             & LF
+     & "vorps %%zmm4, %%zmm12, %%zmm12"             & LF
+     & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1"         & LF
+     & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}"     & LF
+     & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1"         & LF
+     & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}"     & LF
+
+     --  Clamped at a hundred and twenty-seven either way: the byte dot
+     --  product negates an activation, and minus a hundred and twenty-eight
+     --  negated in a byte is itself.
+     & "movl $0x42fe0000, %%eax"                    & LF
+     & "vpbroadcastd %%eax, %%zmm13"                & LF
+     & "movl $0xc2fe0000, %%eax"                    & LF
+     & "vpbroadcastd %%eax, %%zmm14"                & LF
+     & "vminps %%zmm13, %%zmm2, %%zmm2"             & LF
+     & "vminps %%zmm13, %%zmm3, %%zmm3"             & LF
+     & "vmaxps %%zmm14, %%zmm2, %%zmm2"             & LF
+     & "vmaxps %%zmm14, %%zmm3, %%zmm3"             & LF
+
+     & "vcvttps2dq %%zmm2, %%zmm2"                  & LF
+     & "vcvttps2dq %%zmm3, %%zmm3"                  & LF
+     & "vpmovsdb %%zmm2, 0(%5)"                     & LF
+     & "vpmovsdb %%zmm3, 16(%5)"                    & LF
+
+     --  And the two sums, each folded down from sixteen lanes.
+     & "vextracti64x4 $1, %%zmm2, %%ymm15"          & LF
+     & "vpaddd %%ymm15, %%ymm2, %%ymm15"            & LF
+     & "vextracti128 $1, %%ymm15, %%xmm11"          & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vpshufd $0x4E, %%xmm15, %%xmm11"            & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vpshufd $0xB1, %%xmm15, %%xmm11"            & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vmovd %%xmm15, %%eax"                       & LF
+     & "movl %%eax, %0"                             & LF
+
+     & "vextracti64x4 $1, %%zmm3, %%ymm15"          & LF
+     & "vpaddd %%ymm15, %%ymm3, %%ymm15"            & LF
+     & "vextracti128 $1, %%ymm15, %%xmm11"          & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vpshufd $0x4E, %%xmm15, %%xmm11"            & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vpshufd $0xB1, %%xmm15, %%xmm11"            & LF
+     & "vpaddd %%xmm11, %%xmm15, %%xmm15"           & LF
+     & "vmovd %%xmm15, %%eax"                       & LF
+     & "addl %0, %%eax"                             & LF
+     & "movl %%eax, %1"                             & LF;
+
+   Clobbered : constant String :=
+     "rax,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,zmm10,"
+     & "zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,zmm17,zmm18,zmm19,zmm20,"
+     & "zmm21,k1,k2,k3,cc,memory";
+
+   ----------------
+   -- Block_Pack --
+   ----------------
+
+   procedure Block_Pack
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Scale   : out Model_Runner.Numerics.Real;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32;
+      Finite  : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      At_Value : constant System.Address :=
+        Vectors (Vectors'First + At_It)'Address;
+      At_Byte  : constant System.Address :=
+        Values (Values'First + At_Out)'Address;
+
+      Held  : aliased constant N.Real := 0.0;
+      Found : N.Real := 0.0;
+      First : Interfaces.Integer_32 := 0;
+      Whole : Interfaces.Integer_32 := 0;
+      Fine  : Interfaces.Unsigned_8 := 0;
+   begin
+      if not Deep then
+         Packed_Plainly
+           (Vectors, At_It, Values, At_Out, Scale, Earlier, Total, Finite);
+         return;
+      end if;
+
+      System.Machine_Code.Asm
+        ("vmovups 0(%4), %%zmm0"                       & LF
+         & "vmovups 64(%4), %%zmm1"                    & LF
+
+         --  The magnitudes, and whether every one of them is a number.
+         --  Anything that is not fails the ordered compare against
+         --  infinity, an infinity and a NaN alike.
+         & "movl $0x7fffffff, %%eax"                   & LF
+         & "vpbroadcastd %%eax, %%zmm7"                & LF
+         & "movl $0x7f800000, %%eax"                   & LF
+         & "vpbroadcastd %%eax, %%zmm16"               & LF
+         & "vandps %%zmm7, %%zmm0, %%zmm8"             & LF
+         & "vandps %%zmm7, %%zmm1, %%zmm9"             & LF
+         & "vcmpps $0x11, %%zmm16, %%zmm8, %%k1"       & LF
+         & "vcmpps $0x11, %%zmm16, %%zmm9, %%k2"       & LF
+         & "kandw %%k1, %%k2, %%k1"                    & LF
+         & "kmovw %%k1, %%eax"                         & LF
+         & "cmpl $0xffff, %%eax"                       & LF
+         & "jne 1f"                                    & LF
+
+         --  The largest of them, folded down from thirty-two lanes.
+         & "vmaxps %%zmm9, %%zmm8, %%zmm8"             & LF
+         & "vextractf64x4 $1, %%zmm8, %%ymm2"          & LF
+         & "vmaxps %%ymm2, %%ymm8, %%ymm2"             & LF
+         & "vextractf128 $1, %%ymm2, %%xmm3"           & LF
+         & "vmaxps %%xmm3, %%xmm2, %%xmm2"             & LF
+         & "vmovhlps %%xmm2, %%xmm2, %%xmm3"           & LF
+         & "vmaxps %%xmm3, %%xmm2, %%xmm2"             & LF
+         & "vshufps $1, %%xmm2, %%xmm2, %%xmm3"        & LF
+         & "vmaxps %%xmm3, %%xmm2, %%xmm2"             & LF
+
+         --  The scale, and its inverse where there is one. A block of
+         --  zeros has none, and every byte of it is zero either way.
+         & "movl $0x42fe0000, %%eax"                   & LF
+         & "vmovd %%eax, %%xmm17"                      & LF
+         & "vdivss %%xmm17, %%xmm2, %%xmm18"           & LF
+         & "vmovss %%xmm18, %2"                        & LF
+         & "movl $0x3f800000, %%eax"                   & LF
+         & "vmovd %%eax, %%xmm19"                      & LF
+         & "vdivss %%xmm18, %%xmm19, %%xmm20"          & LF
+         & "vbroadcastss %%xmm18, %%zmm21"             & LF
+         & "vpxord %%zmm6, %%zmm6, %%zmm6"             & LF
+         & "vcmpps $0x1E, %%zmm6, %%zmm21, %%k3"       & LF
+         & "vbroadcastss %%xmm20, %%zmm6%{%%k3%}"      & LF
+
+         & Apply_Text
+         & Round_Text
+
+         & "movb $1, %3"                               & LF
+         & "jmp 2f"                                    & LF
+         & "1:"                                        & LF
+         & "movb $0, %3"                               & LF
+         & "2:"                                        & LF
+         & "vzeroupper",
+         Outputs =>
+           [Interfaces.Integer_32'Asm_Output ("=m", First),
+            Interfaces.Integer_32'Asm_Output ("=m", Whole),
+            N.Real'Asm_Output ("=m", Found),
+            Interfaces.Unsigned_8'Asm_Output ("=m", Fine)],
+         Inputs   =>
+           [System.Address'Asm_Input ("r", At_Value),
+            System.Address'Asm_Input ("r", At_Byte),
+            N.Real'Asm_Input ("m", Held)],
+         Clobber  => Clobbered,
+         Volatile => True);
+
+      Finite := Interfaces."/=" (Fine, 0);
+      Scale := (if Finite then Found else 0.0);
+      Earlier := First;
+      Total := Whole;
+   end Block_Pack;
+
+   -----------------
+   -- Block_Round --
+   -----------------
+
+   procedure Block_Round
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      At_Value : constant System.Address :=
+        Vectors (Vectors'First + At_It)'Address;
+      At_Byte  : constant System.Address :=
+        Values (Values'First + At_Out)'Address;
+
+      Held  : aliased constant N.Real := Inverse;
+      Found : N.Real := 0.0;
+      First : Interfaces.Integer_32 := 0;
+      Whole : Interfaces.Integer_32 := 0;
+      Fine  : Interfaces.Unsigned_8 := 0;
+   begin
+      if not Deep then
+         Rounded_Plainly (Vectors, At_It, Inverse, Values, At_Out,
+                          Earlier, Total);
+         return;
+      end if;
+
+      System.Machine_Code.Asm
+        ("vmovups 0(%4), %%zmm0"                       & LF
+         & "vmovups 64(%4), %%zmm1"                    & LF
+         & "vbroadcastss %6, %%zmm6"                   & LF
+         & Apply_Text
+         & Round_Text
+         & "movb $1, %3"                               & LF
+         & "vmovss %%xmm0, %2"                         & LF
+         & "vzeroupper",
+         Outputs =>
+           [Interfaces.Integer_32'Asm_Output ("=m", First),
+            Interfaces.Integer_32'Asm_Output ("=m", Whole),
+            N.Real'Asm_Output ("=m", Found),
+            Interfaces.Unsigned_8'Asm_Output ("=m", Fine)],
+         Inputs   =>
+           [System.Address'Asm_Input ("r", At_Value),
+            System.Address'Asm_Input ("r", At_Byte),
+            N.Real'Asm_Input ("m", Held)],
+         Clobber  => Clobbered,
+         Volatile => True);
+
+      Earlier := First;
+      Total := Whole;
+   end Block_Round;
+
 end Model_Runner.Quantization.Integers.Kernels;

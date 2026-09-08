@@ -105,4 +105,61 @@ package Model_Runner.Quantization.Integers.Kernels is
       Ok        : out Boolean;
       Interleaved : Boolean := False);
 
+   --  A block of an activation, packed: its own scale, its thirty-two
+   --  bytes and the two sums a k-quant's minimum term wants.
+   --
+   --  Multiply by the inverse of that scale, round to nearest with ties
+   --  away from zero, clamp to the byte the dot product can negate, store
+   --  thirty-two of them, and give back the sum of the first sixteen and
+   --  the sum of all of them.
+   --
+   --  These two are here rather than beside their caller because only this
+   --  unit is built for the instruction set they want, and because a static
+   --  formal is the only thing that lets one source carry both the
+   --  insertion and the loop without the baseline compilation naming a
+   --  register it has not got.
+   --
+   --  @param Vectors Activations to read.
+   --  @param At_It First element of the block, from Vectors'First.
+   --  @param Values Receives thirty-two bytes from At_Out.
+   --  @param At_Out First byte of the block, from Values'First.
+   --  @param Scale The block's largest magnitude over a hundred and
+   --    twenty-seven, or zero where nothing was finite.
+   --  @param Earlier Sum of the first sixteen.
+   --  @param Total Sum of all thirty-two.
+   --  @param Finite False where the block holds an infinity or a NaN, in
+   --    which case nothing else it reports means anything.
+   procedure Block_Pack
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Scale   : out Model_Runner.Numerics.Real;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32;
+      Finite  : out Boolean);
+
+   --  The same block against a scale somebody else found.
+   --
+   --  What a k-quant's activation wants: its scale spans eight blocks, so
+   --  the extent is taken over all of them and each block is only rounded.
+   --  Nothing else differs, and the two share the whole of their
+   --  arithmetic.
+   --
+   --  @param Vectors Activations to read.
+   --  @param At_It First element of the block, from Vectors'First.
+   --  @param Inverse One over the scale, or zero for a block of zeros.
+   --  @param Values Receives thirty-two bytes from At_Out.
+   --  @param At_Out First byte of the block, from Values'First.
+   --  @param Earlier Sum of the first sixteen.
+   --  @param Total Sum of all thirty-two.
+   procedure Block_Round
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Earlier : out Interfaces.Integer_32;
+      Total   : out Interfaces.Integer_32);
+
 end Model_Runner.Quantization.Integers.Kernels;

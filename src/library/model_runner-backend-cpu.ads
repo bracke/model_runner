@@ -504,6 +504,12 @@ private
      limited new Ada.Finalization.Limited_Controlled with record
       Control : aliased Coordinator (Workers);
       Waking  : aliased Wake_Signal (Workers);
+
+      --  How many shares the last matrix product was cut into, which is the
+      --  same thing as which workers are awake. Work that is not a matrix
+      --  product follows it rather than asking for the whole pool: see
+      --  Dispatch_Shares.
+      Latest  : Share_Count := Workers + 1;
       Team    : Worker_Array (1 .. Workers);
       Started : Boolean := False;
 

@@ -7,6 +7,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A generated token spends eleven per cent of itself on one task while
+  four workers watch, and three changes take two to three per cent of it
+  back.** Every job the pool posts was timed from the outside: 89.2 per cent
+  of a token is inside a product, 8.5 per cent is between one and the next,
+  and 2.2 per cent is preparing one. The products are already at the wall --
+  599 MB in 13.3 ms is 45.1 GB/s against a measured ceiling of 45.1 -- and
+  llama.cpp does the whole token in 13.7 ms, so the gap between the two
+  engines is that eleven per cent and not the arithmetic.
+
+  **The wake was measured rather than assumed.** A worker that finds its job
+  by spinning sees the ticket 0.69 microseconds after it is raised, timed
+  inside the worker against the poster's own stamp. `Inline_Floor` -- the
+  arithmetic below which shared work is done by the submitting task -- was a
+  million elements, written when a wake went through a protected entry. It
+  is 65,536, which is exactly what lets a generated token's attention go to
+  the pool.
+
+  **Shared work is cut into as many shares as the last product was.** Five
+  of eight workers are on a generated token's products and the other three
+  park; a job asking for the whole pool has to wake them, and the barrier of
+  a token's attention read 6.9 microseconds while it did and 1.0 once it
+  stopped. Naming the vector team there instead cost the 1419-token prompt
+  nine per cent and is recorded as the mistake it was.
+
+  **And the activation is packed in one pass instead of two** -- the block
+  loaded once into two 512-bit registers, its scale, its thirty-two bytes
+  and its two sums out of them, where it was a wide walk for the largest
+  magnitude and then a narrow one for the rounding. Ada rounds a tie away
+  from zero and no rounding mode of the instruction does, so it is built out
+  of a truncation and a fraction, and the test asserts every byte equal
+  rather than close, on both sides of a tie.
+
+  Alternated three rounds against three, 128 tokens generated, every reading
+  of one arm outside every reading of the other: Q4_0 in panels 1.032 times,
+  Q4_K_M 1.026, Q8_0 1.020, and the 1419-token prompt a wash.
+
 - **`gpt-oss` is read: the architecture MXFP4 exists for.** Today's MXFP4
   decoder, panel and kernel had been demonstrated on a file this repository
   had to manufacture with `--tensor-type`, because `llama-quantize` writes

@@ -250,7 +250,8 @@ package body Model_Runner.Quantization.Integers is
       Blocks   : constant Element_Count := Elements / Activation_Block;
 
       --  Blocks to a super-block.
-      Deep : constant Element_Count := Activation_Super / Activation_Block;
+      Per_Super : constant Element_Count :=
+        Activation_Super / Activation_Block;
    begin
       Ok := False;
 
@@ -273,8 +274,8 @@ package body Model_Runner.Quantization.Integers is
       if Super
         and then First <= Last
         and then (Columns mod Activation_Super /= 0
-                  or else First mod Deep /= 0
-                  or else (Last + 1) mod Deep /= 0)
+                  or else First mod Per_Super /= 0
+                  or else (Last + 1) mod Per_Super /= 0)
       then
          return;
       end if;
@@ -291,7 +292,7 @@ package body Model_Runner.Quantization.Integers is
       --  shape. The sums stay one for every thirty-two, because that is
       --  what a k-quant's minimum term wants them for.
       if Super then
-         for Super_Block in First / Deep .. Last / Deep loop
+         for Super_Block in First / Per_Super .. Last / Per_Super loop
             declare
                pragma Suppress (Index_Check);
                pragma Suppress (Range_Check);
@@ -304,7 +305,7 @@ package body Model_Runner.Quantization.Integers is
                Scale   : N.Real;
                Inverse : N.Real;
             begin
-               for Part in 0 .. Deep - 1 loop
+               for Part in 0 .. Per_Super - 1 loop
                   declare
                      Here   : N.Real;
                      Finite : Boolean;
@@ -327,18 +328,32 @@ package body Model_Runner.Quantization.Integers is
                Scale := Largest / 127.0;
                Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);
 
-               for Part in 0 .. Deep - 1 loop
+               for Part in 0 .. Per_Super - 1 loop
                   declare
                      At_Part : constant Element_Count :=
                        At_Element + Part * Activation_Block;
                      At_Half : constant Element_Count :=
-                       (Super_Block * Deep + Part)
+                       (Super_Block * Per_Super + Part)
                        * (Activation_Block / Activation_Half);
                      Total   : Interfaces.Integer_32 := 0;
                      Earlier : Interfaces.Integer_32 := 0;
                   begin
-                     Scales (Scales'First + Super_Block * Deep + Part) :=
+                     Scales (Scales'First + Super_Block * Per_Super + Part) :=
                        Scale;
+
+                     if Deeper then
+                        Deep.Block_Round
+                          (Vectors, At_Part, Inverse, Values, At_Part,
+                           Earlier, Total);
+
+                        Halves (Halves'First + At_Half) := Earlier;
+                        Halves (Halves'First + At_Half + 1) :=
+                          Total - Earlier;
+                        Totals (Totals'First + Super_Block * Per_Super + Part) :=
+                          Total;
+
+                        goto Part_Done;
+                     end if;
 
                      for Index in 0 .. Element_Count (Activation_Half) - 1
                      loop
@@ -385,9 +400,12 @@ package body Model_Runner.Quantization.Integers is
                         end;
                      end loop;
 
-                     Totals (Totals'First + Super_Block * Deep + Part) :=
+                     Totals (Totals'First + Super_Block * Per_Super + Part) :=
                        Total;
                      Halves (Halves'First + At_Half + 1) := Total - Earlier;
+
+                     <<Part_Done>>
+                     null;
                   end;
                end loop;
             end;
@@ -420,10 +438,31 @@ package body Model_Runner.Quantization.Integers is
             At_Half    : constant Element_Count :=
               Block * (Activation_Block / Activation_Half);
          begin
+            --  The whole block in two vectors where the host has them: its
+            --  own scale, its bytes and its two sums in one pass over the
+            --  hundred and twenty-eight bytes it holds.
+            --
             --  A block holding anything that is not finite has no nearest
             --  byte. Refusing here rather than clamping is what keeps the
             --  caller's own finiteness checks the place such a value is
-            --  reported.
+            --  reported, and both paths below refuse the same way.
+            if Deeper then
+               Deep.Block_Pack
+                 (Vectors, At_Element, Values, At_Element,
+                  Scale, Earlier, Total, Finite);
+
+               if not Finite then
+                  return;
+               end if;
+
+               Scales (Scales'First + Block) := Scale;
+               Halves (Halves'First + At_Half) := Earlier;
+               Halves (Halves'First + At_Half + 1) := Total - Earlier;
+               Totals (Totals'First + Block) := Total;
+
+               goto Block_Done;
+            end if;
+
             Block_Extent (Vectors, At_Element, Largest, Finite);
 
             if not Finite then
@@ -492,6 +531,9 @@ package body Model_Runner.Quantization.Integers is
 
             Totals (Totals'First + Block) := Total;
             Halves (Halves'First + At_Half + 1) := Total - Earlier;
+
+            <<Block_Done>>
+            null;
          end;
       end loop;
 

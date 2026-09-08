@@ -1064,6 +1064,168 @@ package body Tests.GGUF_Cases is
       Assert (not Ok, "a range past the last block was accepted");
    end Packing_In_Pieces_Is_Packing_Whole;
 
+   --  The two compilations of the activation packer answer the same bits.
+   --
+   --  Block_Pack and Block_Round are the packing written as machine code
+   --  for the set that carries the byte dot product, and the loop beside
+   --  them is the same packing written as Ada. What makes the pair sound is
+   --  not that they are close: a quantized activation is a byte, and a byte
+   --  that is one different is a different answer with no tolerance to hide
+   --  in. So the assertion is equality.
+   --
+   --  THE ROUNDING IS THE PART THAT NEEDED A TEST. Ada rounds a tie away
+   --  from zero and no rounding mode of the instruction does, so the
+   --  machine code builds it out of a truncation and a fraction. A scale of
+   --  exactly one is what puts a tie where the test can see it -- the
+   --  largest magnitude is 127, so the inverse scale is 1.0 and the values
+   --  are their own scaled selves -- and the run below holds every half
+   --  from a half to nine and a half, both signs, and the two floats either
+   --  side of a half besides.
+   --
+   --  The super-block arm is Block_Round's, which is what a k-quant's
+   --  activation takes: one scale over eight blocks rather than one each.
+   --
+   --  On a host without the instructions the deep instance is never
+   --  entered, so this asks the host the same question the backend asks and
+   --  compares the baseline against itself where the answer is no.
+   procedure Both_Packers_Answer_The_Same_Bits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package QI renames Model_Runner.Quantization.Integers;
+      use type QI.Byte_Signed;
+
+      Deep : constant Boolean := Model_Runner.Platform.Byte_Products;
+
+      Columns : constant N.Element_Count := 256;
+      Count   : constant N.Element_Count := 3;
+      Room    : constant N.Element_Count := Count * Columns;
+      Blocks  : constant N.Element_Count :=
+        QI.Packed_Blocks (Count, Columns);
+
+      Vectors : N.Real_Array (0 .. Room - 1);
+
+      Plain_Values, Deep_Values : QI.Signed_Array (0 .. Room - 1);
+      Plain_Scales, Deep_Scales : N.Real_Array (0 .. Blocks - 1);
+      Plain_Totals, Deep_Totals : QI.Sum_Array (0 .. Blocks - 1);
+      Plain_Halves, Deep_Halves : QI.Sum_Array
+        (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half) - 1);
+
+      Ok : Boolean;
+
+      --  Every arm compared the same way, so that adding one is adding a
+      --  call rather than a paragraph.
+      procedure Compare (Named : String; Super : Boolean);
+
+      procedure Compare (Named : String; Super : Boolean) is
+      begin
+         QI.Use_Deep_Rows (False);
+         QI.Quantize_Vectors
+           (Vectors, Count, Columns,
+            Plain_Values, Plain_Scales, Plain_Totals, Plain_Halves,
+            Ok, Super => Super);
+         Assert (Ok, Named & ": the baseline packer refused the run");
+
+         QI.Use_Deep_Rows (Deep);
+         QI.Quantize_Vectors
+           (Vectors, Count, Columns,
+            Deep_Values, Deep_Scales, Deep_Totals, Deep_Halves,
+            Ok, Super => Super);
+         Assert (Ok, Named & ": the chosen packer refused the run");
+
+         for Index in Plain_Values'Range loop
+            Assert (Plain_Values (Index) = Deep_Values (Index),
+                    Named & ": the two compilations disagree at element"
+                    & N.Element_Count'Image (Index) & ":"
+                    & QI.Byte_Signed'Image (Plain_Values (Index))
+                    & " against"
+                    & QI.Byte_Signed'Image (Deep_Values (Index))
+                    & ", from" & N.Real'Image (Vectors (Index)));
+         end loop;
+
+         for Block in Plain_Scales'Range loop
+            Assert (Plain_Scales (Block) = Deep_Scales (Block),
+                    Named & ": a scale differs at block"
+                    & N.Element_Count'Image (Block));
+            Assert (Plain_Totals (Block) = Deep_Totals (Block),
+                    Named & ": a total differs at block"
+                    & N.Element_Count'Image (Block));
+            Assert (Plain_Halves (Block * 2) = Deep_Halves (Block * 2)
+                    and then Plain_Halves (Block * 2 + 1)
+                             = Deep_Halves (Block * 2 + 1),
+                    Named & ": a half differs at block"
+                    & N.Element_Count'Image (Block));
+            Assert (Deep_Halves (Block * 2) + Deep_Halves (Block * 2 + 1)
+                    = Deep_Totals (Block),
+                    Named & ": the halves do not add up at block"
+                    & N.Element_Count'Image (Block));
+         end loop;
+      end Compare;
+   begin
+      --  A spread that uses the whole of a byte's range, with a tie every
+      --  other element and the largest magnitude exactly 127 so that the
+      --  scale is one and a tie stays a tie.
+      for Index in Vectors'Range loop
+         Vectors (Index) :=
+           (if Index mod 2 = 0
+            then N.Real (Integer (Index) mod 19) + 0.5
+            else N.Real (Integer (Index) mod 23) - 11.25);
+
+         if Index mod 32 = 5 then
+            Vectors (Index) := -Vectors (Index);
+         end if;
+      end loop;
+
+      --  The two floats either side of a half, which are what a rounding
+      --  built out of an addition would get wrong.
+      Vectors (Vectors'First + 3) := N.Real'Pred (0.5);
+      Vectors (Vectors'First + 7) := N.Real'Succ (0.5);
+      Vectors (Vectors'First + 11) := -N.Real'Pred (0.5);
+      Vectors (Vectors'First + 13) := -N.Real'Succ (0.5);
+
+      --  One block of zeros, which has no scale and no inverse.
+      for Index in 0 .. 31 loop
+         Vectors (Vectors'First + 64 + N.Element_Count (Index)) := 0.0;
+      end loop;
+
+      --  And the largest magnitude, once per block, so that every block's
+      --  scale is one.
+      for Block in 0 .. Blocks - 1 loop
+         if Block /= 2 then
+            Vectors (Vectors'First + Block * 32) := 127.0;
+         end if;
+      end loop;
+
+      Compare ("a block's own scale", Super => False);
+      Compare ("one scale over eight blocks", Super => True);
+
+      --  A block holding something that is not a number is refused by both,
+      --  rather than clamped by one of them.
+      declare
+         Grow : N.Real := N.Real'Last;
+      begin
+         --  An infinity, made rather than written: the literal would not
+         --  fit the type and the compiler would say so.
+         Grow := Grow * 16.0;
+         Vectors (Vectors'First + 40) := Grow;
+      end;
+
+      QI.Use_Deep_Rows (False);
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns,
+         Plain_Values, Plain_Scales, Plain_Totals, Plain_Halves, Ok);
+      Assert (not Ok, "the baseline packer accepted an infinity");
+
+      QI.Use_Deep_Rows (Deep);
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns,
+         Deep_Values, Deep_Scales, Deep_Totals, Deep_Halves, Ok);
+      Assert (not Ok, "the chosen packer accepted an infinity");
+
+      QI.Use_Deep_Rows (Deep);
+   end Both_Packers_Answer_The_Same_Bits;
+
    procedure Both_Decoders_Answer_The_Same_Bits
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6286,6 +6448,11 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Both_Decoders_Answer_The_Same_Bits'Access,
          "the two compilations of the decoders answer the same bits");
+
+      Register_Routine
+        (T, Both_Packers_Answer_The_Same_Bits'Access,
+         "the two compilations of the activation packer answer the same "
+         & "bits");
       Register_Routine
         (T, Decoding_Refuses_What_It_Cannot_Fit'Access,
          "decoding refuses every call it cannot fit, for every format");

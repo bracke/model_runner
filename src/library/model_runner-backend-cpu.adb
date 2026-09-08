@@ -282,12 +282,28 @@ package body Model_Runner.Backend.CPU is
    --
    --  A generated token's small work -- two normalizations, two residual
    --  joins and the gated middle of the feed-forward -- is one position
-   --  each, a few thousand elements, against a wake and a settle of tens of
-   --  microseconds. Five of those a layer, twenty-two layers, is a hundred
-   --  and ten jobs a token whose arithmetic is a fraction of what posting
-   --  them costs. Measured rather than reasoned: see `### The jobs that were
-   --  not worth waking anyone for` in the README.
-   Inline_Floor : constant Element_Count := 1_048_576;
+   --  each, a few thousand elements, against a wake and a settle. Five of
+   --  those a layer, twenty-two layers, is a hundred and ten jobs a token
+   --  whose arithmetic is a fraction of what posting them costs. Measured
+   --  rather than reasoned: see `### The jobs that were not worth waking
+   --  anyone for` in the README.
+   --
+   --  IT WAS A MILLION AND IT IS A SIXTEENTH OF THAT, because what a wake
+   --  costs was measured rather than assumed. A worker that finds its job
+   --  by spinning sees the ticket 0.7 microseconds after it is raised --
+   --  timed inside the worker, against the stamp the poster left -- and
+   --  the barrier at the other end is about a microsecond more. The old
+   --  bound was written when a wake went through a protected entry and
+   --  cost tens of microseconds, and it kept a token's attention on the
+   --  submitting task while four workers watched.
+   --
+   --  What the new bound admits is exactly that: a generated token's
+   --  attention, which is heads times positions times the head, and which
+   --  passes sixty-five thousand at a context of thirty-two. The
+   --  normalizations and the joins are still below it and still run here,
+   --  because a sweep at sixteen thousand and at four measured no better
+   --  than this and cost more processor.
+   Inline_Floor : constant Element_Count := 65_536;
 
    procedure Partition
      (Rows    : Element_Count;
@@ -749,7 +765,29 @@ package body Model_Runner.Backend.CPU is
          Vector => null,
          Target => null,
          Rows   => Items,
-         Team   => Item.Workers + 1,
+
+         --  As many shares as the last matrix product was cut into, and
+         --  not the whole pool.
+         --
+         --  A generated token's products take Vector_Team shares, so the
+         --  workers past that team are never on one and their spin runs
+         --  out: they are asleep on their gates for the whole of a
+         --  generation. A job cut into more shares than that has to wake
+         --  them, and a suspension object costs what the spin was built to
+         --  avoid -- the barrier of a token's attention measured 6.9
+         --  microseconds against 1.0 once this stopped asking for them,
+         --  which is the whole of why sharing that work out was a wash
+         --  before and is a gain now.
+         --
+         --  ASKING FOR THE VECTOR TEAM ALWAYS WAS WRONG AND THE PROMPT SAID
+         --  SO. A batched product takes the whole pool and the activation
+         --  it packs is a share of real work rather than a wake: cutting
+         --  that packing into five shares where eight were awake cost the
+         --  1419-token prompt nine per cent, 4.58 s against 5.03, every
+         --  round of three alternated. So this follows the products instead
+         --  of naming a constant, which is the same question asked of the
+         --  thing that actually answers it -- which workers are awake.
+         Team   => Item.Latest,
          Values => null,
          Scales => null,
          Totals => null,
@@ -1175,6 +1213,8 @@ package body Model_Runner.Backend.CPU is
          Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
       end if;
 
+      Item.Latest := Work.Team;
+
       --  Exactly one job is outstanding at a time, so the queue is bounded by
       --  construction and there is nothing for a hostile input to grow.
       Item.Control.Post (Work, Accepted);
@@ -1294,6 +1334,7 @@ package body Model_Runner.Backend.CPU is
          Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
       end if;
 
+      Item.Latest := Work.Team;
       Item.Control.Post (Work, Accepted);
       if not Accepted then
          Status := E.Make (E.Backend_Closed);
@@ -1452,6 +1493,7 @@ package body Model_Runner.Backend.CPU is
          Work.Halves := Item.Halves;
       end if;
 
+      Item.Latest := Work.Team;
       Item.Control.Post (Work, Accepted);
       if not Accepted then
          Status := E.Make (E.Backend_Closed);
