@@ -8214,6 +8214,80 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The legacy four-bit format was on the floating-point path, and is not now
+
+`Has_Integer_Kernel` named four formats: `Q8_0`, `Q4_K`, `Q5_K`, `Q6_K`. The
+engine reads sixteen. Everything else -- every model whose weights are
+`Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K`, `Q3_K` or a non-linear format -- fell
+to `Accumulate_Dot` and multiplied in binary32, and nothing here said so.
+That list had been read as *the formats worth a kernel* when what it is is
+*the formats a kernel was written for*.
+
+**What that cost, measured before anything was changed.** A 110-token prompt
+on TinyLlama-1.1B-Chat `Q4_0`, against `llama-bench` at `95b8e33e1` on the
+same file and eight threads:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 tokens | 27.8 t/s | 508.2 t/s | **18.3x** |
+| prompt, 1419 tokens | 24.4 t/s | 400.7 t/s | 16.4x |
+| generating, 64 tokens | 62.0 t/s | 72.9 t/s | 1.18x |
+
+Eighteen times is the largest gap to llama.cpp this file records -- the
+two-bit format, the next worst, is 7.7 -- and a profile says the whole of it
+in one line: **93.6 per cent of that prompt is in
+`Quantization.Accumulate_Dot`**. Not a slow kernel -- the wrong one.
+
+**What was built is not a kernel.** `Q4_0` is `Q8_0`'s block in every respect
+that matters to the integer tile: thirty-two elements behind one
+half-precision scale, no minimum, no sub-blocks. It differs in two things, a
+nibble where there is a byte and a centring of eight where there is one of
+a hundred and twenty-eight, and both are decisions the existing four-row tile
+already makes per format. So the tile learned the nibble -- low half of byte
+*j* is element *j*, high half is element *j* + 16, which is what the four-bit
+decoder beside it already reads -- and the bias it subtracts against the
+activation's block total became a constant rather than a literal 128. The
+two branches that are genuinely `Q8_0`-shaped, the single-vector kernel and
+the eight-vector strip, were told to say so; `Q4_0` takes the generic tile.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`:**
+
+| | on the floating-point path | on the integer path | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.069, 3.915, 3.964 s | 0.567, 0.573, 0.569 s | **6.97x** |
+| prompt, 1419 | 58.181 s | 8.121 s | **7.16x** |
+| generating, 64 | 1.032, 1.044, 1.020 s | 0.984, 0.979, 0.975 s | 1.05x |
+
+**And the digest does not move**, `61fda0268954d85b` at 110 tokens and
+`7ec6b755e53e16b4` at 1419, on both paths and in every round -- which is not
+a promise the change had to keep, the two arithmetics being different, and is
+the reason the greedy digest is printed at all. Conformance is 41780
+sequences and 0 outside tolerance.
+
+**Where that leaves the gap:**
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 tokens | 193.3 t/s | 508.2 t/s | 2.63x |
+| prompt, 1419 tokens | 174.7 t/s | 400.7 t/s | **2.29x** |
+| generating, 64 tokens | 65.4 t/s | 72.9 t/s | 1.12x |
+
+**What the remaining 2.3 is, and it is not a mystery.** `Q8_0` is level with
+llama.cpp because it has `Rows_By_Strips`, an assembly kernel that holds two
+rows against four vectors in registers; `Q4_0` rides the generic tile, which
+is the same arithmetic through the compiler. llama.cpp's own answer is the
+one two sections above describes for the four-bit k-quant --
+`ggml_repack_q4_0_to_q4_0_8_bl` and `ggml_gemv_q4_0_8x8_q8_0`, the same
+eight-row panel -- and `Interleave` already builds panels for three formats.
+`Q4_0` would be the simplest of the four: one scale a block and no minimum
+to unpack at all.
+
+**The five formats still on the floating-point path are named rather than
+built**: `Q4_1` and `Q5_1` carry a minimum per block, `Q5_0` and `Q5_1` keep
+the fifth bit in a word rather than a byte, and `Q2_K` and `Q3_K` are shapes
+of their own. Each is a measurement away from being worth doing, and this
+entry is what that measurement looks like.
+
 ### Generating is at the memory wall, and four ways round it were refused
 
 Prompts are level or ahead and the device long prompt is level, which left

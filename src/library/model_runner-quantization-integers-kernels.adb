@@ -8242,7 +8242,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  That is worth three of the eleven instructions a block costs
       --  otherwise: the load and the store of the accumulator go, and the
       --  separate multiply and add become one fused multiply-add.
-      if Deep and then Count = 1 then
+      if Deep and then Count = 1 and then Format = G.Type_Q8_0 then
          Rows_Singly
            (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
             First, 0, 1, Sums);
@@ -8284,7 +8284,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  through the single-vector kernel, which computes the same thing by
       --  the same instructions and needs only to be told where its answers
       --  belong.
-      if Deep and then Rows mod 2 = 0 and then Count >= 4 then
+      if Deep and then Rows mod 2 = 0 and then Count >= 4
+        and then Format = G.Type_Q8_0
+      then
          declare
             Full : constant Element_Count := (Count / 8) * 8;
             Four : Element_Count := Full;
@@ -8380,6 +8382,16 @@ package body Model_Runner.Quantization.Integers.Kernels is
            with Alignment => 32;
          type Row_Scales is array (Row_Range) of N.Real;
 
+         --  Whether the format keeps two elements to a byte, and what a
+         --  quant is centred on. The eight-bit format holds a signed byte
+         --  and is biased into range by 128; the four-bit one holds a
+         --  nibble that is already in range and is centred on eight. Every
+         --  other difference between the two is none: a block is
+         --  thirty-two elements behind one half-precision scale in both.
+         Nibbled : constant Boolean := Format = G.Type_Q4_0;
+         Bias    : constant Interfaces.Integer_32 :=
+           (if Nibbled then 8 else 128);
+
          --  The eight partial sums the multiply-add leaves, kept across a
          --  row's blocks rather than reduced at each of them.
          --  Four rather than the eight the instruction leaves, because
@@ -8450,7 +8462,42 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   Scaling (Row) :=
                     Scale_At (Data, At_Byte);
 
-                  if Deep then
+                  if Nibbled then
+                     --  A nibble is already what the instruction's unsigned
+                     --  operand wants, and what comes off it is eight rather
+                     --  than a hundred and twenty-eight -- the format's own
+                     --  centring, taken out below against the activation's
+                     --  block total exactly as the eight-bit format's bias
+                     --  is. The low nibble of byte j is element j and the
+                     --  high nibble is element j + 16, which is the layout
+                     --  the four-bit decoder beside this reads.
+                     for Index in Element_Count range
+                       0 .. Activation_Block / 2 - 1
+                     loop
+                        declare
+                           Packed : constant Interfaces.Unsigned_8 :=
+                             Data (At_Byte + 2 + B.Byte_Count (Index));
+
+                           Upper : constant Element_Count :=
+                             Index + Activation_Block / 2;
+                        begin
+                           if Deep then
+                              Raw (Row) (Index) := Packed and 16#0F#;
+                              Raw (Row) (Upper) :=
+                                Interfaces.Shift_Right (Packed, 4);
+                           else
+                              Weights (Row) (Index) :=
+                                Interfaces.Integer_16
+                                  (Integer (Packed and 16#0F#) - 8);
+                              Weights (Row) (Upper) :=
+                                Interfaces.Integer_16
+                                  (Integer
+                                     (Interfaces.Shift_Right (Packed, 4))
+                                   - 8);
+                           end if;
+                        end;
+                     end loop;
+                  elsif Deep then
                      --  No widening at all: the byte the file holds, with
                      --  its sign bit flipped, is the operand. Flipping that
                      --  bit is adding 128 to a two's complement byte, which
@@ -8500,7 +8547,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         use type Interfaces.Integer_32;
                      begin
                         Fixing (0) :=
-                          (-128) * Totals (Totals'First + At_Scale);
+                          (-Bias) * Totals (Totals'First + At_Scale);
                      end;
                   else
                      for Index in Block_Range loop
