@@ -6646,7 +6646,24 @@ records that llama.cpp and this engine read the same file into the same
 tokens and continue it the same way. What each of them costs to do that is
 this table, taken in one sitting on the host every other figure in this
 section was taken on, against the same TinyLlama-1.1B-Chat Q8_0 file on both
-sides, with llama.cpp at `95b8e33e1`:
+sides, with llama.cpp at `95b8e33e1`.
+
+**Both sides pass the same load gate**, which they did not until
+2026-09-08. Every figure this repository takes of itself is refused on a
+busy machine -- `tests speed` and `tests benchmark` both stop below the
+same bound -- and llama-bench was run by hand, past no bound at all. One
+reading taken straight after a build gave 206.9 tokens a second where a
+settled machine gave 404.3, and it was caught only because it was absurd; a
+reading ten per cent wrong would have been published. So the other side goes
+through `tests outside` now, which waits for the machine the same way and
+prints the load at both ends:
+
+```
+tests outside --wait 10 -- llama-bench -m MODEL -p 110,1419 -n 64 -t 8 -r 3 --device none
+```
+
+It runs whatever it is given and reads none of it: what is gated is when
+somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |

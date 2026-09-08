@@ -253,21 +253,6 @@ package body Benchmarks is
    is
       package IO renames Ada.Text_IO;
 
-      --  Said once in a while rather than once a second.
-      Told : Natural := 0;
-
-      procedure Still (Load : Long_Float) is
-      begin
-         if Told mod 30 = 0 then
-            IO.Put_Line
-              (IO.Standard_Error,
-               "waiting for the machine to fall below "
-               & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
-               & "; it is at " & Model_Runner.Text.Image (Load, 2));
-         end if;
-         Told := Told + 1;
-      end Still;
-
       use type Ada.Real_Time.Time;
 
       --  Time a kernel until at least Seconds have passed, then report the
@@ -1799,51 +1784,13 @@ package body Benchmarks is
       --  processor side of every ratio below competes with whatever else is
       --  running and the device side does not, so the answer would be about
       --  the machine. Refused rather than warned about, and the caller who
-      --  wants it anyway says so.
-      if not Anyway and then Wait > 0
-        and then not Host_Load.Quiet_Enough
-        and then not Host_Load.Wait_For_Quiet (Wait, Still'Access)
-      then
-         IO.Put_Line
-           (IO.Standard_Error,
-            "the machine did not fall below "
-            & Model_Runner.Text.Image (Long_Float (Host_Load.Too_Busy), 2)
-            & " within" & Natural'Image (Wait)
-            & " minutes; nothing measured");
+      --  wants it anyway says so. The gate is Host_Load's, which is where
+      --  `tests speed` and `tests outside` take theirs from -- it was
+      --  written out here in this unit's own words and had begun to drift
+      --  from the other copy.
+      if not Host_Load.Settle (Wait, Anyway) then
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          return;
-      end if;
-
-      if not Anyway and then Wait = 0 then
-         declare
-            Quiet      : Boolean;
-            Reading    : Long_Float;
-            Processors : Boolean;
-         begin
-            Host_Load.Look (Quiet, Reading, Processors);
-
-            if not Quiet then
-               IO.Put_Line
-                 (IO.Standard_Error,
-                  (if Processors
-                   then "the machine has "
-                     & Model_Runner.Text.Image (Reading, 2)
-                     & " processors busy, above the "
-                   else "the machine is at a load of "
-                     & Model_Runner.Text.Image (Reading, 2)
-                     & ", above the ")
-                  & Model_Runner.Text.Image
-                      (Long_Float (Host_Load.Too_Busy), 2)
-                  & " a figure worth publishing needs; wait, or pass "
-                  & "--anyway for the shape of the answer");
-
-               --  A failure, not a quiet nothing: a caller that asked for
-               --  figures and got none should hear about it from the exit
-               --  status too.
-               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-               return;
-            end if;
-         end;
       end if;
 
       IO.Put_Line ("kernel benchmarks, single task, "

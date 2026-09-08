@@ -1,6 +1,8 @@
 with Ada.Directories;
 with Ada.Text_IO;
 
+with Model_Runner.Text;
+
 package body Host_Load is
 
    Where : constant String := "/proc/loadavg";
@@ -319,5 +321,73 @@ package body Host_Load is
          end if;
          return 0.0;
    end Now;
+
+   -------------
+   -- Settle --
+   -------------
+
+   function Settle (Minutes : Natural; Anyway : Boolean) return Boolean is
+      --  Once every thirty looks rather than every one, because a machine
+      --  that takes ten minutes to go quiet should say so a few times and
+      --  not six hundred.
+      Told : Natural := 0;
+
+      procedure Still (Load : Long_Float) is
+      begin
+         if Told mod 30 = 0 then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "waiting for the machine to fall below "
+               & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+               & "; it is at " & Model_Runner.Text.Image (Load, 2));
+         end if;
+         Told := Told + 1;
+      end Still;
+   begin
+      if Anyway then
+         return True;
+      end if;
+
+      if Minutes > 0 then
+         if Wait_For_Quiet (Minutes, Still'Unrestricted_Access) then
+            return True;
+         end if;
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "the machine did not fall below "
+            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & " within" & Natural'Image (Minutes)
+            & " minutes; nothing measured");
+         return False;
+      end if;
+
+      --  Quiet_Enough and not Publishable, because this asks whether a
+      --  figure may be taken NOW and the average answers about the minute
+      --  behind: it lags the window a run is about to occupy.
+      declare
+         Quiet      : Boolean;
+         Reading    : Long_Float;
+         Processors : Boolean;
+      begin
+         Look (Quiet, Reading, Processors);
+
+         if Quiet then
+            return True;
+         end if;
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            (if Processors
+             then "the machine has " & Model_Runner.Text.Image (Reading, 2)
+               & " processors busy, above the "
+             else "the machine is at a load of "
+               & Model_Runner.Text.Image (Reading, 2) & ", above the ")
+            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & " a figure worth publishing needs; wait, or pass "
+            & "--anyway for the shape of the answer");
+         return False;
+      end;
+   end Settle;
 
 end Host_Load;

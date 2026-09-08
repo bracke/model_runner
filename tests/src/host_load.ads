@@ -142,4 +142,26 @@ package Host_Load is
      (Minutes : Natural;
       Say     : access procedure (Load : Long_Float) := null) return Boolean;
 
+   --  The whole gate a tool applies before it measures anything: wait if
+   --  told to, refuse if the machine is busy and the caller did not say to
+   --  go ahead, and say which of those happened.
+   --
+   --  Here rather than in each tool because it was in two of them and had
+   --  begun to differ, which is what the paragraph at the top of this file
+   --  warns about and did not prevent. `speed` waited or refused; `benchmark`
+   --  did the same thing in its own words; and llama-bench, the other side
+   --  of every comparison this repository publishes, went through no gate at
+   --  all -- it is run by hand, and a reading of it taken while the machine
+   --  was busy read half what a settled one did. `outside` runs it through
+   --  this now, so both sides of a published ratio pass the same bound.
+   --
+   --  The messages go to standard error, because a caller's own output is
+   --  the figure and this is about whether the figure may be taken.
+   --
+   --  @param Minutes How long to wait for the machine, or zero to look once.
+   --  @param Anyway True where the caller wants the shape of an answer
+   --    rather than a publishable one, which skips the gate entirely.
+   --  @return True when measuring may go ahead.
+   function Settle (Minutes : Natural; Anyway : Boolean) return Boolean;
+
 end Host_Load;

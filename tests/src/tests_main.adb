@@ -26,6 +26,7 @@ with Fixture_Likeness;
 with Docs_Generation;
 with Shader_Generation;
 with Benchmarks;
+with GNAT.OS_Lib;
 
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.GGUF.Containers.Reader;
@@ -172,6 +173,12 @@ procedure Tests_Main is
          declare
             Argument : constant String := Ada.Command_Line.Argument (Index);
          begin
+            --  A bare "--" ends this command's options and begins somebody
+            --  else's. Only `outside` has any, and its whole purpose is to
+            --  hand a tool of its own arguments through -- which this check
+            --  would otherwise refuse on that tool's behalf.
+            exit when Argument = "--";
+
             if Argument'Length > 2
               and then Argument (Argument'First .. Argument'First + 1) = "--"
               and then not Project_Tools.Text.Contains
@@ -1203,6 +1210,127 @@ begin
          end if;
       end;
 
+   elsif Command = "outside" then
+      --  Run somebody else's measuring tool through this repository's own
+      --  load gate.
+      --
+      --  Every comparison the README publishes has two sides, and until now
+      --  only one of them passed a bound. `tests speed` and `tests
+      --  benchmark` refuse a busy machine; llama-bench is run by hand, and a
+      --  reading of it taken straight after a build read half what a settled
+      --  one did -- which was noticed, discarded and written down, but only
+      --  because the number was absurd. A reading that is merely ten per
+      --  cent wrong would have been published.
+      --
+      --  So: wait for the machine the same way, say what the load was before
+      --  and after, and hand the command whatever it wants. The output is
+      --  the other tool's own; nothing here reads or reformats it, because
+      --  what is being gated is when it runs and not what it says.
+      declare
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Minutes return Natural is
+         begin
+            return Natural'Value (Option ("--wait", ""));
+         exception
+            when others =>
+               return 0;
+         end Minutes;
+
+         --  Where the command begins: everything after a bare "--", so the
+         --  other tool's own options cannot be mistaken for these.
+         Marker : Natural := 0;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--" then
+               Marker := Index;
+               exit;
+            end if;
+         end loop;
+
+         if Marker = 0 or else Marker = Ada.Command_Line.Argument_Count then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests outside [--wait MINUTES] [--anyway] "
+               & "-- COMMAND [ARGUMENT ...]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         if not Host_Load.Settle (Minutes, Given ("--anyway")) then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         declare
+            Before : constant Long_Float := Host_Load.Now;
+
+            Named : constant String := Ada.Command_Line.Argument (Marker + 1);
+
+            --  Spawned rather than run through the process helper this
+            --  repository uses elsewhere, because that one collects the
+            --  child's output to inspect it and here the child's output is
+            --  the whole point: it goes to the reader's terminal untouched.
+            Args : GNAT.OS_Lib.Argument_List
+                     (1 .. Ada.Command_Line.Argument_Count - Marker - 1);
+
+            Program : GNAT.OS_Lib.String_Access :=
+              GNAT.OS_Lib.Locate_Exec_On_Path (Named);
+
+            Status : Integer;
+         begin
+            if not GNAT.OS_Lib."/=" (Program, null) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "no such command: " & Named);
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+
+            for Index in Args'Range loop
+               Args (Index) :=
+                 new String'(Ada.Command_Line.Argument (Marker + 1 + Index));
+            end loop;
+
+            Status := GNAT.OS_Lib.Spawn (Program.all, Args);
+
+            for Index in Args'Range loop
+               GNAT.OS_Lib.Free (Args (Index));
+            end loop;
+            GNAT.OS_Lib.Free (Program);
+
+            --  Both ends, as every figure this repository publishes carries
+            --  them: the one before says the run began on a quiet machine
+            --  and the one after says whether it stayed that way.
+            Ada.Text_IO.Put_Line
+              ("load " & Model_Runner.Text.Image (Before, 2)
+               & " to " & Model_Runner.Text.Image (Host_Load.Now, 2));
+
+            if Status /= 0 then
+               Ada.Command_Line.Set_Exit_Status
+                 (Ada.Command_Line.Exit_Status (Status));
+            end if;
+         end;
+      end;
+
    elsif Command = "external-model" then
       --  Validate a model the user already has. Nothing is downloaded, and a
       --  missing file is a skip rather than a failure.
@@ -1518,8 +1646,6 @@ begin
 
          --  How many looks have gone by, so that waiting says so once in a
          --  while rather than once a second.
-         Told : Natural := 0;
-
          --  Minutes to wait for the machine, or none. Read through its own
          --  reader because Number is for values that must be positive and
          --  this one's absence is the ordinary case.
@@ -1531,82 +1657,15 @@ begin
                return 0;
          end Waiting;
       begin
-         --  Refused on a busy machine, exactly as `tests benchmark` is and
-         --  on the same bound. These two publish figures that are compared
-         --  with each other and with what the README says, and one of them
-         --  refusing a machine the other accepted meant the same host was
-         --  too busy for one set of published numbers and fine for another.
-         --  A caller who says --wait is told when rather than refused: the
-           --  loop that watched the load and started the tool when it fell
-           --  used to live in a shell script outside this repository, which
-           --  every figure retaken this week went through.
-         if not Given ("--anyway")
-           and then Waiting > 0
-         then
-            declare
-               procedure Still (Load : Long_Float) is
-               begin
-                  if Told mod 30 = 0 then
-                     Ada.Text_IO.Put_Line
-                       (Ada.Text_IO.Standard_Error,
-                        "waiting for the machine to fall below "
-                        & Model_Runner.Text.Image
-                            (Long_Float (Host_Load.Too_Busy), 2)
-                        & "; it is at "
-                        & Model_Runner.Text.Image (Load, 2));
-                  end if;
-                  Told := Told + 1;
-               end Still;
-
-               Quiet : constant Boolean :=
-                 Host_Load.Wait_For_Quiet
-                   (Waiting, Still'Unrestricted_Access);
-            begin
-               if not Quiet then
-                  Ada.Text_IO.Put_Line
-                    (Ada.Text_IO.Standard_Error,
-                     "the machine did not fall below "
-                     & Model_Runner.Text.Image
-                         (Long_Float (Host_Load.Too_Busy), 2)
-                     & " within" & Natural'Image (Waiting)
-                     & " minutes; nothing measured");
-                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-                  return;
-               end if;
-            end;
-
-         --  Quiet_Enough and not Publishable, because this asks whether a
-         --  figure may be taken *now* and the two readers above ask whether
-         --  the machine was busy while something already ran. The minute's
-         --  average is the right instrument for the second question and the
-         --  wrong one for the first: it answers about the window a finished
-         --  stage occupied, and it lags the window a run is about to.
-         elsif not Given ("--anyway") then
-            declare
-               Quiet      : Boolean;
-               Reading    : Long_Float;
-               Processors : Boolean;
-            begin
-               Host_Load.Look (Quiet, Reading, Processors);
-
-               if not Quiet then
-                  Ada.Text_IO.Put_Line
-                    (Ada.Text_IO.Standard_Error,
-                     (if Processors
-                      then "the machine has "
-                        & Model_Runner.Text.Image (Reading, 2)
-                        & " processors busy, above the "
-                      else "the machine is at a load of "
-                        & Model_Runner.Text.Image (Reading, 2)
-                        & ", above the ")
-                     & Model_Runner.Text.Image
-                         (Long_Float (Host_Load.Too_Busy), 2)
-                     & " a figure worth publishing needs; wait, or pass "
-                     & "--anyway for the shape of the answer");
-                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-                  return;
-               end if;
-            end;
+         --  Refused on a busy machine, exactly as `tests benchmark` and
+         --  `tests outside` are and on the same bound, because all three
+         --  publish figures that are compared with each other and with what
+         --  the README says. The gate itself is in Host_Load: it was
+         --  written out here and again in Benchmarks, and two copies of a
+         --  rule are two things to keep in step.
+         if not Host_Load.Settle (Waiting, Given ("--anyway")) then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
          end if;
 
          --  The arithmetic, told to the backend before anything is

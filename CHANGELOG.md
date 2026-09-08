@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests outside` runs somebody else's measuring tool through this
+  repository's load gate.** Every comparison the README publishes has two
+  sides and only one of them passed a bound: `tests speed` and `tests
+  benchmark` refuse a busy machine, and llama-bench was run by hand. A
+  reading taken straight after a build gave 206.9 tokens a second where a
+  settled machine gave 404.3 -- caught only because it was absurd, where one
+  ten per cent wrong would have been published.
+
+  ```
+  tests outside --wait 10 -- llama-bench -m MODEL -p 110,1419 -n 64 -t 8 -r 3 --device none
+  ```
+
+  It waits for the machine the same way, prints the load at both ends, and
+  reads none of the output: what is gated is when somebody else's tool runs,
+  not what it says. The llama.cpp row confirmed in this sitting is the first
+  published reading of the other side to pass a bound -- pp110 390.87
+  against a published 397.6.
+
 - **The block-exponent format in eight-row panels -- the last one, and the
   first that does not pay.** `MXFP4` is `IQ4_NL`'s block with a different
   table and a scale that is not a half: an E8M0 exponent byte, two to that
@@ -49,6 +67,14 @@ Keep a Changelog and the project uses semantic versioning.
   and output projection stayed `Q8_0`.
 
 ### Changed
+
+- **The load gate has one copy again.** `Host_Load`'s own first paragraph
+  warns that "three copies of it would be three things to keep in step and
+  two of them would drift", and by the time a third caller wanted it there
+  were two: `speed` waited or refused in one set of words and `benchmark`
+  did the same thing in another. `Host_Load.Settle` is the one copy and all
+  three take it from there. Behaviour unchanged, which the confirming pairs
+  in `docs/measured-figures.txt` are there to show.
 
 - **`MXFP4`'s panel keeps the exponent byte and the kernel converts it --
   the panel is the size of its rows again and a generated token is a tenth
@@ -490,6 +516,18 @@ Keep a Changelog and the project uses semantic versioning.
   them.
 
 ### Fixed
+
+- **The usage listing had been silently short.** `Tool_Commands.Usage_Line`
+  built it in a fixed 1024-character buffer and dropped whatever did not
+  fit, so `tests` stopped listing its commands after `external-model` -- for
+  as long as `speed` has carried eighteen options, that one line being a
+  third of the room. What goes missing is the end of a list, which looks
+  like the end of a list. It grows as it is written now, and all twenty
+  commands appear.
+
+- **The option checker refused another tool's options on its behalf**,
+  reading every argument against the command's own list. It stops at a bare
+  `--` now, which is the only place one appears.
 
 - **Two arrays at one address cost `MXFP4`'s prompt a third of itself, and
   it is the only kernel here they cost anything.** Its panel prompt read one

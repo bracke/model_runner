@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+
 package body Tool_Commands is
 
    Name_Test           : aliased constant String := "test";
@@ -8,6 +10,7 @@ package body Tool_Commands is
    Name_Speed          : aliased constant String := "speed";
    Name_Benchmark      : aliased constant String := "benchmark";
    Name_External       : aliased constant String := "external-model";
+   Name_Outside        : aliased constant String := "outside";
    Name_Tokenize       : aliased constant String := "tokenize";
    Name_Render         : aliased constant String := "render";
    Name_Docs           : aliased constant String := "docs";
@@ -32,6 +35,11 @@ package body Tool_Commands is
      & " --kv-cache --repeats --round --serve --callers --anyway --wait"
      & " --budget ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
+   --  The bare "--" is in this list because the command really does
+   --  accept it -- it is what separates this tool's options from the
+   --  ones it hands on -- and the check that reads a usage line against
+   --  its options is right to ask.
+   Opts_Outside   : aliased constant String := " --anyway --wait -- ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
@@ -52,6 +60,8 @@ package body Tool_Commands is
      & " [--callers N] [--anyway] [--wait MINUTES]"
      & " [--budget]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
+   Takes_Outside   : aliased constant String :=
+     "[--anyway] [--wait MINUTES] -- COMMAND [ARGUMENT ...]";
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"
@@ -72,6 +82,11 @@ package body Tool_Commands is
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "";
+
+   Says_Outside : aliased constant String :=
+     "run somebody else's measuring tool through this repository's load"
+     & " gate, so both sides of a published comparison pass the same"
+     & " bound";
 
    Says_Bench : aliased constant String :=
      "what one attention call costs on a device, at several shapes, with the"
@@ -117,7 +132,7 @@ package body Tool_Commands is
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
 
-   Held : constant array (1 .. 19) of Command :=
+   Held : constant array (1 .. 20) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -134,6 +149,8 @@ package body Tool_Commands is
        Opts_Benchmark'Access),
       (Name_External'Access, Takes_External'Access, Says_External'Access,
        Opts_External'Access),
+      (Name_Outside'Access, Takes_Outside'Access, Says_Outside'Access,
+       Opts_Outside'Access),
       (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
        Opts_Tokenize'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
@@ -187,16 +204,19 @@ package body Tool_Commands is
    -- Usage_Line --
    ----------------
 
+   --  Grown rather than fixed, because a fixed one was silently short.
+   --  The buffer here was a thousand and twenty-four characters and Add
+   --  dropped whatever did not fit, so the listing stopped after
+   --  `external-model` and had done for as long as `speed` carried its
+   --  eighteen options -- the line for that one command is a third of the
+   --  room. Nobody noticed because the thing that goes missing is the end
+   --  of a list, which looks like the end of a list.
    function Usage_Line return String is
-      Room : String (1 .. 1024) := [others => ' '];
-      Used : Natural := 0;
+      Room : Ada.Strings.Unbounded.Unbounded_String;
 
       procedure Add (Value : String) is
       begin
-         if Used + Value'Length <= Room'Length then
-            Room (Used + 1 .. Used + Value'Length) := Value;
-            Used := Used + Value'Length;
-         end if;
+         Ada.Strings.Unbounded.Append (Room, Value);
       end Add;
    begin
       Add ("usage: tests <command>");
@@ -216,7 +236,7 @@ package body Tool_Commands is
                  & Held (Index).Takes.all);
          end if;
       end loop;
-      return Room (1 .. Used);
+      return Ada.Strings.Unbounded.To_String (Room);
    end Usage_Line;
 
 end Tool_Commands;
