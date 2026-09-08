@@ -27,8 +27,9 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Nine formats are written here: the three k-quants a "_M" file is made
---  of, the four legacy ones, and the two- and three-bit k-quants. The
+--  Eleven formats are written here, which is every one the engine can
+--  multiply: the three k-quants a "_M" file is made of, the four legacy
+--  ones, the two- and three-bit k-quants, and the two non-linear formats. The
 --  legacy layouts are described before the last two because they are the
 --  four-bit k-quant's with everything it packs taken away -- and, for the
 --  two that carry a fifth bit, with one thing added that no k-quant has.
@@ -104,6 +105,7 @@ package Model_Runner.Quantization.Interleave is
    Fifth_Least_Block_Bytes : constant := 192;
    Two_Block_Bytes   : constant := 800;
    Three_Block_Bytes : constant := 912;
+   Level_Block_Bytes : constant := 1104;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -260,6 +262,32 @@ package Model_Runner.Quantization.Interleave is
    Three_Factor_At : constant := 16;
    Three_Low_At    : constant := 144;
    Three_High_At   : constant := 656;
+
+   --  The two non-linear formats, whose nibble is not a number but an index
+   --  into a table of sixteen levels that belongs to the format. NOTHING
+   --  ABOUT THAT REACHES THE LAYOUT: the panel keeps the nibbles, and the
+   --  kernel turns an index into a level with one `vpshufb` against a
+   --  register holding the table twice. A byte table lookup is a single
+   --  instruction on this part, which is why storing the levels themselves
+   --  -- a byte an element, twice the room -- would be the wrong trade.
+   --
+   --  IQ4_NL's block is Q4_0's in every respect the layout cares about,
+   --  thirty-two elements behind one half-precision scale with element J in
+   --  the low nibble of byte J and element J + 16 in the high one, so it
+   --  takes the same 144-byte panel and the same permutation. Only the
+   --  kernel differs.
+   --
+   --  IQ4_XS is that block eight times over with a six-bit scale apiece,
+   --  1104 bytes against the eight rows' 136 each:
+   --
+   --     0 ..   15   the eight rows' block scales, half precision
+   --    16 ..   79   the eight sub-block scales, a signed byte each,
+   --                 sub-block major
+   --    80 .. 1103   the quants, interleaved -- four groups to a sub-block,
+   --                 paired as Q4_0 pairs its two halves
+   Level_Scale_At  : constant := 0;
+   Level_Factor_At : constant := 16;
+   Level_Quants_At : constant := 80;
 
    --  Bytes a panel block occupies in the layout this format takes.
    --

@@ -7,51 +7,41 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **The last two formats on the floating-point path, in eight-row panels --
-  `--repack rows` now covers every format the engine multiplies.** `Q2_K`
-  and `Q3_K` were what was left; both are in panels, which makes nine.
+- **The two formats whose nibble is an index rather than a number, in
+  eight-row panels -- and the table lookup that made them slow is one
+  instruction.** `IQ4_NL` and `IQ4_XS` read a nibble as an index into a
+  table of sixteen levels belonging to the format, which is what buys their
+  accuracy over `Q4_0` and what has always made them slower to decode: the
+  kernel table has them at 0.62 and 0.50 nanoseconds an element.
 
-  **They are not the legacy formats with a smaller quant.** A super-block
-  has **sixteen** sub-blocks rather than eight -- both scale sixteen
-  elements together -- so the panels take sixteen scales, and for `Q2_K`
-  sixteen minima, out of their nibbles at load time and write them a byte
-  apiece. That makes these the first two layouts here that **grow**: 800
-  bytes against the eight rows' 672, and 912 against 880. Every other panel
-  is exactly the size of the rows it holds.
+  **`vpshufb` looks up sixteen bytes by sixteen indices within each half of
+  a register**, which is exactly a table of this size -- so a level costs
+  one operation a weight vector, and **the panels keep nibbles rather than
+  levels**. Storing the levels would be a byte an element, twice the room,
+  to save one instruction. The table is held biased by 128 because the byte
+  dot product's unsigned operand cannot hold a negative level, and the bias
+  comes off against the activation's block total as the eight-bit format's
+  does.
 
-  **And a quant of two bits puts four elements in a byte**, so one
-  thirty-two byte group carries sixteen elements a row and the kernel takes
-  four weight vectors out of one load at shifts of nought, two, four and
-  six. A group is then exactly a sub-block, so its four dot products are
-  summed and multiplied by that sub-block's scale as a whole number, and one
-  conversion to floating point serves all sixteen.
+  **`IQ4_NL` needed no layout at all**: its block is `Q4_0`'s shape, so it
+  takes `Q4_0`'s panel and permutation unchanged and only the kernel knows
+  the difference. `IQ4_XS` is that block eight times behind a second scale,
+  1104 bytes, and its kernel is the lookup with the two-bit k-quant's
+  sub-block arithmetic.
 
-  `Q3_K`'s third bit is kept as the five-bit legacy formats keep their
-  fifth, a run packed so the shift is an immediate, two groups to a byte.
-  `Q2_K`'s minima and `Q3_K`'s signed scales are each a dot product of
-  sixteen pairs -- eight `vpdpwssd`, the instruction the four-bit k-quant
-  uses for its eight.
+  Alternated three rounds against three, `--backend cpu`. **`IQ4_NL`: the
+  110-token prompt 4.082/3.956/4.036 s to 0.188/0.182/0.182, 22.1 times**;
+  the 1419-token prompt 55.854 to 3.046, 18.3; sixty-four generated tokens
+  7.331/7.334/7.341 to 1.082/1.080/1.084, 6.78. **`IQ4_XS`:
+  4.034/3.963/3.964 to 0.196/0.196/0.193, 20.5 times**; 55.518 to 3.218,
+  17.3; generating 5.798/5.830/5.840 to 1.035/1.034/1.037, 5.62.
 
-  Alternated three rounds against three, `--backend cpu`. **`Q2_K`: the
-  110-token prompt 4.113/4.245/4.129 s to 0.251/0.261/0.254, 16.3 times**;
-  the 1419-token prompt 57.699 to 3.940, 14.6; sixty-four generated tokens
-  6.268/6.205/6.199 to 0.963/0.931/0.967, 6.53. **`Q3_K`: 2.661/2.627/2.608
-  to 0.228/0.241/0.229, 11.3 times**; 36.841 to 3.729, 9.9; generating
-  4.196/4.208/4.173 to 1.002/1.039/1.040, 4.10.
-
-  **Against llama.cpp, and the `Q2_K` row is the one that counts**: 438.2
-  t/s against 223.4 at 110 tokens, and llama.cpp *does* repack this format
-  -- `block_q2_Kx8` is in `repack.cpp`'s list -- so 1.96 times is one
-  eight-row kernel against another with no asterisk. `Q3_K` reads 482.5
-  against 265.5 and is not on that list, so it carries the same caveat
-  `Q4_1`, `Q5_0` and `Q5_1` do.
-
-  **What the panel path costs these two is a coarser activation**: both now
-  quantize a super-block at a time, as the other three k-quants already did,
-  because the kernel scales a whole super-block by one number. Measured,
-  that is worth nothing -- the largest difference between the panel product
-  and the floating-point one runs 0.078 to 0.104 across all nine formats,
-  and adding these two moved the maximum from 0.1039 to 0.1043.
+  **Against llama.cpp, `IQ4_NL` is the second format where both sides
+  repack** -- 604.4 t/s against 474.8 -- **and the one where the two answers
+  differ visibly**: llama.cpp's is `block_iq4_nlx4`, four rows interleaved
+  where three of its four repacks are eight. So 1.27 times is eight rows
+  against four on the same format, no asterisk. `IQ4_XS` reads 569.9 against
+  190.8 and is not repacked there, so it carries the usual caveat.
 
 ### Changed
 
@@ -415,6 +405,60 @@ Keep a Changelog and the project uses semantic versioning.
   them.
 
 ### Fixed
+
+- **A coverage claim published this morning was wrong.** "`--repack rows`
+  covers nine formats -- every one the engine can multiply" counted nine
+  when the engine reads sixteen: three are floating-point and have no blocks
+  to interleave, `Q8_0` is left out on purpose, and **`MXFP4` simply had no
+  panel**. It still has none; it is `IQ4_NL`'s shape with a power-of-two
+  scale in a byte where the half is. Corrected in both places, with the
+  count stated as eleven of sixteen and the exclusions named.
+
+- **The last two formats on the floating-point path, in eight-row panels --
+  `--repack rows` now covers every format the engine multiplies.** `Q2_K`
+  and `Q3_K` were what was left; both are in panels, which makes nine.
+
+  **They are not the legacy formats with a smaller quant.** A super-block
+  has **sixteen** sub-blocks rather than eight -- both scale sixteen
+  elements together -- so the panels take sixteen scales, and for `Q2_K`
+  sixteen minima, out of their nibbles at load time and write them a byte
+  apiece. That makes these the first two layouts here that **grow**: 800
+  bytes against the eight rows' 672, and 912 against 880. Every other panel
+  is exactly the size of the rows it holds.
+
+  **And a quant of two bits puts four elements in a byte**, so one
+  thirty-two byte group carries sixteen elements a row and the kernel takes
+  four weight vectors out of one load at shifts of nought, two, four and
+  six. A group is then exactly a sub-block, so its four dot products are
+  summed and multiplied by that sub-block's scale as a whole number, and one
+  conversion to floating point serves all sixteen.
+
+  `Q3_K`'s third bit is kept as the five-bit legacy formats keep their
+  fifth, a run packed so the shift is an immediate, two groups to a byte.
+  `Q2_K`'s minima and `Q3_K`'s signed scales are each a dot product of
+  sixteen pairs -- eight `vpdpwssd`, the instruction the four-bit k-quant
+  uses for its eight.
+
+  Alternated three rounds against three, `--backend cpu`. **`Q2_K`: the
+  110-token prompt 4.113/4.245/4.129 s to 0.251/0.261/0.254, 16.3 times**;
+  the 1419-token prompt 57.699 to 3.940, 14.6; sixty-four generated tokens
+  6.268/6.205/6.199 to 0.963/0.931/0.967, 6.53. **`Q3_K`: 2.661/2.627/2.608
+  to 0.228/0.241/0.229, 11.3 times**; 36.841 to 3.729, 9.9; generating
+  4.196/4.208/4.173 to 1.002/1.039/1.040, 4.10.
+
+  **Against llama.cpp, and the `Q2_K` row is the one that counts**: 438.2
+  t/s against 223.4 at 110 tokens, and llama.cpp *does* repack this format
+  -- `block_q2_Kx8` is in `repack.cpp`'s list -- so 1.96 times is one
+  eight-row kernel against another with no asterisk. `Q3_K` reads 482.5
+  against 265.5 and is not on that list, so it carries the same caveat
+  `Q4_1`, `Q5_0` and `Q5_1` do.
+
+  **What the panel path costs these two is a coarser activation**: both now
+  quantize a super-block at a time, as the other three k-quants already did,
+  because the kernel scales a whole super-block by one number. Measured,
+  that is worth nothing -- the largest difference between the panel product
+  and the floating-point one runs 0.078 to 0.104 across all nine formats,
+  and adding these two moved the maximum from 0.1039 to 0.1043.
 
 - **Two published `Q4_0` generating rates were sixty-four divided by the
   seconds a seventeen-token run took.** The model reaches its

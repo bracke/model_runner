@@ -9,6 +9,7 @@ package body Model_Runner.Quantization.Interleave is
    use type G.Tensor_Type;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_16;
 
    --  What one row's super-block occupies, and where its parts are. Written
    --  out rather than asked of Model_Runner.GGUF, because the arithmetic
@@ -61,6 +62,14 @@ package body Model_Runner.Quantization.Interleave is
    --  And the three-bit one's: the high bit of every quant first, then the
    --  low two bits, then twelve bytes holding sixteen six-bit scales, then
    --  the block's own scale.
+   --  And the two non-linear ones. IQ4_NL's block is Q4_0's shape exactly;
+   --  IQ4_XS keeps eight of them behind one scale, with the eight six-bit
+   --  sub-block scales split between a nibble each and a pair of bits each.
+   Level_Row_Bytes : constant := 136;
+   Level_High      : constant := 2;
+   Level_Low       : constant := 4;
+   Level_Quants    : constant := 8;
+
    Three_Row_Bytes : constant := 110;
    Three_Hmask     : constant := 0;
    Three_Quants    : constant := 32;
@@ -175,6 +184,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q5_1 then Fifth_Least_Block_Bytes
        elsif Format = G.Type_Q2_K then Two_Block_Bytes
        elsif Format = G.Type_Q3_K then Three_Block_Bytes
+       elsif Format = G.Type_IQ4_NL then Legacy_Block_Bytes
+       elsif Format = G.Type_IQ4_XS then Level_Block_Bytes
        else 0);
 
    -----------------------
@@ -211,6 +222,8 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q5_1 then Fifth_Least_Row_Bytes
        elsif Format = G.Type_Q2_K then Two_Row_Bytes
        elsif Format = G.Type_Q3_K then Three_Row_Bytes
+       elsif Format = G.Type_IQ4_NL then Legacy_Row_Bytes
+       elsif Format = G.Type_IQ4_XS then Level_Row_Bytes
        else 0);
 
    ------------------
@@ -229,7 +242,9 @@ package body Model_Runner.Quantization.Interleave is
          or else Format = G.Type_Q5_0
          or else Format = G.Type_Q5_1
          or else Format = G.Type_Q2_K
-         or else Format = G.Type_Q3_K)
+         or else Format = G.Type_Q3_K
+         or else Format = G.Type_IQ4_NL
+         or else Format = G.Type_IQ4_XS)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -239,6 +254,7 @@ package body Model_Runner.Quantization.Interleave is
        --  for the three k-quants and thirty-two elements for the legacy one.
        (if Format = G.Type_Q4_0 or else Format = G.Type_Q4_1
           or else Format = G.Type_Q5_0 or else Format = G.Type_Q5_1
+          or else Format = G.Type_IQ4_NL
         then Columns mod 32 = 0
         else Columns mod 256 = 0));
 
@@ -714,6 +730,58 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Build_Three;
 
+   --  One row's non-linear super-block, written into its panel.
+   --
+   --  The eight six-bit sub-block scales come out of their nibble-and-pair
+   --  here and go a signed byte apiece, sub-block major -- the same
+   --  arrangement every other panel with sub-blocks uses, and for the same
+   --  reason. The nibbles are not touched at all: an index into the level
+   --  table is still an index, and turning it into a level is one
+   --  instruction in the kernel rather than a byte an element here.
+   procedure Build_Level
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      High : constant Interfaces.Unsigned_16 :=
+        Interfaces.Unsigned_16 (Source (In_At + Level_High))
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_16 (Source (In_At + Level_High + 1)), 8);
+   begin
+      Target (Out_At + Level_Scale_At + Lane * 2)     := Source (In_At);
+      Target (Out_At + Level_Scale_At + Lane * 2 + 1) := Source (In_At + 1);
+
+      for Sub in B.Byte_Count range 0 .. 7 loop
+         declare
+            Nibble : constant Interfaces.Unsigned_8 :=
+              (if Sub mod 2 = 0
+               then Source (In_At + Level_Low + Sub / 2) and 16#0F#
+               else Interfaces.Shift_Right
+                      (Source (In_At + Level_Low + Sub / 2), 4));
+
+            Upper : constant Interfaces.Unsigned_8 :=
+              Interfaces.Unsigned_8
+                (Interfaces.Shift_Right (High, 2 * Natural (Sub)) and 3);
+         begin
+            Target (Out_At + Level_Factor_At + Sub * Panel_Rows + Lane) :=
+              (Nibble or Interfaces.Shift_Left (Upper, 4)) - 32;
+         end;
+      end loop;
+
+      for Group in B.Byte_Count range 0 .. 31 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Level_Quants_At + Group * 32 + Lane * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Level_Quants + Group * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Build_Level;
+
    --  And one row's six-bit super-block.
    --
    --  Its block scale and its sixteen sub-block scales are already whole
@@ -878,6 +946,18 @@ package body Model_Runner.Quantization.Interleave is
                               B.Byte_Count (Row));
                         elsif Format = G.Type_Q3_K then
                            Build_Three
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
+                        elsif Format = G.Type_IQ4_NL then
+
+                           --  This format's block is Q4_0's shape, so its
+                           --  panel is Q4_0's panel. Only the kernel knows
+                           --  the difference.
+                           Build_Legacy
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
+                        elsif Format = G.Type_IQ4_XS then
+                           Build_Level
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
                         else
@@ -1225,6 +1305,62 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Take_Three;
 
+   --  And one row of a non-linear panel.
+   procedure Take_Level
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      High : Interfaces.Unsigned_16 := 0;
+   begin
+      Target (Out_At)     := Source (In_At + Level_Scale_At + Lane * 2);
+      Target (Out_At + 1) := Source (In_At + Level_Scale_At + Lane * 2 + 1);
+
+      Target (Out_At + Level_Low .. Out_At + Level_Low + 3) := [others => 0];
+
+      for Sub in B.Byte_Count range 0 .. 7 loop
+         declare
+            Level : constant Interfaces.Unsigned_8 :=
+              Source (In_At + Level_Factor_At + Sub * Panel_Rows + Lane)
+              + 32;
+         begin
+            if Sub mod 2 = 0 then
+               Target (Out_At + Level_Low + Sub / 2) :=
+                 Target (Out_At + Level_Low + Sub / 2)
+                 or (Level and 16#0F#);
+            else
+               Target (Out_At + Level_Low + Sub / 2) :=
+                 Target (Out_At + Level_Low + Sub / 2)
+                 or Interfaces.Shift_Left (Level and 16#0F#, 4);
+            end if;
+
+            High := High
+              or Interfaces.Shift_Left
+                   (Interfaces.Unsigned_16
+                      (Interfaces.Shift_Right (Level, 4) and 3),
+                    2 * Natural (Sub));
+         end;
+      end loop;
+
+      Target (Out_At + Level_High) :=
+        Interfaces.Unsigned_8 (High and 16#FF#);
+      Target (Out_At + Level_High + 1) :=
+        Interfaces.Unsigned_8 (Interfaces.Shift_Right (High, 8));
+
+      for Group in B.Byte_Count range 0 .. 31 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Level_Quants + Group * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Level_Quants_At + Group * 32 + Lane * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Take_Level;
+
    --  And one row of a six-bit one.
    procedure Take_Six
      (Source : B.Byte_Array;
@@ -1340,6 +1476,10 @@ package body Model_Runner.Quantization.Interleave is
                Take_Two (Source, In_At, Target, Out_At, Lane);
             elsif Format = G.Type_Q3_K then
                Take_Three (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_IQ4_NL then
+               Take_Legacy (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_IQ4_XS then
+               Take_Level (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

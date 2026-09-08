@@ -59,7 +59,9 @@ package body Model_Runner.Quantization.Integers is
                           or else Format = G.Type_Q5_0
                           or else Format = G.Type_Q5_1
                           or else Format = G.Type_Q2_K
-                          or else Format = G.Type_Q3_K)));
+                          or else Format = G.Type_Q3_K
+                          or else Format = G.Type_IQ4_NL
+                          or else Format = G.Type_IQ4_XS)));
 
    --------------------
    -- Packs_Vectors --
@@ -85,7 +87,8 @@ package body Model_Runner.Quantization.Integers is
        or else Format = G.Type_Q5_K
        or else Format = G.Type_Q6_K
        or else Format = G.Type_Q2_K
-       or else Format = G.Type_Q3_K);
+       or else Format = G.Type_Q3_K
+       or else Format = G.Type_IQ4_XS);
 
    ----------------------
    -- Quantize_Vectors --

@@ -8214,13 +8214,105 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The two formats whose nibble is not a number, and a table lookup that is one instruction
+
+`IQ4_NL` and `IQ4_XS` read a nibble as an index into a table of sixteen
+levels that belongs to the format rather than to any file -- fine near zero
+and coarse away from it, which is what buys them their accuracy over `Q4_0`
+and what has always made them slower to decode. `### Kernels` has them at
+0.62 and 0.50 nanoseconds an element, and the gather is why.
+
+**The gather is one instruction here.** `vpshufb` looks up sixteen bytes by
+sixteen indices within each half of a register, which is exactly a table of
+this size, so a level comes out for the cost of one operation a weight
+vector. **That decides the layout**: the panels keep nibbles, not levels.
+Storing the levels themselves would be a byte an element -- twice the room
+-- to save one instruction, and that trade is the wrong way round on a
+kernel this close to memory. The table is held biased by 128, because the
+byte dot product's unsigned operand cannot hold a negative level, and the
+bias comes off against the activation's block total exactly as the
+eight-bit format's does.
+
+**`IQ4_NL` needed no layout at all.** Its block is `Q4_0`'s in every respect
+the panel cares about -- thirty-two elements behind one half-precision
+scale, element *J* in the low nibble of byte *J* and element *J* + 16 in the
+high one -- so it takes `Q4_0`'s 144-byte panel and `Q4_0`'s permutation
+unchanged. Only the kernel knows the difference, and the difference is two
+`vpshufb` a group.
+
+**`IQ4_XS` is that block eight times behind a second scale**, with a six-bit
+signed scale apiece: 1104 bytes against the eight rows' 136 each. Its kernel
+is the table lookup with the two-bit k-quant's sub-block arithmetic, and
+nothing in it is new.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`:**
+
+| `IQ4_NL` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.082, 3.956, 4.036 s | 0.188, 0.182, 0.182 s | **22.1x** |
+| prompt, 1419 | 55.854 s | 3.046 s | **18.3x** |
+| generating, 64 | 7.331, 7.334, 7.341 s | 1.082, 1.080, 1.084 s | **6.78x** |
+
+| `IQ4_XS` | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.034, 3.963, 3.964 s | 0.196, 0.196, 0.193 s | **20.5x** |
+| prompt, 1419 | 55.518 s | 3.218 s | **17.3x** |
+| generating, 64 | 5.798, 5.830, 5.840 s | 1.035, 1.034, 1.037 s | **5.62x** |
+
+**Against llama.cpp** at `95b8e33e1`, same files, eight threads, same
+sitting:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| `IQ4_NL` prompt, 110 | **604.4 t/s** | 474.8 t/s | 1.27x ahead |
+| `IQ4_NL` prompt, 1419 | **465.9 t/s** | 405.7 t/s | 1.15x ahead |
+| `IQ4_NL` generating, 64 | 59.3 t/s | 71.9 t/s | 1.21x behind |
+| `IQ4_XS` prompt, 110 | **569.9 t/s** | 190.8 t/s | 2.99x ahead |
+| `IQ4_XS` prompt, 1419 | **441.0 t/s** | 163.7 t/s | 2.69x ahead |
+| `IQ4_XS` generating, 64 | 61.9 t/s | 73.4 t/s | 1.19x behind |
+
+**`IQ4_NL` is the second row in this whole run of sections where both sides
+repack**, after `Q2_K` -- and it is the one where the two answers to the
+same question are visibly different. llama.cpp's is `block_iq4_nlx4`: **four
+rows interleaved, not eight.** Its own repack list is `block_q4_0x8`,
+`block_q4_Kx8`, `block_iq4_nlx4` and `block_q2_Kx8`, so three of the four
+are eight and this one is four. 1.27 times is eight rows against four on the
+same format, with no asterisk. `IQ4_XS` is not on that list, so its 2.99
+carries the caveat `Q4_1`, `Q5_0`, `Q5_1` and `Q3_K` do.
+
+**And the `### Kernels` table still does not move.** `IQ4_NL` and `IQ4_XS`
+read 0.620 and 0.499 nanoseconds an element there, unchanged, because
+`Row_Dot` is the row product and the row product still does the gather it
+always did. Nothing reaches it for a matrix in panels. That is the fourth
+time this run of sections has had to say so.
+
+**How this is held.** `Panel_Quantized_Kernels_Are_Exact` now covers eight
+kernels, on activations constant across a whole super-block so that both
+paths see the same activations and the same dequantized weights. For these
+two the varied matrix is what matters: a flat one indexes a single level of
+the sixteen and a varied one indexes most of them, so a lookup reading the
+wrong entry fails on the second and not the first. The eight agree to 6E-6,
+and it was checked by breaking it: reading the table one byte off fails by
+48674.
+
+**Eleven formats, and what is left.** The engine reads sixteen. Three of
+them are floating-point and have no blocks to interleave; `Q8_0` is left out
+on purpose, being already level with llama.cpp and having no correction to
+carry; and **`MXFP4` is the one format still without a panel** -- which is
+the correction owed to the section below, whose "every one the engine can
+multiply" counted nine and should have counted eleven of sixteen. `MXFP4`
+is `IQ4_NL`'s shape with a power-of-two scale in a byte where the half is,
+so it is the same kernel again with the exponent converted at load.
+
 ### The last two formats on the floating-point path, and sixteen sub-blocks instead of eight
 
 `Q2_K` and `Q3_K` were what was left. Every other quantized format the
 engine reads had a kernel; these two multiplied in binary32, and a `Q2_K`
 prompt was the largest gap this file still recorded after the four-bit one
 was closed. Both are in panels now, and `--repack rows` covers **nine
-formats** -- every one the engine can multiply.
+formats**. **That sentence said "every one the engine can multiply" when it
+was published and was wrong**: the engine reads sixteen, and `MXFP4` had no
+panel then and has none now. The section above counts them properly.
 
 **These two are not the legacy formats with a smaller quant.** Two things
 about them are new here, and both change the shape of the kernel rather than
@@ -8653,9 +8745,11 @@ behind to a fifth ahead, and the generated token from 4.4 times behind to
 instruction. The first was a format missing from a list of four and the
 second was a layout that existed for three other formats.
 
-**Nothing is left on that list.** `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K`
-were each on it for a day; the sections above are where they went. Every
-format the engine multiplies has a panel kernel.
+**Nothing is left on that list.** `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K`, `Q3_K`,
+`IQ4_NL` and `IQ4_XS` were each on it for a day; the sections above are
+where they went. `MXFP4` is the one quantized format still without a panel,
+and it is not on this list because it was never on the floating-point path
+in the sense these were -- it is `IQ4_NL`'s shape and wants that kernel.
 
 ### The legacy four-bit format was on the floating-point path, and is not now
 
