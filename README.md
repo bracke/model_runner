@@ -8214,6 +8214,128 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The four-bit format that keeps a minimum, and a load at the head of a chain worth a third of a kernel
+
+`Q4_1` is `Q4_0`'s block with a second half-precision number in it: thirty-
+two nibbles behind a scale, and a minimum added to the row's whole sum
+rather than eight taken off every quant. It was the last four-bit format on
+the floating-point path. It is in panels now, and getting it there found
+something about the kernel beside it.
+
+**A panel block is 160 bytes**, the eight rows' twenty each and not one
+more:
+
+```
+   0 ..  15   the eight rows' block scales, half precision
+  16 ..  31   the eight rows' block minima, likewise
+  32 .. 159   the eight rows' quants, interleaved
+```
+
+The nibbles are grouped exactly as the section below groups them. **What
+differs is not the layout at all; it is one term of the arithmetic.** A
+block's contribution to row *L* and vector *V* is
+
+```
+   d_a * ( d_w[L] * SUM q*a  +  m_w[L] * SUM a )
+```
+
+and the insertion forms it as two multiply-accumulates into the running sum:
+the converted dot product against the row scales scaled by the activation's,
+then the row minima against the activation's block total scaled by the same.
+
+**This is the first format here whose kernel exists only in panels**, and
+the reason is that second term. The row-major tile carries one integer
+correction shared by every row of the tile -- which is exactly the shape
+`Q4_0`'s centring has, and exactly the shape a per-row minimum does not. A
+panel's lane is a row, so eight minima are one register and the correction
+is one instruction. `Has_Integer_Kernel` therefore takes the layout as a
+parameter now: answering True for the row-major layout would quantize the
+activations for a product that then declines to use them.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`,
+TinyLlama-1.1B-Chat requantized to `Q4_1`:**
+
+| | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 4.217, 4.123, 4.188 s | 0.182, 0.177, 0.175 s | **23.5x** |
+| prompt, 1419 | 57.300, 57.592 s | 2.905, 2.926 s | **19.7x** |
+| generating, 64 | 6.027, 6.035, 5.983 s | 1.124, 1.125, 1.125 s | **5.36x** |
+
+Twenty-three times, because the stored column is not a slower kernel but no
+kernel: `Q4_1` had no integer path at all and multiplied in binary32.
+
+**Against llama.cpp** at `95b8e33e1`, same file, eight threads, same
+sitting -- and this row is not like the others in this section:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 tokens | **621.5 t/s** | 171.8 t/s | **3.62x ahead** |
+| prompt, 1419 tokens | **488.5 t/s** | 146.2 t/s | **3.34x ahead** |
+| generating, 64 tokens | 56.9 t/s | 62.2 t/s | 1.09x behind |
+
+**llama.cpp does not repack this format.** Its `ggml-cpu/repack.cpp` builds
+`block_q4_0x8`, `block_q4_Kx8`, `block_iq4_nlx4` and `block_q2_Kx8`, and
+`Q4_1` is not among them -- so it reads this file with its plain
+`vec_dot_q4_1_q8_1` at 171.8 tokens a second where it reads `Q4_0` at 508.2.
+The three-and-a-half times is the eight-row layout against no layout, on a
+format that happens not to have one there. It is worth being exact about
+what that does and does not say: this engine's `Q4_1` kernel is not three
+times a good kernel, it is a good kernel where the comparison has none.
+
+**And correctness here needed more than a digest**, because the two paths
+being compared are two arithmetics rather than two kernels -- the stored
+column is binary32 and the panel column quantizes its activations. At 110
+tokens both produce `a038bbc489c2783c`; at 1419 they produce
+`00f047036c93974f` and `8315b2efdbed5f7a`, each stable across rounds. A
+divergence at some token is what two arithmetics do, but `Q4_0`'s two paths
+*don't* diverge at that length, so the asymmetry wanted an answer rather
+than a shrug.
+
+`Panel_Minimum_Term_Is_Exact` is the answer. A matrix whose every block is
+one repeated value encodes with a quant of nought throughout -- the
+encoder's range is zero, so the minimum *is* the value and the dot product
+contributes nothing at all. Give it activations that are also constant a
+block, which quantize to one level without loss, and the two paths must
+agree to floating-point rounding rather than to the quantizer's tolerance.
+They agree to 6E-6. The test was checked by breaking it: doubling the
+minimum's term makes it fail by 19306, which is the whole answer.
+
+### The load at the head of the chain
+
+Building `Q4_1` next to `Q4_0` made the two directly comparable, and the
+comparison said something was wrong. `Q4_1`'s kernel does strictly more work
+per block -- an extra widening, an extra multiply-accumulate -- and it read
+a 1419-token prompt in 2.92 seconds against `Q4_0`'s 3.94. **A kernel doing
+more work, 26 per cent faster, on the same shape.**
+
+The difference was one instruction, and it was the first one. `Q4_0` seeded
+its accumulator with the centring correction -- `vpbroadcastd` from the band
+table -- and then ran eight `vpdpbusd` into that register. Eight
+multiply-accumulates into one register is a dependency chain of eight, and a
+**load at its head adds the load's latency to the whole chain**. `Q4_1` had
+no correction to seed with, so it started at zero -- and a zeroing idiom is
+resolved when the register is renamed and costs nothing at all.
+
+So `Q4_0`'s centring moved out of the accumulator and into the floating-
+point finish, where it is one multiply-accumulate against the row scales the
+insertion is already holding -- the same shape `Q4_1`'s minimum has. One
+instruction more per vector, and:
+
+| 1419-token prompt, `--repack rows` | |
+| --- | ---: |
+| the correction as the accumulator's seed | 3.943, 3.968 s |
+| the correction in the floating-point finish | 2.945, 2.909 s |
+
+**1.35 times**, digest `07edf8ee9d143975` both ways, and it puts `Q4_0` level
+with `Q4_1` at 2.94 against 2.94 -- which is what two kernels this alike
+should read, and is the check that the explanation is the right one.
+
+**What is worth keeping is how it was found.** Nothing in a profile says
+"this load is at the head of a chain"; the kernel's instruction count was
+lower and its measured time was higher, and that only became visible because
+a second kernel of nearly the same shape existed to compare it against.
+Building the second thing is what priced the first.
+
 ### The legacy four-bit format in eight-row panels, and its generated token goes four times to one
 
 The section below put `Q4_0` on the integer path and ended by naming what it
@@ -8257,23 +8379,30 @@ vector's turn one pointer, one broadcast and eight dot products -- and it is
 only possible because a block this small fits in eight registers, which the
 k-quant's does not.
 
-*And the format's centring is the accumulator's starting value.* Every quant
-is a nibble meaning itself less eight, so a block's true sum is the byte dot
-product less eight times the activation's own total over that block. Rather
-than subtract that at the end, the accumulator is **loaded** with the
-negative of it before the first product: one broadcast, where the k-quant's
-minimum takes four multiply-accumulates.
+*And the format's centring rides the floating-point finish.* Every quant is
+a nibble meaning itself less eight, so a block's true sum is the byte dot
+product less eight times the activation's own total over that block. That
+correction was first written as the accumulator's **starting value**, a
+broadcast load before the first product -- one instruction fewer than what
+is there now, and a third slower. The next section is about why.
 
 **Alternated three rounds against three, one sitting, `--backend cpu`,
 TinyLlama-1.1B-Chat `Q4_0`:**
 
 | | as stored | `--repack rows` | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 | 0.564, 0.565, 0.559 s | 0.251, 0.260, 0.250 s | **2.23x** |
-| prompt, 1419 | 8.458, 8.109 s | 4.011, 3.988 s | **2.04x** |
-| generating, 17 | 0.957, 0.952, 0.950 s | 0.279, 0.279, 0.278 s | **3.42x** |
-| generating, 64 | 3.900, 3.885 s | 1.177, 1.182 s | **3.30x** |
+| prompt, 110 | 0.568, 0.571, 0.560 s | 0.177, 0.179, 0.180 s | **3.16x** |
+| prompt, 1419 | 8.017 s | 3.011 s | **2.66x** |
+| generating, 17 | 0.896, 0.896, 0.896 s | 0.275, 0.276, 0.277 s | **3.25x** |
+| generating, 64 | 3.788 s | 1.165 s | **3.25x** |
 | loading | 0.065 s | 0.400 s | |
+
+**These four rows read 2.23, 2.04, 3.42 and 3.30 when this section was first
+published**, on the same code but for one instruction. What changed is at
+the top of the next section: the accumulator's first instruction was a
+broadcast load and is now a zeroing idiom, which is worth a third of this
+kernel's prompt. The earlier readings were right about the code they were
+taken on.
 
 Every round on the same side, ranges nowhere near touching, and the digests
 unchanged: `61fda0268954d85b` at 110 tokens, `7ec6b755e53e16b4` at 1419, on
@@ -8296,20 +8425,19 @@ assembly runs. The panel kernel never writes a quant to memory.
 
 | | this engine | llama.cpp | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 tokens | 440.0 t/s | 508.2 t/s | 1.16x |
-| prompt, 1419 tokens | 355.8 t/s | 400.7 t/s | **1.13x** |
-| generating, 64 tokens | 54.4 t/s | 72.9 t/s | **1.34x** |
+| prompt, 110 tokens | **614.5 t/s** | 508.2 t/s | **1.21x ahead** |
+| prompt, 1419 tokens | **471.3 t/s** | 400.7 t/s | **1.18x ahead** |
+| generating, 64 tokens | 54.9 t/s | 72.9 t/s | 1.33x behind |
 
 **The whole of the `Q4_0` gap, in two days**: the prompt from 18.3 times
-behind to 1.13, and the generated token from 4.4 to 1.34. Neither was a new
+behind to a fifth ahead, and the generated token from 4.4 times behind to
+1.33. Neither was a new
 instruction. The first was a format missing from a list of four and the
 second was a layout that existed for three other formats.
 
-**What is not built, still.** `Q4_1`, `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K` are
-on the floating-point path and are named rather than measured. Of those,
-`Q4_1` is the one this section makes cheap to reach: it is this block with a
-minimum beside the scale, and the minimum's term is a second broadcast into
-the same accumulator.
+**What is not built, still.** `Q5_0`, `Q5_1`, `Q2_K` and `Q3_K` are on the
+floating-point path and are named rather than measured. `Q4_1` was on that
+list for a day; the section above is where it went.
 
 ### The legacy four-bit format was on the floating-point path, and is not now
 
@@ -8590,8 +8718,9 @@ Q4_K_M, seven workers, `--backend cpu`:
 | generating, 10 tokens | 0.172, 0.172, 0.173 s | 0.185, 0.186, 0.186 | 0.93 |
 
 **The long prompt's `--repack rows` cell read 3.517 and 3.549 s when this
-table was confirmed on 2026-09-08**, twice and outside the range above,
-against a stored column that was inside it. Nothing in that day's change
+table was confirmed on 2026-09-08, and 3.705 s in a second sitting the same
+day** -- outside the range above, then nearly inside it, against a stored
+column that stayed inside throughout. Nothing in that day's change
 touches this path beyond one comparison per call, so what moved is most
 likely where the linker put the loop: a kernel was added to the same
 compilation unit. The cell is left as it was taken and the two later

@@ -7,6 +7,57 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The four-bit format that keeps a minimum, in eight-row panels -- and
+  three and a half times llama.cpp, which does not repack it.** `Q4_1` is
+  `Q4_0`'s block with a second half-precision number in it, and it was the
+  last four-bit format on the floating-point path. A panel block is 160
+  bytes, the eight rows' twenty each; the nibbles are grouped exactly as
+  `Q4_0`'s are, and what differs is one term of the arithmetic.
+
+  **It is the first format here whose kernel exists only in panels.** The
+  row-major tile carries one integer correction shared by every row of it,
+  which is the shape `Q4_0`'s centring has and the shape a per-row minimum
+  does not; a panel's lane is a row, so eight minima are one register and
+  the correction is one multiply-accumulate. `Has_Integer_Kernel` takes the
+  layout as a parameter now, so the row-major layout does not quantize
+  activations for a product that would decline to use them.
+
+  Alternated three rounds against three, `--backend cpu`: **the 110-token
+  prompt 4.217/4.123/4.188 s to 0.182/0.177/0.175, 23.5 times**; the
+  1419-token prompt 57.300/57.592 to 2.905/2.926, 19.7; sixty-four
+  generated tokens 6.027/6.035/5.983 to 1.124/1.125/1.125, 5.36. Twenty-
+  three times because the stored column is not a slower kernel but none.
+
+  **Against llama.cpp: 621.5 t/s against 171.8 on a 110-token prompt**, and
+  488.5 against 146.2 at 1419. llama.cpp's `repack.cpp` builds
+  `block_q4_0x8`, `block_q4_Kx8`, `block_iq4_nlx4` and `block_q2_Kx8` and
+  has nothing for `Q4_1`, so this is the eight-row layout against no layout
+  rather than one kernel against another.
+
+  `Panel_Minimum_Term_Is_Exact` holds the term that no other kernel here
+  carries, on a matrix where nothing else contributes: constant blocks
+  encode with a quant of nought throughout, so the minimum is the whole
+  answer. The two paths agree to 6E-6, and the test was checked by breaking
+  it -- doubling the term fails it by 19306.
+
+### Changed
+
+- **`Q4_0`'s centring moved out of the accumulator and into the floating-
+  point finish, which is worth 1.35 times.** Building `Q4_1` beside it made
+  the two comparable, and `Q4_1` -- doing strictly more work per block --
+  read a 1419-token prompt 26 per cent faster. The difference was the first
+  instruction: `Q4_0` seeded its accumulator with a broadcast **load** of
+  the centring correction and then ran eight `vpdpbusd` into that register,
+  so the load's latency sat at the head of a dependency chain of eight,
+  where `Q4_1` started from a zeroing idiom that costs nothing at rename.
+
+  The correction is now one multiply-accumulate against the row scales the
+  insertion already holds: 3.943/3.968 s to 2.945/2.909, digest
+  `07edf8ee9d143975` both ways, and it puts `Q4_0` level with `Q4_1` at 2.94
+  against 2.94. **`Q4_0`'s prompt is now a fifth ahead of llama.cpp's** --
+  614.5 t/s against 508.2 at 110 tokens and 471.3 against 400.7 at 1419 --
+  where this morning it was 1.13 times behind.
+
 - **The legacy four-bit format in eight-row panels -- its prompt goes to
   1.13 times llama.cpp and its generated token from 4.4 times behind to
   1.34.** `--repack rows` now takes `Q4_0` matrices as well as the three

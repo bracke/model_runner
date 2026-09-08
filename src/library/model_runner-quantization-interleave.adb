@@ -33,6 +33,11 @@ package body Model_Runner.Quantization.Interleave is
    Legacy_Row_Bytes : constant := 18;
    Legacy_Quants    : constant := 2;
 
+   --  And the one that keeps a minimum where the other keeps a centring:
+   --  a scale, a minimum and the same sixteen bytes of nibbles.
+   Least_Row_Bytes : constant := 20;
+   Least_Quants    : constant := 4;
+
    Six_Row_Bytes : constant := 210;
    Six_Low       : constant := 0;
    Six_High      : constant := 128;
@@ -136,6 +141,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q5_K then Five_Block_Bytes
        elsif Format = G.Type_Q6_K then Six_Block_Bytes
        elsif Format = G.Type_Q4_0 then Legacy_Block_Bytes
+       elsif Format = G.Type_Q4_1 then Least_Block_Bytes
        else 0);
 
    -----------------------
@@ -167,6 +173,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q5_K then Five_Row_Bytes
        elsif Format = G.Type_Q6_K then Six_Row_Bytes
        elsif Format = G.Type_Q4_0 then Legacy_Row_Bytes
+       elsif Format = G.Type_Q4_1 then Least_Row_Bytes
        else 0);
 
    ------------------
@@ -180,7 +187,8 @@ package body Model_Runner.Quantization.Interleave is
    is (((Format = G.Type_Q4_K
          or else Format = G.Type_Q5_K
          or else Format = G.Type_Q6_K
-         or else Format = G.Type_Q4_0)
+         or else Format = G.Type_Q4_0
+         or else Format = G.Type_Q4_1)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -188,7 +196,7 @@ package body Model_Runner.Quantization.Interleave is
 
        --  A whole number of the format's own blocks, which is a super-block
        --  for the three k-quants and thirty-two elements for the legacy one.
-       (if Format = G.Type_Q4_0
+       (if Format = G.Type_Q4_0 or else Format = G.Type_Q4_1
         then Columns mod 32 = 0
         else Columns mod 256 = 0));
 
@@ -302,6 +310,36 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Build_Legacy;
+
+   --  And one row's legacy four-bit block that keeps a minimum.
+   --
+   --  The same permutation as the one above with a second number beside the
+   --  scale. The nibbles are not touched differently at all: what the
+   --  minimum changes is the kernel's arithmetic, not the layout's.
+   procedure Build_Least
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At + Least_Scale_At + Lane * 2)     := Source (In_At);
+      Target (Out_At + Least_Scale_At + Lane * 2 + 1) := Source (In_At + 1);
+      Target (Out_At + Least_Least_At + Lane * 2)     := Source (In_At + 2);
+      Target (Out_At + Least_Least_At + Lane * 2 + 1) := Source (In_At + 3);
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Least_Quants_At + Group * 32 + Lane * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Least_Quants + Group * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Build_Least;
 
    --  And one row's six-bit super-block.
    --
@@ -450,6 +488,10 @@ package body Model_Runner.Quantization.Interleave is
                            Build_Legacy
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
+                        elsif Format = G.Type_Q4_1 then
+                           Build_Least
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
                         else
                            Build_Four
                              (Source, In_At, Target, Out_At,
@@ -548,6 +590,32 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Take_Legacy;
+
+   --  And one row of a panel in that layout.
+   procedure Take_Least
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At)     := Source (In_At + Least_Scale_At + Lane * 2);
+      Target (Out_At + 1) := Source (In_At + Least_Scale_At + Lane * 2 + 1);
+      Target (Out_At + 2) := Source (In_At + Least_Least_At + Lane * 2);
+      Target (Out_At + 3) := Source (In_At + Least_Least_At + Lane * 2 + 1);
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Least_Quants + Group * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Least_Quants_At + Group * 32 + Lane * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Take_Least;
 
    --  And one row of a six-bit one.
    procedure Take_Six
@@ -655,6 +723,8 @@ package body Model_Runner.Quantization.Interleave is
                Take_Six (Source, In_At, Target, Out_At, Lane);
             elsif Format = G.Type_Q4_0 then
                Take_Legacy (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_Q4_1 then
+               Take_Least (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

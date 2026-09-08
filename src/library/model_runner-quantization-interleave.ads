@@ -27,9 +27,10 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Four formats are written here: the three k-quants a "_M" file is made of
---  and the legacy four-bit format, whose layout is described last because it
---  is the k-quant's with everything the k-quant packs taken away.
+--  Five formats are written here: the three k-quants a "_M" file is made of
+--  and the two legacy four-bit ones, whose layouts are described last
+--  because they are the k-quant's with everything the k-quant packs taken
+--  away.
 --
 --  The four-bit layout. A panel is eight consecutive rows. For each
 --  super-block of the panel, 1184 bytes -- the eight rows' 144 each,
@@ -97,6 +98,7 @@ package Model_Runner.Quantization.Interleave is
    Five_Block_Bytes  : constant := 1440;
    Six_Block_Bytes   : constant := 1680;
    Legacy_Block_Bytes : constant := 144;
+   Least_Block_Bytes  : constant := 160;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -141,6 +143,23 @@ package Model_Runner.Quantization.Interleave is
    Legacy_Scale_At  : constant := 0;
    Legacy_Quants_At : constant := 16;
 
+   --  And the legacy four-bit format that keeps a minimum instead of a
+   --  centring, which is the same block with a second half-precision number
+   --  in it and sixteen more bytes to a panel:
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 ..  31   the eight rows' block minima, likewise
+   --    32 .. 159   the eight rows' quants, interleaved
+   --
+   --  The quants are grouped exactly as the format above groups them,
+   --  because the two pack their nibbles the same way. What differs is what
+   --  a nibble means: there it is itself less eight, here it is itself, and
+   --  the minimum is added to the row's whole block rather than taken off
+   --  every quant.
+   Least_Scale_At  : constant := 0;
+   Least_Least_At  : constant := 16;
+   Least_Quants_At : constant := 32;
+
    --  Bytes a panel block occupies in the layout this format takes.
    --
    --  @param Format Weight format; one Interleaves accepts.
@@ -172,8 +191,8 @@ package Model_Runner.Quantization.Interleave is
 
    --  Whether a matrix in this format and shape can be interleaved.
    --
-   --  The three k-quants a "_M" file is made of, and the legacy four-bit
-   --  format a "Q4_0" file is entirely. A row count that is not a whole
+   --  The three k-quants a "_M" file is made of, and the two legacy
+   --  four-bit formats a "Q4_0" or "Q4_1" file is entirely. A row count that is not a whole
    --  number of panels is refused rather than padded, because a padded panel
    --  is rows that do not exist and a kernel that has to know which they
    --  are.

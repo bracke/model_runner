@@ -378,12 +378,18 @@ package body Tests.Backend_Cases is
       --  an arrangement for each and a kernel for each: the four-bit one
       --  pairs two sub-blocks in a byte, the five-bit one adds a run of
       --  fifth bits to that, and the six-bit one splits every quant between
-      --  two runs. And the legacy four-bit format, whose block is
+      --  two runs. And the two legacy four-bit formats, whose block is
       --  thirty-two elements rather than a super-block -- which is the one
-      --  thing about this question that is not the same for all four, and
+      --  thing about this question that is not the same for all five, and
       --  the reason nothing below says 256.
-      Formats : constant array (1 .. 4) of G.Tensor_Type :=
-        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0];
+      --
+      --  Q4_1 is here for a second reason: it is the only format with a
+      --  panel kernel and no row-major one, so the comparison below is
+      --  between the panel kernel and the floating-point path rather than
+      --  between two kernels, and it is held to the looser of the two
+      --  bounds throughout for exactly that reason.
+      Formats : constant array (1 .. 5) of G.Tensor_Type :=
+        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0, G.Type_Q4_1];
 
       Plain   : B.Byte_Array_Access;
       Panels  : B.Byte_Array_Access;
@@ -441,6 +447,7 @@ package body Tests.Backend_Cases is
            (if G."=" (Shape, G.Type_Q4_K) then 144
             elsif G."=" (Shape, G.Type_Q5_K) then 176
             elsif G."=" (Shape, G.Type_Q4_0) then 18
+            elsif G."=" (Shape, G.Type_Q4_1) then 20
             else 210);
 
          --  Blocks in one row, which is not 256 elements for every format
@@ -456,6 +463,8 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_Q5_K (Values)
                elsif G."=" (Shape, G.Type_Q4_0)
                then Fixtures.Encode_Q4_0 (Values)
+               elsif G."=" (Shape, G.Type_Q4_1)
+               then Fixtures.Encode_Q4_1 (Values)
                else Fixtures.Encode_Q6_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
@@ -558,7 +567,11 @@ package body Tests.Backend_Cases is
          CPU.Use_Integer_Activations (True);
 
          for Batch of Counts loop
-            Compare (Batch, Worst);
+            if G."=" (Shape, G.Type_Q4_1) then
+               Compare (Batch, Coarse);
+            else
+               Compare (Batch, Worst);
+            end if;
          end loop;
 
          for Batch of Few loop
@@ -581,6 +594,142 @@ package body Tests.Backend_Cases is
               "the panel product at two and three vectors differs by "
               & N.Real'Image (Coarse));
    end Panelled_Product_Says_What_Rows_Say;
+
+   --  The minimum's term, on its own and exactly.
+   --
+   --  Q4_1 is the one format whose panel kernel carries a term no other
+   --  kernel here carries: a minimum a block, added to the row's whole sum
+   --  rather than taken off each quant. Every other check of it is a
+   --  comparison against the floating-point path, where activation
+   --  quantization is the largest error by three orders and would hide a
+   --  minimum term that was wrong by a little. This isolates it.
+   --
+   --  A matrix whose every block is one repeated value encodes with a
+   --  quant of nought throughout: the encoder's scale spans a range of
+   --  zero, so the minimum IS the value and the dot product contributes
+   --  nothing at all. Give it activations that are also constant a block
+   --  and both quantize without loss -- a constant block is one level --
+   --  so the two paths must agree to floating-point rounding rather than
+   --  to the quantizer's tolerance. A minimum term that is missing, scaled
+   --  wrongly, or signed wrongly fails this by the whole answer.
+   procedure Panel_Minimum_Term_Is_Exact
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package IL renames Model_Runner.Quantization.Interleave;
+
+      Tall : constant N.Element_Count := 40;
+      Wide : constant N.Element_Count := 512;
+      Held : constant N.Element_Count := Wide / 32;
+
+      Batch : constant N.Element_Count := 8;
+
+      Values : N.Real_Array (0 .. Tall * Wide - 1);
+      Inputs : T.Real_Array_Access;
+      Direct : T.View;
+      Panels : T.View;
+
+      Plain   : B.Byte_Array_Access;
+      Panelled : B.Byte_Array_Access;
+
+      Rows_Way  : T.Real_Array_Access;
+      Panel_Way : T.Real_Array_Access;
+
+      Status : E.Error_Info;
+      Built  : Boolean;
+
+      Worst : N.Real := 0.0;
+   begin
+      --  One value a block, so every quant is nought and every element is
+      --  the block's minimum.
+      for Row in 0 .. Tall - 1 loop
+         for Block in 0 .. Held - 1 loop
+            declare
+               Level : constant N.Real :=
+                 0.5 + N.Real (Row) * 0.25 - N.Real (Block) * 0.125;
+            begin
+               for Index in N.Element_Count range 0 .. 31 loop
+                  Values (Row * Wide + Block * 32 + Index) := Level;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      declare
+         Bytes : constant B.Byte_Array := Fixtures.Encode_Q4_1 (Values);
+      begin
+         B.Allocate (Bytes'Length, Plain);
+         Plain.all := Bytes;
+      end;
+
+      B.Allocate (IL.Panel_Bytes (G.Type_Q4_1, Tall, Held), Panelled);
+
+      T.Make (G.Type_Q4_1, Tall, Wide, Plain, 0, Direct, Status);
+      Assert (E.Is_Ok (Status), "the row-major weight view was refused");
+
+      IL.Build
+        (Format => G.Type_Q4_1,
+         Source => Plain.all,
+         From   => 0,
+         Target => Panelled.all,
+         Into   => 0,
+         Rows   => Tall,
+         Blocks => Held,
+         Ok     => Built);
+      Assert (Built, "the panel layout could not be written");
+
+      T.Make_Panels (G.Type_Q4_1, Tall, Wide, Panelled, 0, Panels, Status);
+      Assert (E.Is_Ok (Status), "the panel weight view was refused");
+
+      T.Allocate (Wide * Batch, Inputs);
+      T.Allocate (Tall * Batch, Rows_Way);
+      T.Allocate (Tall * Batch, Panel_Way);
+
+      --  And activations that are constant a block, so they quantize to one
+      --  level and back without loss.
+      for Vector in 0 .. Batch - 1 loop
+         for Block in 0 .. Held - 1 loop
+            declare
+               Level : constant N.Real :=
+                 1.0 + N.Real (Vector) * 0.5 - N.Real (Block) * 0.0625;
+            begin
+               for Index in N.Element_Count range 0 .. 31 loop
+                  Inputs.all (Vector * Wide + Block * 32 + Index) := Level;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      CPU.Use_Integer_Activations (True);
+
+      CPU.Dispatch_Batch (null, Direct, Inputs, Batch, Rows_Way, Status);
+      Assert (E.Is_Ok (Status), "the row-major product failed");
+
+      CPU.Dispatch_Batch (null, Panels, Inputs, Batch, Panel_Way, Status);
+      Assert (E.Is_Ok (Status), "the panel product failed");
+
+      CPU.Use_Integer_Activations (False);
+
+      for Index in 0 .. Tall * Batch - 1 loop
+         Worst :=
+           N.Real'Max (Worst, abs (Rows_Way.all (Index)
+                                   - Panel_Way.all (Index)));
+      end loop;
+
+      --  A part in a hundred thousand of the largest answer here, which is
+      --  the bound the panel kernels are held to against each other and not
+      --  the looser one a quantized activation needs -- because nothing
+      --  here was quantized with loss.
+      Assert (Worst <= 1.0E-2,
+              "the minimum term differs by " & N.Real'Image (Worst));
+
+      T.Free (Inputs);
+      T.Free (Rows_Way);
+      T.Free (Panel_Way);
+      B.Free (Plain);
+      B.Free (Panelled);
+   end Panel_Minimum_Term_Is_Exact;
 
    --  More workers than rows is legal: the surplus workers get nothing and the
    --  result is still complete.
@@ -3482,6 +3631,10 @@ package body Tests.Backend_Cases is
         (T, Panelled_Product_Says_What_Rows_Say'Access,
          "a four-, five- or six-bit weight in panels decodes to the rows "
          & "it was made of and multiplies to what those rows multiply to");
+      Register_Routine
+        (T, Panel_Minimum_Term_Is_Exact'Access,
+         "the four-bit format that keeps a minimum carries its term "
+         & "exactly, on a matrix where nothing else contributes");
       Register_Routine
         (T, More_Workers_Than_Rows'Access,
          "more workers than rows still produces a complete result");

@@ -668,7 +668,7 @@ package body Model_Runner.Tensors is
         or else Last >= Item.Rows
         or else Count = 0
         or else Per_Block = 0
-        or else not QI.Has_Integer_Kernel (Item.Format)
+        or else not QI.Has_Integer_Kernel (Item.Format, Item.Interleaved)
         or else not QI.Is_Packable (Item.Columns)
         or else Values'Length < Count * Item.Columns
         or else Target'Length < Count * Item.Rows
