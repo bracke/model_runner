@@ -185,7 +185,6 @@ package Model_Runner.Kernels is
       Scores    : in out Real_Array;
       At_Score  : Element_Count);
 
-
    --  One run of an attention head's output: a span of components summed
    --  over a span of positions, each position's values scaled by its score.
    --

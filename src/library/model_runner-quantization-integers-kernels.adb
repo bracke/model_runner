@@ -6411,7 +6411,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
       type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
       Landed : Strip_Lanes;
 
-
       --  The vector a lane of the strip reads: its own where the batch
       --  reaches that far, and the last real one where it does not.
       function Held (Vector : Element_Count) return Element_Count
@@ -8202,27 +8201,27 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   end loop;
                end loop;
 
-            for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1 loop
-               if Format = G.Type_Q4_K then
-                  Rows_By_Strips_Q4K
-                    (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                     Held_Factor, Held_Whole, Held_Down,
-                     Totals, First, Stride, Count, At_Strip * 4,
-                     Element_Count'Min (4, Count - At_Strip * 4), Sums,
-                     Done);
-               else
-                  Rows_By_Strips_Q5K
-                    (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                     Held_Factor, Held_Whole, Held_Down,
-                     Totals, First, Stride, Count, At_Strip * 4,
-                     Element_Count'Min (4, Count - At_Strip * 4), Sums,
-                     Done);
-               end if;
+               for At_Strip in Element_Count range 0 .. (Count + 3) / 4 - 1 loop
+                  if Format = G.Type_Q4_K then
+                     Rows_By_Strips_Q4K
+                       (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                        Held_Factor, Held_Whole, Held_Down,
+                        Totals, First, Stride, Count, At_Strip * 4,
+                        Element_Count'Min (4, Count - At_Strip * 4), Sums,
+                        Done);
+                  else
+                     Rows_By_Strips_Q5K
+                       (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                        Held_Factor, Held_Whole, Held_Down,
+                        Totals, First, Stride, Count, At_Strip * 4,
+                        Element_Count'Min (4, Count - At_Strip * 4), Sums,
+                        Done);
+                  end if;
 
-               if not Done then
-                  return;
-               end if;
-            end loop;
+                  if not Done then
+                     return;
+                  end if;
+               end loop;
             end;
          end;
 
@@ -8653,7 +8652,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                               Volatile => True);
                         end;
                      end loop;
-                     else
+                  else
                      for Row in 0 .. Rows - 1 loop
                         --  Both scales at once, because the insertion
                         --  multiplies the eight sums by one number.

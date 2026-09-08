@@ -1126,7 +1126,6 @@ private
       --  Null if the device refused it, which leaves a batch of one on the
       --  wide kernel exactly as before.
 
-
       --  And a third time with WIDER, which sets its group to sixteen. A
       --  round of nine to thirty-one sequences is two dispatches on the
       --  eight-wide kernel and therefore two passes over every weight in

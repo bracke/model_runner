@@ -7,6 +7,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The legacy four-bit format was on the floating-point path, and is not
+  now -- a Q4_0 prompt goes from 18.3 times behind llama.cpp to 2.3.**
+  `Has_Integer_Kernel` named four formats -- `Q8_0`, `Q4_K`, `Q5_K`, `Q6_K`
+  -- and the engine reads sixteen. Everything else fell to `Accumulate_Dot`
+  and multiplied in binary32, and nothing said so. A profile put **93.6 per
+  cent of a Q4_0 prompt in that one procedure**: not a slow kernel, the
+  wrong one.
+
+  `Q4_0` is `Q8_0`'s block in every respect the integer tile cares about --
+  thirty-two elements behind one half-precision scale, no minimum, no
+  sub-blocks -- and differs in a nibble where there is a byte and a centring
+  of eight where there is one of 128. Both are per-format decisions the
+  generic four-row tile already makes, so no kernel was written: the tile
+  learned the nibble, the bias became a constant, and the two branches that
+  are genuinely `Q8_0`-shaped were told to say so.
+
+  Alternated three rounds against three, `--backend cpu`: **the 110-token
+  prompt 4.069/3.915/3.964 s to 0.567/0.573/0.569, 6.97 times**; the
+  1419-token prompt 58.181 s to 8.121, 7.16; a generated token
+  1.032/1.044/1.020 to 0.984/0.979/0.975. The digests do not move on either
+  path -- `61fda0268954d85b` and `7ec6b755e53e16b4` -- which the two
+  arithmetics did not have to agree on. Conformance 41780 sequences, 0
+  outside tolerance.
+
+  What remains is that `Q8_0` has an assembly kernel and `Q4_0` rides the
+  compiler. Five formats are still on the floating-point path -- `Q4_1`,
+  `Q5_0`, `Q5_1`, `Q2_K`, `Q3_K` -- and are named rather than built.
+
 - **The host's copy of the cache, owed rather than sent -- and the device's
   prompt goes from a third behind llama.cpp to ahead of it.** `--budget` on a
   device prompt put READING_OUT at a fifth of it, which cannot be what it
@@ -227,6 +255,17 @@ Keep a Changelog and the project uses semantic versioning.
   that change as measured along with this one. The figures above are taken
   and stated, and `docs/measured-figures.txt` keeps a group of its own for
   them.
+
+### Fixed
+
+- **A plain `alr build` left twenty-six style warnings behind and the
+  release gate reads all of `obj`.** The release profile does not run
+  GNAT's layout checks and the development profile does, so a tree that
+  passed the gate after a release build failed it after a development one:
+  twelve unindented statements in `Model_Runner.Llama`, four in
+  `Platform.Device.Products`, one in the tokenizer, one misplaced `else` in
+  the integer kernels, and eight doubled blank lines. All whitespace; no
+  figure can move, and the fingerprints were restamped saying so.
 
 ### Measured
 

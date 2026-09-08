@@ -989,7 +989,6 @@ package body Model_Runner.Backend.Device is
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Halted);
 
-
       if Halted or else not Ok then
          Ok := False;
          return;

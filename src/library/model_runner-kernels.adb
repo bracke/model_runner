@@ -308,7 +308,6 @@ package body Model_Runner.Kernels is
      & "vzeroupper"                              & ASCII.LF
      & "vzeroupper";
 
-
    procedure Head_Scores
      (Query    : Real_Array;
       At_Query : Element_Count;
@@ -531,7 +530,6 @@ package body Model_Runner.Kernels is
          end;
       end loop;
    end Head_Scores_Across;
-
 
    ---------------
    -- Blend_Run --

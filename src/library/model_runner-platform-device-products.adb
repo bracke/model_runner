@@ -28,7 +28,6 @@ with Model_Runner.Shaders;
 --  is what that convention is for.
 package body Model_Runner.Platform.Device.Products is
 
-
    use type Interfaces.C.int;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -698,8 +697,6 @@ package body Model_Runner.Platform.Device.Products is
       --  pushed the wrong one would attend to the wrong half of a text and
       --  return numbers of exactly the right shape.
       Causal     : C.unsigned := 1;
-
-
 
       --  How steeply a head's attention falls off with distance, for the one
       --  architecture that is told where a token is by the scores rather
@@ -3175,27 +3172,27 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Fresh then
-      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
 
-      declare
-         --  The copying kernel reads the first two words as how many
-         --  values the batch really holds and how many the copy is to
-         --  hold. The rest of the block is nothing to it.
-         Shape : aliased Shape_Constants :=
-           (Rows    => C.unsigned (Held),
-            Columns => C.unsigned (Made),
-            others  => 0);
-      begin
-         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-               Product_Bytes, Shape'Address);
-         Dispatch
-           (Item.Buffer,
-            C.unsigned ((Made / 2 + Group_Size - 1) / Group_Size), 1, 1);
-      end;
+         declare
+            --  The copying kernel reads the first two words as how many
+            --  values the batch really holds and how many the copy is to
+            --  hold. The rest of the block is nothing to it.
+            Shape : aliased Shape_Constants :=
+              (Rows    => C.unsigned (Held),
+               Columns => C.unsigned (Made),
+               others  => 0);
+         begin
+            Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                  Product_Bytes, Shape'Address);
+            Dispatch
+              (Item.Buffer,
+               C.unsigned ((Made / 2 + Group_Size - 1) / Group_Size), 1, 1);
+         end;
 
-      Barrier
-        (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
-         0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
+         Barrier
+           (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
+            0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
       end if;
 
       --  Whichever of the four tiles decodes this format at this width.
@@ -3839,20 +3836,20 @@ package body Model_Runner.Platform.Device.Products is
                  + Interfaces.Unsigned_64 (Values'Length) * 2
                  <= Item.Cache_Bytes
       then
-      declare
-         Halves : Model_Runner.Numerics.Half_Array (Values'Range)
-           with Import,
-                Address =>
-                  System.Storage_Elements.To_Address
-                    (System.Storage_Elements.To_Integer (Item.Cache_At)
-                     + System.Storage_Elements.Integer_Address
-                         (Item.Cache_Elements * 4
-                          + Interfaces.Unsigned_64 (At_Value) * 2));
-      begin
-         for Index in Halves'Range loop
-            Halves (Index) := Model_Runner.Numerics.To_Half (Values (Index));
-         end loop;
-      end;
+         declare
+            Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+              with Import,
+                   Address =>
+                     System.Storage_Elements.To_Address
+                       (System.Storage_Elements.To_Integer (Item.Cache_At)
+                        + System.Storage_Elements.Integer_Address
+                            (Item.Cache_Elements * 4
+                             + Interfaces.Unsigned_64 (At_Value) * 2));
+         begin
+            for Index in Halves'Range loop
+               Halves (Index) := Model_Runner.Numerics.To_Half (Values (Index));
+            end loop;
+         end;
       end if;
 
       Ok := True;

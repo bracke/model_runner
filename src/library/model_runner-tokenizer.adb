@@ -2645,54 +2645,54 @@ package body Model_Runner.Tokenizer is
             Worth (Index) := Pair_Worth (Index);
          end loop;
 
-      loop
-         declare
-            Best_Left  : Integer := -1;
-            Best_Score : Float := Float'First;
-            Index      : Integer := (if Count = 0 then -1 else 1);
-         begin
-            while Index >= 1 loop
-               declare
-                  Next : constant Integer := Symbols (Index).Next;
-               begin
-                  exit when Next < 1;
-
-                  if Worth (Index) > Best_Score then
-                     Best_Score := Worth (Index);
-                     Best_Left := Index;
-                  end if;
-
-                  Index := Next;
-               end;
-            end loop;
-
-            exit when Best_Left < 1;
-
+         loop
             declare
-               Right : constant Integer := Symbols (Best_Left).Next;
+               Best_Left  : Integer := -1;
+               Best_Score : Float := Float'First;
+               Index      : Integer := (if Count = 0 then -1 else 1);
             begin
-               --  Splice the right symbol out and extend the left one. This is
-               --  only correct because the two slices are adjacent in Working,
-               --  which the split above guarantees.
-               Symbols (Best_Left).Length :=
-                 Symbols (Best_Left).Length + Symbols (Right).Length;
-               Symbols (Best_Left).Next := Symbols (Right).Next;
-               if Symbols (Right).Next >= 1 then
-                  Symbols (Symbols (Right).Next).Previous := Best_Left;
-               end if;
-               Symbols (Right).Alive := False;
-               Worth (Right) := Float'First;
+               while Index >= 1 loop
+                  declare
+                     Next : constant Integer := Symbols (Index).Next;
+                  begin
+                     exit when Next < 1;
 
-               --  The two pairs a merge changes: the one this symbol now
-               --  begins, and the one that ends where it begins.
-               Worth (Best_Left) := Pair_Worth (Best_Left);
-               if Symbols (Best_Left).Previous >= 1 then
-                  Worth (Symbols (Best_Left).Previous) :=
-                    Pair_Worth (Symbols (Best_Left).Previous);
-               end if;
+                     if Worth (Index) > Best_Score then
+                        Best_Score := Worth (Index);
+                        Best_Left := Index;
+                     end if;
+
+                     Index := Next;
+                  end;
+               end loop;
+
+               exit when Best_Left < 1;
+
+               declare
+                  Right : constant Integer := Symbols (Best_Left).Next;
+               begin
+                  --  Splice the right symbol out and extend the left one. This is
+                  --  only correct because the two slices are adjacent in Working,
+                  --  which the split above guarantees.
+                  Symbols (Best_Left).Length :=
+                    Symbols (Best_Left).Length + Symbols (Right).Length;
+                  Symbols (Best_Left).Next := Symbols (Right).Next;
+                  if Symbols (Right).Next >= 1 then
+                     Symbols (Symbols (Right).Next).Previous := Best_Left;
+                  end if;
+                  Symbols (Right).Alive := False;
+                  Worth (Right) := Float'First;
+
+                  --  The two pairs a merge changes: the one this symbol now
+                  --  begins, and the one that ends where it begins.
+                  Worth (Best_Left) := Pair_Worth (Best_Left);
+                  if Symbols (Best_Left).Previous >= 1 then
+                     Worth (Symbols (Best_Left).Previous) :=
+                       Pair_Worth (Symbols (Best_Left).Previous);
+                  end if;
+               end;
             end;
-         end;
-      end loop;
+         end loop;
       end;
 
       declare

@@ -7584,27 +7584,27 @@ package body Model_Runner.Llama is
                      then
                         Angles_Base := Turn_Base (Settings, Natural (Index));
 
-                     for Which in 0 .. Count - 1 loop
-                        declare
-                           Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
-                           Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
-                        begin
-                           K.Rotary_Table
-                             (Element_Count (Settings.Rotary),
-                              Natural (Sits_At (Which)),
-                              Turn_Base (Settings, Natural (Index)),
-                              Settings.Scaling, Turns (Source),
-                              Cosines => Cosines, Sines => Sines);
+                        for Which in 0 .. Count - 1 loop
+                           declare
+                              Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+                              Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+                           begin
+                              K.Rotary_Table
+                                (Element_Count (Settings.Rotary),
+                                 Natural (Sits_At (Which)),
+                                 Turn_Base (Settings, Natural (Index)),
+                                 Settings.Scaling, Turns (Source),
+                                 Cosines => Cosines, Sines => Sines);
 
-                           for Pair in 0 .. Pairs - 1 loop
-                              Angles.all (Which * Pairs * 2 + Pair * 2) :=
-                                Cosines (Pair);
-                              Angles.all
-                                (Which * Pairs * 2 + Pair * 2 + 1) :=
-                                Sines (Pair);
-                           end loop;
-                        end;
-                     end loop;
+                              for Pair in 0 .. Pairs - 1 loop
+                                 Angles.all (Which * Pairs * 2 + Pair * 2) :=
+                                   Cosines (Pair);
+                                 Angles.all
+                                   (Which * Pairs * 2 + Pair * 2 + 1) :=
+                                   Sines (Pair);
+                              end loop;
+                           end;
+                        end loop;
                      end if;
                   end if;
 
@@ -8159,162 +8159,162 @@ package body Model_Runner.Llama is
             --  left here to do.
             if not Fused then
 
-            Product_Batch
-              (Item, Current.Attention_Out, Attend, Count, Norm, Status);
-            exit when E.Is_Error (Status);
-            Charge (Item, Projecting, Mark);
-
-            if Current.Out_Bias /= null then
-               for Which in 0 .. Count - 1 loop
-                  declare
-                     Origin : constant Element_Count := Slot (Which, Width);
-                  begin
-                     K.Add (Norm.all (Origin .. Origin + Width - 1),
-                            Current.Out_Bias.all);
-                  end;
-               end loop;
-            end if;
-
-            declare
-               Share  : aliased Join_Share;
-               Shared : E.Error_Info;
-            begin
-               Workers_CPU.Dispatch_Shares
-                 (Team, Count, Share'Unchecked_Access, Shared);
-
-               if not Share.Ok or else E.Is_Error (Shared) then
-                  Release;
-                  Item.Current := Failed;
-                  Status := E.Make (E.Memory_Allocation_Failed);
-                  return;
-               end if;
-            end;
-
-            Charge (Item, Joining, Mark);
-
-            --  Which experts run is decided per position, so a batch has no
-            --  one matrix to multiply the whole of it by: this is the one
-            --  block that runs a token at a time however many were handed
-            --  in. Everything before it -- the projections, the attention,
-            --  the output -- still goes through the batch.
-            if Settings.Experts > 0 then
-               for Which in 0 .. Count - 1 loop
-                  declare
-                     Origin : constant Element_Count := Slot (Which, Width);
-                  begin
-                     Item.Normalized.all :=
-                       Norm.all (Origin .. Origin + Width - 1);
-                     Mixture
-                       (Item, Current, Item.Normalized, Item.Mixture, Status);
-                     exit when E.Is_Error (Status);
-                     Norm.all (Origin .. Origin + Width - 1) :=
-                       Item.Mixture.all;
-                  end;
-               end loop;
+               Product_Batch
+                 (Item, Current.Attention_Out, Attend, Count, Norm, Status);
                exit when E.Is_Error (Status);
-            else
-               --  As in the single-token path: the two arrangements differ
-               --  only in how Gate is filled, and the projection down is
-               --  written once so that neither can skip it.
-               if not T.Is_Present (Current.Gate) then
-                  --  No gate: up, a Gaussian unit, down. As in the
-                  --  single-token path, the gate being absent is what says
-                  --  so.
-                  Product_Batch
-                    (Item, Current.Up, Norm, Count, Gate, Status);
-                  exit when E.Is_Error (Status);
+               Charge (Item, Projecting, Mark);
 
-                  declare
-                     Share  : aliased Feed_Share := (Both => False);
-                     Shared : E.Error_Info;
-                  begin
-                     Workers_CPU.Dispatch_Shares
-                       (Team, Count, Share'Unchecked_Access, Shared);
-
-                     if E.Is_Error (Shared) then
-                        Release;
-                        Item.Current := Failed;
-                        Status := Shared;
-                        return;
-                     end if;
-                  end;
-               elsif Model_Runner.Backend."="
-                       (Item.Owner.Able.Kind,
-                        Model_Runner.Backend.Backend_Device)
-               then
-                  --  A device takes the whole gated block at once -- both
-                  --  arms, the unit, the multiply, and the projection that
-                  --  reads what they make -- with none of the middle coming
-                  --  back. However many positions: the combining step works
-                  --  elementwise over whatever the arms hold, and both arms
-                  --  are laid out the same way by the same kernel, so what
-                  --  that layout is does not matter to it.
-                  Model_Runner.Backend.Device.Dispatch_Gated
-                    (Current.Gate, Current.Up, Current.Down,
-                     Norm, Count, Gate_Unit (Source), Norm, Status,
-                     Item.Stopping);
-                  exit when E.Is_Error (Status);
-                  Whole_Block := True;
-               else
-                  Product_Batch
-                    (Item, Current.Gate, Norm, Count, Gate, Status);
-                  exit when E.Is_Error (Status);
-                  Product_Batch
-                    (Item, Current.Up, Norm, Count, Up, Status);
-                  exit when E.Is_Error (Status);
-
-                  declare
-                     Share  : aliased Feed_Share;
-                     Shared : E.Error_Info;
-                  begin
-                     Workers_CPU.Dispatch_Shares
-                       (Team, Count, Share'Unchecked_Access, Shared);
-
-                     if E.Is_Error (Shared) then
-                        Release;
-                        Item.Current := Failed;
-                        Status := Shared;
-                        return;
-                     end if;
-                  end;
-               end if;
-
-               if not Whole_Block then
-                  Product_Batch
-                    (Item, Current.Down, Gate, Count, Norm, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               if Current.Down_Bias /= null then
+               if Current.Out_Bias /= null then
                   for Which in 0 .. Count - 1 loop
                      declare
                         Origin : constant Element_Count := Slot (Which, Width);
                      begin
                         K.Add (Norm.all (Origin .. Origin + Width - 1),
-                               Current.Down_Bias.all);
+                               Current.Out_Bias.all);
                      end;
                   end loop;
                end if;
-            end if;
 
-            Charge (Item, Feeding, Mark);
+               declare
+                  Share  : aliased Join_Share;
+                  Shared : E.Error_Info;
+               begin
+                  Workers_CPU.Dispatch_Shares
+                    (Team, Count, Share'Unchecked_Access, Shared);
 
-            declare
-               Share  : aliased Join_Share := (After => True, Ok => True);
-               Shared : E.Error_Info;
-            begin
-               Workers_CPU.Dispatch_Shares
-                 (Team, Count, Share'Unchecked_Access, Shared);
+                  if not Share.Ok or else E.Is_Error (Shared) then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                     return;
+                  end if;
+               end;
 
-               if not Share.Ok or else E.Is_Error (Shared) then
-                  Release;
-                  Item.Current := Failed;
-                  Status := E.Make (E.Memory_Allocation_Failed);
-                  return;
+               Charge (Item, Joining, Mark);
+
+               --  Which experts run is decided per position, so a batch has no
+               --  one matrix to multiply the whole of it by: this is the one
+               --  block that runs a token at a time however many were handed
+               --  in. Everything before it -- the projections, the attention,
+               --  the output -- still goes through the batch.
+               if Settings.Experts > 0 then
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Origin : constant Element_Count := Slot (Which, Width);
+                     begin
+                        Item.Normalized.all :=
+                          Norm.all (Origin .. Origin + Width - 1);
+                        Mixture
+                          (Item, Current, Item.Normalized, Item.Mixture, Status);
+                        exit when E.Is_Error (Status);
+                        Norm.all (Origin .. Origin + Width - 1) :=
+                          Item.Mixture.all;
+                     end;
+                  end loop;
+                  exit when E.Is_Error (Status);
+               else
+                  --  As in the single-token path: the two arrangements differ
+                  --  only in how Gate is filled, and the projection down is
+                  --  written once so that neither can skip it.
+                  if not T.Is_Present (Current.Gate) then
+                     --  No gate: up, a Gaussian unit, down. As in the
+                     --  single-token path, the gate being absent is what says
+                     --  so.
+                     Product_Batch
+                       (Item, Current.Up, Norm, Count, Gate, Status);
+                     exit when E.Is_Error (Status);
+
+                     declare
+                        Share  : aliased Feed_Share := (Both => False);
+                        Shared : E.Error_Info;
+                     begin
+                        Workers_CPU.Dispatch_Shares
+                          (Team, Count, Share'Unchecked_Access, Shared);
+
+                        if E.Is_Error (Shared) then
+                           Release;
+                           Item.Current := Failed;
+                           Status := Shared;
+                           return;
+                        end if;
+                     end;
+                  elsif Model_Runner.Backend."="
+                          (Item.Owner.Able.Kind,
+                           Model_Runner.Backend.Backend_Device)
+                  then
+                     --  A device takes the whole gated block at once -- both
+                     --  arms, the unit, the multiply, and the projection that
+                     --  reads what they make -- with none of the middle coming
+                     --  back. However many positions: the combining step works
+                     --  elementwise over whatever the arms hold, and both arms
+                     --  are laid out the same way by the same kernel, so what
+                     --  that layout is does not matter to it.
+                     Model_Runner.Backend.Device.Dispatch_Gated
+                       (Current.Gate, Current.Up, Current.Down,
+                        Norm, Count, Gate_Unit (Source), Norm, Status,
+                        Item.Stopping);
+                     exit when E.Is_Error (Status);
+                     Whole_Block := True;
+                  else
+                     Product_Batch
+                       (Item, Current.Gate, Norm, Count, Gate, Status);
+                     exit when E.Is_Error (Status);
+                     Product_Batch
+                       (Item, Current.Up, Norm, Count, Up, Status);
+                     exit when E.Is_Error (Status);
+
+                     declare
+                        Share  : aliased Feed_Share;
+                        Shared : E.Error_Info;
+                     begin
+                        Workers_CPU.Dispatch_Shares
+                          (Team, Count, Share'Unchecked_Access, Shared);
+
+                        if E.Is_Error (Shared) then
+                           Release;
+                           Item.Current := Failed;
+                           Status := Shared;
+                           return;
+                        end if;
+                     end;
+                  end if;
+
+                  if not Whole_Block then
+                     Product_Batch
+                       (Item, Current.Down, Gate, Count, Norm, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
+
+                  if Current.Down_Bias /= null then
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Origin : constant Element_Count := Slot (Which, Width);
+                        begin
+                           K.Add (Norm.all (Origin .. Origin + Width - 1),
+                                  Current.Down_Bias.all);
+                        end;
+                     end loop;
+                  end if;
                end if;
-            end;
 
-            Charge (Item, Joining, Mark);
+               Charge (Item, Feeding, Mark);
+
+               declare
+                  Share  : aliased Join_Share := (After => True, Ok => True);
+                  Shared : E.Error_Info;
+               begin
+                  Workers_CPU.Dispatch_Shares
+                    (Team, Count, Share'Unchecked_Access, Shared);
+
+                  if not Share.Ok or else E.Is_Error (Shared) then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                     return;
+                  end if;
+               end;
+
+               Charge (Item, Joining, Mark);
 
             end if;
          end;
@@ -8352,83 +8352,83 @@ package body Model_Runner.Llama is
             end if;
          end if;
 
-      for Index in Source.Layers.all'Range loop
-         if Deferred (Index) and then not Owing then
-            declare
-               Layer_Keys : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * KV_Width;
+         for Index in Source.Layers.all'Range loop
+            if Deferred (Index) and then not Owing then
+               declare
+                  Layer_Keys : constant Element_Count :=
+                    Element_Count (Index) * Element_Count (Item.Context)
+                    * KV_Width;
 
-               Layer_Vals : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * V_Width;
+                  Layer_Vals : constant Element_Count :=
+                    Element_Count (Index) * Element_Count (Item.Context)
+                    * V_Width;
 
-               Read : Boolean := True;
-            begin
-               --  A batch is one session's own run of positions and comes
-               --  back in two reads. A round's rows are different sessions
-               --  in different blocks, so each row is fetched into the
-               --  member whose cache it belongs to -- which is the same
-               --  bytes and the same one wait, said a row at a time.
-               if Rounding then
-                  for Which in 0 .. Count - 1 loop
+                  Read : Boolean := True;
+               begin
+                  --  A batch is one session's own run of positions and comes
+                  --  back in two reads. A round's rows are different sessions
+                  --  in different blocks, so each row is fetched into the
+                  --  member whose cache it belongs to -- which is the same
+                  --  bytes and the same one wait, said a row at a time.
+                  if Rounding then
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Whose : constant Session_Access := Held_By (Which);
+
+                           At_Key : constant Element_Count :=
+                             Layer_Keys + Sits_At (Which) * KV_Width;
+
+                           At_Val : constant Element_Count :=
+                             Layer_Vals + Sits_At (Which) * V_Width;
+                        begin
+                           Model_Runner.Backend.Device.Get_Cache
+                             (Block_Base (Whose.all) + At_Key,
+                              Whose.Keys.all
+                                (At_Key .. At_Key + KV_Width - 1), Read);
+
+                           if Read then
+                              Model_Runner.Backend.Device.Get_Cache
+                                (Block_Base (Whose.all)
+                                 + Whose.Keys.all'Length + At_Val,
+                                 Whose.Values.all
+                                   (At_Val .. At_Val + V_Width - 1), Read);
+                           end if;
+
+                           exit when not Read;
+                        end;
+                     end loop;
+                  else
                      declare
-                        Whose : constant Session_Access := Held_By (Which);
+                        Base : constant Element_Count :=
+                          Layer_Keys + Element_Count (Item.Committed) * KV_Width;
 
-                        At_Key : constant Element_Count :=
-                          Layer_Keys + Sits_At (Which) * KV_Width;
-
-                        At_Val : constant Element_Count :=
-                          Layer_Vals + Sits_At (Which) * V_Width;
+                        V_At : constant Element_Count :=
+                          Layer_Vals + Element_Count (Item.Committed) * V_Width;
                      begin
                         Model_Runner.Backend.Device.Get_Cache
-                          (Block_Base (Whose.all) + At_Key,
-                           Whose.Keys.all
-                             (At_Key .. At_Key + KV_Width - 1), Read);
+                          (Block_Base (Item) + Base,
+                           Item.Keys.all (Base .. Base + Count * KV_Width - 1),
+                           Read);
 
                         if Read then
                            Model_Runner.Backend.Device.Get_Cache
-                             (Block_Base (Whose.all)
-                              + Whose.Keys.all'Length + At_Val,
-                              Whose.Values.all
-                                (At_Val .. At_Val + V_Width - 1), Read);
+                             (Block_Base (Item) + Item.Keys.all'Length + V_At,
+                              Item.Values.all
+                                (V_At .. V_At + Count * V_Width - 1),
+                              Read);
                         end if;
-
-                        exit when not Read;
                      end;
-                  end loop;
-               else
-                  declare
-                     Base : constant Element_Count :=
-                       Layer_Keys + Element_Count (Item.Committed) * KV_Width;
+                  end if;
 
-                     V_At : constant Element_Count :=
-                       Layer_Vals + Element_Count (Item.Committed) * V_Width;
-                  begin
-                     Model_Runner.Backend.Device.Get_Cache
-                       (Block_Base (Item) + Base,
-                        Item.Keys.all (Base .. Base + Count * KV_Width - 1),
-                        Read);
-
-                     if Read then
-                        Model_Runner.Backend.Device.Get_Cache
-                          (Block_Base (Item) + Item.Keys.all'Length + V_At,
-                           Item.Values.all
-                             (V_At .. V_At + Count * V_Width - 1),
-                           Read);
-                     end if;
-                  end;
-               end if;
-
-               if not Read then
-                  Release;
-                  Item.Current := Failed;
-                  Status := E.Make (E.Backend_Closed);
-                  return;
-               end if;
-            end;
-         end if;
-      end loop;
+                  if not Read then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Closed);
+                     return;
+                  end if;
+               end;
+            end if;
+         end loop;
       end;
 
       if E.Is_Error (Status) then
