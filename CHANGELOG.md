@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`gpt-oss` is read: the architecture MXFP4 exists for.** Today's MXFP4
+  decoder, panel and kernel had been demonstrated on a file this repository
+  had to manufacture with `--tensor-type`, because `llama-quantize` writes
+  that format only for a mixture's expert tensors and no dense MXFP4 model
+  is to hand. This is the model it was invented for, and it is the fifteenth
+  architecture this build reads.
+
+  **Two things in it are new to this program and neither is a detail.** An
+  **attention sink** is one learned score a head that joins the softmax's
+  denominator and takes none of the weight -- so a head with nothing worth
+  attending to answers small rather than answering with whatever is nearest.
+  It is the only thing here that adds to a denominator without adding to a
+  numerator. And its **gate is not the sigmoid-weighted one**: both
+  projections are held at a limit of seven, the logistic is taken at a slope
+  of 1.702, and one is added to the up projection -- so the gate reaches the
+  second vector and cannot be written as an activation followed by a
+  multiply, which is why `K.Clamped_Gate` is a procedure of its own.
+
+  Beside those it alternates a sliding window as gemma2 does and turns the
+  windowed layers on a base of their own as gemma3 does -- the first
+  architecture here to want both -- and carries biases where no other
+  mixture here carries any: on the router, on each of an expert's three
+  projections, and on the way out of attention.
+
+  **Held by a comparison and not by a run.** Both new rules produce a
+  plausible number when they are missed: dropping the sink moves a logit by
+  0.104 and using the ordinary gate by 0.898. The independent implementation
+  in `reference_transformer` implements both, and the two agree; both
+  figures were measured by breaking the engine on purpose.
+
+  **It is not yet read from a published file**, which every other
+  architecture here is. The support matrix says so in its own row rather
+  than leaving the omission to be noticed.
+
 - **`tests outside` runs somebody else's measuring tool through this
   repository's load gate.** Every comparison the README publishes has two
   sides and only one of them passed a bound: `tests speed` and `tests

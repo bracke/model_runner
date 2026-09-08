@@ -183,8 +183,8 @@ package Model_Runner.Llama is
    --  which is why every bias here is asked for by architecture rather
    --  than taken if present.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -210,6 +210,7 @@ package Model_Runner.Llama is
          when Qwen2     => "qwen2",
          when Qwen3     => "qwen3",
          when Qwen3_MoE => "qwen3moe",
+         when GPT_OSS   => "gpt-oss",
          when Gemma     => "gemma",
          when Gemma2    => "gemma2",
          when Gemma3    => "gemma3",
@@ -357,6 +358,23 @@ package Model_Runner.Llama is
       --  layer, no router, which is what a model without the key means.
       Experts         : Natural := 0;
       Experts_Used    : Natural := 0;
+
+      --  The gate unit's two bounds, for an architecture that clamps it.
+      --
+      --  GPT_OSS does not use the plain sigmoid-weighted gate every other
+      --  architecture here does. Its gate is held at a limit before the
+      --  logistic, its up projection is held to the same limit either side
+      --  of nought, and the logistic is taken at a steeper slope:
+      --
+      --     x = min (gate, limit)
+      --     y = max (-limit, min (up, limit))
+      --     out = x / (1 + exp (-alpha * x)) * (y + 1)
+      --
+      --  The one is added because this architecture's up projection is
+      --  centred on nought rather than on one. Alpha of zero means the
+      --  plain gate, which is every other architecture here.
+      Gate_Alpha      : Model_Runner.Numerics.Real := 0.0;
+      Gate_Limit      : Model_Runner.Numerics.Real := 0.0;
 
       --  Width of one expert's feed-forward block. A mixture-of-experts file
       --  may state this separately from feed_forward_length, because the two
@@ -1286,6 +1304,30 @@ private
       --  Both are absent from a dense layer, where Gate, Up and Down are the
       --  whole feed-forward block.
       Router  : aliased Model_Runner.Tensors.View;
+
+      --  What the router adds before it chooses, where an architecture
+      --  states one.
+      Router_Bias : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The experts' biases, held whole rather than a slice an expert.
+      --  One expert's are the run of Expert_Feed at its own index, which
+      --  the mixture below reaches by arithmetic -- there is nothing to
+      --  gain by copying thirty-two runs out of three arrays and a
+      --  megabyte to lose.
+      Expert_Gate_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Expert_Up_Bias   : Model_Runner.Tensors.Real_Array_Access;
+      Expert_Down_Bias : Model_Runner.Tensors.Real_Array_Access;
+
+      --  One learned score a head, which joins the softmax's denominator
+      --  and has no value behind it.
+      --
+      --  A head with a sink can attend to nothing: the sink competes with
+      --  every real score for the weight, so when none of them is large the
+      --  weights all come out small rather than being forced to sum to one
+      --  over whatever is there. It costs one exponential a head and it is
+      --  the only thing in this file that adds to a denominator without
+      --  adding to a numerator.
+      Sinks : Model_Runner.Tensors.Real_Array_Access;
       Experts : Expert_Array_Access := null;
    end record;
 

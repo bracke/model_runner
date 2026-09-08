@@ -1486,7 +1486,32 @@ package body Model_Runner.Kernels is
    -- Softmax --
    -------------
 
+   --  Both softmaxes, with and without a sink, are this one procedure: the
+   --  sink changes two lines of it and duplicating the rest to save a
+   --  parameter would be two reductions to keep in step.
+   procedure Weigh
+     (Target  : in out Real_Array;
+      Sink    : Real;
+      Sinking : Boolean;
+      Ok      : out Boolean);
+
    procedure Softmax (Target : in out Real_Array; Ok : out Boolean) is
+   begin
+      Weigh (Target, 0.0, False, Ok);
+   end Softmax;
+
+   procedure Softmax
+     (Target : in out Real_Array; Sink : Real; Ok : out Boolean) is
+   begin
+      Weigh (Target, Sink, True, Ok);
+   end Softmax;
+
+   procedure Weigh
+     (Target  : in out Real_Array;
+      Sink    : Real;
+      Sinking : Boolean;
+      Ok      : out Boolean)
+   is
       Largest : Real;
       Sum     : Wide_Real := 0.0;
    begin
@@ -1503,6 +1528,16 @@ package body Model_Runner.Kernels is
 
          if not Finite then
             return;
+         end if;
+
+         --  The sink joins the maximum before anything is exponentiated,
+         --  which is what keeps the whole of it in range when the sink is
+         --  the largest of them.
+         if Sinking then
+            if not N.Is_Finite (Sink) then
+               return;
+            end if;
+            Largest := Real'Max (Largest, Sink);
          end if;
       end;
 
@@ -1542,6 +1577,12 @@ package body Model_Runner.Kernels is
          Sum := (Parts (0) + Parts (1)) + (Parts (2) + Parts (3));
       end;
 
+      --  And the sink's own share of the denominator, which nothing will
+      --  claim: this is the whole of what a sink does.
+      if Sinking then
+         Sum := Sum + Wide_Real (Raised (Sink - Largest));
+      end if;
+
       if Sum <= 0.0 or else not N.Is_Finite (Sum) then
          return;
       end if;
@@ -1561,7 +1602,7 @@ package body Model_Runner.Kernels is
       end;
 
       Ok := True;
-   end Softmax;
+   end Weigh;
 
    ----------
    -- SiLU --
@@ -1587,6 +1628,31 @@ package body Model_Runner.Kernels is
    --  row product. Anyone attacking it again needs either wider instructions
    --  than the build allows or an approximation loose enough to change what
    --  models say, and the second is a decision rather than an optimization.
+   procedure Clamped_Gate
+     (Gate  : in out Real_Array;
+      Up    : Real_Array;
+      Alpha : Real;
+      Limit : Real)
+   is
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
+
+      Count : constant Element_Count :=
+        Element_Count'Min (Gate'Length, Up'Length);
+   begin
+      for Index in 0 .. Count - 1 loop
+         declare
+            X : constant Real :=
+              Real'Min (Gate (Gate'First + Index), Limit);
+            Y : constant Real :=
+              Real'Max (-Limit, Real'Min (Up (Up'First + Index), Limit));
+         begin
+            Gate (Gate'First + Index) :=
+              X / (1.0 + Raised (-Alpha * X)) * (Y + 1.0);
+         end;
+      end loop;
+   end Clamped_Gate;
+
    procedure SiLU (Target : in out Real_Array) is
       --  As in Exponentiate, and for the same reason.
       pragma Suppress (Overflow_Check);

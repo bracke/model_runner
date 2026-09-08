@@ -421,10 +421,51 @@ package Model_Runner.Kernels is
    --  @param Ok True when the result is a usable distribution.
    procedure Softmax (Target : in out Real_Array; Ok : out Boolean);
 
+   --  The same, with one score that joins the denominator and takes none of
+   --  the weight.
+   --
+   --  A head with a sink can attend to nothing. The sink enters the maximum
+   --  and the total exactly as a score would, so it competes with every
+   --  real score for the weight -- but nothing is written for it and no
+   --  value stands behind it, so when no real score is large the weights
+   --  all come out small rather than being forced to sum to one over
+   --  whatever happens to be there.
+   --
+   --  @param Target Scores to normalize, updated in place.
+   --  @param Sink The score that joins the denominator and takes no weight.
+   --  @param Ok True when the result is a usable distribution.
+   procedure Softmax
+     (Target : in out Real_Array; Sink : Real; Ok : out Boolean);
+
    --  SiLU activation, in place: x multiplied by the logistic of x.
    --
    --  @param Target Values to activate, updated in place.
    procedure SiLU (Target : in out Real_Array);
+
+   --  The gate unit one architecture here clamps, in place over the gate.
+   --
+   --  GPT_OSS does not activate the gate and then multiply by the up
+   --  projection, which is what every other architecture here does and what
+   --  SiLU above is for. It holds both at a limit first, takes the logistic
+   --  at a steeper slope, and adds one to the up projection:
+   --
+   --     x = min (Gate, Limit)
+   --     y = max (-Limit, min (Up, Limit))
+   --     Gate = x / (1 + exp (-Alpha * x)) * (y + 1)
+   --
+   --  So it cannot be written as an activation followed by a multiply: the
+   --  clamp reaches both vectors and the one reaches only the second. It is
+   --  one procedure for that reason rather than for speed.
+   --
+   --  @param Gate Gate projection, replaced by the unit's output.
+   --  @param Up Up projection, read and not written.
+   --  @param Alpha Slope of the logistic.
+   --  @param Limit Bound both projections are held to.
+   procedure Clamped_Gate
+     (Gate  : in out Real_Array;
+      Up    : Real_Array;
+      Alpha : Real;
+      Limit : Real);
 
    --  Gaussian error unit, in place, in the form the models that want it
    --  were trained with.

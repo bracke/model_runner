@@ -164,8 +164,8 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama => K.Interleaved,
-                    when Qwen2 | Qwen3 | Qwen3_MoE | Gemma | Gemma2 | Gemma3
-                       | Phi3 | Falcon | Phi2 | GPT2 | Bert
+                    when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
+                       | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 =>
                       K.Split);
 
@@ -631,6 +631,33 @@ package body Model_Runner.Llama is
          end if;
          Settings.Local_Base :=
            (if E.Is_Ok (Local) then Value else 10_000.0);
+      end if;
+
+      --  GPT_OSS alternates a window the same way Gemma2 does and turns
+      --  the windowed layers on a base of their own, the way Gemma3 does.
+      --  It is the first architecture here to want both, which is why
+      --  neither of those two blocks could be reused for it.
+      if Settings.Kind = GPT_OSS then
+         Settings.Alternating := True;
+         Settings.Window_Every := 2;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.freq_base_swa"),
+            1.0, 1.0E12, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Local_Base :=
+           (if E.Is_Ok (Local) then Value else Settings.Rope_Base);
+
+         --  The gate's two bounds, which this architecture states nowhere:
+         --  they are constants of the model rather than of the file, and
+         --  llama.cpp writes them out in its graph for the same reason.
+         --  1.702 is the slope that makes the logistic agree with the
+         --  Gaussian error function this model was trained against.
+         Settings.Gate_Alpha := 1.702;
+         Settings.Gate_Limit := 7.0;
       end if;
 
       if Settings.Kind = Gemma2 then
@@ -1205,6 +1232,7 @@ package body Model_Runner.Llama is
       end Slice;
 
       Gates, Ups, Downs : T.View;
+
    begin
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"),
@@ -1232,6 +1260,41 @@ package body Model_Runner.Llama is
          Width * Count, Feed, Downs, Status, Repack);
       if E.Is_Error (Status) then
          return;
+      end if;
+
+      --  And the biases, which this architecture is the first mixture here
+      --  to carry: one a router and one for each of an expert's three
+      --  projections, laid out as the weights are -- every expert's in one
+      --  tensor, taken apart below.
+      if Item.Settings.Kind = GPT_OSS then
+         Resolve_Norm
+           (Item, Source, Layer_Key (Index, "ffn_gate_inp.bias"),
+            Element_Count (Item.Settings.Experts), Current.Router_Bias,
+            Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Resolve_Norm
+           (Item, Source, Layer_Key (Index, "ffn_gate_exps.bias"),
+            Feed * Count, Current.Expert_Gate_Bias, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Resolve_Norm
+           (Item, Source, Layer_Key (Index, "ffn_up_exps.bias"),
+            Feed * Count, Current.Expert_Up_Bias, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Resolve_Norm
+           (Item, Source, Layer_Key (Index, "ffn_down_exps.bias"),
+            Width * Count, Current.Expert_Down_Bias, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
@@ -2189,11 +2252,25 @@ package body Model_Runner.Llama is
 
                --  And the bias on the way out of attention, which Phi2,
                --  GPT2, Bert and jina-bert-v2 have and the rest have not.
-               if Item.Settings.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2
+               if Item.Settings.Kind in
+                    Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
                then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "attn_output.bias"),
                      Width, Current.Out_Bias, Status);
+                  exit when E.Is_Error (Status);
+               end if;
+
+               --  One score a head that joins the softmax's denominator and
+               --  has nothing behind it, which is what lets a head of this
+               --  architecture attend to nothing at all. Named by head
+               --  count rather than by width: there is one of these for
+               --  each head, not one for each component.
+               if Item.Settings.Kind = GPT_OSS then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_sinks.weight"),
+                     Element_Count (Item.Settings.Heads), Current.Sinks,
+                     Status);
                   exit when E.Is_Error (Status);
                end if;
 
@@ -3097,6 +3174,10 @@ package body Model_Runner.Llama is
       Max_Bias   : Real;
       Query_At   : Element_Count;
 
+      --  One score a head that joins the softmax's denominator and takes
+      --  none of the weight, or null for an architecture that states none.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+
       --  The heads this call is to blend, and how far apart the rows of the
       --  score buffer are.
       --
@@ -3275,8 +3356,17 @@ package body Model_Runner.Llama is
                end loop;
             end if;
 
-            K.Softmax
-              (Scores (At_Score + First .. At_Score + Last), Usable);
+            --  With this head's sink where the architecture states one,
+            --  which joins the denominator and takes none of the weight.
+            if Sinks /= null then
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last),
+                  Sinks.all (Sinks.all'First + Element_Count (Head)),
+                  Usable);
+            else
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last), Usable);
+            end if;
             if not Usable then
                Ok := False;
                return;
@@ -3705,7 +3795,12 @@ package body Model_Runner.Llama is
       Target     : out Real_Array;
       Usable     : out Boolean;
       Positions  : Element_Count := 1;
-      Window     : Natural := 0)
+      Window     : Natural := 0;
+
+      --  This layer's sinks, passed for the reason the window is: they
+      --  belong to a layer and this procedure is told about one call
+      --  rather than about a stack.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access := null)
    is
       --  What this model's attention is, asked of the model rather than
       --  passed in: a window is a property of a layer and changes down the
@@ -3782,7 +3877,7 @@ package body Model_Runner.Llama is
                K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                Value_Size, Element_Count (Source.Settings.Group_Size),
                Since, Ends, Scale, Source.Settings.Attention_Cap,
-               Source.Settings.Max_Bias, Asking,
+               Source.Settings.Max_Bias, Asking, Sinks,
                0, Heads - 1, Item.Score_Room, Item.Scores.all,
                Target (Target'First + B_At .. Target'First + B_At
                        + Blend_Span - 1), Fine);
@@ -3869,6 +3964,10 @@ package body Model_Runner.Llama is
       Max_Bias   : Real;
       Query_At   : Element_Count;
 
+      --  One score a head that joins the softmax's denominator and takes
+      --  none of the weight, or null for an architecture that states none.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+
       --  The heads this call is to blend, and how far apart the rows of the
       --  score buffer are.
       --
@@ -3946,8 +4045,17 @@ package body Model_Runner.Llama is
                end loop;
             end if;
 
-            K.Softmax
-              (Scores (At_Score + First .. At_Score + Last), Usable);
+            --  With this head's sink where the architecture states one,
+            --  which joins the denominator and takes none of the weight.
+            if Sinks /= null then
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last),
+                  Sinks.all (Sinks.all'First + Element_Count (Head)),
+                  Usable);
+            else
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last), Usable);
+            end if;
             if not Usable then
                Ok := False;
                return;
@@ -4014,6 +4122,10 @@ package body Model_Runner.Llama is
       Cap        : Real;
       Max_Bias   : Real;
       Query_At   : Element_Count;
+
+      --  One score a head that joins the softmax's denominator and takes
+      --  none of the weight, or null for an architecture that states none.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
 
       --  The heads this call is to blend, and how far apart the rows of the
       --  score buffer are.
@@ -4089,8 +4201,17 @@ package body Model_Runner.Llama is
                end loop;
             end if;
 
-            K.Softmax
-              (Scores (At_Score + First .. At_Score + Last), Usable);
+            --  With this head's sink where the architecture states one,
+            --  which joins the denominator and takes none of the weight.
+            if Sinks /= null then
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last),
+                  Sinks.all (Sinks.all'First + Element_Count (Head)),
+                  Usable);
+            else
+               K.Softmax
+                 (Scores (At_Score + First .. At_Score + Last), Usable);
+            end if;
             if not Usable then
                Ok := False;
                return;
@@ -4200,6 +4321,18 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  What the router adds before it chooses, where an architecture
+      --  states one. It changes which experts are picked and not only their
+      --  weights, so it belongs before the softmax rather than after.
+      if Current.Router_Bias /= null then
+         K.Add
+           (Item.Routing.all
+              (Item.Routing.all'First
+               .. Item.Routing.all'First
+                  + Element_Count (Settings.Experts) - 1),
+            Current.Router_Bias.all);
+      end if;
+
       K.Softmax (Item.Routing.all, Usable);
       if not Usable then
          Status := E.Make (E.Tensor_Non_Finite_Value);
@@ -4246,6 +4379,16 @@ package body Model_Runner.Llama is
       for Slot in Chosen'Range loop
          declare
             Which : Expert renames Current.Experts.all (Chosen (Slot));
+
+            Expert_Feed : constant Element_Count :=
+              Element_Count (Item.Owner.all.Settings.Expert_Feed);
+
+            At_Feed : constant Element_Count :=
+              Element_Count (Chosen (Slot)) * Expert_Feed;
+
+            At_Wide : constant Element_Count :=
+              Element_Count (Chosen (Slot))
+              * Element_Count (Item.Owner.all.Settings.Embedding);
          begin
             Product (Item, Which.Gate, Input, Item.Gate, Status);
             if E.Is_Error (Status) then
@@ -4257,15 +4400,60 @@ package body Model_Runner.Llama is
                return;
             end if;
 
-            --  A mixture is Qwen3_MoE only, which is a logistic gate; asked
-            --  of the model all the same, so that an architecture added with
-            --  a router and a different gate cannot quietly get this one.
-            Gate_Activation (Item.Owner.all, Item.Gate.all);
-            K.Multiply (Item.Gate.all, Item.Up.all);
+            --  The biases, where the architecture carries them. One
+            --  expert's are the run of Expert_Feed at its own index of an
+            --  array holding every expert's, so what is added is a slice
+            --  rather than a whole.
+            if Current.Expert_Gate_Bias /= null then
+               K.Add
+                 (Item.Gate.all (Item.Gate.all'First
+                                 .. Item.Gate.all'First + Expert_Feed - 1),
+                  Current.Expert_Gate_Bias.all
+                    (Current.Expert_Gate_Bias.all'First + At_Feed
+                     .. Current.Expert_Gate_Bias.all'First + At_Feed
+                        + Expert_Feed - 1));
+               K.Add
+                 (Item.Up.all (Item.Up.all'First
+                               .. Item.Up.all'First + Expert_Feed - 1),
+                  Current.Expert_Up_Bias.all
+                    (Current.Expert_Up_Bias.all'First + At_Feed
+                     .. Current.Expert_Up_Bias.all'First + At_Feed
+                        + Expert_Feed - 1));
+            end if;
+
+            --  The gate this architecture states. A mixture used to be
+            --  Qwen3_MoE only, which is the plain logistic gate; the
+            --  clamped one below reaches the up projection as well as the
+            --  gate, so it cannot be an activation followed by a multiply.
+            if Item.Owner.all.Settings.Gate_Alpha > 0.0 then
+               K.Clamped_Gate
+                 (Item.Gate.all, Item.Up.all,
+                  Item.Owner.all.Settings.Gate_Alpha,
+                  Item.Owner.all.Settings.Gate_Limit);
+            else
+               Gate_Activation (Item.Owner.all, Item.Gate.all);
+               K.Multiply (Item.Gate.all, Item.Up.all);
+            end if;
 
             Product (Item, Which.Down, Item.Gate, Item.Expert_Row, Status);
             if E.Is_Error (Status) then
                return;
+            end if;
+
+            if Current.Expert_Down_Bias /= null then
+               declare
+                  Wide : constant Element_Count :=
+                    Element_Count (Item.Owner.all.Settings.Embedding);
+               begin
+                  K.Add
+                    (Item.Expert_Row.all
+                       (Item.Expert_Row.all'First
+                        .. Item.Expert_Row.all'First + Wide - 1),
+                     Current.Expert_Down_Bias.all
+                       (Current.Expert_Down_Bias.all'First + At_Wide
+                        .. Current.Expert_Down_Bias.all'First + At_Wide
+                           + Wide - 1));
+               end;
             end if;
 
             K.Scale (Item.Expert_Row.all, Share (Slot));
@@ -6446,7 +6634,7 @@ package body Model_Runner.Llama is
                         Head_Size, Value_Size,
                         Element_Count (Settings.Group_Size),
                         First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved,
+                        Settings.Max_Bias, Reserved, Current.Sinks,
                         From, To, Item.Score_Room,
                         Item.Scores.all, Item.Attention.all, Fine);
                   elsif Item.Held = Exact then
@@ -6455,7 +6643,7 @@ package body Model_Runner.Llama is
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
                         First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved,
+                        Settings.Max_Bias, Reserved, Current.Sinks,
                         From, To, Item.Score_Room,
                         Item.Scores.all, Item.Attention.all, Fine);
                   else
@@ -6465,7 +6653,7 @@ package body Model_Runner.Llama is
                         Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
                         Value_Size, Element_Count (Settings.Group_Size),
                         First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved,
+                        Settings.Max_Bias, Reserved, Current.Sinks,
                         From, To, Item.Score_Room,
                         Item.Scores.all, Item.Attention.all, Fine);
                   end if;
@@ -6532,7 +6720,8 @@ package body Model_Runner.Llama is
                      Attend_There
                        (Item, Source, Item.Query.all, Heads, Head_Size,
                         Value_Size, First, Reserved, Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable);
+                        V_Width, Scale, Item.Attention.all, Usable,
+                        Sinks => Current.Sinks);
                   end if;
                elsif Item.Held = Exact and then Resident then
                   --  Attention and the matrix that reads its result, named
@@ -6556,7 +6745,8 @@ package body Model_Runner.Llama is
                      Attend_There
                        (Item, Source, Item.Query.all, Heads, Head_Size,
                         Value_Size, First, Reserved, Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable);
+                        V_Width, Scale, Item.Attention.all, Usable,
+                        Sinks => Current.Sinks);
                   end if;
                end if;
 
@@ -8032,7 +8222,8 @@ package body Model_Runner.Llama is
                         First_Step, Last_Step,
                         Base, V_Base, KV_Width, V_Width, Scale,
                         Attend.all (0 .. Count * Blend - 1), Usable,
-                        Positions => Count, Window => Window_Here);
+                        Positions => Count, Window => Window_Here,
+                        Sinks => Current.Sinks);
                   end if;
 
                   if not Usable then
@@ -8104,7 +8295,7 @@ package body Model_Runner.Llama is
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which),
+                                 Sits_At (Which), Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -8118,7 +8309,7 @@ package body Model_Runner.Llama is
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which),
+                                 Sits_At (Which), Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -8132,7 +8323,7 @@ package body Model_Runner.Llama is
                                  Element_Count (Settings.Group_Size),
                                  First_Step, Last_Step, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which),
+                                 Sits_At (Which), Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);

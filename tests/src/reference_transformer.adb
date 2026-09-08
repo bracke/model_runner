@@ -872,6 +872,7 @@ package body Reference_Transformer is
          when Qwen2     => "qwen2.",
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
+         when GPT_OSS   => "gpt-oss.",
          when Gemma     => "gemma.",
          when Gemma2    => "gemma2.",
          when Gemma3    => "gemma3.",
@@ -1266,6 +1267,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3;
          elsif Named = "qwen3moe" then
             Item.Kind := Qwen3_MoE;
+         elsif Named = "gpt-oss" then
+            Item.Kind := GPT_OSS;
          elsif Named = "gemma" then
             Item.Kind := Gemma;
          elsif Named = "gemma2" then
@@ -1360,9 +1363,26 @@ package body Reference_Transformer is
       --  Gemma3.
       Item.Window_Every :=
         (case Item.Kind is
-            when Gemma2 => 2,
+            when Gemma2 | GPT_OSS => 2,
             when Gemma3 => 6,
             when others => 0);
+
+      --  GPT_OSS turns its windowed layers on a base of its own, stated
+      --  under a name of its own: Gemma3 calls it rope.local_freq_base and
+      --  this calls it rope.freq_base_swa, and they mean the same thing.
+      if Item.Kind = GPT_OSS then
+         declare
+            Value  : Model_Runner.Numerics.Wide_Real;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.freq_base_swa",
+               1.0, 1.0E12, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Local_Base := Long_Float (Value);
+            end if;
+         end;
+      end if;
 
       Item.Experts := Metadata (Source, Prefix (Item) & "expert_count", 0);
       Item.Experts_Used :=
@@ -1738,9 +1758,18 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 then
+            if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
+            if Item.Kind = GPT_OSS then
+               Current.Sinks :=
+                 Read_Vector (Layer_Name (Index, "attn_sinks.weight"),
+                              Present);
                if not Present then
                   return;
                end if;
@@ -1775,6 +1804,36 @@ package body Reference_Transformer is
                               Present);
                if not Present then
                   return;
+               end if;
+
+               if Item.Kind = GPT_OSS then
+                  Current.Router_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_gate_inp.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+
+                  Current.Gate_Expert_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_gate_exps.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+
+                  Current.Up_Expert_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_up_exps.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+
+                  Current.Down_Expert_Bias :=
+                    Read_Vector (Layer_Name (Index, "ffn_down_exps.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
                end if;
 
                Current.Gate_Experts :=
@@ -2663,10 +2722,33 @@ package body Reference_Transformer is
                               end if;
                            end loop;
 
+                           --  This head's sink, where the architecture
+                           --  states one: a score that joins the maximum
+                           --  and the total and takes none of the weight,
+                           --  so a head with nothing worth attending to
+                           --  answers small rather than answering with
+                           --  whatever is nearest.
+                           if Current.Sinks /= null then
+                              declare
+                                 Sink : constant Long_Float :=
+                                   Current.Sinks.all (Head);
+                              begin
+                                 if Sink > Largest then
+                                    Largest := Sink;
+                                 end if;
+                              end;
+                           end if;
+
                            for Past in Scores'Range loop
                               Scores (Past) := Functions.Exp (Scores (Past) - Largest);
                               Total := Total + Scores (Past);
                            end loop;
+
+                           if Current.Sinks /= null then
+                              Total := Total
+                                + Functions.Exp
+                                    (Current.Sinks.all (Head) - Largest);
+                           end if;
 
                            for Component in 0 .. Item.Value_Size - 1 loop
                               declare
@@ -2769,6 +2851,13 @@ package body Reference_Transformer is
                      begin
                         Project (Current.Router.all, Input, Scores);
 
+                        if Current.Router_Bias /= null then
+                           for Index in Scores'Range loop
+                              Scores (Index) := Scores (Index)
+                                + Current.Router_Bias.all (Index);
+                           end loop;
+                        end if;
+
                         Largest := Scores (0);
                         for Index in Scores'Range loop
                            if Scores (Index) > Largest then
@@ -2835,6 +2924,21 @@ package body Reference_Transformer is
                               Project_Rows
                                 (Current.Up_Experts.all, Rows_Feed, Input, Up);
 
+                              --  The biases, where the architecture carries
+                              --  them, indexed as the weights are: one
+                              --  expert's run at its own place in an array
+                              --  holding every expert's.
+                              if Current.Gate_Expert_Bias /= null then
+                                 for Index in Gate'Range loop
+                                    Gate (Index) := Gate (Index)
+                                      + Current.Gate_Expert_Bias.all
+                                          (Rows_Feed + Index);
+                                    Up (Index) := Up (Index)
+                                      + Current.Up_Expert_Bias.all
+                                          (Rows_Feed + Index);
+                                 end loop;
+                              end if;
+
                               --  Through the same gate the dense block uses,
                               --  which is the architecture's and not a copy of
                               --  one. This was the logistic written out, and a
@@ -2844,14 +2948,50 @@ package body Reference_Transformer is
                               --  either implementation printed matched, because
                               --  the dense blocks were never the ones that
                               --  differed.
-                              for Index in Gate'Range loop
-                                 Gate (Index) :=
-                                   Gated (Gate (Index)) * Up (Index);
-                              end loop;
+                              --
+                              --  GPT_OSS is the exception and cannot go
+                              --  through Gated at all: it holds both
+                              --  projections at a limit, takes the logistic
+                              --  at a steeper slope, and adds one to the up
+                              --  projection, so the gate reaches the second
+                              --  vector as well as the first.
+                              if Item.Kind = GPT_OSS then
+                                 for Index in Gate'Range loop
+                                    declare
+                                       Limit : constant Long_Float := 7.0;
+                                       Alpha : constant Long_Float := 1.702;
+
+                                       X : constant Long_Float :=
+                                         Long_Float'Min (Gate (Index), Limit);
+                                       Y : constant Long_Float :=
+                                         Long_Float'Max
+                                           (-Limit,
+                                            Long_Float'Min (Up (Index),
+                                                            Limit));
+                                    begin
+                                       Gate (Index) :=
+                                         X / (1.0 + Functions.Exp (-Alpha * X))
+                                         * (Y + 1.0);
+                                    end;
+                                 end loop;
+                              else
+                                 for Index in Gate'Range loop
+                                    Gate (Index) :=
+                                      Gated (Gate (Index)) * Up (Index);
+                                 end loop;
+                              end if;
 
                               Project_Rows
                                 (Current.Down_Experts.all, Rows_Down, Gate,
                                  Out_Row);
+
+                              if Current.Down_Expert_Bias /= null then
+                                 for Index in Out_Row'Range loop
+                                    Out_Row (Index) := Out_Row (Index)
+                                      + Current.Down_Expert_Bias.all
+                                          (Rows_Down + Index);
+                                 end loop;
+                              end if;
 
                               for Index in Sum'Range loop
                                  Sum (Index) :=

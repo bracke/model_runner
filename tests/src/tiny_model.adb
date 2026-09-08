@@ -352,6 +352,7 @@ package body Tiny_Model is
            when Qwen2     => "qwen2",
            when Qwen3     => "qwen3",
            when Qwen3_MoE => "qwen3moe",
+           when GPT_OSS   => "gpt-oss",
            when Gemma     => "gemma",
            when Gemma2    => "gemma2",
            when Gemma3    => "gemma3",
@@ -464,6 +465,17 @@ package body Tiny_Model is
             Fixtures.Add_F32
               (Builder, Prefix & ".rope.scaling.beta_slow", 1.0);
          end if;
+      end if;
+
+      --  What GPT_OSS states and no other architecture here does: a window
+      --  every other layer, and a base of its own for the layers that slide
+      --  one. The engine refuses to guess at either.
+      if Kind = GPT_OSS then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.sliding_window",
+            Interfaces.Unsigned_32 (4));
+         Fixtures.Add_F32
+           (Builder, Prefix & ".rope.freq_base_swa", 8_000.0);
       end if;
 
       --  A mixture of experts, when one is asked for. Absent otherwise,
@@ -916,8 +928,14 @@ package body Tiny_Model is
                  [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 then
+         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS then
             Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
+         end if;
+
+         --  One score a head that joins the softmax's denominator, which is
+         --  this architecture's own and nothing else here has.
+         if Kind = GPT_OSS then
+            Norm_Of (Layer_Name (Index, "attn_sinks.weight"), Heads);
          end if;
 
          --  Bert's normalization over the residual once attention has been
@@ -963,6 +981,18 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
+
+            --  And the biases GPT_OSS carries on all of them, laid out the
+            --  way the weights are: every expert's in one tensor.
+            if Kind = GPT_OSS then
+               Norm_Of (Layer_Name (Index, "ffn_gate_inp.bias"), Experts);
+               Norm_Of (Layer_Name (Index, "ffn_gate_exps.bias"),
+                        Expert_Feed * Experts);
+               Norm_Of (Layer_Name (Index, "ffn_up_exps.bias"),
+                        Expert_Feed * Experts);
+               Norm_Of (Layer_Name (Index, "ffn_down_exps.bias"),
+                        Embedding * Experts);
+            end if;
          elsif Kind in Falcon | Phi2 | GPT2 | Bert then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),

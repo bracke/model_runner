@@ -5370,6 +5370,115 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Mixture_Under_Its_Own_Keys;
 
+   --  The architecture that attends to nothing, and clamps its gate.
+   --
+   --  GPT_OSS is the model MXFP4 exists for and the first architecture here
+   --  to carry either of two things. A sink is one learned score a head
+   --  that joins the softmax's denominator and takes none of the weight, so
+   --  a head with nothing worth attending to answers small rather than
+   --  answering with whatever is nearest; nothing else in this program adds
+   --  to a denominator without adding to a numerator. And its gate is not
+   --  the logistic every other architecture here uses: both projections are
+   --  held at a limit, the logistic is taken at a steeper slope, and one is
+   --  added to the up projection -- so it reaches the second vector and
+   --  cannot be an activation followed by a multiply.
+   --
+   --  Compared against the independent implementation rather than only run,
+   --  because a sink that is dropped and a gate that is the ordinary one
+   --  both produce a number: the engine would answer, and answer wrongly,
+   --  and only a second implementation of the same two rules says so.
+   procedure Sinks_And_A_Clamped_Gate
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image  : B.Byte_Array_Access;
+      Result : Logit_Vector;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.GPT_OSS,
+         Experts => 4, Experts_Used => 2);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Read : constant L.Configuration := L.Config (Under.Ready);
+         begin
+            Assert (L."=" (Read.Kind, L.GPT_OSS),
+                    "the architecture was not read from the file");
+            Assert (Read.Experts = 4 and then Read.Experts_Used = 2,
+                    "the expert counts were not read under the "
+                    & "architecture's own keys:"
+                    & Natural'Image (Read.Experts)
+                    & Natural'Image (Read.Experts_Used));
+         end;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         L.Close (Live);
+      end;
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded, Made : Boolean;
+
+         Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst : Long_Float := 0.0;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+
+         Reference_Transformer.Run (Second, Tokens, Expected, Made);
+         Assert (Made, "the reference produced no logits");
+
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Result
+                      (Model_Runner.Numerics.Element_Count (Index)))
+                    - Expected (Index)));
+         end loop;
+
+         Assert (Worst < 1.0E-3,
+                 "the engine and the independent implementation disagree "
+                 & "about a gpt-oss model by" & Long_Float'Image (Worst));
+
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Sinks_And_A_Clamped_Gate;
+
    --  Key and value heads may be different widths, and neither need be the
    --  embedding divided by the head count.
    --
@@ -6816,6 +6925,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");
+      Register_Routine
+        (T, Sinks_And_A_Clamped_Gate'Access,
+         "an attention sink and a clamped gate agree with the independent "
+         & "implementation of both");
       Register_Routine
         (T, Head_Widths_May_Differ'Access,
          "key and value heads may be different widths, and neither the "

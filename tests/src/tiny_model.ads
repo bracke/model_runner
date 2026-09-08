@@ -68,8 +68,8 @@ package Tiny_Model is
    --  learned row for the position and another for the segment, and no
    --  projection to a distribution at all.
    type Fixture_Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.

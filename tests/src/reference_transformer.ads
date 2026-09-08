@@ -127,8 +127,8 @@ private
    --  than the form the engine uses, which is the whole point of a second
    --  implementation.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, Gemma, Gemma2, Gemma3, Phi3, Falcon,
-      Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -189,6 +189,15 @@ private
       Gate_Experts   : Matrix_Access := null;
       Up_Experts     : Matrix_Access := null;
       Down_Experts   : Matrix_Access := null;
+
+      --  What GPT_OSS carries and nothing else here does: one score a head
+      --  for the softmax's denominator, and a bias on the router and on
+      --  each of an expert's three projections.
+      Sinks             : Vector_Access := null;
+      Router_Bias       : Vector_Access := null;
+      Gate_Expert_Bias  : Vector_Access := null;
+      Up_Expert_Bias    : Vector_Access := null;
+      Down_Expert_Bias  : Vector_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
