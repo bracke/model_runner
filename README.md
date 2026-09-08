@@ -8214,6 +8214,84 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The block-exponent format, the last one -- and the first panel that loses to llama.cpp
+
+`MXFP4` is `IQ4_NL`'s block with a different table and a scale that is not a
+half: an E8M0 exponent byte, two to that byte less a hundred and
+twenty-eight. It was the one quantized format left without a panel, named as
+such in the section below. It has one now, and `--repack rows` covers
+**twelve formats** -- every quantized format the engine multiplies except
+`Q8_0`, which is left out on purpose.
+
+**The scale is what makes this panel different from every other.** Two to
+the byte less 128 runs from 2^-128 to 2^127, and a half cannot hold either
+end, so this is the one layout here whose scales are **binary32**: 160 bytes
+against the eight rows' seventeen each. Every other panel over a
+thirty-two-element block is exactly the size of the rows it holds. The
+conversion is done once at load, by the bit pattern the decoder uses rather
+than a power taken at run time, so it is exact -- and the kernel **loads**
+eight floats where every other kernel here widens eight halves, which is one
+instruction fewer.
+
+**And the bias comes off in whole numbers**, where `IQ4_NL` takes it off as
+a floating-point term. That is a real difference and the table is why: this
+format's levels reach twelve where the bias is 128, so a biased byte is
+about ten times the number it stands for and two floating-point terms of
+that size would cancel down to the answer, costing a digit. `IQ4_NL`'s
+levels reach 127, so its two terms are the size of their difference. Taken
+off before the conversion, this kernel is **exactly** equal to the
+floating-point path on the test's flat matrix -- a difference of nought, the
+only one of nine that reads zero.
+
+**Alternated three rounds against three, one sitting, `--backend cpu`:**
+
+| | as stored | `--repack rows` | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 | 3.968, 4.025, 4.214 s | 0.261, 0.264, 0.268 s | **15.4x** |
+| prompt, 1419 | 57.221 s | 4.118 s | **13.9x** |
+| generating, 21 | 2.346, 2.344, 2.367 s | 0.362, 0.363, 0.363 s | **6.47x** |
+| generating, 64 | 7.404 s | 1.238 s | **5.98x** |
+
+Digests unchanged on both paths at both lengths, `323e0f4ae1822664` and
+`00f047036c93974f`.
+
+**The file is a mixture and that has to be said**, because no dense `MXFP4`
+model exists to hand: `llama-quantize` writes this format only for a
+mixture's expert tensors, so the file was made by naming each weight matrix
+with `--tensor-type`. A hundred and fifty-four tensors are `MXFP4`; the
+embedding and the output projection stayed `Q8_0`, and `llama-bench` labels
+the file `Q8_0` for that reason.
+
+**Against llama.cpp** at `95b8e33e1`, same file, eight threads, same
+sitting:
+
+| | this engine | llama.cpp | |
+| --- | ---: | ---: | ---: |
+| prompt, 110 tokens | 421.5 t/s | **483.1 t/s** | 1.15x behind |
+| prompt, 1419 tokens | 344.6 t/s | **418.4 t/s** | 1.21x behind |
+| generating, 64 tokens | 51.7 t/s | **73.0 t/s** | 1.41x behind |
+
+**This is the first of the eight formats panelled today where the panel
+path lands behind**, and it is worth being plain about rather than burying:
+llama.cpp does not repack `MXFP4` either -- it is not in `repack.cpp`'s list
+-- so this is an eight-row layout losing to a row-major kernel.
+
+**Two things are candidates and neither was chased.** The panel is 160 bytes
+where the block is 136, eighteen per cent more to read, and it is the only
+32-element panel here that grows at all; and the scale is four bytes a row
+where every other format's is two, which is thirty-two bytes a block of load
+against sixteen. Both point the same way -- this kernel reads more than its
+neighbours for the same arithmetic -- and the fix, if it is one, is to keep
+the exponent byte and convert it in the kernel: three instructions a block
+against sixteen bytes, and a panel that is exactly the size of its rows. The
+two subnormal exponents are what stands in the way, and they were not worth
+guessing about at the end of a long day.
+
+**Twelve formats, and what the table looks like now.** A 110-token prompt
+reads 0.171 to 0.268 seconds for every quantized format the engine
+multiplies, against stored readings from 0.29 to 4.2. `MXFP4` is the slowest
+of the twelve and the only one behind llama.cpp.
+
 ### The two formats whose nibble is not a number, and a table lookup that is one instruction
 
 `IQ4_NL` and `IQ4_XS` read a nibble as an index into a table of sixteen
@@ -8302,7 +8380,9 @@ carry; and **`MXFP4` is the one format still without a panel** -- which is
 the correction owed to the section below, whose "every one the engine can
 multiply" counted nine and should have counted eleven of sixteen. `MXFP4`
 is `IQ4_NL`'s shape with a power-of-two scale in a byte where the half is,
-so it is the same kernel again with the exponent converted at load.
+so it is the same kernel again with the exponent converted at load. **It was
+built the same day and the section above is where it is measured** -- and it
+is the one of the twelve that does not pay.
 
 ### The last two formats on the floating-point path, and sixteen sub-blocks instead of eight
 

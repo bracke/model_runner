@@ -65,6 +65,10 @@ package body Model_Runner.Quantization.Interleave is
    --  And the two non-linear ones. IQ4_NL's block is Q4_0's shape exactly;
    --  IQ4_XS keeps eight of them behind one scale, with the eight six-bit
    --  sub-block scales split between a nibble each and a pair of bits each.
+   --  And the block-exponent format: one E8M0 byte and sixteen of nibbles.
+   Micro_Row_Bytes : constant := 17;
+   Micro_Quants    : constant := 1;
+
    Level_Row_Bytes : constant := 136;
    Level_High      : constant := 2;
    Level_Low       : constant := 4;
@@ -186,6 +190,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q3_K then Three_Block_Bytes
        elsif Format = G.Type_IQ4_NL then Legacy_Block_Bytes
        elsif Format = G.Type_IQ4_XS then Level_Block_Bytes
+       elsif Format = G.Type_MXFP4 then Micro_Block_Bytes
        else 0);
 
    -----------------------
@@ -224,6 +229,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_Q3_K then Three_Row_Bytes
        elsif Format = G.Type_IQ4_NL then Legacy_Row_Bytes
        elsif Format = G.Type_IQ4_XS then Level_Row_Bytes
+       elsif Format = G.Type_MXFP4 then Micro_Row_Bytes
        else 0);
 
    ------------------
@@ -244,7 +250,8 @@ package body Model_Runner.Quantization.Interleave is
          or else Format = G.Type_Q2_K
          or else Format = G.Type_Q3_K
          or else Format = G.Type_IQ4_NL
-         or else Format = G.Type_IQ4_XS)
+         or else Format = G.Type_IQ4_XS
+         or else Format = G.Type_MXFP4)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -255,6 +262,7 @@ package body Model_Runner.Quantization.Interleave is
        (if Format = G.Type_Q4_0 or else Format = G.Type_Q4_1
           or else Format = G.Type_Q5_0 or else Format = G.Type_Q5_1
           or else Format = G.Type_IQ4_NL
+          or else Format = G.Type_MXFP4
         then Columns mod 32 = 0
         else Columns mod 256 = 0));
 
@@ -782,6 +790,51 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Build_Level;
 
+   --  One row's block-exponent block, written into its panel.
+   --
+   --  The nibbles go exactly where IQ4_NL's go. What is done here and
+   --  nowhere else is the scale: the file keeps an E8M0 exponent byte and
+   --  the panel keeps the binary32 number it stands for, because two to the
+   --  byte less a hundred and twenty-eight does not fit in a half at either
+   --  end of its range. The conversion is the one the decoder does, a bit
+   --  pattern rather than a power taken at run time, so it is exact.
+   procedure Build_Micro
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      Held : constant Interfaces.Unsigned_8 := Source (In_At);
+
+      --  Two to the byte less a hundred and twenty-eight has a biased
+      --  exponent of the byte less one and no mantissa; the two bytes below
+      --  that are subnormal, where what shifts is the leading bit.
+      Bits : constant Interfaces.Unsigned_32 :=
+        (if Held < 2
+         then Interfaces.Shift_Left (16#0020_0000#, Natural (Held))
+         else Interfaces.Shift_Left
+                (Interfaces.Unsigned_32 (Held) - 1, 23));
+   begin
+      for Index in B.Byte_Count range 0 .. 3 loop
+         Target (Out_At + Micro_Scale_At + Lane * 4 + Index) :=
+           Interfaces.Unsigned_8
+             (Interfaces.Shift_Right (Bits, Natural (Index) * 8)
+              and 16#FF#);
+      end loop;
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Micro_Quants_At + Group * 32 + Lane * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Micro_Quants + Group * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Build_Micro;
+
    --  And one row's six-bit super-block.
    --
    --  Its block scale and its sixteen sub-block scales are already whole
@@ -958,6 +1011,10 @@ package body Model_Runner.Quantization.Interleave is
                               B.Byte_Count (Row));
                         elsif Format = G.Type_IQ4_XS then
                            Build_Level
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
+                        elsif Format = G.Type_MXFP4 then
+                           Build_Micro
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
                         else
@@ -1361,6 +1418,45 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
    end Take_Level;
 
+   --  And one row of a block-exponent panel, the scale taken back to the
+   --  exponent byte it came from.
+   procedure Take_Micro
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+      Bits : Interfaces.Unsigned_32 := 0;
+   begin
+      for Index in B.Byte_Count range 0 .. 3 loop
+         Bits := Bits
+           or Interfaces.Shift_Left
+                (Interfaces.Unsigned_32
+                   (Source (In_At + Micro_Scale_At + Lane * 4 + Index)),
+                 Natural (Index) * 8);
+      end loop;
+
+      --  The two subnormal patterns stand for exponents nought and one;
+      --  every other is the biased exponent plus one.
+      Target (Out_At) :=
+        (if Bits = 16#0020_0000# then 0
+         elsif Bits = 16#0040_0000# then 1
+         else Interfaces.Unsigned_8
+                (Interfaces.Shift_Right (Bits, 23) + 1));
+
+      for Group in B.Byte_Count range 0 .. 3 loop
+         declare
+            Wrote : constant B.Byte_Index :=
+              Out_At + Micro_Quants + Group * 4;
+            Read  : constant B.Byte_Index :=
+              In_At + Micro_Quants_At + Group * 32 + Lane * 4;
+         begin
+            Target (Wrote .. Wrote + 3) := Source (Read .. Read + 3);
+         end;
+      end loop;
+   end Take_Micro;
+
    --  And one row of a six-bit one.
    procedure Take_Six
      (Source : B.Byte_Array;
@@ -1480,6 +1576,8 @@ package body Model_Runner.Quantization.Interleave is
                Take_Legacy (Source, In_At, Target, Out_At, Lane);
             elsif Format = G.Type_IQ4_XS then
                Take_Level (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_MXFP4 then
+               Take_Micro (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

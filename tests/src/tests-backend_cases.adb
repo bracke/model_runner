@@ -401,10 +401,10 @@ package body Tests.Backend_Cases is
       --  And the two non-linear formats, whose nibble is an index into a
       --  table rather than a number -- which the layout is entirely
       --  indifferent to, IQ4_NL taking Q4_0's panel unchanged.
-      Formats : constant array (1 .. 11) of G.Tensor_Type :=
+      Formats : constant array (1 .. 12) of G.Tensor_Type :=
         [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0, G.Type_Q4_1,
          G.Type_Q5_0, G.Type_Q5_1, G.Type_Q2_K, G.Type_Q3_K,
-         G.Type_IQ4_NL, G.Type_IQ4_XS];
+         G.Type_IQ4_NL, G.Type_IQ4_XS, G.Type_MXFP4];
 
       Plain   : B.Byte_Array_Access;
       Panels  : B.Byte_Array_Access;
@@ -469,6 +469,7 @@ package body Tests.Backend_Cases is
             elsif G."=" (Shape, G.Type_Q3_K) then 110
             elsif G."=" (Shape, G.Type_IQ4_NL) then 18
             elsif G."=" (Shape, G.Type_IQ4_XS) then 136
+            elsif G."=" (Shape, G.Type_MXFP4) then 17
             else 210);
 
          --  Blocks in one row, which is not 256 elements for every format
@@ -498,6 +499,8 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_IQ4_NL (Values)
                elsif G."=" (Shape, G.Type_IQ4_XS)
                then Fixtures.Encode_IQ4_XS (Values)
+               elsif G."=" (Shape, G.Type_MXFP4)
+               then Fixtures.Encode_MXFP4 (Values)
                else Fixtures.Encode_Q6_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
@@ -607,6 +610,7 @@ package body Tests.Backend_Cases is
               or else G."=" (Shape, G.Type_Q3_K)
               or else G."=" (Shape, G.Type_IQ4_NL)
               or else G."=" (Shape, G.Type_IQ4_XS)
+              or else G."=" (Shape, G.Type_MXFP4)
             then
                Compare (Batch, Coarse);
             else
@@ -635,7 +639,7 @@ package body Tests.Backend_Cases is
               & N.Real'Image (Coarse));
    end Panelled_Product_Says_What_Rows_Say;
 
-   --  The eight panel kernels that carry a quantized correction, exactly.
+   --  The nine panel kernels that carry a quantized correction, exactly.
    --
    --  Every other check of these is a comparison against the floating-point
    --  path, where activation quantization is the largest error by three
@@ -675,9 +679,10 @@ package body Tests.Backend_Cases is
 
       Batch : constant N.Element_Count := 8;
 
-      Shapes : constant array (1 .. 8) of G.Tensor_Type :=
+      Shapes : constant array (1 .. 9) of G.Tensor_Type :=
         [G.Type_Q4_0, G.Type_Q4_1, G.Type_Q5_0, G.Type_Q5_1,
-         G.Type_Q2_K, G.Type_Q3_K, G.Type_IQ4_NL, G.Type_IQ4_XS];
+         G.Type_Q2_K, G.Type_Q3_K, G.Type_IQ4_NL, G.Type_IQ4_XS,
+         G.Type_MXFP4];
 
       Worst : N.Real := 0.0;
 
@@ -731,7 +736,9 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_Q3_K (Values)
                elsif G."=" (Shape, G.Type_IQ4_NL)
                then Fixtures.Encode_IQ4_NL (Values)
-               else Fixtures.Encode_IQ4_XS (Values));
+               elsif G."=" (Shape, G.Type_IQ4_XS)
+               then Fixtures.Encode_IQ4_XS (Values)
+               else Fixtures.Encode_MXFP4 (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
             Plain.all := Bytes;
@@ -789,11 +796,34 @@ package body Tests.Backend_Cases is
 
          CPU.Use_Integer_Activations (False);
 
-         for Index in 0 .. Tall * Batch - 1 loop
-            Worst :=
-              N.Real'Max (Worst, abs (Rows_Way.all (Index)
-                                      - Panel_Way.all (Index)));
-         end loop;
+         --  Against the size of the answers, not absolute and not each
+         --  answer. Two things make the obvious measures wrong. These
+         --  formats do not produce numbers of the same size -- the
+         --  block-exponent one's levels reach twelve times its scale where
+         --  a four-bit k-quant's reach fifteen sixteenths of one -- so an
+         --  absolute bound is loose for one and tight for another, and the
+         --  bound this test carried until the ninth format arrived was set
+         --  by the quietest of eight. And the varied matrix is signed, so
+         --  its five hundred and twelve terms cancel and a particular
+         --  answer can land near nought: dividing by THAT measures the
+         --  cancellation rather than the kernel. Dividing by the largest
+         --  answer of the comparison asks what is meant -- the error
+         --  against the scale the arithmetic ran at.
+         declare
+            Size : N.Real := 1.0;
+         begin
+            for Index in 0 .. Tall * Batch - 1 loop
+               Size := N.Real'Max (Size, abs Rows_Way.all (Index));
+            end loop;
+
+            for Index in 0 .. Tall * Batch - 1 loop
+               Worst :=
+                 N.Real'Max
+                   (Worst,
+                    abs (Rows_Way.all (Index) - Panel_Way.all (Index))
+                    / Size);
+            end loop;
+         end;
 
          T.Free (Inputs);
          T.Free (Rows_Way);
@@ -808,11 +838,15 @@ package body Tests.Backend_Cases is
       end loop;
 
       --  Floating-point rounding over five hundred and twelve terms summed
-      --  two ways, and nothing else: this is three orders inside what a
-      --  quantized activation would cost. A minimum that is missing, a
-      --  centring of the wrong size or a fifth bit taken from the wrong
-      --  shift fails it by the answer rather than by a part of it.
-      Assert (Worst <= 1.0E-2,
+      --  two ways, and nothing else. The nine read between nought and 4E-5
+      --  of the scale they ran at, the loudest being Q4_0 -- which is the
+      --  only one of them whose row-major side is an integer kernel too, so
+      --  its comparison is two integer kernels grouping their blocks
+      --  differently rather than an integer kernel against a floating-point
+      --  one. A minimum that is missing, a centring of the wrong size, a
+      --  fifth bit taken from the wrong shift or a table read at the wrong
+      --  offset fails this by the answer rather than by a part of it.
+      Assert (Worst <= 1.0E-4,
               "a panel kernel differs by " & N.Real'Image (Worst));
    end Panel_Quantized_Kernels_Are_Exact;
 
@@ -3718,7 +3752,7 @@ package body Tests.Backend_Cases is
          & "it was made of and multiplies to what those rows multiply to");
       Register_Routine
         (T, Panel_Quantized_Kernels_Are_Exact'Access,
-         "the eight panel kernels with a quantized correction agree with "
+         "the nine panel kernels with a quantized correction agree with "
          & "the floating-point path exactly where the activations quantize "
          & "without loss");
       Register_Routine

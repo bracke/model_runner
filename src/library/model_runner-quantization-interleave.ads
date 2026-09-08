@@ -27,9 +27,11 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Eleven formats are written here, which is every one the engine can
---  multiply: the three k-quants a "_M" file is made of, the four legacy
---  ones, the two- and three-bit k-quants, and the two non-linear formats. The
+--  Twelve formats are written here: the three k-quants a "_M" file is made
+--  of, the four legacy ones, the two- and three-bit k-quants, the two
+--  non-linear formats, and the block-exponent one. That is every quantized
+--  format the engine multiplies except Q8_0, which is left out on purpose
+--  -- it is already level with llama.cpp and has no correction to carry. The
 --  legacy layouts are described before the last two because they are the
 --  four-bit k-quant's with everything it packs taken away -- and, for the
 --  two that carry a fifth bit, with one thing added that no k-quant has.
@@ -106,6 +108,7 @@ package Model_Runner.Quantization.Interleave is
    Two_Block_Bytes   : constant := 800;
    Three_Block_Bytes : constant := 912;
    Level_Block_Bytes : constant := 1104;
+   Micro_Block_Bytes : constant := 160;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -289,6 +292,23 @@ package Model_Runner.Quantization.Interleave is
    Level_Factor_At : constant := 16;
    Level_Quants_At : constant := 80;
 
+   --  And the block-exponent format, whose nibbles are IQ4_NL's and whose
+   --  scale is not a half at all. It is an E8M0 exponent -- one byte, two
+   --  to that byte less a hundred and twenty-eight -- and the range of that
+   --  runs from two to the minus hundred and twenty-eight to two to the
+   --  hundred and twenty-seventh, which a half cannot hold at either end.
+   --  So this is the one panel here whose scales are binary32:
+   --
+   --     0 ..  31   the eight rows' block scales, binary32
+   --    32 .. 159   the eight rows' quants, interleaved
+   --
+   --  160 bytes against the eight rows' seventeen each, which is the only
+   --  thing this format's panel costs that IQ4_NL's does not -- and the
+   --  kernel is one instruction shorter for it, loading eight floats where
+   --  the others widen eight halves.
+   Micro_Scale_At  : constant := 0;
+   Micro_Quants_At : constant := 32;
+
    --  Bytes a panel block occupies in the layout this format takes.
    --
    --  @param Format Weight format; one Interleaves accepts.
@@ -321,8 +341,8 @@ package Model_Runner.Quantization.Interleave is
    --  Whether a matrix in this format and shape can be interleaved.
    --
    --  Every format the panel kernels read: the three k-quants a "_M" file
-   --  is made of, the four legacy ones, and the two- and three-bit
-   --  k-quants. A row count that is not a whole
+   --  is made of, the four legacy ones, the two- and three-bit k-quants,
+   --  the two non-linear formats and the block-exponent one. A row count that is not a whole
    --  number of panels is refused rather than padded, because a padded panel
    --  is rows that do not exist and a kernel that has to know which they
    --  are.

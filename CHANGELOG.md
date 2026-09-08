@@ -7,6 +7,62 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The block-exponent format in eight-row panels -- the last one, and the
+  first that does not pay.** `MXFP4` is `IQ4_NL`'s block with a different
+  table and a scale that is not a half: an E8M0 exponent byte, two to that
+  byte less 128. `--repack rows` now covers **twelve formats**, every
+  quantized format the engine multiplies except `Q8_0`.
+
+  **The scale is what makes this panel different from every other.** Its
+  range runs from 2^-128 to 2^127 and a half holds neither end, so this is
+  the one layout here whose scales are **binary32** -- 160 bytes against the
+  eight rows' seventeen each, where every other panel over a
+  thirty-two-element block is exactly the size of the rows it holds. The
+  conversion is done once at load by the bit pattern the decoder uses, so it
+  is exact, and the kernel **loads** eight floats where the others widen
+  eight halves.
+
+  **And the bias comes off in whole numbers**, where `IQ4_NL` takes it off
+  as a floating-point term: this format's levels reach twelve where the bias
+  is 128, so two floating-point terms of that size would cancel down to the
+  answer and cost a digit. Taken off before the conversion it is **exactly**
+  equal to the floating-point path on the test's flat matrix -- nought, the
+  only one of nine kernels that reads zero.
+
+  Alternated three rounds against three, `--backend cpu`: **the 110-token
+  prompt 3.968/4.025/4.214 s to 0.261/0.264/0.268, 15.4 times**; the
+  1419-token prompt 57.221 to 4.118, 13.9; sixty-four generated tokens 7.404
+  to 1.238, 5.98. Digests unchanged on both paths at both lengths.
+
+  **Against llama.cpp it is 1.15 and 1.21 times BEHIND on the two prompts**
+  -- the first of the eight formats panelled today to land there, and
+  llama.cpp does not repack this format either, so it is an eight-row layout
+  losing to a row-major kernel. Two candidates, neither chased: the panel is
+  eighteen per cent larger than the block, and the scale is four bytes a row
+  where every other format's is two. The fix, if it is one, is to keep the
+  exponent byte and convert it in the kernel; the two subnormal exponents
+  are what stands in the way.
+
+  The file is a mixture and the README says so: `llama-quantize` writes
+  `MXFP4` only for a mixture's expert tensors, so it was made by naming each
+  weight matrix with `--tensor-type`. 154 tensors are `MXFP4`; the embedding
+  and output projection stayed `Q8_0`.
+
+### Changed
+
+- **`Panel_Quantized_Kernels_Are_Exact` measures against the size of the
+  answers rather than absolutely.** Two things made the old absolute bound
+  wrong once a ninth format arrived: these formats do not produce numbers of
+  the same size -- `MXFP4`'s levels reach twelve times its scale where a
+  four-bit k-quant's reach fifteen sixteenths of one -- so the bound was set
+  by the quietest of eight; and the varied matrix is signed, so its terms
+  cancel and dividing by a particular answer measures the cancellation
+  rather than the kernel. Dividing by the largest answer of the comparison
+  asks what is meant. The nine read between nought and 4E-5, the loudest
+  being `Q4_0` -- the only one whose row-major side is an integer kernel
+  too, so its comparison is two integer kernels rather than one against the
+  floating-point path.
+
 - **The two formats whose nibble is an index rather than a number, in
   eight-row panels -- and the table lookup that made them slow is one
   instruction.** `IQ4_NL` and `IQ4_XS` read a nibble as an index into a
@@ -42,8 +98,6 @@ Keep a Changelog and the project uses semantic versioning.
   where three of its four repacks are eight. So 1.27 times is eight rows
   against four on the same format, no asterisk. `IQ4_XS` reads 569.9 against
   190.8 and is not repacked there, so it carries the usual caveat.
-
-### Changed
 
 - **`Panel_Legacy_Kernels_Are_Exact` became
   `Panel_Quantized_Kernels_Are_Exact`** and covers six kernels rather than
