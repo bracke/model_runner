@@ -1,4 +1,5 @@
 private with Ada.Finalization;
+private with Ada.Synchronous_Task_Control;
 private with System.Atomic_Counters;
 
 with Model_Runner.Errors;
@@ -356,24 +357,101 @@ private
       Rows_Three   : Element_Count := 0;
    end record;
 
-   type Generation_Array is array (Worker_Count) of Natural;
+   --  How many tiles of a product have been handed out so far.
+   --
+   --  A job used to be cut into one contiguous range for every worker,
+   --  decided before any of them started. That is right when the workers
+   --  run at the same speed and wrong when they do not: the job is not
+   --  done until its slowest share is, and on a fifteen-watt part sharing
+   --  its boost between eight cores they do not. This counter is what a
+   --  worker takes its next tile from instead, so a core that finishes
+   --  early takes more and the job ends when the work does rather than
+   --  when the unluckiest range does.
+   type Chunk_Counter is new Integer with Atomic;
+
+   type Ticket_Array is
+     array (Worker_Count range <>) of aliased
+       System.Atomic_Counters.Atomic_Unsigned;
+
+   type Sleeping_Array is
+     array (Worker_Count range <>) of aliased Chunk_Counter;
+
+   type Gate_Array is
+     array (Worker_Count range <>) of
+       Ada.Synchronous_Task_Control.Suspension_Object;
+
+   --  Everything the handover needs, and nothing that takes a lock.
+   --
+   --  A worker used to reach the next job through a protected entry: it
+   --  spun here first and then called the entry whether the spin had found
+   --  anything or not, so every job cost the team a protected action each
+   --  to take the work and another each to report it. Nine or sixteen lock
+   --  acquisitions on one object for a job that is a couple of hundred
+   --  microseconds long, and a park in the kernel whenever the spin ran out
+   --  -- which is what capped the generating team at five shares, because
+   --  the sixth cost more in handover than it brought in arithmetic.
+   --
+   --  This is the whole handover now. Held carries the job, Ticket counts
+   --  jobs posted, Seen says which one each worker has taken, Left counts
+   --  the shares still to report and Chunk hands out tiles. A worker that
+   --  finds work by spinning touches no lock at all.
+   --
+   --  Sleeping and Gate are what remain of the old blocking path, for a
+   --  pool with nothing coming: a worker announces that it is about to
+   --  sleep, re-reads the ticket, and sleeps only if nothing arrived in
+   --  between; the poster reads the announcement and wakes it. The order of
+   --  those two pairs is what makes the sleep safe, and it is the only
+   --  thing here that is subtle.
+   type Wake_Signal (Workers : Worker_Count) is limited record
+      Ticket : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+      Left   : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+      Chunk  : aliased Chunk_Counter := 0;
+
+      --  Set by a worker whose share raised, read by the submitting task
+      --  once every share has reported.
+      Failed : aliased Chunk_Counter := 0;
+
+      --  Set when the pool closes, so a worker sees it without asking the
+      --  coordinator. A worker that reads this every time round its loop
+      --  costs nothing; one that asked a protected function instead took a
+      --  lock for every job it waited through.
+      Shut   : aliased Chunk_Counter := 0;
+
+      --  The job itself, written before the ticket that publishes it.
+      Held   : Job;
+      Crew   : aliased Chunk_Counter := 0;
+
+      Seen     : Ticket_Array (1 .. Workers) := [others => 0];
+      Sleeping : Sleeping_Array (1 .. Workers) := [others => 0];
+      Gate     : Gate_Array (1 .. Workers);
+   end record;
+
+   type Wake_Access is access all Wake_Signal;
 
    --  Rendezvous between the submitting task and the workers.
    protected type Coordinator (Team : Worker_Count) is
 
-      --  Wait until job number Generation differs from the one this worker
-      --  last ran, or until the pool is closing.
-      entry Wait_For_Work (Worker_Count)
-        (Current_Job : out Job; Is_Closing : out Boolean);
-
       --  Publish a job to every worker.
+      --
+      --  What this does now is bookkeeping: the job itself reaches the
+      --  workers through Wake_Signal, and this counts the job so that a
+      --  report stamped with an older one cannot open the barrier below.
       procedure Post (Item : Job; Accepted : out Boolean);
 
-      --  Record that one worker finished its partition.
-      procedure Finished (Failed : Boolean);
+      --  Say that every share of job number Stamp has reported.
+      --
+      --  Called by whichever worker's share was the last, and only when the
+      --  submitting task might be asleep below. The stamp is what makes a
+      --  late report from a finished job harmless: it opens the barrier for
+      --  that job and not for the one after it.
+      procedure Report (Stamp : Natural);
 
-      --  Wait until every worker has finished the current job.
-      entry Await (Failed : out Boolean);
+      --  Wait until every share of the job now outstanding has reported.
+      --
+      --  No parameter, because exactly one job is outstanding at a time and
+      --  the barrier is therefore about the latest: a report stamped with
+      --  an older job cannot open it.
+      entry Await;
 
       --  Stop accepting work and release the workers.
       procedure Shut_Down;
@@ -382,11 +460,8 @@ private
       function Accepting return Boolean;
 
    private
-      Current    : Job;
       Generation : Natural := 0;
-      Seen       : Generation_Array := [others => 0];
-      Remaining  : Natural := 0;
-      Any_Failed : Boolean := False;
+      Reported   : Natural := 0;
       Closing    : Boolean := False;
    end Coordinator;
 
@@ -408,25 +483,6 @@ private
    --  the coordinator is still what opens the barrier and what says the job
    --  is done, and a run with the spin never taken is the run this had
    --  before.
-   --  How many tiles of a product have been handed out so far.
-   --
-   --  A job used to be cut into one contiguous range for every worker,
-   --  decided before any of them started. That is right when the workers
-   --  run at the same speed and wrong when they do not: the job is not
-   --  done until its slowest share is, and on a fifteen-watt part sharing
-   --  its boost between eight cores they do not. This counter is what a
-   --  worker takes its next tile from instead, so a core that finishes
-   --  early takes more and the job ends when the work does rather than
-   --  when the unluckiest range does.
-   type Chunk_Counter is new Integer with Atomic;
-
-   type Wake_Signal is limited record
-      Ticket : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
-      Left   : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
-      Chunk  : aliased Chunk_Counter := 0;
-   end record;
-
-   type Wake_Access is access all Wake_Signal;
 
    --  A reusable worker. It blocks on the coordinator between jobs, so no task
    --  is created per unit of work.
@@ -447,7 +503,7 @@ private
    type Pool (Workers : Worker_Count) is
      limited new Ada.Finalization.Limited_Controlled with record
       Control : aliased Coordinator (Workers);
-      Waking  : aliased Wake_Signal;
+      Waking  : aliased Wake_Signal (Workers);
       Team    : Worker_Array (1 .. Workers);
       Started : Boolean := False;
 

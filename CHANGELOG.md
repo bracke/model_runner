@@ -68,6 +68,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The worker handover is off the lock, and the generating team is now a
+  free choice rather than one the handover made.** llama.cpp's
+  `ggml_barrier` is a pure atomic spin, so its threads never park inside a
+  graph: 43 voluntary context switches against this program's 2,327 for the
+  same generating work. A worker here used to spin on a ticket and then call
+  a protected entry whether the spin had found anything or not, and report
+  through another -- nine or sixteen lock acquisitions for a job a couple of
+  hundred microseconds long.
+
+  The job now travels in the wake signal, written before the ticket that
+  publishes it, and a worker that finds work by spinning **touches no lock
+  at all**. What is left of the blocking path is a suspension object per
+  worker: the worker says it is about to sleep, re-reads the ticket, and
+  sleeps only if nothing arrived between -- the two orders are what make it
+  safe. Only the worker whose share was the last reports through the
+  coordinator.
+
+  Alternated three rounds against three, twenty-eight generated tokens:
+  **0.435/0.434/0.433 s to 0.428/0.426/0.428, 1.6 per cent**, the same
+  processor time, and **2,327 voluntary context switches to 232**. Digest
+  unchanged.
+
+  **And the belief that prompted it was wrong.** The handover was thought to
+  be what capped the generating team at five. It was what stopped the shares
+  being *available* -- eight now reach 7.9 cores where the old pool could
+  not pass 5.1 -- but being there is worth two per cent of the wall for
+  fifty-one per cent more processor, so `Vector_Team` stays at five. That
+  settles `### Generating is at the memory wall` from the other side: the
+  pool can use the cores now, and using them buys two per cent.
+
 - **The load gate has one copy again.** `Host_Load`'s own first paragraph
   warns that "three copies of it would be three things to keep in step and
   two of them would drift", and by the time a third caller wanted it there

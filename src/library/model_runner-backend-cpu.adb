@@ -13,6 +13,8 @@ package body Model_Runner.Backend.CPU is
    use type Model_Runner.Tensors.Real_Array_Access;
 
    package AC renames System.Atomic_Counters;
+
+   use type AC.Atomic_Unsigned;
    package E renames Model_Runner.Errors;
    package T renames Model_Runner.Tensors;
 
@@ -28,14 +30,18 @@ package body Model_Runner.Backend.CPU is
 
    --  Wait for a job without leaving the processor, for a while.
    procedure Watch
-     (Waking : Wake_Access; Mine : AC.Atomic_Unsigned);
+     (Waking   : Wake_Access;
+      Position : Worker_Count;
+      Mine     : AC.Atomic_Unsigned;
+      Closing  : Boolean);
 
    --  Wait for the shares to report without leaving the processor, for a
    --  while.
    procedure Settle (Waking : Wake_Access);
 
    --  Say that a job of this many shares has been posted.
-   procedure Announce (Waking : Wake_Access; Shares : Natural);
+   procedure Announce
+     (Waking : Wake_Access; Work : Job; Shares : Natural);
 
    package Chunks is new System.Atomic_Operations.Integer_Arithmetic
      (Chunk_Counter);
@@ -55,8 +61,12 @@ package body Model_Runner.Backend.CPU is
    -- Watch --
    -----------
 
-   procedure Watch (Waking : Wake_Access; Mine : AC.Atomic_Unsigned) is
-      use type AC.Atomic_Unsigned;
+   procedure Watch
+     (Waking   : Wake_Access;
+      Position : Worker_Count;
+      Mine     : AC.Atomic_Unsigned;
+      Closing  : Boolean)
+   is
    begin
       if Waking = null then
          return;
@@ -70,6 +80,26 @@ package body Model_Runner.Backend.CPU is
          --  the memory-order penalty out of the loop's exit.
          System.Machine_Code.Asm ("pause", Volatile => True);
       end loop;
+
+      --  Nothing came, so sleep -- and say so first. A poster reads that
+      --  announcement after it has raised the ticket, and this re-reads the
+      --  ticket after making it, so the two cannot both miss: either this
+      --  sees the job, or the poster sees a worker to wake.
+      if Waking.Ticket = Mine and then not Closing then
+         Waking.Sleeping (Position) := 1;
+
+         if Waking.Ticket = Mine then
+            Ada.Synchronous_Task_Control.Suspend_Until_True
+              (Waking.Gate (Position));
+         end if;
+
+         Waking.Sleeping (Position) := 0;
+
+         --  A wake-up nobody needed leaves the gate closed for the next
+         --  one, which is why this is set false here rather than trusted to
+         --  have been consumed.
+         Ada.Synchronous_Task_Control.Set_False (Waking.Gate (Position));
+      end if;
    end Watch;
 
    ------------
@@ -77,7 +107,6 @@ package body Model_Runner.Backend.CPU is
    ------------
 
    procedure Settle (Waking : Wake_Access) is
-      use type AC.Atomic_Unsigned;
    begin
       if Waking = null then
          return;
@@ -93,18 +122,38 @@ package body Model_Runner.Backend.CPU is
    -- Announce --
    --------------
 
-   procedure Announce (Waking : Wake_Access; Shares : Natural) is
+   procedure Announce
+     (Waking : Wake_Access; Work : Job; Shares : Natural)
+   is
    begin
       if Waking = null then
          return;
       end if;
 
-      --  The count and the tile counter first and the ticket second, so a
-      --  worker that wakes on the ticket cannot see either belonging to the
-      --  job before it.
+      --  The job, the count and the tile counter first and the ticket
+      --  second, so a worker that wakes on the ticket cannot see any of
+      --  them belonging to the job before it. This is the whole of what
+      --  publishing a job is now: what a worker reads, it reads from here.
+      Waking.Held := Work;
+      Waking.Crew := Chunk_Counter (Work.Team);
+      Waking.Failed := 0;
       Waking.Left := AC.Atomic_Unsigned (Shares);
       Waking.Chunk := 0;
       AC.Increment (Waking.Ticket);
+
+      --  And then wake whoever had given up waiting. The order matters: a
+      --  worker announces that it is going to sleep and then re-reads the
+      --  ticket, so either it sees the ticket this raised, or this sees the
+      --  announcement it made. Both can happen, which costs a wake-up
+      --  nobody needed; neither happening is what would lose a worker, and
+      --  the two orders make that impossible.
+      for Index in 1 .. Waking.Workers loop
+         if Waking.Sleeping (Index) /= 0
+           and then Share_Count (Index) < Work.Team
+         then
+            Ada.Synchronous_Task_Control.Set_True (Waking.Gate (Index));
+         end if;
+      end loop;
    end Announce;
 
    --------------
@@ -315,27 +364,8 @@ package body Model_Runner.Backend.CPU is
 
    protected body Coordinator is
 
-      --  Opened for the workers this job asked for and no others.
-      --
-      --  A worker outside the team leaves Seen (Index) where it was and
-      --  takes the next job instead, which is what makes a smaller team
-      --  cost nothing rather than costing a wake. Posting a job used to
-      --  open every worker's barrier whatever the team, so cutting a job's
-      --  team saved the memory traffic and paid for it in wake-ups: a
-      --  quarter less processor time for three per cent more wall, which is
-      --  the wrong side of the trade and is why this is here.
-      entry Wait_For_Work (for Index in Worker_Count)
-        (Current_Job : out Job; Is_Closing : out Boolean)
-        when Closing
-             or else (Generation /= Seen (Index)
-                      and then Share_Count (Index) < Current.Team) is
-      begin
-         Seen (Index) := Generation;
-         Current_Job := Current;
-         Is_Closing := Closing;
-      end Wait_For_Work;
-
       procedure Post (Item : Job; Accepted : out Boolean) is
+         pragma Unreferenced (Item);
       begin
          if Closing then
             --  Work submitted while closing is rejected, never queued.
@@ -343,39 +373,29 @@ package body Model_Runner.Backend.CPU is
             return;
          end if;
 
-         Current := Item;
-         Any_Failed := False;
-
-         --  How many workers will report, which is how many the barrier
-         --  above will open for: the job's team less the share the
-         --  submitting task takes itself, and never more than there are.
-         --  Team here is the pool's, the discriminant; Item.Team is the
-         --  job's, and before a job could ask for fewer the two agreed.
-         Remaining :=
-           Natural (Share_Count'Min (Share_Count (Team), Item.Team - 1));
          Generation := Generation + 1;
          Accepted := True;
       end Post;
 
-      procedure Finished (Failed : Boolean) is
+      procedure Report (Stamp : Natural) is
       begin
-         if Failed then
-            Any_Failed := True;
+         --  The latest report wins and an older one is ignored, which is
+         --  what makes a report that arrives after its submitter has
+         --  already gone on harmless: it cannot open the barrier for the
+         --  job after the one it belongs to.
+         if Stamp > Reported then
+            Reported := Stamp;
          end if;
-         if Remaining > 0 then
-            Remaining := Remaining - 1;
-         end if;
-      end Finished;
+      end Report;
 
-      entry Await (Failed : out Boolean) when Remaining = 0 is
+      entry Await when Closing or else Reported >= Generation is
       begin
-         Failed := Any_Failed;
+         null;
       end Await;
 
       procedure Shut_Down is
       begin
          Closing := True;
-         Remaining := 0;
       end Shut_Down;
 
       function Accepting return Boolean is (not Closing);
@@ -743,9 +763,9 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       Announce
-        (Item.Waking'Unchecked_Access,
+        (Item.Waking'Unchecked_Access, Job_Of,
          Natural (Share_Count'Min (Share_Count (Item.Workers),
-                                   Job_Of.Team - 1)));
+                                  Job_Of.Team - 1)));
 
       --  The submitting task takes the last share rather than waiting, for
       --  the reason written out above Mat_Vec.
@@ -761,8 +781,16 @@ package body Model_Runner.Backend.CPU is
             Mine := True;
       end;
 
+      --  Spin for the shares to report, and only ask the coordinator when
+      --  the spin gave up: a job that finishes while this is still spinning
+      --  costs no protected action at all, and one that does not is waited
+      --  for exactly as it used to be.
       Settle (Item.Waking'Unchecked_Access);
-      Item.Control.Await (Failed);
+      if Item.Waking.Left /= 0 then
+         Item.Control.Await;
+      end if;
+
+      Failed := Item.Waking.Failed /= 0;
 
       if Failed or else Mine then
          Status := E.Make (E.Backend_Worker_Failed);
@@ -943,18 +971,33 @@ package body Model_Runner.Backend.CPU is
       end select;
 
       loop
-         --  Look for the next job before blocking for it. The entry below
-         --  is what actually hands the job over and what says the pool is
-         --  closing; this only decides whether the task is awake when it
-         --  asks. A spin that finds nothing costs the budget below and then
-         --  blocks, which is what this did before it was here.
-         Watch (Waking, Mine);
+         --  Wait for the next job without a lock. Watch spins on the
+         --  ticket and, only when nothing comes, sleeps on this worker's
+         --  own gate -- so a pool that is busy never enters the runtime at
+         --  all and one that is idle still stops burning a core.
+         Watch (Waking, Position, Mine, Closing);
 
-         Control.Wait_For_Work (Position) (Current, Closing);
+         Closing := Waking.Shut /= 0;
          exit when Closing;
 
-         Mine := Waking.Ticket;
+         --  Nothing new: the spin timed out and the sleep was woken by
+         --  something else. Ask again.
+         if Waking.Ticket = Mine then
+            goto Continue;
+         end if;
 
+         Mine := Waking.Ticket;
+         Waking.Seen (Position) := Mine;
+
+         --  Not on this job's team: it is taken, and there is nothing to
+         --  report for it.
+         if Share_Count (Position)
+            >= Share_Count (Waking.Crew)
+         then
+            goto Continue;
+         end if;
+
+         Current := Waking.Held;
          Failed := False;
 
          begin
@@ -974,31 +1017,39 @@ package body Model_Runner.Backend.CPU is
                end if;
             end;
          exception
-            --  A worker failure is reported to the coordinator rather than
-            --  killing the task, so the pool stays usable and the submitting
-            --  task learns about it.
+            --  A worker failure is reported to the submitting task rather
+            --  than killing the task, so the pool stays usable and the
+            --  submitter learns about it.
             when others =>
                Failed := True;
          end;
 
-         Control.Finished (Failed);
+         if Failed then
+            Waking.Failed := 1;
+         end if;
 
-         --  After the coordinator, never before: a submitting task that
-         --  sees this reach zero goes straight to Await, and Await opens on
-         --  what the line above wrote.
-         AC.Decrement (Waking.Left);
+         --  The share is reported by taking one off the count, which is
+         --  what the submitting task is spinning on. Only the worker whose
+         --  share was the last says so through the coordinator, and only so
+         --  that a submitter which gave up spinning and slept is woken:
+         --  one protected action for a whole job rather than two for every
+         --  share of it.
+         if AC.Decrement (Waking.Left) then
+            Control.Report (Natural (Mine));
+         end if;
+
+         <<Continue>>
       end loop;
    exception
       when others =>
-         if Control /= null then
-            Control.Finished (True);
-         end if;
-
-         --  So that a task dying here does not leave every later Settle
+         --  So that a task dying here does not leave a submitting task
          --  spinning its whole budget against a count that will never
          --  reach zero.
          if Waking /= null then
-            AC.Decrement (Waking.Left);
+            Waking.Failed := 1;
+            if AC.Decrement (Waking.Left) then
+               Control.Report (Natural (Waking.Ticket));
+            end if;
          end if;
    end Worker;
 
@@ -1049,6 +1100,15 @@ package body Model_Runner.Backend.CPU is
    procedure Close (Item : in out Pool) is
    begin
       Item.Control.Shut_Down;
+
+      --  Say so where a worker will see it without a lock, and then open
+      --  every gate: a worker asleep on one is waiting for a job that will
+      --  never come, and the flag is what tells it so when it wakes.
+      Item.Waking.Shut := 1;
+      for Index in 1 .. Item.Workers loop
+         Ada.Synchronous_Task_Control.Set_True (Item.Waking.Gate (Index));
+      end loop;
+
       Free_Packed (Item);
    exception
       when others =>
@@ -1124,9 +1184,9 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       Announce
-        (Item.Waking'Unchecked_Access,
+        (Item.Waking'Unchecked_Access, Work,
          Natural (Share_Count'Min (Share_Count (Item.Workers),
-                                   Work.Team - 1)));
+                                  Work.Team - 1)));
 
       --  The submitting task takes the last share rather than waiting for
       --  the workers to finish it. Waiting is what it used to do, and it
@@ -1156,8 +1216,16 @@ package body Model_Runner.Backend.CPU is
             Mine_Failed := True;
       end;
 
+      --  Spin for the shares to report, and only ask the coordinator when
+      --  the spin gave up: a job that finishes while this is still spinning
+      --  costs no protected action at all, and one that does not is waited
+      --  for exactly as it used to be.
       Settle (Item.Waking'Unchecked_Access);
-      Item.Control.Await (Failed);
+      if Item.Waking.Left /= 0 then
+         Item.Control.Await;
+      end if;
+
+      Failed := Item.Waking.Failed /= 0;
 
       if Failed or else Mine_Failed then
          Status := E.Make (E.Backend_Worker_Failed);
@@ -1233,9 +1301,9 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       Announce
-        (Item.Waking'Unchecked_Access,
+        (Item.Waking'Unchecked_Access, Work,
          Natural (Share_Count'Min (Share_Count (Item.Workers),
-                                   Work.Team - 1)));
+                                  Work.Team - 1)));
 
       begin
          Take_Chunks
@@ -1246,8 +1314,16 @@ package body Model_Runner.Backend.CPU is
             Mine_Failed := True;
       end;
 
+      --  Spin for the shares to report, and only ask the coordinator when
+      --  the spin gave up: a job that finishes while this is still spinning
+      --  costs no protected action at all, and one that does not is waited
+      --  for exactly as it used to be.
       Settle (Item.Waking'Unchecked_Access);
-      Item.Control.Await (Failed);
+      if Item.Waking.Left /= 0 then
+         Item.Control.Await;
+      end if;
+
+      Failed := Item.Waking.Failed /= 0;
 
       if Failed or else Mine_Failed then
          Status := E.Make (E.Backend_Worker_Failed);
@@ -1383,9 +1459,9 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       Announce
-        (Item.Waking'Unchecked_Access,
+        (Item.Waking'Unchecked_Access, Work,
          Natural (Share_Count'Min (Share_Count (Item.Workers),
-                                   Work.Team - 1)));
+                                  Work.Team - 1)));
 
       --  The submitting task takes the last share rather than waiting for
       --  the workers to finish it. Waiting is what it used to do, and it
@@ -1415,8 +1491,16 @@ package body Model_Runner.Backend.CPU is
             Mine_Failed := True;
       end;
 
+      --  Spin for the shares to report, and only ask the coordinator when
+      --  the spin gave up: a job that finishes while this is still spinning
+      --  costs no protected action at all, and one that does not is waited
+      --  for exactly as it used to be.
       Settle (Item.Waking'Unchecked_Access);
-      Item.Control.Await (Failed);
+      if Item.Waking.Left /= 0 then
+         Item.Control.Await;
+      end if;
+
+      Failed := Item.Waking.Failed /= 0;
 
       if Failed or else Mine_Failed then
          Status := E.Make (E.Backend_Worker_Failed);

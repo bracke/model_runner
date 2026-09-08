@@ -8231,6 +8231,72 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
+### The handover taken off the lock, and what it did not buy
+
+`### Generating is at the memory wall` left a number unexplained: llama.cpp
+kept 7.7 cores hot generating where this kept 5.1, and this pool would not
+use more than five shares because past that the wakes cost more than the
+extra core brought. llama.cpp's answer is in `ggml-cpu.c`: `ggml_barrier` is
+a pure atomic spin -- `atomic_fetch_add`, then `while (n_barrier_passed ==
+n_passed) ggml_thread_cpu_relax()` -- so its threads never leave the graph
+and never park. Measured on the same `Q4_0` file, generating: **43 voluntary
+context switches against this program's 2,327.**
+
+**So the handover was taken off the lock.** A worker used to spin on a
+ticket and then call a protected entry whether the spin had found anything
+or not, and report through another protected call: nine or sixteen lock
+acquisitions on one object for a job a couple of hundred microseconds long,
+and a park in the kernel whenever the spin ran out. Now the job itself
+travels in the wake signal -- written before the ticket that publishes it --
+and a worker that finds work by spinning **touches no lock at all**. What is
+left of the blocking path is a suspension object per worker for a pool with
+nothing coming: the worker says it is about to sleep, re-reads the ticket,
+and sleeps only if nothing arrived in between, which is the one subtle thing
+here and is why the two orders are written out beside it. Only the worker
+whose share was the last reports through the coordinator, and only so a
+submitting task that gave up spinning is woken.
+
+**Alternated three rounds against three, `Q4_0` in panels, twenty-eight
+generated tokens:**
+
+| | old handover | on the wake signal | |
+| --- | ---: | ---: | ---: |
+| generating | 0.435, 0.434, 0.433 s | 0.428, 0.426, 0.428 s | **1.6 %** |
+| processor time | 2.31, 2.31, 2.29 s | 2.31, 2.29, 2.32 s | a wash |
+| voluntary switches | 2,327 | **232** | 10x |
+
+Every reading of one arm below every reading of the other, digest
+`adb365246e4b76ef` throughout.
+
+**And now the part that matters more than the 1.6 per cent.** The reason
+this was built was the belief that the handover was what capped the
+generating team at five. It was not. With the cost gone the sweep was taken
+again, and the extra shares are available now in a way they were not:
+
+| shares | generating | of the processor | cores hot |
+| --- | ---: | ---: | ---: |
+| five | 0.424 s | 2.30 s | 5.1 |
+| six | 0.423 s | 2.70 s | 6.1 |
+| eight | **0.415 s** | 3.48 s | **7.9** |
+
+Eight shares reach 7.9 cores where the old pool could not get past 5.1 --
+**the handover really was what stopped them** -- and being there is worth
+**two per cent of the wall for fifty-one per cent more processor.** That is
+the same trade the five was chosen on and it is refused for the same reason,
+so `Vector_Team` stays at five.
+
+**Which settles the question from the other side.** The earlier section
+argued generating was at the memory wall from a bandwidth measurement and a
+per-core comparison; the objection to it was always that the pool might
+simply be unable to use the cores. It can now, and using them buys two per
+cent. **A generated token is waiting for memory, and the cores that were
+missing were not the reason.**
+
+What the change is worth keeping for is what it is rather than what it
+bought: a fast path with no lock on it, ten times fewer trips into the
+kernel, and a team size that is now a free choice rather than one the
+handover made.
+
 ### The block-exponent format, the last one -- and two arrays at one address
 
 `MXFP4` is `IQ4_NL`'s block with a different table and a scale that is not a
