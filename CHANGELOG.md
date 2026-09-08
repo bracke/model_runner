@@ -491,6 +491,42 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Two arrays at one address cost `MXFP4`'s prompt a third of itself, and
+  it is the only kernel here they cost anything.** Its panel prompt read one
+  and a sixth *behind* llama.cpp where every other panelled format was
+  ahead. Two guesses were published about why and both were wrong; this is
+  the third and it is measured.
+
+  The insertion reads sixteen words a block -- eight activation scales and
+  eight whole-number corrections -- and Ada writes that as a floating-point
+  array with an integer array imported at its address. Four panel kernels
+  here do exactly that and pay nothing. This one paid **1.47 times**, and
+  the difference is how often and in what order the two are written: `Q4_K`
+  fills sixteen floats and then four integers, once per 256 elements;
+  `MXFP4` alternated float and integer every iteration, once per 32. A write
+  through one is a write the compiler must assume changed the other, so the
+  address arithmetic is redone -- which is most of a loop that alternates
+  and nothing in a loop that does not.
+
+  **The same change was tried on `Q4_K` and reverted**: 0.212 and 0.222 s
+  against 0.209 to 0.222 unchanged, a wash, so it stays as it was. One array
+  of whole numbers with the scale as its bit pattern is the fix here; the
+  insertion reads it as a float either way.
+
+  **The 110-token prompt goes 0.262/0.264/0.265 s to 0.178/0.180/0.182** and
+  the 1419-token one 4.134 to 3.185. Against llama.cpp `MXFP4` is now **1.26
+  and 1.10 times ahead** where it was 1.16 and 1.22 behind, so **every one
+  of the twelve panelled formats is ahead of llama.cpp on a prompt**.
+  Generating is unchanged, as it should be: its fill runs once per block for
+  one vector rather than eight, so the aliasing had eight times less to
+  spoil. Digests unchanged at both lengths.
+
+  Found by building a model matched tensor for tensor -- `MXFP4` 0.265 s
+  against `IQ4_NL` 0.177 with the same shapes and mixture, which said the
+  fault was the kernel and not the file -- and then by instruction count:
+  25.5 billion against 17.6 for identical work, where the two kernels'
+  assembly differs by five per cent.
+
 - **A coverage claim published this morning was wrong.** "`--repack rows`
   covers nine formats -- every one the engine can multiply" counted nine
   when the engine reads sixteen: three are floating-point and have no blocks

@@ -14198,10 +14198,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  correction with one multiply-accumulate against the row scales it
       --  is already holding. Sixteen words a block so that both halves land
       --  on a thirty-two byte boundary.
+      --  ONE array, not two at one address. The insertion reads sixteen
+      --  words a block -- eight activation scales and eight whole-number
+      --  corrections -- and the obvious way to write that from Ada is a
+      --  floating-point array with an integer overlay on it, which is what
+      --  the k-quant kernels here do. It costs nothing there because they
+      --  fill it once for two hundred and fifty-six elements. This format's
+      --  block is thirty-two, so the same fill runs eight times as often,
+      --  and two arrays at one address are two arrays the compiler must
+      --  assume alias: every write to one invalidates what it knew about
+      --  the other, and the address arithmetic is done again for each.
+      --  Measured, that was the whole of this kernel's gap to IQ4_NL's.
+      --
+      --  So the table is whole numbers throughout and the scale goes in as
+      --  its bit pattern. The insertion reads it as a float either way.
       type Band_Table is
-        array (0 .. Chunk_Room * 16 - 1) of N.Real with Alignment => 32;
-      type Mark_Table is
-        array (0 .. Chunk_Room * 16 - 1) of Interfaces.Integer_32;
+        array (0 .. Chunk_Room * 16 - 1) of Interfaces.Integer_32
+        with Alignment => 32;
 
       --  The strip's eight running sums, eight rows apiece: what the
       --  insertion loads at entry and stores at exit.
@@ -14230,7 +14243,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
          128, 127, 126, 125, 124, 122, 120, 116];
 
       Bands : Band_Table;
-      Marks : Mark_Table with Import, Address => Bands'Address;
+
+      function To_Bits is new Ada.Unchecked_Conversion
+        (N.Real, Interfaces.Integer_32);
       Work  : Work_Table;
       Feeds : Feed_Table;
 
@@ -14286,10 +14301,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         At_It : constant Element_Count :=
                           Places (Natural (Vector)) + At_Block + Block;
                      begin
-                        Bands
-                          (Natural (Block * 16 + Vector)) :=
-                            Scales (Scales'First + At_It);
-                        Marks (Natural (Block * 16 + 8 + Vector)) :=
+                        Bands (Natural (Block * 16 + Vector)) :=
+                          To_Bits (Scales (Scales'First + At_It));
+                        Bands (Natural (Block * 16 + 8 + Vector)) :=
                           Interfaces.Integer_32 (128)
                           * Totals (Totals'First + At_It);
                      end;
@@ -14533,10 +14547,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
                        Places (0) + At_Block + Block;
                   begin
                      Bands (Natural (Block * 16)) :=
-                       Scales (Scales'First + At_It);
-                     Marks (Natural (Block * 16 + 8)) :=
-                          Interfaces.Integer_32 (128)
-                          * Totals (Totals'First + At_It);
+                       To_Bits (Scales (Scales'First + At_It));
+                     Bands (Natural (Block * 16 + 8)) :=
+                       Interfaces.Integer_32 (128)
+                       * Totals (Totals'First + At_It);
                   end;
                end loop;
 

@@ -8214,7 +8214,7 @@ because a "_M" file's Q6_K tensors are in that path and the minimum's term is
 summed in a different order. Conformance is 28344 sequences and 0 outside
 tolerance.
 
-### The block-exponent format, the last one -- and the first panel that loses to llama.cpp
+### The block-exponent format, the last one -- and two arrays at one address
 
 `MXFP4` is `IQ4_NL`'s block with a different table and a scale that is not a
 half: an E8M0 exponent byte, two to that byte less a hundred and
@@ -8250,18 +8250,19 @@ only one of nine that reads zero.
 
 | | as stored | `--repack rows` | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 | 3.968, 4.025, 4.214 s | 0.262, 0.264, 0.265 s | **15.4x** |
-| prompt, 1419 | 57.221 s | 4.134 s | **13.8x** |
-| generating, 21 | 2.346, 2.344, 2.367 s | 0.325, 0.326, 0.326 s | **7.20x** |
-| generating, 64 | 7.404 s | 1.125 s | **6.58x** |
+| prompt, 110 | 3.968, 4.025, 4.214 s | 0.178, 0.180, 0.182 s | **22.4x** |
+| prompt, 1419 | 57.221 s | 3.185 s | **18.0x** |
+| generating, 21 | 2.346, 2.344, 2.367 s | 0.321, 0.323, 0.323 s | **7.27x** |
+| generating, 64 | 7.404 s | 1.115 s | **6.64x** |
 
 Digests unchanged on both paths at both lengths, `323e0f4ae1822664` and
 `00f047036c93974f`.
 
-**And the two panels measured against each other say something the first
-version of this section guessed wrong.** With four-byte scales the same runs
-read 0.261/0.264/0.268 s at 110 tokens, 4.118 s at 1419, and 0.362/0.363/
-0.363 and 1.238 s generating. Keeping the byte is:
+**And the two panels measured against each other say what a prompt and a
+generated token are.** With four-byte scales the same runs read
+0.261/0.264/0.268 s at 110 tokens, 4.118 s at 1419, and 0.362/0.363/0.363
+and 1.238 s generating -- both columns below carrying the aliasing the
+section above is about, so this pair is about the panel's size alone:
 
 | | binary32 scales | the exponent byte | |
 | --- | ---: | ---: | ---: |
@@ -8291,29 +8292,62 @@ sitting:
 
 | | this engine | llama.cpp | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 tokens | 416.7 t/s | **483.1 t/s** | 1.16x behind |
-| prompt, 1419 tokens | 343.2 t/s | **418.4 t/s** | 1.22x behind |
-| generating, 64 tokens | 56.9 t/s | **73.0 t/s** | 1.28x behind |
+| prompt, 110 tokens | **611.1 t/s** | 485.2 t/s | 1.26x ahead |
+| prompt, 1419 tokens | **445.5 t/s** | 404.3 t/s | 1.10x ahead |
+| generating, 64 tokens | 57.4 t/s | 73.0 t/s | 1.27x behind |
 
 **This is the first of the eight formats panelled today where the panel
 path lands behind**, and it is worth being plain about rather than burying:
 llama.cpp does not repack `MXFP4` either -- it is not in `repack.cpp`'s list
 -- so this is an eight-row layout losing to a row-major kernel.
 
-**One candidate was named and it has been tried.** The section first said
-the panel's eighteen per cent of extra bytes was the likely cause and that
-keeping the exponent byte would be the fix. Keeping it **closed a tenth of
-the generating gap and none of the prompt gap**, which says the extra bytes
-were never what the prompt was waiting for. So the prompt gap stands
-unexplained: llama.cpp reads this format row-major, without a repack, and
-still evaluates a prompt one and a sixth faster than an eight-row panel
-does. That is the one number in this run of sections that is not accounted
-for, and it is left that way rather than dressed up.
+**This section carried a prompt one and a sixth BEHIND llama.cpp for two
+readings, and named two candidates. Both were wrong. Here is the third.**
+
+The first guess was the panel's size -- 160 bytes where the block was 136.
+Keeping the exponent byte instead closed a tenth of the *generating* gap and
+none of the prompt gap, so the bytes were never what the prompt waited for.
+
+**What it actually was: two arrays at one address.** The insertion reads
+sixteen words a block -- eight activation scales and eight whole-number
+corrections -- and the obvious way to write that from Ada is a
+floating-point array with an integer array imported at its address. Four of
+the panel kernels here do exactly that and pay nothing for it. This one paid
+**a third of its prompt**, and the reason is how often the two are written
+and in what order:
+
+| | words written a block | float and integer | cost |
+| --- | ---: | --- | ---: |
+| `Q4_K` | 20, per 256 elements | in separate loops | none |
+| `MXFP4` | 2, per 32 elements | interleaved, same iteration | **1.47x** |
+
+A write through one array is a write the compiler must assume changed the
+other, so what it knew about the address arithmetic is thrown away and done
+again. In a loop that alternates them every iteration and runs once for
+every thirty-two elements, that is most of the loop. In one that fills
+sixteen floats and then four integers, once for every two hundred and
+fifty-six, it is nothing -- and **that was measured, not assumed**: `Q4_K`
+with the same change reads 0.212 and 0.222 s against 0.209 to 0.222
+unchanged, a wash, so it was left alone.
+
+The fix is one array of whole numbers with the scale written as its bit
+pattern. The insertion reads it as a float either way, and it was never
+told.
+
+**What it cost to find:** two published guesses, a controlled model built to
+match tensor for tensor -- `MXFP4` 0.265 s against `IQ4_NL` 0.177 with the
+same shapes, the same mixture and the same kernel shape, which is what said
+the fault was in the kernel and not in the file -- and an instruction count.
+`perf` put 25.5 billion instructions against 17.6 for identical work, and
+the two kernels' bodies differ by five per cent. Everything after that was
+looking for where 8 billion instructions were hiding in a procedure whose
+assembly was already accounted for.
 
 **Twelve formats, and what the table looks like now.** A 110-token prompt
-reads 0.171 to 0.265 seconds for every quantized format the engine
-multiplies, against stored readings from 0.29 to 4.2. `MXFP4` is the slowest
-of the twelve and the only one behind llama.cpp. **Every panel is now
+reads 0.171 to 0.251 seconds for every quantized format the engine
+multiplies, against stored readings from 0.29 to 4.2, and **every one of the
+twelve is ahead of llama.cpp on a prompt**. The generated token is behind
+for all of them, by 1.19 to 1.41. **Every panel is now
 exactly the size of the rows it holds** except the two- and three-bit
 k-quants and the four-, five- and six-bit ones, which grow because they take
 packed sub-block scales out into bytes -- and those five buy the growth back
