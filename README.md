@@ -1230,8 +1230,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.344 s** -- 0.042 s evaluating the prompt and 0.302 s generating --
-and **1.83 s** of processor time, the median of three runs. Loading the model
+take **0.342 s** -- 0.041 s evaluating the prompt and 0.299 s generating --
+and **1.82 s** of processor time, the median of three runs. Loading the model
 costs a further **0.065 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1239,7 +1239,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.079 s** for 8.62 s of
+f32`, taken back to back in the same sitting, is **1.083 s** for 8.66 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1643,10 +1643,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.344 s | **0.244 s** |
-| -- evaluating the prompt | 0.042 s | 0.028 s |
-| -- generating | 0.302 s | **0.215 s** |
-| -- processor time | 1.83 s | **0.08 s** |
+| 6-token prompt, 12 generated | 0.342 s | **0.244 s** |
+| -- evaluating the prompt | 0.041 s | 0.027 s |
+| -- generating | 0.299 s | **0.216 s** |
+| -- processor time | 1.82 s | **0.09 s** |
 | 110-token prompt, one token | 0.314 s | **0.102 s** |
 | -- evaluating the prompt | 0.286 s | **0.082 s** |
 | -- processor time | 2.33 s | **0.02 s** |
@@ -6667,10 +6667,10 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 380.6 t/s | **39.1 t/s** |
-| llama.cpp, processor | 392.8 t/s | 40.6 t/s |
+| model_runner, processor | 390.1 t/s | **39.4 t/s** |
+| llama.cpp, processor | 396.1 t/s | 40.6 t/s |
 | model_runner, device | 1571.4 t/s | 52.6 t/s |
-| llama.cpp, device | 1665.9 t/s | 58.7 t/s |
+| llama.cpp, device | 1679.3 t/s | 58.6 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6689,25 +6689,25 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 307.5 t/s | **39.1 t/s** |
-| llama.cpp, processor | 312.4 t/s | 40.6 t/s |
-| model_runner, device | 1973.6 t/s | 52.6 t/s |
-| llama.cpp, device | 1999.3 t/s | 58.7 t/s |
+| model_runner, processor | **312.7 t/s** | **39.4 t/s** |
+| llama.cpp, processor | 305.5 t/s | 40.6 t/s |
+| model_runner, device | **1968.1 t/s** | 52.6 t/s |
+| llama.cpp, device | 1892.5 t/s | 58.6 t/s |
 
-**The processor's long prompt is level and its generated token is within
-four per cent**, 307.5 against 312.4 at 1419 tokens and 1.04 behind
-generating -- where it was 1.07 before `### What a generated token does on
-one task while four watch`. **The device's long prompt is level too**,
-1973.6 against 1999.3, and its short one 1571.4 against 1665.9. Its
-generated token is 1.12 behind and nothing in this sitting touched it.
+**Both long prompts are ahead and the generated token is within three per
+cent.** 312.7 against 305.5 on the processor at 1419 tokens, 1968.1 against
+1892.5 on the device, and 39.4 against 40.6 generating -- **1.03 behind,
+where it was 1.07 two sections above**. The short prompts are 1.02 and 1.07
+behind.
 
-**THE WHOLE TABLE WAS TAKEN AGAIN, BOTH SIDES, AND THE MACHINE IS SLOWER
-THAN IT WAS.** llama.cpp's own rows moved with it -- its processor prompt
-reads 392.8 and 312.4 against 397.6 and 319.3 published, and its device
-short prompt 1665.9 against 1663.1 -- so about one and a half per cent of
-what these cells lost is the machine and not the program. That is what
-taking both sides in one sitting is for, and it is why the generated
-token's four per cent is the row worth reading: it moved the other way.
+**THE WHOLE TABLE IS TAKEN AGAIN, BOTH SIDES, EVERY TIME.** This machine is
+a fifteen-watt part and its rows move a few per cent between sittings for
+reasons that are not the program: llama.cpp's own processor prompt has read
+397.6, 392.8 and 396.1 at 110 tokens across three of them, and 319.3, 312.4
+and 305.5 at 1419. That is what taking both sides in one sitting is for, and
+it is why the row worth reading is the one that moved against the machine
+rather than with it -- the generated token, which has gone 1.07, 1.04, 1.03
+while everything around it wandered.
 
 **The device's long prompt was the row that moved, and the commit that
 published it could not reproduce it either.** It read 1800.8 t/s -- 0.788 s
@@ -8399,6 +8399,91 @@ the cache write, the sampling between tokens, what is left of the packing --
 and no single one of them is the answer. Closing the rest of the gap to
 llama.cpp means putting a token's element-wise work on the pool the way its
 products already are, and that is a larger change than this one.
+
+### The element-wise work of a layer, on the pool
+
+The section above leaves a generated token 91 per cent inside a product, 6.1
+per cent between one and the next, and 2.2 per cent preparing one. This is
+about the 6.1.
+
+**What is between two products is element-wise, or it is a reduction, and
+that is the whole of what decides where it runs.** A share of a job is a
+range, so cutting by element is exact where the answer at an index reads that
+index and nothing else -- the gated middle, the residual add -- and wrong
+where it does not. A normalization reads the sum of the whole vector before
+it writes any of it, so it cannot be cut that way at all, and the batched
+path's own shares say the same thing by cutting themselves by position
+instead, which is what a batch has more than one of and a token has not.
+
+**So the gated middle goes to the pool and the normalizations stay.** The
+gate is the wide half of the feed-forward -- 5,632 elements against the
+model's 2,048 -- and each of its elements is an exponential and a multiply
+where a blend's is a multiply and an add. `tests benchmark` prices the
+activation at 2.13 ns an element against 0.26 for a quantized row product,
+which is why it carries a weight of eight when it asks the pool whether it is
+worth waking: the bound stays one number for every caller and the caller says
+what its elements cost.
+
+**The bound moved again, and it was swept rather than reasoned.** At a
+million, 65,536, 32,768, 8,192 and 2,048 elements, TinyLlama Q4_0 in panels
+reads **63.9, 64.8, 66.1, 65.9 and 65.8** tokens a second, medians of three,
+the load rising through the sweep so that the later points are the
+disadvantaged ones. A million shares nothing; 65,536 shares a token's
+attention and not its gate; 32,768 shares both; the two below it also admit
+the residual joins and buy nothing more. **So the joins are written as
+shares and run on the submitting task at every width this repository has a
+model of** -- 2,048 elements against a bound of 32,768 -- and what would
+change that is a wider model, which is the bound's business rather than the
+call site's.
+
+**The rotation and the cache write were left alone, measured.** A profile
+puts `Apply_Rotary` at 0.037 ms a token, which is what one wake and one
+barrier cost, so there is nothing in it either way.
+
+**Packing the activation on the pool was built and refused.** Before every
+product the vector it multiplies is rounded to a byte an element, and that
+is 0.33 ms of a token on the submitting task -- the largest single thing left
+after the gate. It is already a share when there is enough of it, and the
+bound that decides is a count of blocks; dropping that bound from 256 blocks
+to 64 and to 32 reads 65.8 and 65.9 tokens a second against 66.3. **A
+generated token packs 64 blocks and posting them costs more than doing
+them**, which is what the bound was put there to say and now says with a
+number.
+
+**And a tagged type declared inside the layer loop costs 2.3 microseconds a
+layer to elaborate.** The share that attention runs on was declared where it
+is used, which is inside a loop that runs twenty-two times a token. Three
+more empty ones in the same block measured **one per cent of the token**, so
+one is about a third of that; the share is declared once for the whole call
+now and carries what changes per layer -- the cache offsets, the window's
+first position, the sink -- as fields. This is the second time in this file
+that something with no arithmetic in it has been worth a per cent, and both
+times a profile said nothing and a controlled comparison said it.
+
+**One thing that measured nothing is kept anyway.** `RMS_Norm` zeroed its
+whole target and then wrote every element of it, which is a pass across the
+activation for nothing, forty-four times a token. Removing it reads inside
+the spread. It is gone because it is work for nothing, not because it was
+worth anything.
+
+**What the round is worth, alternated three rounds against three, 128 tokens
+generated:**
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_0 in panels | 65.12, 65.13, 65.28 t/s | 66.11, 66.13, 66.46 t/s | 1.015 |
+| Q4_K_M in panels | 53.46, 54.06, 54.14 | 54.13, 54.67, 54.87 | 1.011 |
+| Q8_0 | 38.90, 39.02, 39.19 | 39.35, 39.43, 39.45 | 1.008 |
+| the 1419-token prompt, Q8_0 | 4.504, 4.539, 4.592 s | 4.575, 4.566, 4.561 s | a wash |
+
+**And what is left is one loop, in a package that may not reach a pool.**
+The largest single item on the submitting task is now the greedy selection:
+32,000 iterations reading two boolean arrays and calling one function that is
+not inlined, at about thirty cycles a token identifier, which is **0.26 ms of
+a 15 ms token**. It is element-wise and would divide perfectly. It is in
+`Model_Runner.Sampling`, which decides what a model says and has no business
+knowing what a host has; giving it a pool is a seam rather than an
+optimization, and it is not in this change.
 
 ### The block-exponent format, the last one -- and two arrays at one address
 
@@ -11132,9 +11217,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.344 s | 29 ms a token |
+| TinyLlama-1.1B at eight bits | 0.342 s | 29 ms a token |
 | the same model at two bits | 1.320 s | 110 ms a token |
-| the first, drafted by the second | 2.879 s | 24 proposed, 7 accepted |
+| the first, drafted by the second | 2.975 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking

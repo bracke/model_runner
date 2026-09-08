@@ -288,22 +288,24 @@ package body Model_Runner.Backend.CPU is
    --  rather than reasoned: see `### The jobs that were not worth waking
    --  anyone for` in the README.
    --
-   --  IT WAS A MILLION AND IT IS A SIXTEENTH OF THAT, because what a wake
-   --  costs was measured rather than assumed. A worker that finds its job
-   --  by spinning sees the ticket 0.7 microseconds after it is raised --
-   --  timed inside the worker, against the stamp the poster left -- and
+   --  IT WAS A MILLION AND IT IS A THIRTY-SECOND OF THAT, because what a
+   --  wake costs was measured rather than assumed. A worker that finds its
+   --  job by spinning sees the ticket 0.7 microseconds after it is raised
+   --  -- timed inside the worker, against the stamp the poster left -- and
    --  the barrier at the other end is about a microsecond more. The old
    --  bound was written when a wake went through a protected entry and
    --  cost tens of microseconds, and it kept a token's attention on the
    --  submitting task while four workers watched.
    --
-   --  What the new bound admits is exactly that: a generated token's
-   --  attention, which is heads times positions times the head, and which
-   --  passes sixty-five thousand at a context of thirty-two. The
-   --  normalizations and the joins are still below it and still run here,
-   --  because a sweep at sixteen thousand and at four measured no better
-   --  than this and cost more processor.
-   Inline_Floor : constant Element_Count := 65_536;
+   --  What the bound admits is a generated token's attention -- heads
+   --  times positions times the head, which passes this at a context of
+   --  sixteen -- and its gated middle, which is an exponential and a
+   --  multiply over the wide half of the feed-forward. Swept on the four
+   --  and eight-bit models at a million, 65,536, 32,768, 8,192 and 2,048,
+   --  and this is where it stops paying: the two smaller bounds admit the
+   --  residual joins as well and measure no better, and the two larger
+   --  ones leave the gated middle here and measure worse.
+   Inline_Floor : constant Element_Count := 32_768;
 
    procedure Partition
      (Rows    : Element_Count;

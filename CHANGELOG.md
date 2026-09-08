@@ -7,6 +7,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The element-wise work between a token's products goes to the pool.** The
+  entry above leaves a generated token 91 per cent inside a product, 6.1 per
+  cent between one and the next and 2.2 per cent preparing one; this is about
+  the 6.1. What is between two products is either element-wise, and can be
+  cut into ranges exactly, or it is a reduction and cannot: the gated middle
+  and the residual add are the first, a normalization -- which reads the sum
+  of the whole vector before it writes any of it -- is the second, and it
+  stays where it was.
+
+  The gated middle is the piece that pays. It is the wide half of the
+  feed-forward and each of its elements is an exponential and a multiply,
+  which `tests benchmark` prices at 2.13 ns against 0.26 for a quantized row
+  product, so it carries a weight of eight when it asks the pool whether it
+  is worth waking. `Inline_Floor` was swept again -- a million, 65,536,
+  32,768, 8,192, 2,048 -- and sits at 32,768, which is where it stops paying.
+
+  **Three things were built and refused, with figures.** Packing the
+  activation on the pool: 65.8 and 65.9 tokens a second against 66.3, because
+  a generated token packs 64 blocks and posting them costs more than doing
+  them. Sharing the residual joins: written as shares, and below the bound at
+  every width this repository has a model of. Sharing the rotation: it is
+  0.037 ms a token, which is what one wake and one barrier cost.
+
+  **And a tagged type declared inside the layer loop cost 2.3 microseconds a
+  layer to elaborate** -- three more empty ones in the same block measured one
+  per cent of the token -- so attention's share is declared once for the whole
+  call and carries what changes per layer as fields.
+
+  Alternated three rounds against three, 128 tokens generated: Q4_0 in panels
+  1.015 times, Q4_K_M 1.011, Q8_0 1.008, and the 1419-token prompt a wash.
+
 - **A generated token spends eleven per cent of itself on one task while
   four workers watch, and three changes take two to three per cent of it
   back.** Every job the pool posts was timed from the outside: 89.2 per cent

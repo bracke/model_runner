@@ -1090,12 +1090,16 @@ package body Model_Runner.Kernels is
       Sum   : Wide_Real := 0.0;
       Gain  : Wide_Real;
    begin
-      Target := [others => 0.0];
-
+      --  Zeroed only where the shapes do not agree, which is the one path
+      --  that leaves without writing every element. It used to be zeroed
+      --  first and then written over, which is a whole pass across the
+      --  activation for nothing -- a generated token normalizes twice a
+      --  layer and paid for it forty-four times.
       if Source'Length /= Weight'Length
         or else Source'Length /= Target'Length
         or else Source'Length = 0
       then
+         Target := [others => 0.0];
          return;
       end if;
 

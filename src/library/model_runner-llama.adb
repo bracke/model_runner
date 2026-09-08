@@ -6225,6 +6225,216 @@ package body Model_Runner.Llama is
           and then L.Post_Attention_Norm = null
           and then L.Post_Feed_Norm = null);
 
+      --  A slice of a token's work, for the pool.
+      --
+      --  A generated token's products run on five tasks and what lies
+      --  between them ran on one -- six per cent of the token, with four
+      --  workers watching, which `### The element-wise work of a layer, on
+      --  the pool` measures. The batched path has shared these out since it
+      --  was written -- Norm_Share, Join_Share and Feed_Share below -- and
+      --  cuts them by position, which is what a batch has more than one of.
+      --  A token has one position, so these cut by element instead.
+      --
+      --  CUTTING BY ELEMENT IS EXACT WHERE THE WORK IS ELEMENT-WISE AND
+      --  WRONG WHERE IT IS NOT, which is the whole of what decides what is
+      --  here. The gated middle and the residual add are element-wise: the
+      --  answer at an index reads that index and nothing else, so a share
+      --  computes what the whole computed, element for element, and no
+      --  digest moves. A normalization is not -- it reads the sum of the
+      --  whole vector before it writes any of it -- and it stays on the
+      --  submitting task rather than becoming two dispatches around a
+      --  barrier for two microseconds of arithmetic.
+      --
+      --  These are declared here rather than where they are used, which is
+      --  inside the loop over the layers. A tagged type declared in a loop
+      --  is elaborated every time round it, and that measured 2.3
+      --  microseconds a layer -- three more empty ones in the same block
+      --  cost one per cent of the token. What changes per layer travels in
+      --  the record instead.
+
+      --  What an element of the gated middle costs, against an element of
+      --  the blend the inline bound was chosen on. It is an exponential
+      --  and a multiply where that is a multiply and an add, and
+      --  `tests benchmark` reads 2.13 ns an element for the activation
+      --  against 0.26 for a quantized row product. Named rather than folded
+      --  into the bound so that the bound stays one number for every
+      --  caller and each caller says what its own elements cost.
+      Gate_Weight : constant Element_Count := 8;
+
+      --  A share of the heads.
+      --
+      --  A head is independent of every other head: it reads its own slice
+      --  of the query, writes its own row of scores and its own slice of
+      --  the blend, so the only thing that had to change before this was
+      --  possible is that the scores are a row a head rather than one row
+      --  shared.
+      type Blend_Share is limited new Workers_CPU.Task_Item with
+         record
+            Base      : Element_Count := 0;
+            V_Base    : Element_Count := 0;
+            Rows_Base : Element_Count := 0;
+            Earliest  : Element_Count := 0;
+            Sinks     : T.Real_Array_Access := null;
+            Ok        : Boolean := True;
+         end record;
+
+      overriding procedure Run
+        (Share : in out Blend_Share;
+         From  : Element_Count;
+         To    : Element_Count);
+
+      overriding procedure Run
+        (Share : in out Blend_Share;
+         From  : Element_Count;
+         To    : Element_Count)
+      is
+         Fine : Boolean := True;
+      begin
+         if From > To then
+            return;
+         end if;
+
+         if Item.Held = Eighth then
+            Blend_Eighth
+              (Item.Query.all, Item.Byte_Keys.all,
+               Item.Byte_Values.all,
+               Item.Key_Scales.all, Item.Value_Scales.all,
+               Share.Base, Share.V_Base, Share.Rows_Base, KV_Width,
+               V_Width, Heads, Head_Size, Value_Size,
+               Element_Count (Settings.Group_Size),
+               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Reserved, Share.Sinks,
+               From, To, Item.Score_Room,
+               Item.Scores.all, Item.Attention.all, Fine);
+         elsif Item.Held = Exact then
+            Blend_Exact
+              (Item.Query.all, Item.Keys.all, Item.Values.all,
+               Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
+               Value_Size, Element_Count (Settings.Group_Size),
+               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Reserved, Share.Sinks,
+               From, To, Item.Score_Room,
+               Item.Scores.all, Item.Attention.all, Fine);
+         else
+            Blend_Halved
+              (Item.Query.all, Item.Half_Keys.all,
+               Item.Half_Values.all,
+               Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
+               Value_Size, Element_Count (Settings.Group_Size),
+               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Reserved, Share.Sinks,
+               From, To, Item.Score_Room,
+               Item.Scores.all, Item.Attention.all, Fine);
+         end if;
+
+         --  Only ever set false, by any share that could not finish, and
+         --  read by nobody until the pool has collected every worker --
+         --  which is a rendezvous through a protected object and orders
+         --  these writes against that read.
+         if not Fine then
+            Share.Ok := False;
+         end if;
+      end Run;
+
+      type Gated_Share is limited new Workers_CPU.Task_Item with record
+         Gate : T.Real_Array_Access;
+         Up   : T.Real_Array_Access;
+      end record;
+
+      overriding procedure Run
+        (Share : in out Gated_Share; First : Element_Count;
+         Last  : Element_Count);
+
+      overriding procedure Run
+        (Share : in out Gated_Share; First : Element_Count;
+         Last  : Element_Count) is
+      begin
+         if First > Last then
+            return;
+         end if;
+
+         Gate_Activation
+           (Source, Share.Gate.all (Share.Gate.all'First + First
+                                    .. Share.Gate.all'First + Last));
+
+         if Share.Up /= null then
+            K.Multiply
+              (Share.Gate.all (Share.Gate.all'First + First
+                               .. Share.Gate.all'First + Last),
+               Share.Up.all (Share.Up.all'First + First
+                             .. Share.Up.all'First + Last));
+         end if;
+      end Run;
+
+      type Added_Share is limited new Workers_CPU.Task_Item with record
+         Into : T.Real_Array_Access;
+         Adds : T.Real_Array_Access;
+      end record;
+
+      overriding procedure Run
+        (Share : in out Added_Share; First : Element_Count;
+         Last  : Element_Count);
+
+      overriding procedure Run
+        (Share : in out Added_Share; First : Element_Count;
+         Last  : Element_Count) is
+      begin
+         if First > Last then
+            return;
+         end if;
+
+         K.Add
+           (Share.Into.all (Share.Into.all'First + First
+                            .. Share.Into.all'First + Last),
+            Share.Adds.all (Share.Adds.all'First + First
+                            .. Share.Adds.all'First + Last));
+      end Run;
+
+      --  The residual join, shared out where it is only an addition.
+      --
+      --  Which is where the layer has no normalization on the way out of
+      --  the sublayer: an architecture that has one reads the sum of the
+      --  whole vector, so the join stops being element-wise and the whole
+      --  of it stays here. Every llama, qwen, phi and mistral takes the
+      --  first arm; gemma2 and gemma3 take the second.
+      procedure Joined
+        (Produced : T.Real_Array_Access;
+         Gain     : T.Real_Array_Access;
+         Bias     : T.Real_Array_Access;
+         Sent     : out E.Error_Info);
+
+      procedure Joined
+        (Produced : T.Real_Array_Access;
+         Gain     : T.Real_Array_Access;
+         Bias     : T.Real_Array_Access;
+         Sent     : out E.Error_Info) is
+      begin
+         Sent := E.Success;
+
+         --  And where the two are not the same length, which nothing here
+         --  produces and which a share cut by index could not answer: the
+         --  whole of it goes through the procedure that checks its own
+         --  shapes, exactly as it did before there were shares.
+         if Gain /= null
+           or else Produced.all'Length /= Item.Activation.all'Length
+         then
+            Join_Residual
+              (Source, Produced.all, Item.Activation.all, Gain, Bias,
+               Item.Post_Room);
+            return;
+         end if;
+
+         declare
+            Share : aliased Added_Share :=
+              (Into => Item.Activation, Adds => Produced);
+         begin
+            Workers_CPU.Dispatch_Shares
+              (Item.Team, Item.Activation.all'Length,
+               Share'Unchecked_Access, Sent,
+               Cost => Item.Activation.all'Length);
+         end;
+      end Joined;
+
       --  Where the last phase boundary was, for a caller that asked for a
       --  budget. The batched path keeps one of these too, and the phases
       --  mean the same thing in both -- which is the point: a token and a
@@ -6593,82 +6803,13 @@ package body Model_Runner.Llama is
                  Earliest (Settings, Reserved, Natural (Index));
                Usable : Boolean;
 
-               --  A share of the heads, for the worker pool.
-               --
-               --  Attention ran on the calling task while every worker sat
-               --  idle, and the budget under "Where a token's time goes"
-               --  says it is about a third of a generated token now that
-               --  the products have got two and a half times faster. A head
-               --  is independent of every other head: it reads its own
-               --  slice of the query, writes its own row of scores and its
-               --  own slice of the blend, so the only thing that had to
-               --  change before this was possible is that the scores are a
-               --  row a head rather than one row shared.
-               type Blend_Share is limited new Workers_CPU.Task_Item with
-                  record
-                     Ok : Boolean := True;
-                  end record;
-
-               overriding procedure Run
-                 (Share : in out Blend_Share;
-                  From  : Element_Count;
-                  To    : Element_Count);
-
-               overriding procedure Run
-                 (Share : in out Blend_Share;
-                  From  : Element_Count;
-                  To    : Element_Count)
-               is
-                  Fine : Boolean := True;
-               begin
-                  if From > To then
-                     return;
-                  end if;
-
-                  if Item.Held = Eighth then
-                     Blend_Eighth
-                       (Item.Query.all, Item.Byte_Keys.all,
-                        Item.Byte_Values.all,
-                        Item.Key_Scales.all, Item.Value_Scales.all,
-                        Base, V_Base, Rows_Base, KV_Width, V_Width, Heads,
-                        Head_Size, Value_Size,
-                        Element_Count (Settings.Group_Size),
-                        First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved, Current.Sinks,
-                        From, To, Item.Score_Room,
-                        Item.Scores.all, Item.Attention.all, Fine);
-                  elsif Item.Held = Exact then
-                     Blend_Exact
-                       (Item.Query.all, Item.Keys.all, Item.Values.all,
-                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                        Value_Size, Element_Count (Settings.Group_Size),
-                        First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved, Current.Sinks,
-                        From, To, Item.Score_Room,
-                        Item.Scores.all, Item.Attention.all, Fine);
-                  else
-                     Blend_Halved
-                       (Item.Query.all, Item.Half_Keys.all,
-                        Item.Half_Values.all,
-                        Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-                        Value_Size, Element_Count (Settings.Group_Size),
-                        First, Reserved, Scale, Settings.Attention_Cap,
-                        Settings.Max_Bias, Reserved, Current.Sinks,
-                        From, To, Item.Score_Room,
-                        Item.Scores.all, Item.Attention.all, Fine);
-                  end if;
-
-                  --  Only ever set false, by any share that could not
-                  --  finish, and read by nobody until the pool has
-                  --  collected every worker -- which is a rendezvous
-                  --  through a protected object and orders these writes
-                  --  against that read.
-                  if not Fine then
-                     Share.Ok := False;
-                  end if;
-               end Run;
-
-               Share  : aliased Blend_Share;
+               Share  : aliased Blend_Share :=
+                 (Base     => Base,
+                  V_Base   => V_Base,
+                  Rows_Base => Rows_Base,
+                  Earliest => First,
+                  Sinks    => Current.Sinks,
+                  Ok       => True);
                Shared : E.Error_Info;
             begin
                if Item.Held /= Exact or else not Resident then
@@ -6777,10 +6918,10 @@ package body Model_Runner.Llama is
                if Current.Out_Bias /= null then
                   K.Add (Item.Normalized.all, Current.Out_Bias.all);
                end if;
-               Join_Residual
-                 (Source, Item.Normalized.all, Item.Activation.all,
-                  Current.Post_Attention_Norm,
-                  Current.Post_Attention_Norm_Bias, Item.Post_Room);
+               Joined
+                 (Item.Normalized, Current.Post_Attention_Norm,
+                  Current.Post_Attention_Norm_Bias, Status);
+               exit when E.Is_Error (Status);
 
                Charge (Item, Joining, Mark);
 
@@ -6803,10 +6944,10 @@ package body Model_Runner.Llama is
                   Mixture
                     (Item, Current, Item.Normalized, Item.Mixture, Status);
                   exit when E.Is_Error (Status);
-                  Join_Residual
-                    (Source, Item.Mixture.all, Item.Activation.all,
-                     Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
-                     Item.Post_Room);
+                  Joined
+                    (Item.Mixture, Current.Post_Feed_Norm,
+                     Current.Post_Feed_Norm_Bias, Status);
+                  exit when E.Is_Error (Status);
                else
                   --  Gated or not, the two arrangements differ only in how the
                   --  buffer handed to the projection down is filled: one fills
@@ -6854,8 +6995,29 @@ package body Model_Runner.Llama is
                            [Item.Gate, Item.Up], Status);
                         exit when E.Is_Error (Status);
 
-                        Gate_Activation (Source, Item.Gate.all);
-                        K.Multiply (Item.Gate.all, Item.Up.all);
+                        if Item.Gate.all'Length /= Item.Up.all'Length then
+                           --  Not a shape anything here produces, and one
+                           --  a share cut by index could not answer. The
+                           --  kernels check their own shapes.
+                           Gate_Activation (Source, Item.Gate.all);
+                           K.Multiply (Item.Gate.all, Item.Up.all);
+                        else
+                           declare
+                              Share  : aliased Gated_Share :=
+                                (Gate => Item.Gate, Up => Item.Up);
+                              Shared : E.Error_Info;
+                           begin
+                              Workers_CPU.Dispatch_Shares
+                                (Item.Team, Item.Gate.all'Length,
+                                 Share'Unchecked_Access, Shared,
+                                 Cost => Item.Gate.all'Length * Gate_Weight);
+
+                              if E.Is_Error (Shared) then
+                                 Status := Shared;
+                                 return;
+                              end if;
+                           end;
+                        end if;
                      end if;
                   end if;
 
@@ -6871,10 +7033,10 @@ package body Model_Runner.Llama is
 
                   Charge (Item, Feeding, Mark);
 
-                  Join_Residual
-                    (Source, Item.Normalized.all, Item.Activation.all,
-                     Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
-                     Item.Post_Room);
+                  Joined
+                    (Item.Normalized, Current.Post_Feed_Norm,
+                     Current.Post_Feed_Norm_Bias, Status);
+                  exit when E.Is_Error (Status);
                end if;
 
             end if;
