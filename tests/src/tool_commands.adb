@@ -22,6 +22,7 @@ package body Tool_Commands is
    Name_Likeness       : aliased constant String := "fixture-likeness";
    Name_Slow           : aliased constant String := "slow";
    Name_Device_Bench   : aliased constant String := "device-bench";
+   Name_Perplexity     : aliased constant String := "perplexity";
 
    Nothing : aliased constant String := "";
 
@@ -50,6 +51,9 @@ package body Tool_Commands is
      " --model --system --prompt --assistant --calls --tool --tools"
      & " --template --generation-prompt ";
    Opts_Likeness  : aliased constant String := " --model --names ";
+   Opts_Perplex   : aliased constant String :=
+     " --model --against --text --chunk --chunks --threads --backend"
+     & " --anyway --wait ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
@@ -134,8 +138,14 @@ package body Tool_Commands is
      "write the grammar a JSON schema becomes";
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
+   Says_Perplexity : aliased constant String :=
+     "what a quantization costs the model's predictions";
 
-   Held : constant array (1 .. 20) of Command :=
+   Takes_Perplexity : aliased constant String :=
+     "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"
+     & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]";
+
+   Held : constant array (1 .. 21) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -148,6 +158,8 @@ package body Tool_Commands is
        Opts_Fuzz'Access),
       (Name_Speed'Access, Takes_Speed'Access, Says_Speed'Access,
        Opts_Speed'Access),
+      (Name_Perplexity'Access, Takes_Perplexity'Access,
+       Says_Perplexity'Access, Opts_Perplex'Access),
       (Name_Benchmark'Access, Takes_Benchmark'Access, Says_Benchmark'Access,
        Opts_Benchmark'Access),
       (Name_External'Access, Takes_External'Access, Says_External'Access,

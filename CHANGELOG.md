@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A batch's every-position logits were projected one position at a time.**
+  `Evaluate_Batch` fills a caller's `Every` by pushing each position through
+  the output matrix separately -- reading all sixty-five megabytes of it per
+  position on a small model -- where the round path a few lines below had
+  always batched the same work. It is one matrix product over the batch now.
+
+  The perplexity tool, which asks for every position, went from **281
+  seconds to 9.9** for the same measurement (with a worker pool it was also
+  missing). Drafting asks for them too, and every drafted figure moved:
+  the lookup's quoting run **1.51x to 1.63x** on the processor and **1.63x
+  to 1.78x** on the device, and the cost of checking five drafted positions
+  **98 ms to 57**. On the device a sixteen-token draft is now nine per cent
+  better than a four-token one, where the curve used to be flat.
+
 - **A repetition penalty made every drafted run produce different text, and
   had since drafting was written.** A penalty is computed from the tokens
   said so far; a round samples several positions before it emits any of
@@ -56,6 +70,34 @@ Keep a Changelog and the project uses semantic versioning.
   drop. Rows move only where a layer straddles the hole.
 
 ### Added
+
+- **`tests perplexity`: what a quantization costs the model's predictions.**
+  Every format here had a measured cost to run and an asserted cost to be
+  right. This measures the second: perplexity over a corpus, and against an
+  `--against` model of the same weights in another format, the
+  Kullback-Leibler divergence from its distributions. It is llama.cpp's
+  `llama-perplexity`.
+
+  Twelve formats of TinyLlama-1.1B-Chat over 1,020 scored positions, each
+  against the eight-bit file, in nats: q5_k_m 0.0102, q5_1 0.0130, q5_0
+  0.0135, iq4_nl 0.0353, iq4_xs 0.0364, q4_k_m 0.0444, q4_0 0.0519, q4_1
+  0.0601, q3_k 0.0912, **mxfp4 0.1204**, q2_k 0.2894 -- and q8_0 against
+  itself at exactly 0.000000, which is the instrument reading nothing when
+  there is nothing to read.
+
+  **MXFP4 is the finding**: a four-bit format sitting between q3_k and q2_k,
+  twice q3_k's divergence and a different top token on a fifth of positions,
+  because its scale is one byte holding a power of two where every other
+  four-bit format here carries a half-precision one. And the divergence
+  column is the one to read: q4_0 has a lower perplexity than q4_1 and
+  q4_k_m and a higher divergence than both.
+
+  The baseline is q8_0 rather than f16, since no half-precision file of this
+  model is here, and the corpus is a fixed 15,440-token fixture of this
+  repository's own prose -- so the numbers compare with each other and with
+  nothing measured elsewhere. The first corpus tried,
+  `speed-prompt-long.txt`, turned out to be nine distinct lines repeated ten
+  times and scored 1.27, the model reciting rather than predicting.
 
 - **A served caller keeps what its prompt shares with the one its seat last
   held.** Until now a seat was reset between callers and the next one read

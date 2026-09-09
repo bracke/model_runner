@@ -54,6 +54,7 @@ with Ada.Text_IO;
 with Expectations;
 with External_Model;
 with Host_Load;
+with Perplexity_Run;
 with Speed_Run;
 with Tiny_Model;
 
@@ -9706,6 +9707,107 @@ package body Tests.CLI_Cases is
    --  IS ABOVE IT -- which is what a twentieth of the machine buys on every
    --  host with twenty processors or fewer, and this is where that stays
    --  true.
+   --  The two numbers a perplexity run is made of, on rows whose answers
+   --  are known without a model.
+   --
+   --  A perplexity is an exponential of a mean of logarithms and every one
+   --  of those three is a way to be wrong quietly: a sign, a base, a
+   --  normalization. What makes this checkable at all is that a uniform
+   --  distribution has a perplexity of exactly the vocabulary -- the model
+   --  choosing between all of them equally -- and that a distribution
+   --  diverges from itself by nothing.
+   procedure The_Perplexity_Numbers_Are_What_They_Claim
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package P renames Perplexity_Run;
+
+      use type Model_Runner.Numerics.Element_Count;
+
+      Width : constant Model_Runner.Numerics.Element_Count := 64;
+
+      Flat  : constant Model_Runner.Numerics.Real_Array (0 .. Width - 1) :=
+        [others => 0.0];
+      Tilted : Model_Runner.Numerics.Real_Array (0 .. Width - 1) :=
+        [others => 0.0];
+      Raised : constant Model_Runner.Numerics.Real_Array (0 .. Width - 1) :=
+        [others => 7.5];
+
+      Wanted : constant Long_Float :=
+        -Long_Float (Model_Runner.Numerics.Log
+                       (Model_Runner.Numerics.Wide_Real (Width)));
+      Got    : Long_Float;
+   begin
+      --  A flat row gives every token one chance in sixty-four, so the
+      --  logarithm of that is what any of them is worth.
+      Got := P.Log_Probability (Flat, 0);
+      Assert (abs (Got - Wanted) < 1.0E-9,
+              "a flat row reported" & Long_Float'Image (Got)
+              & " where" & Long_Float'Image (Wanted) & " is what a chance "
+              & "in sixty-four is worth");
+
+      --  And the same for every token in it, which is what "flat" means.
+      Assert (abs (P.Log_Probability (Flat, Width - 1) - Wanted) < 1.0E-9,
+              "a flat row gave its last token a different chance from its "
+              & "first");
+
+      --  A softmax is unchanged by adding a constant to every logit, and a
+      --  reader that subtracts the maximum for stability has to keep that
+      --  property rather than merely survive it.
+      Assert (abs (P.Log_Probability (Raised, 0) - Wanted) < 1.0E-9,
+              "raising every logit by the same amount changed the answer, "
+              & "so the normalization is not a softmax");
+
+      --  A row that favours one token gives it more than a flat row does
+      --  and the rest less, which is the direction the whole measurement
+      --  depends on.
+      Tilted (3) := 10.0;
+      Assert (P.Log_Probability (Tilted, 3) > Wanted,
+              "a favoured token was not given more than an even chance");
+      Assert (P.Log_Probability (Tilted, 4) < Wanted,
+              "a token beside a favoured one was not given less");
+
+      --  Nothing diverges from itself.
+      Assert (P.Divergence (Flat, Flat) = 0.0,
+              "a distribution diverged from itself by"
+              & Long_Float'Image (P.Divergence (Flat, Flat)));
+      Assert (P.Divergence (Tilted, Tilted) = 0.0,
+              "a tilted distribution diverged from itself");
+
+      --  And two that differ diverge by something, in both directions,
+      --  never below zero.
+      Assert (P.Divergence (Flat, Tilted) > 0.0,
+              "a flat row and a tilted one did not diverge");
+      Assert (P.Divergence (Tilted, Flat) > 0.0,
+              "the divergence is not positive the other way round");
+
+      --  A row that is nearly certain diverges from a flat one by nearly
+      --  the whole of what a flat one is worth: it has thrown away all the
+      --  uncertainty there was.
+      declare
+         Sharp : Model_Runner.Numerics.Real_Array (0 .. Width - 1) :=
+           [others => 0.0];
+      begin
+         Sharp (9) := 40.0;
+         Assert (abs (P.Divergence (Sharp, Flat)
+                      + Wanted) < 1.0E-6,
+                 "a nearly certain row did not diverge from a flat one by "
+                 & "the flat one's own entropy");
+      end;
+
+      --  Two rows of different widths are not two views of one question,
+      --  and are refused rather than compared.
+      declare
+         Narrow : constant Model_Runner.Numerics.Real_Array (0 .. 3) :=
+           [others => 0.0];
+      begin
+         Assert (P.Divergence (Flat, Narrow) < 0.0,
+                 "rows of different widths were compared rather than "
+                 & "refused");
+      end;
+   end The_Perplexity_Numbers_Are_What_They_Claim;
+
    procedure The_Bound_Is_Below_One_Busy_Processor
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11185,6 +11287,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, A_Busy_Machine_Cannot_Publish_A_Figure'Access,
          "a busy machine cannot publish a figure");
+      Register_Routine
+        (T, The_Perplexity_Numbers_Are_What_They_Claim'Access,
+         "a perplexity of a flat row is the vocabulary, and nothing "
+         & "diverges from itself");
       Register_Routine
         (T, The_Bound_Is_Below_One_Busy_Processor'Access,
          "the load a figure is gated on is below one busy processor");

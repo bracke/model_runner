@@ -9504,32 +9504,68 @@ package body Model_Runner.Llama is
         and then Every.all'Length
                  >= Count * Element_Count (Settings.Vocabulary)
       then
-         for Which in 0 .. Count - 1 loop
-            declare
-               Origin : constant Element_Count := Slot (Which, Width);
-               Into   : constant Element_Count :=
-                 Which * Element_Count (Settings.Vocabulary);
-            begin
-               Final_State
-                 (Source, Acts.all (Origin .. Origin + Width - 1),
-                  Item.Normalized.all);
+         --  ONE PROJECTION OVER EVERY ROW, not a projection a row. This
+         --  read the output matrix once for each position asked about --
+         --  sixty-five megabytes of it a position on a small model -- where
+         --  the round path a few lines above had always batched the same
+         --  work. A caller asking for every position's distribution is
+         --  asking for the largest matrix in the model to be multiplied by
+         --  a matrix and not by a hundred vectors in turn.
+         --
+         --  What it was costing: 0.45 seconds a position, against 2.6
+         --  milliseconds for a position of an ordinary prompt.
+         declare
+            Vocabulary  : constant Element_Count :=
+              Element_Count (Settings.Vocabulary);
+            Wide_Logits : T.Real_Array_Access := null;
+         begin
+            T.Allocate (Count * Vocabulary, Wide_Logits);
 
-               Product
-                 (Item, Source.Output, Item.Normalized, Item.Logit_Row,
-                  Status);
-               if E.Is_Error (Status) then
-                  Release;
-                  Item.Current := Failed;
-                  return;
-               end if;
+            if Wide_Logits = null then
+               Release;
+               Status := E.Make (E.Memory_Allocation_Failed);
+               E.Add_Text
+                 (Status, "category", "every_logits", E.Param_Identifier);
+               return;
+            end if;
 
-               Finish_Logits (Source, Item.Logit_Row.all);
-               Every.all (Every.all'First + Into
-                          .. Every.all'First + Into
-                             + Element_Count (Settings.Vocabulary) - 1) :=
-                 Item.Logit_Row.all;
-            end;
-         end loop;
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Origin : constant Element_Count := Slot (Which, Width);
+                  Into   : constant Element_Count := Which * Width;
+               begin
+                  Final_State
+                    (Source, Acts.all (Origin .. Origin + Width - 1),
+                     Norm.all (Into .. Into + Width - 1));
+               end;
+            end loop;
+
+            Product_Batch
+              (Item, Source.Output, Norm, Count, Wide_Logits, Status);
+
+            if E.Is_Error (Status) then
+               T.Free (Wide_Logits);
+               Release;
+               Item.Current := Failed;
+               return;
+            end if;
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Into : constant Element_Count := Which * Vocabulary;
+               begin
+                  Finish_Logits
+                    (Source,
+                     Wide_Logits.all (Into .. Into + Vocabulary - 1));
+
+                  Every.all (Every.all'First + Into
+                             .. Every.all'First + Into + Vocabulary - 1) :=
+                    Wide_Logits.all (Into .. Into + Vocabulary - 1);
+               end;
+            end loop;
+
+            T.Free (Wide_Logits);
+         end;
       end if;
 
       --  The last position's distribution, for the caller who is reading a

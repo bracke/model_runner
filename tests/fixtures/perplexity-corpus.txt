@@ -1,0 +1,950 @@
+
+Local GGUF language-model execution in Ada 2022.
+
+`model_runner` loads a local GGUF model file, validates its container strictly,
+prepares a bounded Llama-compatible decoder-only execution plan, tokenizes
+prompts, evaluates the model on the processor or on a compute device, maintains
+an explicit KV cache, samples output tokens, decodes them incrementally and
+streams the generated text.
+
+Inference is local only: no network access, no daemon, no Ollama, no llama.cpp,
+no delegation to an external model runtime.
+
+The engine and the command-line program work end to end. A list of what is
+**not** implemented is at the bottom of this file; nothing here claims a
+capability it does not have.
+
+The model path is explicit. No registry, short name, tag or manifest is
+resolved.
+
+Run `model_runner help run` for the full option list. Options are validated
+with the same typed path as environment variables, repeated options are a usage
+error, and `--` ends option processing.
+
+Reading a prompt costs what it costs: on this machine prefill runs at about
+27 tokens a second, so a thousand-token document is more than half a minute
+before the model says anything. Its cache is tens of megabytes. Saving that
+and handing it back is the difference between waiting for the model to
+re-read a document every time and not.
+
+Only the committed positions are written, not the capacity. What is loaded
+fills the cache before the prompt is looked at, and the generation keeps
+whatever of it the new prompt agrees with and re-reads only the rest -- so a
+saved context is worth having when the next prompt extends it, and costs
+nothing but a refusal to read the file when it does not.
+
+The file names the model it belongs to, the shape of the cache, the context
+capacity and the precision it is held in, and any mismatch is refused rather
+than read: one model's attention is not another's. The identifier is the
+model's validated shape together with the size of its tensor data, a sample
+of its bytes, and a digest of any adapter merged into it -- that identifies a
+model file and is not meant to verify one.
+
+The adapter belongs in that identifier because merging one replaces the
+weights: a context computed before a merge describes attention the merged
+model never had, and nothing about the text that came back would look
+wrong. The two were indistinguishable until a test asked, and the test only
+asked usefully once it was written against a quantized model -- with
+binary32 weights the merge writes into the file's own bytes, which the
+identifier already samples, so it appeared to be handled when it was not.
+
+A saved context is untrusted input, and every field of it is range checked.
+What cannot be checked is whether the contents mean anything: bytes that
+match are read, and what they say the model was thinking is what the model
+will think. Loading a file is trusting whoever wrote it with the
+conversation.
+
+`--lora` is repeatable and the adapters stack, in the order given: a merge
+adds a difference to the weights, so a second one lands on top of the first
+rather than replacing it. `--lora-scale` pairs with them positionally -- the
+Nth scale belongs to the Nth adapter, and an adapter named without one is the
+adapter as it was trained.
+
+A scale of minus one subtracts, which is how an adapter comes off again:
+naming the same file twice at plus one and minus one leaves the weights where
+they started, to within what binary32 rounding does to a number added and
+taken away. Both claims are held by a test that measures how far the logits
+move -- a second merge moves them about as far again as the first, and plus
+one followed by minus one puts them back within a hundredth of that
+distance.
+
+`--lora PATH` merges a low-rank adapter into the weights before anything is
+generated. An adapter says what a fine-tune changed, as a pair of small
+matrices per weight it touches whose product is the difference; merging adds
+that difference, so evaluation afterwards costs exactly what it cost before
+and the adapter's own storage goes when its file is closed.
+
+Only binary32 weights can be added to, so naming an adapter selects
+`--repack f32` where none was named -- four bytes a weight, the same bargain
+that flag already publishes. `--repack bf16` beside an adapter is a usage
+error rather than a quiet rounding of every merged weight.
+
+**What merging costs.** It is rank times every weight it touches, once at
+load. Measured on this machine: **0.27 ns** an update at rank sixteen, and
+4.4 ns at rank one -- the difference is that a rank-one merge reads and
+writes each weight for a single update where a rank-sixteen merge amortizes
+that over sixteen. TinyLlama-1.1B has about 968 million adaptable weights,
+so a rank-sixteen adapter is 15.5 billion updates: **about four seconds**.
+`tests benchmark` reports both ranks, because reporting only rank one would
+have made a four-second merge look like a minute.
+
+The scale multiplies the difference over and above the adapter's own alpha,
+so `1.0` is the fine-tune as trained and `0` is the model without it.
+Adapters for `attn_q`, `attn_k`, `attn_v`, `attn_output`, `ffn_gate`,
+`ffn_up` and `ffn_down` are merged; a pair naming anything else is refused,
+as is half a pair, because half a difference is not a smaller difference.
+
+`--json-schema TEXT` and `--json-schema-file PATH` take a JSON schema and
+turn it into a grammar before anything is generated, so a caller with a
+schema does not have to hand-write GBNF and then keep the two in step. It
+reads `type`, `properties` with `required`, `items`, `enum` and `const`, and
+refuses every other keyword by name rather than ignoring it -- a keyword
+ignored produces a grammar that allows more than the schema does, which is a
+constraint that quietly is not one.
+
+A property the schema does not require may be absent; one it requires may
+not. A schema that names no `required` list requires everything it names,
+which is not what JSON Schema says -- there, absent means optional -- and is
+the narrow direction this errs in throughout. The first property named must
+be one the schema requires: a first property that may be absent makes the
+comma before the second conditional on it, and expressing that needs an
+alternative for every place the object might start.
+
+Objects come out closed and ordered: exactly the properties named, in the
+order named. JSON leaves member order free and a grammar that allowed every
+order would grow as the factorial of the property count, so what this
+produces is narrower than the schema. Everything it accepts the schema
+accepts, and not the reverse; that is the honest direction for a constraint
+to err in and it is written where a reader will meet it.
+
+`tests schema SCHEMA` prints the grammar a schema becomes, which is how the
+output gets read without running a model.
+
+`--grammar` holds the generated text to a grammar. At each step every token
+whose text cannot continue the grammar is removed from the distribution
+before anything is sampled, so what comes out is text the grammar accepts --
+not text the model was asked nicely to produce.
+
+`--grammar-file` reads it from a file instead; naming both is a usage error.
+The notation is GBNF: rules with `::=`, alternatives with `|`, sequences,
+`"literals"` with the usual escapes, `[a-z]` and `[^a-z]` sets, `( )`
+grouping, `?` `*` `+` and `{n}` `{n,}` `{n,m}` repetition, and `#` comments.
+One rule must be called `root`. Sets and literals match code points, not
+bytes, so `[a-ø]` means what it says whatever the tokenizer does underneath.
+
+Anything outside that notation is refused where it is met, with the position
+in the grammar: there is no construct the parser recognizes and then
+declines, so there is no separate diagnostic for one. Every bound -- rules,
+elements, ranges, nesting, and how many ways the grammar may be in the middle
+of at once -- is a refusal rather than an allocation, because a grammar comes
+from a command line or a file and is therefore untrusted.
+
+The end-of-sequence token is masked until the grammar may end, so a run
+cannot stop half way through what it was told to produce. A token that
+contributes no text at all is masked throughout: it cannot advance a grammar,
+and allowing it would let a run produce it forever while the grammar stayed
+where it was. If a step leaves nothing at all -- a grammar this model's
+vocabulary cannot spell -- the run stops and says so, rather than leaving the
+sampler with an empty distribution and reporting that instead.
+
+In a conversation the grammar applies to each reply, and starts again for
+each: what a grammar describes is an answer, not a whole conversation.
+
+**Tools.** `--tools` offers the model tools, as the JSON a caller already
+holds; `--tools-file` reads them from a file. They reach the model through
+its own chat template, so a model whose template says nothing about tools is
+refused rather than told nothing and asked anyway. What comes back is a
+reply, and what the reply asks for is read out of it and reported on standard
+error, by name, so standard output stays what the model wrote.
+
+Nothing here runs anything. This program starts no process, opens no socket
+and loads no library, so a tool call is text the model wrote and a tool
+result is text you hand back. The loop closes outside this program:
+
+The turns follow the prompt in the order they are written -- `--assistant`,
+`--tool-result`, another reply, another answer -- because which reply an
+answer follows is the shape of the loop. The reply is handed back as it was
+printed and the calls are read out of it here, so what reaches the model is
+the call as that model's template writes one rather than as the model
+happened to spell it. Interactively the same loop is `/tools` to see what is
+on offer and `/tool TEXT` to hand an answer back.
+
+**What sampling costs.** It runs once per token and over as many candidates
+as the model has tokens, which every fixture here has sixteen of. Measured
+over 32,000: **0.062 ms** greedy, and **0.18 ms** with top-k 40, top-p 0.95,
+min-p 0.05 and a repetition penalty. Against about 85 ms for a token of
+TinyLlama-1.1B that is a fifth of a per cent.
+
+It was 2.86 ms -- fifteen times that -- because a top-k of forty was reached
+by sorting all thirty-two thousand candidates. A small top-k is now selected
+rather than sorted: the order candidates are ranked by is total, the logit
+and then the token, so any correct way of taking the first k of it takes the
+same k in the same places. A large top-k is still sorted, because keeping k
+in order as you go costs more per candidate than sorting does once k is big
+enough; where the two cross is a judgement and it is written where it is
+made. Both figures come from `tests benchmark`.
+
+**What it costs.** The filter runs over the whole vocabulary at every step,
+so it is worth a figure rather than an assurance. Measured on a stand-in
+vocabulary of 32,000 short pieces, one token filtered takes **10 ns** where
+the grammar allows one character next and **116 ns** inside a run of letters,
+where most tokens survive their first character and are matched to the end.
+Over 32,000 tokens that is 0.3 ms and 3.7 ms a step, against about 85 ms for
+a token of TinyLlama-1.1B: four per cent at worst.
+
+The first version cost 7.4 microseconds a token -- 0.24 s a step, several
+times the forward pass -- and the whole difference was copying. A matcher
+holds 256 stacks of 64 positions, and both stepping and testing a token were
+clearing or copying all of it whether or not it was in use. Now the count
+bounds what is copied, nothing is cleared that will not be read, and a token
+whose first character no live stack accepts is refused before anything is
+copied at all. `tests benchmark` reports both figures.
+
+`embed` prints what the model made of a text rather than what it would say
+next: the hidden state after the final normalization, before the projection
+that turns a state into a distribution over tokens. That projection is where
+the resemblance between two texts is thrown away -- it keeps only how much
+each token is favoured -- which is why the state is what an embedding is
+pooled from.
+
+One component a line, so the usual tools can read it. `--pooling mean`
+averages every position and `--pooling last` takes the final one; neither is
+chosen on a model's behalf, because which is right depends on how the model
+was trained. The vector is scaled to unit length unless `--no-normalize`,
+since the usual thing to do with two of them is compare their directions and
+that is a dot product only when both have length one.
+
+The prompt is read as written and no chat template is applied. A template
+turns a text into a turn of a conversation, and an embedding is of the text.
+
+The text is evaluated in batches, as a prompt is: a matrix product over
+thirty-two vectors moves 1.87 times the elements a second that one at a time
+does on this machine, and a text to be embedded is exactly that shape.
+Pooling needs every position's state, so the batched path is asked for them
+-- it is the only one that has them all in hand at once. `--batch-size` sets
+how many go through the weights together and does not change the answer.
+
+So `model_runner run m.gguf --prompt-file p.txt > answer.txt` puts only
+generated text in `answer.txt` — no trailing newline, no styling, no prefix.
+
+Prompts are never taken from the environment. This table is the whole of what
+the program reads: the release checklist fails on a variable read but not
+listed here, and on a read from anywhere but the two files that are allowed
+one. Both locale variables were read and unlisted until that check was written.
+
+`0` success · `2` usage error · `3` model format error · `4` unsupported model
+feature · `5` resource failure · `6` input or output failure · `7` cancelled ·
+`8` internal failure.
+
+Every diagnostic carries a stable public code such as `MR-GGUF-0023`, derived
+mechanically from the error enumeration so a code and its message cannot drift.
+`docs/error-codes.md` marks each code raised or reserved: a published ordinal is
+never reused, so codes that nothing raises stay listed, and saying which is which
+keeps the reference from promising diagnostics the program cannot emit.
+
+both walks over the vocabulary -- the one looking for a logit that is not a
+number and the one looking for the highest -- divide across whatever workers
+the caller has, into blocks that do not move when the team does, so the token
+is the same at every worker count and with none; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
+
+Needs [Alire](https://alire.ada.dev) and a GNAT toolchain.
+
+`model_runner` depends on sibling crates that are not in the Alire community
+index. As the rest of this family does, `alire.toml` pins them **by path**, so
+they have to sit beside this one:
+
+Those pins are transitive, and the closure is deeper than it looks: `messages`
+pins `i18n`, and sub-crates inside `i18n` and `awklib` pin further crates
+again. A bare clone of this repository alone will not build -- `alr` reports
+that a pin path is not a valid directory and names the crate it wanted, one at
+a time.
+
+The reliable way to materialise the closure is the composite action this family
+uses in CI, which walks the pins for you:
+
+By hand, clone each crate `alr` asks for into the same parent directory until
+it stops asking, then:
+
+I have not reduced that to a single verified command line for a reader
+starting from nothing, and would rather say so than print one that does not
+work. From a tree that already has the siblings, `tests pristine` is that
+command: it clones what git carries beside them -- so every path pin resolves
+without copying or linking -- resolves the pins, builds, and runs the suite
+and the repository checks in the clone, in about twenty seconds. It removes
+the clone when it passes and leaves it where it says when it does not.
+
+That is the only arrangement in which the repository is what a reader gets,
+and it is the arrangement in which the suite failed for forty consecutive
+pushes while passing here. Run it before a release. It is not part of the
+release checklist, because it clones from git and therefore sees only what is
+committed -- a checklist run before the commit would be answering about the
+previous one.
+
+Two things are generated rather than committed, so a clone does not have them
+until something makes them:
+
+- **`config/`** holds the configuration project that Alire writes, and both
+  project files import it. `alr build` creates it. Calling `gprbuild` directly
+  in a fresh clone fails with `imported project file "config/..." not found`,
+  which is what that means.
+- **`tests/fixtures/tiny-model.gguf`** is written by `tests fixtures`, and by
+  the suite itself: three tests read a model from that path and write it
+  first, through one operation that also names it. This paragraph used to say
+  the suite did not need it -- that it built the same model in memory -- and
+  that was the belief behind forty consecutive red CI runs. The file is
+  ignored by git, because a model file is not committed unless its licence
+  plainly allows it; it was present on the machine where the suite was run
+  and on no clean checkout, so the suite passed here and failed there with
+  `inspect does not print the published line "Container"`.
+
+Development is the default profile here and in every sibling crate, on
+purpose: `-Og` with the full validity checks, one profile across every root so
+they share object files. Release is for a release -- and for anything you
+intend to measure, because the difference is not small: twelve tokens on a 1.1B
+model take 2.2 seconds at `--release` and around 14 at the default.
+
+`fixture-likeness` asks the question the rest of the suite cannot. Everything
+else compares two implementations that were written together, against a
+fixture written to suit them; where the fixture and the engine share a wrong
+idea about what a model carries, both agree and nothing is said. This folds
+layer indices together and compares a published file's tensor list against the
+fixture this repository builds for its architecture, reporting what each side
+has that the other does not. Pointed at a published `gpt2` the first time it
+ran, it named `blk.*.ffn_norm.bias` -- a tensor every gpt2 carries, that the
+fixture did not write and the engine did not read.
+
+The suite takes eight seconds, and took twenty-eight minutes until one test
+was moved out of it. That test ran the whole conformance sweep -- the same
+`Conformance.Run` the gate runs as a stage of its own -- so the gate did it
+twice, 948 s inside the suite and 650 s again beside it. Ninety-nine and a
+half per cent of the suite was one routine.
+
+It read "a second and a half" here for a long time after that had stopped
+being true, and the wrong figure cost a day: the gate timed every stage except
+the suite, AUnit prints nothing until it has finished, and a timeout set from
+a stale number looks exactly like a hang. The gate says `took: suite` now, and
+`tests slow` says where a suite's time goes.
+
+Compiling a template took half a minute until it stopped allocating
+twenty-six megabytes: an instruction carried its operand and its condition
+inline, and the program is four thousand of them.
+
+Every test is deterministic, offline, and needs no downloaded model. The
+checklist holds the second of those: nothing in the repository may exceed a
+megabyte, which is what a committed model would. What the suite covers:
+
+- **GGUF** — truncation at *every* byte offset of a valid file, corrupt
+  magic, unsupported versions, excessive counts, duplicate metadata keys,
+  duplicate tensor names, invalid UTF-8, quantization block misalignment,
+  out-of-bounds tensor ranges, trailing-data policy, typed accessors, a
+  450-case mutation corpus that must produce only controlled outcomes, the
+  fused dot product agreeing with the reference decoder for every format, the
+  number of vectors in one kernel call changing none of them, and nothing a
+  model file says -- metadata value, metadata key or tensor name -- reaching
+  the terminal unescaped, five hundred generated containers read back through
+  the accessors the engine uses and compared with what was written -- strings,
+  signed and unsigned integers of two widths, booleans, array elements and the
+  tensor descriptors -- so a disagreement between the writer and the reader
+  cannot look like agreement, the UTF-8 validator refusing overlong encodings,
+  surrogates and code points past U+10FFFF while accepting each length at its
+  boundaries, a hostile vocabulary, whose special-token
+  identifiers name tokens that do not exist, being unable to make the
+  tokenizer reach outside itself, and the structural refusals -- an unnamed
+  metadata key or tensor, an alignment that is not a power of two, a string
+  past the length limit -- each reporting the code that names it, and the
+  tokenizer's own refusals doing the same: no tokenizer model, a model this
+  engine does not implement, no token list, input that is not UTF-8, and a
+  buffer too small for the tokens. The architecture profile likewise: a file
+  naming no architecture or another one, widths that do not divide, an odd
+  rotary width, a rotary scaling this does not compute, an expert count with
+  no used count and one asking for more experts than the model has, a shared
+  expert, a sliding window of no positions, and an embedding tensor of the
+  wrong shape. A prompt
+  file that is absent, a directory, past the size limit or not UTF-8 likewise,
+  with a sound one read. A file that ends inside a field is truncated, a rank
+  past the limit is an invalid rank, and an extent of zero is an invalid
+  dimension -- three answers a reader could give as one. What a caller can be
+  wrong about is checked the same way: a request for no tokens or no batch, a
+  prompt longer than the context, a message with no content, and generating
+  from a model that was never prepared, a conversation past its bound, a model
+  released while a session still holds it, and a sampler with every token
+  forbidden. Refusals that cannot be built into a
+  container are edited into one: an undefined value, array-element or tensor
+  type, an array of arrays, a tensor off its alignment, and two tensors over
+  the same bytes. The builder records where it wrote each field and the test
+  asks by name, so no test carries a table of byte offsets. A tensor view
+  refuses each impossible shape by name too: no rows or columns, a quantized
+  row that is not whole blocks, a format this build cannot decode, a shape
+  past its buffer, and an operand that does not match.
+- **Inference** — every piece the streaming decoder hands out being whole
+  UTF-8, checked over a vocabulary built so that a character spans three
+  tokens, which the fixture model's all-ASCII vocabulary cannot express;
+  preparation, finite logits, run-to-run determinism,
+  cancellation leaving the cache uncommitted, a batch refused at the same
+  context boundary a single token is -- filling it exactly accepted, one past
+  refused, and a refused batch leaving the cache where it was; a cancellation
+  asked for while
+  the model is still loading stopping the load, context exhaustion and reset,
+  out-of-range token rejection, tokenizer round trip, an interrupt reaching the
+  cancellation token through a real signal, agreement with the independent
+  reference implementation, and a batch producing the same bits as the same
+  tokens evaluated one at a time, down to the cache it leaves behind.
+- **Sampling, stops, kernels and templates** — a fixed seed producing a token
+  sequence written down rather than only compared with itself, so the claim
+  that the generator produces the same stream on every host is checked on
+  every host the suite runs on; the stop-string matcher
+  compared against the rule written out the slow way, over two thousand
+  generated sets and buffers, so a disagreement is a fault in one of them
+  rather than a restatement of the other; two thousand generated
+  configurations, every setting varied together over logits that include what
+  a broken model produces, each returning a token inside the vocabulary or
+  saying it cannot; the kernels answering
+  degenerate input rather than trapping on it: a layer of zeros normalized
+  without dividing by its own scale, a length mismatch leaving the target
+  zeroed, and softmax refusing to turn values that are not finite into a
+  distribution; greedy maximum and tie-breaking, greedy
+  entropy independence, fixed-seed reproducibility, top-k, min-p, repetition
+  penalty, NaN and infinity rejection, stop-string earliest-then-longest
+  matching, stop bounds, exact template rendering, branches and whitespace
+  control, rejection of unsupported constructs, and automatic seeding varying
+  between runs without falling back to the fixed seed.
+- **CLI and generation** — four thousand generated command lines, built from
+  options in impossible orders, values where flags go, empty arguments, text
+  that is not UTF-8 and numbers too long to be numbers, each answered with a
+  definite outcome rather than raised on; interactive mode, which needs a
+  terminal at both ends and so was driven by nothing at all until its loop was
+  made to read redirected input -- the loop running a conversation to its end,
+  a turn accumulating across lines and submitting on a blank one, a turn past
+  its bound refused whole rather than truncated, a slash on a later line being
+  the text it looks like, every command word read as itself, and the
+  conversation keeping its shape under the edits the loop makes: a system
+  message landing first, replacing rather than accumulating, clearing without
+  disturbing the rest, and a cancelled turn dropped from the end without going
+  past the beginning; every backend this build has named on the command line
+  and one it does not have refused; command parsing, fifteen distinct usage
+  errors,
+  end-of-options, pre-parse scans, reproducible generation, stop strings across
+  token boundaries with no leak, stop tokens producing no text, closed output
+  as a normal end, context budget checked before evaluation, retained text
+  matching what was streamed, the end token ending a run without any of it
+  reaching the output, the reference comparison accepting a match while
+  rejecting a mismatch and a recording with no stated origin, a prompt read
+  from standard input bounded and refused plainly rather than truncated, the
+  diagnostics never quoting the prompt or the system message, and a seed
+  covering the whole unsigned range in parsing, storage and display.
+- **Catalog** — every diagnostic code resolves, every enumeration-derived
+  key resolves, every interface key exists, protocol tokens untranslated,
+  emergency path, locale fallback, escaped parameters, the pseudo-locale
+  differing everywhere while keeping every placeholder, a partial second locale
+  translating and inheriting per key, and POSIX host-locale normalization.
+- **Chat template** — two thousand generated templates, mostly balanced so
+  that rendering rather than compiling is what is examined, one in four broken
+  on purpose, rendered into buffers small enough to overrun: none raises, and
+  every render that fails reports writing nothing, which is what stops a
+  caller emitting the previous turn's bytes; an ordinary template compiling
+  and rendering, every
+  documented compile-time refusal reported by its own code rather than merely
+  as an error, and all five bounds driven to their edge and one past it: size,
+  instruction count, nesting depth, output size and iterations.
+- **Arithmetic, memory, clocks, text and packaging** — numbers rendering the
+  way a reader sees them, with fractions keeping their leading zeros and a
+  value too large for a fixed-point image saying so rather than raising inside
+  a diagnostic; the release archive carrying
+  every file a distribution needs under its versioned prefix, with the program
+  executable and the documents not, and refusing to write anything at all when
+  one input is missing; the byte readers decoding little-endian
+  from any offset and refusing a field that runs past the end, returning zero
+  when they do; checked arithmetic carrying overflow
+  rather than raising or wrapping, invalidity absorbing through further
+  operations, alignment refusing a non-power of two, narrowing to Natural
+  reporting range loss and zeroing its result; an allocation past the budget
+  refused
+  before it is attempted, mapped bytes not counted as allocated, a plan that
+  cannot be represented refused rather than wrapped, a clock that goes
+  backwards yielding no elapsed time, and a file mapping reading back what is
+  in it while refusing a read past the end.
+- **CPU backend** — the partition covers every row exactly once for every
+  worker count, a parallel product equals the serial one **exactly**, more
+  workers than rows still produces a complete result, a closed pool rejects
+  work, one pool serves many jobs, a pool that is never used still terminates,
+  capabilities advertise only what is implemented.
+
+`en` is complete. `da` is a partial translation of the command surface and the
+common diagnostics, and every other key falls back to English per key, so
+nothing reaches the emergency form. `qps` is a pseudo-locale
+generated from the English entries: every letter outside a `{placeholder}` or a
+protocol token is accented and the message is bracketed, so an untranslated
+string, a lost placeholder or a truncated line is visible at a glance.
+
+Two lines, not one: the diagnostic and the hint that follows it. Both are
+translated, and the second is the one that shows a locale is complete enough
+to be useful rather than merely present -- a run that told a Danish reader
+what went wrong and then advised them in English would be the interesting
+failure, and would not have been visible here while the example showed only
+the first line.
+
+`tests fuzz` runs two campaigns: one over model files, one over the text a
+caller supplies. Both are seeded, so a failure replays exactly.
+
+The second is `Text_Fuzzing`, and it exists because everything fuzzed before
+it was a container. A prompt file, standard input and a command-line value are
+untrusted too, and they reach `Model_Runner.Tokenizer.Encode` whole. A case
+fails when the call raises, when it reports a code the interface does not
+document, when it says it succeeded and hands back a token the vocabulary does
+not hold, or when it takes longer than the limit for text of its size — which
+is 50 ms plus 20 µs a character, roughly a hundred times what encoding
+actually costs.
+
+The clock is there because the defect that prompted this could not have been
+found any other way. `Encode` looks for a control token at every position
+whose byte some piece of the vocabulary begins with, and the scan reached the
+longest token the format allows — 1024 bytes — at every one of them. Sixty thousand brackets, well inside the
+documented input limit, took **25.5 seconds** where the same length of
+ordinary text took a fortieth of a second. Nothing was wrong with the answer.
+The scan is now bounded by the longest marker the vocabulary actually holds,
+which for the fixture is four bytes and for a real vocabulary about
+seventeen; a position whose byte begins no piece costs one array read and no
+lookup at all.
+
+`tests benchmark` times both cases now, at a load of 1.11: **0.0139 s** for
+sixty thousand ordinary characters and **0.0156 s** for sixty thousand
+brackets, so the hostile text costs about an eighth more rather than six
+hundred times more. Those are lower than the 0.039 and 0.045 this used to
+quote, and the reason is what they measure: the older pair came from timing
+a whole `model_runner run` in the shell -- parsing the model, loading the
+vocabulary, encoding, and refusing the prompt for length -- while these are
+the encode. The 25.5 s is history and needs the commit before the bound; it
+is quoted as the reason the bound exists rather than as something to
+reproduce.
+
+The longest cases are drawn from an alphabet where one character in two is a
+bracket, because a cost paid per bracket is invisible in text where one
+character in twenty is one, and drawing that shape by chance would need a
+campaign far longer than the release gate can afford. Against the unbounded
+scan the gate reports forty slow cases and a worst of 7054 ms; against the
+bounded one, none and 16 ms.
+
+`tests fuzz` mutates the synthetic container — truncation at an arbitrary
+offset, single-bit flips, 64-bit and 32-bit field overwrites, and byte-run
+splices — and feeds it to the whole load path: the parser, the tokenizer, the
+chat-template compiler and model preparation. Only four outcomes are accepted:
+loaded, structurally rejected, rejected against a resource limit, or cancelled.
+Every accepted container is also rendered as `inspect` would render it, and a
+control character surviving that is counted as an invalid acceptance: a file
+that could steer a terminal has been accepted into a state it should not have
+reached. One of the mutations writes control bytes deliberately, because a bit
+flip reaches one only by chance.
+
+Each campaign also reports how far its files got: of two thousand mutated
+files, about twelve hundred prepare a model and nearly as many run a forward
+pass. A campaign where none reached the engine fails, because clean totals
+from files that all stopped at the parser would say nothing about everything
+past it.
+
+A campaign also fails on an internal invariant violation. That code means the
+program found a state it believes impossible, and a file deciding when that
+happens is a fault however it arrives — but it arrives as a refusal, so a
+campaign counting refusals will not notice. Twenty-six cases in two thousand
+were doing exactly that.
+
+An escaped exception or an invalid container accepted into a usable state is a
+failure. Each case is derived from the seed and the case number alone, so a
+failure replays exactly.
+
+`tests conformance` computes the same logits twice, by different routes, and
+compares them. `Reference_Transformer` in the tests crate is written from the
+architecture description and shares no arithmetic with the engine: it decodes
+binary32 from the file bytes by reconstructing the value from its fields rather
+than reinterpreting the host representation, computes in `Long_Float`
+throughout, keeps the whole key and value history instead of a
+reserved-and-committed cache, and expands key and value heads instead of
+mapping query heads onto them. A mistake in cache indexing or head grouping
+therefore cannot be common to both.
+
+Five buckets, because five things are being compared and mixing them would
+let the loosest hide the tightest. The first is the exact path and answers to
+1.0E-3 relative and 1.0E-4 absolute; the rounded, cached and byte ones are
+`--repack bf16`, an f16 context and a q8 context, each with a measured pair
+of its own; the quantized one is `--arith int8`, the arithmetic a run uses by
+default, held to 5.0E-2 and 5.0E-1. A count of zero in any of them would say
+the sweep ran none of that kind -- which is what a mode that quietly fell
+back to another path would look like, and is the reason the counts are
+published rather than only the worst differences.
+
+The run above crossed 13 architectures, in 16 formats and 5 shapes,
+of which 1248 ran on a device -- which is the same claim the paragraph below makes in
+words, and is checked against the run rather than kept by hand.
+
+Thirteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
+`gpt2`, `bert`, `nomic-bert` and `jina-bert-v2`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
+experts, a stretched rotation, and heads wider than the embedding implies with
+keys and values different widths again. Ten of the thirteen are compared on the
+last position's logits and in every shape they can hold; the three that
+produce states rather than a distribution are compared on
+what the model made of every position, which is the only answer they have and a
+stronger one -- a logit is the last state through one more matrix, and these
+are every state before that matrix. `bert` holds two of the five shapes: a
+mixture wants a gate it has not got, a stretched rotation wants a rotation it
+has not got, and a window is a bound on how far back a position may look,
+which a model that looks both ways has not got. `nomic-bert` rotates and
+gates, so it holds all but the window; `jina-bert-v2` gates but rotates
+nothing at all, so it holds all but the window and the stretch. They answer fewer of the
+sweep's asks for the same reason -- there is no evaluating a position of one
+before the text it reads exists, so a token at a time and a text in pieces are
+both refused -- and the ones they decline are counted rather than quietly
+missing. The processor and the binary64 backends, every evaluation path -- a token at a
+time, a whole prompt in one pass, and a prompt handed over in several --
+serial and across a worker pool, every repacking mode -- the panel layout
+among them, so the kernels that read it are crossed with every architecture
+and shape the sweep has -- and every one of the sixteen weight formats the
+engine decodes: binary32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K,
+Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and MXFP4. The fixture writes each of
+them and the reference reads each of them, both worked out from the layouts
+rather than by calling the engine, so a packing mistake cannot be common to
+the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
+outside it.
+
+The device backend is compared separately rather than crossed with the rest,
+and it is compared in fifteen of the sixteen formats: the shader has a branch
+for each of those,
+so each is a transcription of a bit layout that could be wrong on its own.
+That is what this crossing is for. A shift by the wrong amount, a sub-block
+scale read from the wrong byte or a level table off by one produces an answer
+that is merely wrong, and nothing downstream can tell a slightly wrong weight
+from a right one. It runs each of the three architectures in each of the
+fifteen formats, through both evaluation paths, against the same independent
+implementation; on a machine with no device it runs nothing and says so by
+the count. Its arithmetic is
+where the worst relative figure above comes from -- the shader accumulates a
+row in binary32 where the processor's kernels accumulate in binary64 and
+round once -- and it is a relative figure on a logit near zero: the worst
+absolute difference is 2.2e-05, which is under the absolute floor.
+
+The reference runs once for each fixture and sequence rather than once for
+each comparison. It reads the file and the tokens and nothing else -- it does
+not know which backend it is being compared against, and cannot, because it
+has none -- so the eight comparisons that differ only in backend, repacking,
+batching or pooling all check against one answer. That is 780 forward passes
+where there were 6435, and it took the sweep from nine minutes to two and a
+half without dropping a comparison: every figure above is what the eight-fold
+version reported, to the last digit.
+
+Two combinations are left out of that sweep, and the reason for both is a
+measurement. Repacking to brain floats halves the mantissa, and both a sliding
+window and a mixture sharpen what that perturbation reaches: a window makes the
+attention softmax sharper, so a difference full attention would average away
+moves a logit instead, and a mixture puts a softmax on the router, where the
+same difference moves the shares the experts are summed with and, where two
+experts score nearly the same, moves which of them runs at all. Against the
+reference, worst absolute over this sweep:
+
+against a lossy tolerance of 0.3. The two expert rows are what separate the
+mixture's two causes: running every expert leaves no choice to flip, so 0.330
+is what the shares alone cost, and the rest of the way to 0.509 is the route
+changing. The exact repacking modes agree everywhere in that table -- 2.2e-05
+at a window of three and on the mixture, against 3.5e-06 dense -- so none of
+this says the window or the routing is wrong, and all of it says what
+`--repack bf16` costs on those models. Comparing them in the sweep would mean
+asserting a tolerance nobody has grounds for. Four of the five shapes sit outside that
+tolerance, which is worth saying plainly rather than burying in a table:
+**0.137 is what `--repack bf16` costs a dense model with full attention and
+heads the width its embedding implies, and it does not carry over to a model
+that does anything else**. The last row needs no theory -- wider heads mean
+more terms in every dot product to accumulate eight mantissa bits of error
+over. Use `--repack
+f32`, which is exact and costs memory instead.
+
+One thing to know before taking any of these figures again: `tests speed`
+and the `run` command do not count a prompt's tokens the same way. The
+checked-in long prompt is 110 tokens as the tool counts it and 130 as the
+command reports it, because the command counts what a chat run adds and the
+tool counts what the figure describes. Every prompt length quoted here is the
+tool's count.
+
+The cached figures are `--kv-cache f16`, which stores what a session has
+committed as binary16 rather than binary32: half the memory for the context,
+and **0.0327** worst absolute on these fixtures against 2.2e-05 for the exact
+cache. That is measured with and without a sliding window; without one it is
+0.0218, and a window raises it for the reason a window raises everything
+lossy here -- it sharpens the softmax, so a rounded value moves a logit
+further. That is three orders of magnitude worse than exact and six times better
+than rounding the weights, which is what one would expect from where each
+rounding happens -- a weight is rounded once and read into every product, a
+key is rounded once and read back by every later position. Both evaluation
+paths are compared, because the two storages are two procedures.
+
+`--kv-cache q8` stores it in one byte an element instead, with a scale for
+each row -- a row being one position's keys, or its values, for one layer,
+which is the unit the evaluator already writes and reads whole. A quarter of
+the memory the exact cache takes, and **0.303** worst absolute on these
+fixtures, which is thirty times what the halved cache costs and four
+thousand times the exact one. The bound this sweep holds it to is 0.4,
+measured over every architecture, shape and format it crosses and rounded up.
+It is the coarsest thing this program does to a number it will read back,
+and it is offered for the case the halved cache does not fit rather than as
+a default: nothing chooses it unless asked.
+
+What it saves is now a number the program will tell you rather than one this
+document works out: `inspect --kv-cache` reports what a session would take in
+each storage, and on TinyLlama-1.1B-Chat Q8_0 at its full 2048-token context
+that is **97,251,904** bytes exact, **48,807,695** halved and **24,585,588**
+in bytes -- a little under a quarter, the difference being the buffers a
+session holds whatever it stores its context in, and the scales.
+
+On the device it is the same story and worth stating separately, because a
+storage that halves what crosses to a device might have been expected to pay
+there: twelve tokens read **1.169 s** with the byte cache against **1.151 s**
+without, which is inside the spread between two runs. What the device reads
+back is a row it decodes on the host either way, so there is nothing here for
+it to save.
+
+What it costs in time is nothing this machine can measure: twelve tokens of
+TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
+with the exact one, and two runs of the same figure an hour apart on this
+machine differ by more than that. Packing a row is one pass over what a
+projection had just written hundreds of products into, and unpacking is a
+multiply where a read used to be, so this is what one would expect rather
+than a surprise -- but it was arithmetic about memory until it was a
+measurement about time, and those are different claims.
+
+What it costs in what the model says is not nothing. The same twelve tokens
+come out as a different digest -- `7d3e2df2d776ba62` against
+`5abff916f9d83ca6` -- so at eleven hundred million parameters and twelve
+tokens the byte cache has already changed the text. The exact and halved
+caches agree with each other on that run; this one does not agree with
+either. A storage offered for the case the halved cache does not fit is a
+storage whose output is its own.
+
+A rolling context in that storage loses a little more of what it keeps every
+time it rolls. `Shift` turns the surviving keys back by the angle it dropped,
+which means decoding a row that was already rounded and rounding it again --
+the price of the storage rather than a fault in the shift, and worth knowing
+before running a long conversation on it.
+
+The rounded figures are `--repack bf16`, counted apart because mixing them in
+would let the lossy path's error hide the exact path's. They are the number
+that flag never had: rounding every weight to eight mantissa bits moves a
+logit **on these fixtures** by up to **0.137**, and a logit close to zero moves
+by almost all of itself, which is what the relative figure says.
+
+On this fixture is not a small qualification. Rounding error accumulates with
+the length of a dot product and the depth of the stack, and the widest fixture is
+256 wide and two deep where a small real model is two thousand wide and
+twenty-two deep. The figure has read 0.032, 0.064, 0.090, 0.254 and now 0.137 as the fixtures
+changed -- which is the shape of the thing rather than a number to trust to
+three places: wider means more terms means more accumulated rounding, coarser
+weights mean a rounding step that matters more, and halving the feed-forward
+width of the widest fixtures brought it down again. What it says is that the
+flag costs a tenth of a logit or so on a model this size, and that a model of
+a useful size is where the question actually gets answered. The figure bounds what was measured, not what the flag does
+to a model you have. What exists for real models is behaviour rather than
+logits: sixty greedy tokens from TinyLlama Q8_0 and forty from Q4_K come out
+identical either way, which is worth knowing and is not a bound.
+`tests external-model --model PATH --repack bf16` runs a model you have both
+ways and says whether the identifiers still match. `--repack f32`
+is in the first set, where it belongs: it lands exactly where the stored
+layout does. The bound the rounded path is held to is 5e-2 relative with a
+1e-1 absolute floor -- what it measures, rounded up -- rather than the exact
+one, which would only restate that rounding rounds.
+
+A prompt longer than `--batch-size` is evaluated in several calls, and the
+seam between them -- where the cache position carries from one call to the
+next -- is where an off-by-one would live. Eight tokens three at a time is
+two of those seams, and every comparison used to hand the whole sequence over
+at once. What decides where the seams fall is the loop in `Generation`, and
+that loop is checked against the engine itself: a test asserts that a batch
+produces the same bits as the same tokens one at a time. So the seam is
+compared independently and the arithmetic that chooses it is not, which is
+the honest division here.
+
+The partitioned path is compared for the same reason the batched one is: a
+run uses it and only the engine had ever read what it produced. Row
+partitioning is where a boundary error would live, and the two checks that
+exercise a pool -- worker-count stability here and in `tests external-model`
+-- compare the engine against itself, so a partition that is wrong the same
+way at every worker count passes both.
+
+The batched path is compared because it is the one a prompt goes through, and
+it was checked only against the engine's own single-token results: the
+strongest statement here -- that the arithmetic agrees with an implementation
+written from the architecture description -- was being made about the decode
+path alone. The reference backend takes a token at a time by design, so the
+batched half of the sweep runs on the backend that batches, which the sweep
+asks rather than assumes.
+
+Running the reference backend through the same comparison is worth the
+seconds it costs: that the two backends agree with each other says the fast
+path's partitioning and batching change nothing, and that both agree with an
+independently written forward pass says the arithmetic is right. The second
+is the stronger statement and it used to be made about only one of them.
+
+The relative figure is dominated by one logit that is very close to zero,
+where a difference of six ten-millionths is a large fraction of a small
+number. Measured apart, `llama` reaches 1.22e-06 absolute and 1.22e-05
+relative, and `qwen2` reaches 6.08e-07 absolute and 8.27e-04 relative -- so
+the architecture with the larger relative figure is the one whose two
+implementations agree more closely in absolute terms. That is worth saying
+because the relative number moved seventy-fold when `qwen2` was added and it
+would otherwise read as a regression.
+
+Those digits are what the run prints, and `tests conformance` checks that this
+file still quotes them. It had gone stale twice before that check existed: the
+counts here read 4 and 64 while the run had grown to 8 and 128, and the worst
+divergence was quoted six times smaller than it is. A figure worth publishing
+is worth failing the release checklist over.
+
+`tests external-model --model PATH [--expect FILE]` runs the same kind of
+validation against a model you already have — container, architecture, session,
+greedy generation, valid UTF-8, seed reproducibility and worker-count stability
+— and, when given a recording from a trusted reference runtime, compares the
+tokenization, the greedy token identifiers and any recorded logits against it.
+Nothing is downloaded, and a missing file is a skip rather than a failure. See
+[docs/reference-runtime.md](docs/reference-runtime.md).
+
+`--backend NAME` points it at any backend this build has, which is what makes
+it a validation of a backend on somebody's own model rather than of the
+processor path alone. `--draft-model PATH` runs the model again with that one
+proposing for it and checks that the text is identical, which is the claim
+drafting makes and the only place it can be checked against a model anybody
+cares about; the summary reports how many proposals were made and taken.
+
+What this runner generates is what the command generates from the same
+inputs, and a test holds that by running both and comparing a digest of the
+text. It samples greedily and seeds itself with forty-two, which is a choice
+rather than the command's default, so the test gives the command those
+settings explicitly. `tests benchmark` has no such counterpart and needs
+none: it measures kernels on synthetic tensors it builds itself, so there is
+no command it could differ from. A backend that does not partition rows is not asked
+whether the worker count changes its answer, and says so rather than
+reporting an unrun check as one that held; a machine with no device is a skip
+for the same reason a missing model is.
+
+The third is worth showing. The committed fixture holds sixteen tokens of
+context and the runner asks for sixteen tokens by default, so a three-token
+prompt leaves no room and the engine refuses before generating anything. The
+failure names the code it refused with, which is how anyone reading it can
+tell an unusable request from a broken engine without reproducing the run by
+hand. It printed only "generation failed" until this was written down, and
+this example was published for two years as though it had succeeded.
+
+`tests check` performs its checks in Ada: crate structure and declared
+dependencies, the version in `alire.toml` against `Model_Runner.Version`,
+absence of scripting-language build files, that production code never reaches
+AUnit or `project_tools`, that nothing below the presentation layer reaches the
+message catalog, terminal styling, the command-line layer or a standard stream,
+the 120-character line budget, a catalog entry for every diagnostic code, and
+that the generated error-code reference is current.
+
+Diagnostics are held in three states, not two. `Reserved_Codes` names the
+codes nothing raises; `Unreached_Codes` names the codes the program raises
+that no test names, each with why — naming is the proxy for reaching, and it
+errs towards calling a code reached, so the list going empty would not mean
+every refusal has been made to happen. Seventeen codes were in that third state
+with nothing saying so — a refusal written and never made to happen is a
+promise the program has not been asked to keep, and the check that every code
+is *produced somewhere* counts a raise nobody reaches exactly as it counts a
+raise everybody reaches. Ten of the seventeen are now reached; the rest are on
+the list with a reason. Both lists are held in both directions. The checks are
+negative-tested: injecting a violation makes them fail, and they run on every
+host the project supports rather than on the one they were written on.
+
+They also hold the changelog against git — no commit touching the library, the
+message catalog or the release gate may be newer than the newest commit
+touching `CHANGELOG.md`, so a change and its entry arrive together — and the
+release checklist ends by running `check_all_selftest`, which requires the
+checklist to refuse a directory that is not a model_runner tree, and to refuse
+it for that reason rather than by failing somewhere else.
+
+They also compile every host body, not only the two a build uses — in the
+tests crate as well as the library, which has its own per-host directories and
+had been left out of the walk. And a host call may only be bound by name from
+one of those directories: anywhere else in the tests crate is one directory
+built for whatever machine you are on, so a POSIX-spelled import links there
+and nowhere else.
+`src/platform` holds five directories and a Linux build uses `linux` and
+`posix`; the other three are production code no compiler here would otherwise
+see, and reading them as text is not compiling them. The sibling `hostkit`
+crate shipped a Windows body holding `('\\')` where Ada spells a backslash,
+found by building on Windows and nowhere else. `gcc -gnatc` stops before code
+generation but after analysis, so profiles are checked against the spec all
+five share and names are resolved — and nothing here needs the host's own
+libraries, because these bodies reach their host through `Interfaces.C`, whose
+declarations are the same everywhere. That is what makes the question askable
+from a machine of the wrong kind.
+
+They also check that each host gets exactly one body for each platform spec.
+Compiling a body says it is well formed and says nothing about whether the
+host that needs it has one; the project file builds `linux` with `posix`,
+`macos` with `posix`, `windows` alone and `unsupported` alone, so a spec whose
+bodies were written for some of those and not the rest fails to link on the
+others — on that host and nowhere else.
+
+CLI and presentation sit above command execution, which sits above generation,
+the conversation and template layer, the tokenizer, the model and session
+interfaces, the architecture implementation, the tensor layer and the platform
+abstractions. No package below the presentation layer writes to standard
+output or standard error, depends on the message catalog, or depends on
+terminal styling.
+
+**Work crosses the layering downwards through one pair of interfaces rather
+than upwards through a dependency.** `Model_Runner.Shares` declares `Work` --
+something a range of items can be asked of -- and `Team` -- something that
+can run the pieces of a job at the same time. The worker pool in the CPU
+backend wears `Team`; the engine's shares and the sampler's wear `Work`. That
+is how a package which decides what a model says gets shared out without
+naming a package that asks the platform what it has and creates tasks. What a
+team may be handed is bounded by one rule, stated there: the answer must not
+depend on where the cuts fall.
+
+Every GGUF file is untrusted input. Counts are checked against explicit limits
+before they size a loop or an allocation; offsets, element counts and byte sizes
+are derived with checked arithmetic that reports overflow instead of wrapping;
+strings are validated as UTF-8; tensor ranges are checked against the file and
+against each other. Embedded chat templates are compiled into a bounded
+allowlisted form that has no operation capable of reaching a file, a process,
+the environment or the network. Metadata values are escaped before they reach a
+terminal, and so is message text from the catalog, which is a file beside the
+executable rather than part of the program. Model files are opened read-only
+and are never modified, which a
+test holds by comparing the file's bytes and its modification time across a
+run. The units that interpret what a container holds -- the template engine,
+the tokenizer, the metadata accessors, the engine itself -- may not name a
+file, a stream, a directory, the environment or the command line at all, and
+the release checklist fails if one of them does.
+
+Generated text is passed through as the model produced it. It is never styled
+and never escaped: a model that generates a terminal escape sequence has
+generated one, and rewriting it would corrupt output a reader asked for. The
+line is between what the program says about a file — keys, names, values,
+diagnostics, all escaped — and what it hands back. Redirect to a file, or
+filter, if the model is one you do not trust with your terminal.
+
+Prompt text given with `--prompt` may be visible to other local processes. Use
+`--prompt-file` or standard input for sensitive text.
+
+Named in the specification, absent here:
+
+- **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
+  the compiler vectorizes them; there is no assembly in this repository. That
+  is a fact about the code and not a rule: machine code insertions are an Ada
+  feature and a check used to refuse them, which guarded this sentence rather
+  than anything about the program. What the release checklist does hold is
+  that no source in another language lives here, which is a different
+  question -- and one `src/shaders/row_product.comp` answers with a yes: it is
+  GLSL, because a compute shader has to be written in a language a graphics
+  driver's compiler reads. What the checklist refuses is compiled code in
+  another language -- C, C++, assembly -- and it holds the shader to something
+  stricter instead: the source's digest is recorded beside the compiled form,
+  so a shader edited and not recompiled fails the checklist rather than going
+  on running the old one.
+
+All figures below are from the release build, on a Ryzen 7 7840U -- eight
+cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
+chooses for itself and at the arithmetic it chooses for itself. From the
+six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
+take **0.339 s** -- 0.042 s evaluating the prompt and 0.297 s generating --
+and **1.81 s** of processor time, the median of three runs. Loading the model
+costs a further **0.065 s** of wall that this figure does not include, and it
+used to cost 0.6 s: the weights are the file's own pages now rather than a
+copy of them, so what loading does is open a mapping and what reading them
+costs is paid as they are touched.

@@ -49,6 +49,7 @@ with Project_Tools.Text;
 with Packaging;
 with Pristine;
 with Host_Load;
+with Perplexity_Run;
 with Speed_Run;
 with Tool_Commands;
 with Fuzzing;
@@ -1091,6 +1092,77 @@ begin
             Model_Runner.Tokenizer.Close (Words);
             Model_Runner.GGUF.Containers.Close (Item);
             Model_Runner.Byte_Sources.Files.Close (Source);
+         end if;
+      end;
+
+   elsif Command = "perplexity" then
+      --  What a quantization costs the model's predictions, which is the
+      --  half of the format table this repository has always asserted and
+      --  never measured.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Number (Name : String; Default : Natural) return Natural is
+            Said : constant String := Option (Name, "");
+         begin
+            if Said = "" then
+               return Default;
+            end if;
+            return Natural'Value (Said);
+         exception
+            when others =>
+               return Default;
+         end Number;
+
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Result : Perplexity_Run.Report;
+      begin
+         if Option ("--model", "") = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "perplexity: --model is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         Perplexity_Run.Run
+           (Path    => Option ("--model", ""),
+            Against => Option ("--against", ""),
+            Text    =>
+              Option ("--text", "../tests/fixtures/speed-prompt-long.txt"),
+            Chunk   => Positive'Max (2, Number ("--chunk", 512)),
+            Chunks  => Number ("--chunks", 0),
+            Threads => Number ("--threads",
+                               Model_Runner.Platform.Core_Count - 1),
+            Backend => Backend_Of (Option ("--backend", "cpu")),
+            Anyway  => Given ("--anyway"),
+            Waiting => Number ("--wait", 0),
+            Result  => Result);
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Perplexity_Run.Summary (Result));
+
+         --  A run that measured nothing is a failure, for the reason every
+         --  other campaign here gives: an "I did nothing" that exits with a
+         --  success is indistinguishable from an "I did".
+         if not Result.Ran then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
 

@@ -393,7 +393,7 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the eight others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests perplexity`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -11476,9 +11476,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.339 s | 28 ms a token |
-| the same model at two bits | 1.318 s | 110 ms a token |
-| the first, drafted by the second | 2.968 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.340 s | 28 ms a token |
+| the same model at two bits | 1.401 s | 117 ms a token |
+| the first, drafted by the second | 2.919 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking
@@ -11496,17 +11496,25 @@ either.
 
 The arithmetic, from the same three figures, in generating time alone so that
 the prompt each run also pays is not counted twice. Six rounds of four
-proposals cost 3.028 s, of which the draft's own twenty-four passes are
-24 × 101 ms = 2.44 s, leaving 0.59 s for six checks -- **98 ms to check five
-positions**, against 27 ms for one token generated normally. A batch is one pass over the
-weights and the extra work is the output projection per position, which is
-why five positions cost about two tokens rather than five.
+proposals cost 2.617 s, of which the draft's own twenty-four passes are
+24 × 95 ms = 2.28 s, leaving 0.34 s for six checks -- **57 ms to check five
+positions**, against 25 ms for one token generated normally. A batch is one
+pass over the weights and the extra work is the output projection per
+position, which is why five positions cost about two tokens rather than five.
 
-So a round of K proposals costs `K × d + 98 ms` and yields `1 + a` tokens,
-against `(1 + a) × 27 ms` without a draft. At the acceptance measured here,
-about 1.2 of four, a round yields 2.2 tokens worth 59 ms and the check alone
-costs 98 -- so the check alone costs more than the tokens a round is worth
-and no draft pays at this acceptance, whatever it costs a token. **That
+That check read **98 ms** until `### What a format costs the predictions`
+below found the projection being done a position at a time rather than as one
+product over the batch. It is the same five positions and the same weights;
+what changed is how many times the output matrix is read to answer about
+them.
+
+So a round of K proposals costs `K × d + 57 ms` and yields `1 + a` tokens,
+against `(1 + a) × 25 ms` without a draft. At the acceptance measured here,
+about 1.2 of four, a round yields 2.2 tokens worth 55 ms and the check alone
+costs 57 -- so the check alone still costs about what the tokens a round is
+worth, and no draft pays at this acceptance whatever it costs a token. The
+margin was two to one against and is now level, which moved the conclusion
+not at all and moved the reason for it a long way. **That
 threshold has read 17, 10, 6, 9, 6, 4, 7 ms a token, nothing at all, 11, 18,
 nothing seven times more, 3.5, nothing again twice, half a millisecond and
 nothing four times more across twenty-five sittings of the same code**, because it is a difference of
@@ -11556,8 +11564,13 @@ the load gate, same digest every time:
 
 | | plain | `--draft-lookup` | |
 | --- | ---: | ---: | ---: |
-| processor, generating | 3.249, 3.269, 3.277 s | **2.131, 2.175, 2.179 s** | 1.51x |
-| device, generating | 2.409, 2.414, 2.421 s | **1.469, 1.483, 1.480 s** | 1.63x |
+| processor, generating | 3.250, 3.275, 3.279 s | **1.983, 2.019, 2.009 s** | 1.63x |
+| device, generating | 2.406, 2.383, 2.392 s | **1.338, 1.334, 1.352 s** | 1.78x |
+
+Those read 1.51 and 1.63 when this section was written, and what moved them
+is not the drafting: `### What a format costs the predictions` below found
+that a batch's every-position logits were projected a position at a time, and
+a drafted round is exactly the caller that asks for them.
 
 116 proposed and 69 accepted, on both backends and in every round -- the
 proposals are a function of the text and not of the machine, so the two
@@ -11569,15 +11582,19 @@ depths:
 
 | tokens proposed a round | processor | device | proposed / accepted |
 | ---: | ---: | ---: | --- |
-| 4 | **2.184 s** | **1.528 s** | 116 / 69 |
-| 8 | 2.276 | 1.547 | 176 / 75 |
-| 16 | 2.633 | 1.549 | 284 / 87 |
+| 4 | **1.964 s** | 1.330 s | 116 / 69 |
+| 8 | 1.998 | 1.328 | 176 / 75 |
+| 16 | 2.157 | **1.207** | 284 / 87 |
 
-Deeper drafts are righter in total and cost more than they are worth on the
-processor, where a batch row is real arithmetic; on the device the curve is
-flat, because a row there is nearly free and the extra acceptance pays for
-itself. Four is best on one and free on the other, so `--draft-tokens` keeps
-the default it had.
+**And the two backends now want different depths**, which they did not when
+the check cost a projection a row. Four is still best on the processor, where
+a batch row is real arithmetic and a rejected proposal is paid for; on the
+device sixteen is now nine per cent better than four, because a row there is
+nearly free and the extra acceptance is all gain. The default stays at four,
+which is the right answer for one backend and eight per cent off the best for
+the other -- a device run that wants the rest can ask for `--draft-tokens
+16`. Before the projection was batched this table read 2.184, 2.276, 2.633
+and 1.528, 1.547, 1.549, and its conclusion was that the device was flat.
 
 **And what it costs when there is nothing to look up**, which is the figure
 that decides whether to leave the flag on. A sixteen-token answer to a
@@ -17226,7 +17243,9 @@ comes out faster than IQ4_NL despite doing more per element -- a sub-block
 scale to form as well as the lookup -- because its block is 256 elements
 against 32, so the per-block work is spread eight times thinner. Both are in
 the four that take the wider compilation, and both were above 0.9 before it. The table is
-what these formats buy their accuracy with, and this is what it costs.
+what these formats buy their accuracy with, and this is what it costs -- and
+what the accuracy actually is, which this page asserted for a year and never
+measured, is `### What a format costs the predictions` below.
 
 Four rows moved a long way since this table was last published, and they are
 the same four that moved a long way the time before, in the other direction.
@@ -17505,6 +17524,102 @@ keys were turned for the positions they were written at and turned back
 again, where the other run's were turned once, and two rotations composing to
 the same angle do not compose to the same bits. That is the assertion the
 turn-back is held by -- deleting it, the first one passes.
+
+### What a format costs the predictions
+
+Every format in this repository has a measured cost to run and an asserted
+cost to be right. `tests perplexity` measures the second one. It is
+llama.cpp's `llama-perplexity`: score a corpus a chunk at a time, and against
+a `--against` model of the same weights in another format, report how far the
+distributions have moved.
+
+**Read the divergence column.** Perplexity is the exponential of the mean
+surprise -- how many equally likely tokens the model was effectively choosing
+between -- and it is a fact about a model *and a corpus together*. The
+Kullback-Leibler divergence is a fact about the format: at each position the
+eight-bit model has a distribution and the other has another, and the
+divergence says how much of the first's information the second threw away.
+It needs no standard corpus to mean something, because both sides read the
+same text.
+
+Twelve formats of TinyLlama-1.1B-Chat, 1,020 scored positions, each against
+the eight-bit file, ordered by what they cost:
+
+| format | perplexity | divergence, nats | worst position | top token agreed |
+| --- | ---: | ---: | ---: | ---: |
+| q8_0, the baseline | 35.5256 | **0.000000** | 0.0000 | 100.0 % |
+| q5_k_m | 35.6834 | 0.010226 | 0.1492 | 93.8 % |
+| q5_1 | 35.7907 | 0.013021 | 0.2483 | 91.8 % |
+| q5_0 | 35.8219 | 0.013543 | 0.1043 | 93.0 % |
+| iq4_nl | 36.5197 | 0.035287 | 0.7945 | 87.6 % |
+| iq4_xs | 36.4245 | 0.036373 | 0.7856 | 86.7 % |
+| q4_k_m | 36.6017 | 0.044413 | 0.4610 | 87.9 % |
+| q4_0 | 36.1500 | 0.051893 | 0.8296 | 87.0 % |
+| q4_1 | 37.7095 | 0.060082 | 1.1356 | 85.9 % |
+| q3_k | 37.0745 | 0.091220 | 0.9899 | 82.3 % |
+| mxfp4 | 38.3502 | 0.120443 | 1.8979 | 79.6 % |
+| q2_k | 45.0612 | 0.289359 | 3.4884 | 71.0 % |
+
+**The first row is the check.** The eight-bit file measured against itself
+reads a divergence of exactly zero and agrees with itself on every position,
+which is the whole instrument reading nothing when there is nothing to read.
+
+**Five bits is nearly free**, and the k-quant is the best of the three
+despite q5_1 carrying a per-block minimum that q5_0 does not -- 0.010 against
+0.013 and 0.014. That is the accuracy the k-quants are said to buy, with a
+number on it.
+
+**The ordinary four-bit formats are one band.** iq4_nl, iq4_xs, q4_k_m, q4_0
+and q4_1 spread 0.035 to 0.060, a factor of 1.7 across five quite different
+designs -- where the *speed* table above spreads the same five by a factor of
+three. The two that index a table of levels rather than naming a number are
+the most accurate of them, which is what the paragraph above says they buy
+with their gather.
+
+**MXFP4 is not in that band, and that is the finding here.** It is a
+four-bit format and it lands between q3_k and q2_k: 0.120 nats, twice q3_k,
+and a different top token on a fifth of the positions. Its scale is one byte
+holding a power of two where every other four-bit format here carries a
+half-precision scale, and that is the whole of the difference. The support
+matrix describes the layout and said nothing about what it costs.
+
+**Q2_K is a different thing from the rest of the table** -- 5.6 times the
+four-bit band, a worst position of 3.49 nats, and a different top token on
+twenty-nine per cent of them. `### Drafting` above concludes that this file
+cannot pay as a draft model because it costs more per token than the model it
+drafts for; this adds that it would also be proposing a different word nearly
+a third of the time.
+
+**And here is why the divergence column is the one to read.** Q4_0 has a
+lower perplexity than q4_1, q4_k_m and mxfp4 and a higher divergence than the
+first two. A format can land nearer the actual next token on one particular
+thousand positions while sitting further from what the eight-bit model
+believes; the first is luck on a corpus and the second is a property of the
+format.
+
+**Two things bound all of it.** The baseline is q8_0 and not f16, because no
+half-precision file of this model is here -- so these numbers compare with
+each other and with nothing measured against a half-precision baseline
+elsewhere. And the corpus is `tests/fixtures/perplexity-corpus.txt`, a
+15,440-token snapshot of this repository's own prose, so the absolute
+perplexity is not comparable to anybody's wikitext figure. Both are the price
+of measuring something rather than asserting it.
+
+The corpus is a fixture because the first attempt used
+`speed-prompt-long.txt`, which is **nine distinct lines repeated ten times**
+and scored a perplexity of 1.27: the model was reciting rather than
+predicting. That is worth knowing about a file several published speed
+figures are taken on.
+
+**One engine change came out of building this.** `Evaluate_Batch` fills a
+caller's every-position logits by projecting each position through the output
+matrix, and it did that one position at a time -- reading all sixty-five
+megabytes of that matrix for each of them -- where the round path a few lines
+below had always batched the same work. It is one matrix product over the
+batch now. With that and the worker pool the new tool was missing, the same
+measurement went from **281 seconds to 9.9**. Drafting asks for those logits
+too, and pays less for them: `### Drafting out of the context` re-measured
+below.
 
 ## License
 
