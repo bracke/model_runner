@@ -7,6 +7,40 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A cache that holds only the window.** Three architectures here slide one
+  -- gemma2 on every other layer, gemma3 on five in six, gpt-oss on every
+  other -- and until now that narrowed what a position could read and nothing
+  else: every layer was given the whole context, including the twenty-two of
+  gemma3's twenty-six that can never look further back than 512 positions.
+  A layer that slides is given the window and a batch now. **A gemma3 session
+  at its own 32,768 context costs 0.33 GB where it cost 1.83**, and a gemma2
+  session 1.43 GB where it cost 1.83 -- 5.5 times and 1.28, the difference
+  between them being that gemma3's window is a sixty-fourth of its context
+  and gemma2's is half.
+
+  **A ring was the obvious design and is not the one here**: storing a
+  position at `P mod cells` makes a window's positions non-contiguous, which
+  every hot loop in attention assumes they are not. The window slides
+  instead, moving what it still needs down to the front when a run passes the
+  end of a layer's room -- a window of rows every batch of positions, which
+  is eight rows for every row written on gemma2 and one on gemma3. Between
+  slides the positions are contiguous and every kernel is the kernel it was.
+
+  **The seam that made it safe is that the blend is given cells rather than
+  positions** -- where the rows sit rather than what they are. Every distance
+  it takes is a difference between two of them, so the causal mask, the
+  fall-off with distance and the softmax are none the wiser, and a change to
+  the cache's shape left three attention kernels, both evaluation paths and
+  the device untouched. Both windowed models produce the same text they
+  produced before, byte for byte, on a 1328-token prompt that slides.
+
+  **The device keeps the whole context and is told so**: it holds its own copy
+  and writes it a position at a time, so a host sliding rows underneath would
+  leave that copy describing positions that have moved. **A saved session
+  says where each layer's run begins** and the format's version is two; a file
+  written by the version before it is refused by version, and a session whose
+  geometry differs is refused by name.
+
 - **A seam so that a package which decides what a model says can be shared
   out without knowing what a host is.** `Model_Runner.Shares` declares two
   interfaces -- `Work`, something a range of items can be asked of, and

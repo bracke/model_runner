@@ -1248,6 +1248,12 @@ package Model_Runner.Llama is
 
 private
 
+   --  How many positions a layer holds, and where its rows begin. One
+   --  entry a layer; see the Session's own comment for what they mean.
+   type Cell_Counts is
+     array (Natural range <>) of Model_Runner.Numerics.Element_Count;
+   type Cell_Counts_Access is access Cell_Counts;
+
    --  One expert's feed-forward block. The three matrices are views into the
    --  stacked tensor the file carries -- the expert axis is the outermost, so
    --  an expert's rows are contiguous and a view over them needs no copy.
@@ -1566,6 +1572,23 @@ private
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  How the cache is cut up, one entry a layer.
+      --
+      --  It used to be one number: every layer held the whole context and a
+      --  position sat at its own index. A layer that slides a window can
+      --  never read further back than the window, so it is given the window
+      --  and a margin instead, and a position sits at its distance from the
+      --  lowest one the layer still holds. Origin is that lowest position
+      --  and is the only one of these that moves.
+      --
+      --  Null until the session is opened, and null for a session that
+      --  holds nothing.
+      Cells     : Cell_Counts_Access := null;
+      At_Keys   : Cell_Counts_Access := null;
+      At_Values : Cell_Counts_Access := null;
+      At_Rows   : Cell_Counts_Access := null;
+      Origin    : Cell_Counts_Access := null;
    end record;
 
    overriding procedure Finalize (Item : in out Session);

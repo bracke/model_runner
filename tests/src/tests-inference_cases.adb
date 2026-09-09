@@ -6010,6 +6010,147 @@ package body Tests.Inference_Cases is
       end;
    end Sliding_Window_Narrows_Attention;
 
+   --  A window that slides is the same window.
+   --
+   --  The test above holds a window that narrows what a position reads. This
+   --  one holds what the cache does about it: a layer that slides a window
+   --  is given the window and a batch rather than the whole context, and
+   --  when a run passes the end of that it moves what the window still needs
+   --  down to the front and carries on. Nothing else in the engine is told
+   --  -- a position is asked for by where it sits, not by what it is -- and
+   --  the claim is that the answer does not know either.
+   --
+   --  So the run has to be long enough to slide, which is why this one is
+   --  five hundred and sixty positions where the test above is eight: a
+   --  layer holds the window and a batch, a batch is five hundred and
+   --  twelve, and nothing moves until a position passes that. Held against
+   --  the implementation written from the description, as the window itself
+   --  is, because an engine compared only with itself would agree with its
+   --  own mistake.
+   --
+   --  And the memory is the point of it, so the plan is asked too: a
+   --  context this model can only read three positions back through must
+   --  cost less than one that holds every position for every layer.
+   procedure A_Window_That_Slides_Answers_The_Same
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      use type Model_Runner.Memory.U64;
+
+      --  Past the window and a batch, so that every layer has slid at least
+      --  once by the end and the last position reads across a move.
+      --  Long enough to slide, and no longer. A layer holds the window and
+      --  a batch, so nothing moves until a position passes five hundred and
+      --  fifteen; the last position of this run reads across the rows that
+      --  moved, which is the part a run that stopped later would not touch
+      --  -- a window of three reaches three positions back, and forty of
+      --  them later there is nothing of the move left to be wrong about.
+      Room   : constant := 600;
+      Length : constant := 518;
+
+      Prompt : Vocab.Token_Array (1 .. Length);
+
+      Image  : B.Byte_Array_Access;
+      Engine : Logit_Vector;
+      Wanted : Reference_Transformer.Real_Vector
+        (0 .. Tiny_Model.Vocabulary - 1);
+      Made   : Boolean := False;
+      Worst  : Long_Float := 0.0;
+   begin
+      --  Tokens that do not repeat with the window's period, so that a
+      --  position reading the wrong three neighbours answers differently.
+      for Index in Prompt'Range loop
+         Prompt (Index) :=
+           Vocab.Token_Id (4 + ((Index - 1) * 7 + Index / 13) mod 5);
+      end loop;
+
+      Tiny_Model.Build (Image, Window => 3, Room => Room);
+
+      --  What the engine says, on a cache that slides.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+
+         Whole  : Model_Runner.Memory.Session_Plan;
+         Narrow : Model_Runner.Memory.Session_Plan;
+      begin
+         Start (Under);
+
+         --  What it costs, before anything is opened. A context short
+         --  enough that the window and a batch cover it holds every
+         --  position of every layer, as it always did; one longer than that
+         --  holds the window and the batch, and costs less.
+         L.Plan_Session (Under.Ready, 64, Narrow, Status);
+         Assert (E.Is_Ok (Status), "the short plan failed");
+         L.Plan_Session (Under.Ready, Room, Whole, Status);
+         Assert (E.Is_Ok (Status), "the long plan failed");
+
+         Assert (Whole.KV_Cache_Bytes < Narrow.KV_Cache_Bytes * (Room / 64),
+                 "a context nine times longer cost nine times the cache, so "
+                 & "the window bought nothing:"
+                 & Model_Runner.Memory.U64'Image (Whole.KV_Cache_Bytes)
+                 & " against"
+                 & Model_Runner.Memory.U64'Image (Narrow.KV_Cache_Bytes));
+
+         L.Open (Live, Under.Ready, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Engine, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         L.Close (Live);
+      end;
+
+      --  And what the independent implementation says.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded : Boolean;
+
+         Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+
+         Reference_Transformer.Run (Second, Tokens, Wanted, Made);
+         Assert (Made, "the reference produced no logits");
+
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+
+      for Index in Wanted'Range loop
+         Worst := Long_Float'Max
+           (Worst,
+            abs (Long_Float
+                   (Engine (Model_Runner.Numerics.Element_Count (Index)))
+                 - Wanted (Index)));
+      end loop;
+
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree about "
+              & "a window that has slid, by" & Long_Float'Image (Worst));
+   end A_Window_That_Slides_Answers_The_Same;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6897,6 +7038,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, A_Window_That_Slides_Answers_The_Same'Access,
+         "a window that has slid answers what the independent "
+         & "implementation answers, and costs less than the whole context");
       Register_Routine
         (T, Snapshot_Keeps_The_Two_Widths_Apart'Access,
          "a snapshot keeps the key and value widths apart");

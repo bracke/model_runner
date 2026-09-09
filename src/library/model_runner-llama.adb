@@ -12,8 +12,50 @@ with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
 
+   use type Model_Runner.Numerics.Element_Count;
    use type System.Address;
    use type System.Storage_Elements.Integer_Address;
+
+   procedure Free_Cells is
+     new Ada.Unchecked_Deallocation (Cell_Counts, Cell_Counts_Access);
+
+   --  Whether a layer slides a window.
+   --
+   --  The same rule Earliest applies, written once so that the two cannot
+   --  disagree: a window at all, and not one of the layers the alternating
+   --  architectures leave attending to everything.
+   function Slides (Settings : Configuration; Layer : Natural) return Boolean
+   is (Settings.Window > 0
+       and then not (Settings.Alternating
+                     and then Settings.Window_Every > 0
+                     and then Layer mod Settings.Window_Every
+                              = Settings.Window_Every - 1));
+
+   --  Where a layer's keys, values and row scales begin.
+   --
+   --  A layer used to begin at its index times the whole context, because
+   --  every layer held the whole context. They are different sizes now, so
+   --  the beginnings are a running sum computed when the session opens and
+   --  read from here rather than multiplied out at every use.
+   function Keys_At (Item : Session; Layer : Natural) return Element_Count
+   is (if Item.At_Keys = null then 0 else Item.At_Keys.all (Layer));
+
+   function Values_At (Item : Session; Layer : Natural) return Element_Count
+   is (if Item.At_Values = null then 0 else Item.At_Values.all (Layer));
+
+   function Rows_At (Item : Session; Layer : Natural) return Element_Count
+   is (if Item.At_Rows = null then 0 else Item.At_Rows.all (Layer));
+
+   --  Where a position sits inside its layer.
+   --
+   --  Its distance from the lowest position that layer still holds. For a
+   --  layer that holds everything that is the position itself, which is
+   --  what this was before there was anything else.
+   function Cell_Of
+     (Item : Session; Layer : Natural; Position : Element_Count)
+      return Element_Count
+   is (if Item.Origin = null then Position
+       else Position - Item.Origin.all (Layer));
 
    --  The same reason the kernels give. Every activation and weight here
    --  came out of a model file, so a not-a-number or an infinity is possible
@@ -31,7 +73,6 @@ package body Model_Runner.Llama is
    use type Model_Runner.Arithmetic.Checked;
    use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Bytes.Byte_Array_Access;
-   use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Numerics.Wide_Real;
    use type Model_Runner.Tensors.Real_Array_Access;
@@ -3673,12 +3714,10 @@ package body Model_Runner.Llama is
          for Index in Source.Layers.all'Range loop
             declare
                Layer_Keys : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * KV_Width;
+                 Keys_At (Item, Natural (Index));
 
                Layer_Vals : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * V_Width;
+                 Values_At (Item, Natural (Index));
 
                Base : constant Element_Count := Layer_Keys + First * KV_Width;
                V_At : constant Element_Count := Layer_Vals + First * V_Width;
@@ -5002,7 +5041,12 @@ package body Model_Runner.Llama is
 
    --  The layout below. A file written by another version is refused rather
    --  than guessed at.
-   Session_Version : constant := 1;
+   --  Two, because a saved session now says where each layer's run
+   --  begins. A layer that slides a window does not hold the positions
+   --  before it, so one run a layer from position zero stopped being a
+   --  faithful record of what a session has. A file written by the version
+   --  before this is refused by version, as it always was.
+   Session_Version : constant := 2;
 
    ------------------
    -- Fingerprint --
@@ -5080,6 +5124,132 @@ package body Model_Runner.Llama is
    -- Snapshot --
    --------------
 
+   --  Make room in every layer that slides a window for the positions up
+   --  to Upto.
+   --
+   --  A layer that slides holds the window and a margin. When a run of
+   --  positions has passed the end of what it holds, what the window still
+   --  needs is moved down to the front and the layer's origin moves with
+   --  it. Nothing else in the engine knows this happened: a position is
+   --  asked for by Cell_Of everywhere, and the blend takes cells rather
+   --  than positions, so the arithmetic is the arithmetic it was.
+   --
+   --  How often, and how much: the margin is a window again or a batch,
+   --  whichever is larger, so a layer slides about once every margin
+   --  positions and moves at most a window of rows when it does. That is
+   --  about one row moved for every row written, against the six hundred
+   --  megabytes of weights a token reads.
+   procedure Make_Room
+     (Item     : in out Session;
+      Settings : Configuration;
+      Upto     : Element_Count);
+
+   procedure Make_Room
+     (Item     : in out Session;
+      Settings : Configuration;
+      Upto     : Element_Count)
+   is
+      KV_Width : constant Element_Count :=
+        Element_Count (Settings.KV_Heads * Settings.Head_Size);
+      V_Width  : constant Element_Count :=
+        Element_Count (Settings.KV_Heads * Settings.Value_Size);
+      Width    : constant Element_Count :=
+        Element_Count (Settings.Window);
+   begin
+      if Item.Cells = null or else Settings.Window = 0 then
+         return;
+      end if;
+
+      for Layer in Item.Cells.all'Range loop
+         declare
+            Cells  : constant Element_Count := Item.Cells.all (Layer);
+            Origin : constant Element_Count := Item.Origin.all (Layer);
+         begin
+            if Upto - Origin >= Cells then
+               declare
+                  --  The lowest position anything will read from here on,
+                  --  which is the window measured back from the first of
+                  --  the positions about to be written.
+                  Held  : constant Element_Count :=
+                    Element_Count (Item.Committed);
+                  Start : constant Element_Count :=
+                    (if Held < Width then 0 else Held - Width + 1);
+                  Moved : constant Element_Count :=
+                    (if Start >= Held then 0 else Held - Start);
+
+                  Keys_Base : constant Element_Count := Keys_At (Item, Layer);
+                  Vals_Base : constant Element_Count :=
+                    Values_At (Item, Layer);
+                  Rows_Base : constant Element_Count := Rows_At (Item, Layer);
+
+                  From : constant Element_Count := Start - Origin;
+               begin
+                  if Moved > 0 then
+                     case Item.Held is
+                        when Exact =>
+                           Item.Keys.all
+                             (Keys_Base .. Keys_Base + Moved * KV_Width - 1) :=
+                             Item.Keys.all
+                               (Keys_Base + From * KV_Width
+                                .. Keys_Base + (From + Moved) * KV_Width - 1);
+                           Item.Values.all
+                             (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
+                             Item.Values.all
+                               (Vals_Base + From * V_Width
+                                .. Vals_Base + (From + Moved) * V_Width - 1);
+
+                        when Halved =>
+                           Item.Half_Keys.all
+                             (Keys_Base .. Keys_Base + Moved * KV_Width - 1) :=
+                             Item.Half_Keys.all
+                               (Keys_Base + From * KV_Width
+                                .. Keys_Base + (From + Moved) * KV_Width - 1);
+                           Item.Half_Values.all
+                             (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
+                             Item.Half_Values.all
+                               (Vals_Base + From * V_Width
+                                .. Vals_Base + (From + Moved) * V_Width - 1);
+
+                        when Eighth =>
+                           Item.Byte_Keys.all
+                             (B.Byte_Count (Keys_Base)
+                              .. B.Byte_Count
+                                   (Keys_Base + Moved * KV_Width - 1)) :=
+                             Item.Byte_Keys.all
+                               (B.Byte_Count (Keys_Base + From * KV_Width)
+                                .. B.Byte_Count
+                                     (Keys_Base
+                                      + (From + Moved) * KV_Width - 1));
+                           Item.Byte_Values.all
+                             (B.Byte_Count (Vals_Base)
+                              .. B.Byte_Count
+                                   (Vals_Base + Moved * V_Width - 1)) :=
+                             Item.Byte_Values.all
+                               (B.Byte_Count (Vals_Base + From * V_Width)
+                                .. B.Byte_Count
+                                     (Vals_Base
+                                      + (From + Moved) * V_Width - 1));
+
+                           Item.Key_Scales.all
+                             (Rows_Base .. Rows_Base + Moved - 1) :=
+                             Item.Key_Scales.all
+                               (Rows_Base + From
+                                .. Rows_Base + From + Moved - 1);
+                           Item.Value_Scales.all
+                             (Rows_Base .. Rows_Base + Moved - 1) :=
+                             Item.Value_Scales.all
+                               (Rows_Base + From
+                                .. Rows_Base + From + Moved - 1);
+                     end case;
+                  end if;
+
+                  Item.Origin.all (Layer) := Start;
+               end;
+            end if;
+         end;
+      end loop;
+   end Make_Room;
+
    procedure Snapshot
      (Item   : in out Session;
       Source : Model'Class;
@@ -5095,12 +5265,37 @@ package body Model_Runner.Llama is
         B.Byte_Count (Settings.KV_Heads * Settings.Value_Size);
       Layers   : constant B.Byte_Count := B.Byte_Count (Settings.Layers);
 
-      --  Ten numbers of eight bytes, then a token each, then the two caches
-      --  at four bytes an element whichever precision they are held in.
+      --  Where each layer's run begins, and how long it is. A layer that
+      --  holds everything begins at zero and runs to what was committed,
+      --  which is what every layer did before one of them slid.
+      function Origin_Of (Layer : B.Byte_Count) return B.Byte_Count
+      is (if Item.Origin = null then 0
+          else B.Byte_Count (Item.Origin.all (Natural (Layer))));
+
+      function Run_Of (Layer : B.Byte_Count) return B.Byte_Count
+      is (if Origin_Of (Layer) >= Held then 0 else Held - Origin_Of (Layer));
+
+      function Runs return B.Byte_Count;
+
+      function Runs return B.Byte_Count is
+         Total : B.Byte_Count := 0;
+      begin
+         for Layer in 0 .. Layers - 1 loop
+            Total := Total + Run_Of (Layer);
+         end loop;
+         return Total;
+      end Runs;
+
+      Spans : constant B.Byte_Count := Runs;
+
+      --  Ten numbers of eight bytes, then a token each, then two numbers a
+      --  layer saying where its run begins and how many positions the layer
+      --  holds room for, then the two caches at four bytes an element
+      --  whichever precision they are held in.
       Length : constant B.Byte_Count :=
-        10 * 8 + Held * 8
-        + Layers * Held * KV_Width * 4
-        + Layers * Held * V_Width * 4;
+        10 * 8 + Held * 8 + 2 * Layers * 8
+        + Spans * KV_Width * 4
+        + Spans * V_Width * 4;
 
       At_Byte : B.Byte_Count := 0;
 
@@ -5159,15 +5354,27 @@ package body Model_Runner.Llama is
          Put_Count (Natural (Item.History.all (Index)));
       end loop;
 
-      --  The cache is laid out by capacity, so one layer's committed
-      --  positions are a run and the layers are not adjacent.
+      --  Where each layer's run begins, and the room it has. The second is
+      --  what a reader compares against its own geometry: a session opened
+      --  the same way cuts the cache the same way, and one that did not
+      --  cannot be told where these positions belong.
+      for Layer_Index in 0 .. Layers - 1 loop
+         Put (Interfaces.Unsigned_64 (Origin_Of (Layer_Index)));
+         Put (Interfaces.Unsigned_64
+                (if Item.Cells = null then Element_Count (Item.Context)
+                 else Item.Cells.all (Natural (Layer_Index))));
+      end loop;
+
+      --  One layer's run of positions at a time, from where that layer
+      --  begins, and the layers are not adjacent.
       for Layer_Index in 0 .. Layers - 1 loop
          declare
             First : constant Element_Count :=
-              Element_Count (Layer_Index)
-              * Element_Count (Item.Context) * Element_Count (KV_Width);
+              Keys_At (Item, Natural (Layer_Index));
          begin
-            for Index in 0 .. Element_Count (Held * KV_Width) - 1 loop
+            for Index in 0 .. Element_Count (Run_Of (Layer_Index) * KV_Width)
+                               - 1
+            loop
                if Item.Held = Eighth then
                   --  Written as the numbers it stands for rather than as
                   --  its bytes and scales: a saved context is read back by
@@ -5195,10 +5402,11 @@ package body Model_Runner.Llama is
       for Layer_Index in 0 .. Layers - 1 loop
          declare
             First : constant Element_Count :=
-              Element_Count (Layer_Index)
-              * Element_Count (Item.Context) * Element_Count (V_Width);
+              Values_At (Item, Natural (Layer_Index));
          begin
-            for Index in 0 .. Element_Count (Held * V_Width) - 1 loop
+            for Index in 0 .. Element_Count (Run_Of (Layer_Index) * V_Width)
+                               - 1
+            loop
                if Item.Held = Exact then
                   Put_Bits (N.Bits (Item.Values.all (First + Index)));
                else
@@ -5466,20 +5674,50 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
+      --  Where each layer's run begins, and the room the writer had. A
+      --  session opened the same way cuts the cache the same way; one that
+      --  did not cannot be told where these positions belong, and is
+      --  refused rather than filled with them.
       if not Trouble then
-         for Layer_Index in 0 .. Element_Count (Settings.Layers) - 1 loop
+         for Layer_Index in 0 .. Settings.Layers - 1 loop
+            declare
+               Begins : constant Interfaces.Unsigned_64 := Get;
+               Room   : constant Interfaces.Unsigned_64 := Get;
+            begin
+               exit when Trouble;
+
+               if Item.Cells = null
+                 or else Room
+                         /= Interfaces.Unsigned_64 (Item.Cells.all (Layer_Index))
+               then
+                  Refuse (E.Lifecycle_Cache_Mismatched, "another window");
+                  exit;
+               end if;
+
+               if Begins > Interfaces.Unsigned_64 (Held) then
+                  Refuse (E.Lifecycle_Cache_Unreadable, "a run past the end");
+                  exit;
+               end if;
+
+               Item.Origin.all (Layer_Index) := Element_Count (Begins);
+            end;
+         end loop;
+      end if;
+
+      if not Trouble then
+         for Layer_Index in 0 .. Settings.Layers - 1 loop
             Get_Run
-              (True, Layer_Index * Element_Count (Item.Context) * KV_Width,
-               Held * KV_Width);
+              (True, Keys_At (Item, Layer_Index),
+               (Held - Item.Origin.all (Layer_Index)) * KV_Width);
             exit when Trouble;
          end loop;
       end if;
 
       if not Trouble then
-         for Layer_Index in 0 .. Element_Count (Settings.Layers) - 1 loop
+         for Layer_Index in 0 .. Settings.Layers - 1 loop
             Get_Run
-              (False, Layer_Index * Element_Count (Item.Context) * V_Width,
-               Held * V_Width);
+              (False, Values_At (Item, Layer_Index),
+               (Held - Item.Origin.all (Layer_Index)) * V_Width);
             exit when Trouble;
          end loop;
       end if;
@@ -5521,12 +5759,40 @@ package body Model_Runner.Llama is
       Capacity : constant Natural :=
         (if Context = 0 then Settings.Context_Length else Context);
 
-      --  layers * capacity * kv heads * head size * bytes * 2, entirely in
-      --  checked arithmetic so that an implausible request is reported as an
+      --  How many positions the layers hold between them.
+      --
+      --  It was layers times capacity, because every layer held the whole
+      --  context. A layer that slides a window holds the window and a
+      --  margin instead, and this counts what Open will allocate rather
+      --  than what it used to -- the two must agree, or a plan refuses a
+      --  session that would have fitted or admits one that will not.
+      --
+      --  The rule is stated once, here and in Open, and the two are held
+      --  together by a test that opens a session and compares what it took
+      --  against what this said.
+      Margin : constant Natural := Max_Batch;
+
+      function Cells_Of (Layer : Natural) return Natural
+      is (if Slides (Settings, Layer)
+          then Natural'Min (Capacity, Settings.Window + Margin)
+          else Capacity);
+
+      function Positions return Interfaces.Unsigned_64;
+
+      function Positions return Interfaces.Unsigned_64 is
+         Total : Interfaces.Unsigned_64 := 0;
+      begin
+         for Layer in 0 .. Settings.Layers - 1 loop
+            Total := Total + Interfaces.Unsigned_64 (Cells_Of (Layer));
+         end loop;
+         return Total;
+      end Positions;
+
+      --  positions * kv heads * head size * bytes * 2, entirely in checked
+      --  arithmetic so that an implausible request is reported as an
       --  overflow rather than wrapping into a small allocation.
       Room : constant A.Checked :=
-        A.To_Checked (Interfaces.Unsigned_64 (Settings.Layers))
-        * A.To_Checked (Interfaces.Unsigned_64 (Capacity))
+        A.To_Checked (Positions)
         * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
         * A.To_Checked
             (Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Value_Size))
@@ -5639,6 +5905,73 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  How the cache is cut up, before anything is allocated.
+      --
+      --  A layer that slides a window can never read further back than the
+      --  window, so it is given the window and a margin rather than the
+      --  whole context: the margin is what lets a batch be written and a
+      --  run of tokens generated before the layer has to slide, and sliding
+      --  moves only what the window still needs. A layer that attends to
+      --  everything is given everything, which is what every layer had.
+      --
+      --  THE DEVICE KEEPS ITS OWN COPY OF THE CACHE AND WRITES IT A
+      --  POSITION AT A TIME, so a host that slid its rows underneath would
+      --  leave that copy describing positions that have moved. A session
+      --  opened on a device holds the whole context for every layer, as it
+      --  did, and the saving is the processor's for now.
+      declare
+         Layers : constant Natural := Settings.Layers;
+         Room   : Element_Count := 0;
+         Keys   : Element_Count := 0;
+         Vals   : Element_Count := 0;
+
+         --  How far past the window a layer runs before it slides.
+         --
+         --  A batch, because a batch is written before anything reads it
+         --  and the room has to hold one whole. Not more: what a slide
+         --  costs is a window of rows moved every margin positions, which
+         --  is a window over a batch of rows for every position written --
+         --  eight of them on gemma2, against the six hundred megabytes of
+         --  weights that position reads. What a larger margin would buy is
+         --  fewer slides and a bigger cache, which is the trade this
+         --  section exists to refuse.
+         Margin : constant Element_Count := Element_Count (Max_Batch);
+
+         Windowed : constant Boolean :=
+           Settings.Window > 0
+           and then Model_Runner.Backend."/="
+                      (Source.Able.Kind,
+                       Model_Runner.Backend.Backend_Device);
+      begin
+         Item.Cells := new Cell_Counts (0 .. Layers - 1);
+         Item.At_Keys := new Cell_Counts (0 .. Layers - 1);
+         Item.At_Values := new Cell_Counts (0 .. Layers - 1);
+         Item.At_Rows := new Cell_Counts (0 .. Layers - 1);
+         Item.Origin := new Cell_Counts (0 .. Layers - 1);
+
+         for Layer in 0 .. Layers - 1 loop
+            Item.Cells.all (Layer) :=
+              (if Windowed and then Slides (Settings, Layer)
+               then Element_Count'Min
+                      (Element_Count (Capacity),
+                       Element_Count (Settings.Window) + Margin)
+               else Element_Count (Capacity));
+
+            Item.At_Rows.all (Layer) := Room;
+            Item.At_Keys.all (Layer) := Keys;
+            Item.At_Values.all (Layer) := Vals;
+            Item.Origin.all (Layer) := 0;
+
+            Room := Room + Item.Cells.all (Layer);
+            Keys := Keys
+              + Item.Cells.all (Layer)
+                * Element_Count (Settings.KV_Heads * Settings.Head_Size);
+            Vals := Vals
+              + Item.Cells.all (Layer)
+                * Element_Count (Settings.KV_Heads * Settings.Value_Size);
+         end loop;
+      end;
+
       declare
          Width : constant Element_Count :=
            Element_Count (Settings.Embedding);
@@ -5652,30 +5985,32 @@ package body Model_Runner.Llama is
            Element_Count (Settings.KV_Heads * Settings.Head_Size);
          KV_Out : constant Element_Count :=
            Element_Count (Settings.KV_Heads * Settings.Value_Size);
-         Deep  : constant Element_Count :=
-           Element_Count (Settings.Layers) * Element_Count (Capacity);
-
-         --  One scale a row, and a row is one position of one layer.
-         Rows  : constant Element_Count := Deep;
+         --  What the geometry above added up to: the positions every layer
+         --  holds between them, which is the whole context a layer only
+         --  where no layer slides a window.
+         Rows  : constant Element_Count :=
+           Item.At_Rows.all (Settings.Layers - 1)
+           + Item.Cells.all (Settings.Layers - 1);
       begin
          --  One storage or the other, never both.
          Item.Held := Cache;
 
          case Cache is
             when Exact =>
-               T.Allocate (Deep * KV, Item.Keys);
-               T.Allocate (Deep * KV_Out, Item.Values);
+               T.Allocate (Rows * KV, Item.Keys);
+               T.Allocate (Rows * KV_Out, Item.Values);
 
             when Halved =>
-               T.Allocate (Deep * KV, Item.Half_Keys);
-               T.Allocate (Deep * KV_Out, Item.Half_Values);
+               T.Allocate (Rows * KV, Item.Half_Keys);
+               T.Allocate (Rows * KV_Out, Item.Half_Values);
 
             when Eighth =>
                --  The bytes, and a scale for every row of them: one row a
                --  position a layer, for the keys and again for the values.
-               Item.Byte_Keys := new B.Byte_Array (0 .. B.Byte_Count (Deep * KV) - 1);
+               Item.Byte_Keys :=
+                 new B.Byte_Array (0 .. B.Byte_Count (Rows * KV) - 1);
                Item.Byte_Values :=
-                 new B.Byte_Array (0 .. B.Byte_Count (Deep * KV_Out) - 1);
+                 new B.Byte_Array (0 .. B.Byte_Count (Rows * KV_Out) - 1);
                T.Allocate (Rows, Item.Key_Scales);
                T.Allocate (Rows, Item.Value_Scales);
          end case;
@@ -5801,6 +6136,12 @@ package body Model_Runner.Llama is
       end if;
 
       Item.Seat := -1;
+
+      Free_Cells (Item.Cells);
+      Free_Cells (Item.At_Keys);
+      Free_Cells (Item.At_Values);
+      Free_Cells (Item.At_Rows);
+      Free_Cells (Item.Origin);
 
       T.Free (Item.Keys);
       T.Free (Item.Values);
@@ -5983,32 +6324,36 @@ package body Model_Runner.Llama is
       for Index in Item.Owner.Layers'Range loop
          declare
             Base : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+              Keys_At (Item, Natural (Index));
             V_Base : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+              Values_At (Item, Natural (Index));
             Rows_Base : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context);
+              Rows_At (Item, Natural (Index));
          begin
             for Step in 0 .. Moved - 1 loop
                declare
-                  From : constant Element_Count :=
-                    Base + Element_Count (Keep + Drop + Step) * KV_Width;
-                  Into : constant Element_Count :=
-                    Base + Element_Count (Keep + Step) * KV_Width;
+                  --  Where the two positions sit in this layer, which is
+                  --  not the positions themselves for a layer that slides
+                  --  a window.
+                  Was : constant Element_Count :=
+                    Cell_Of (Item, Natural (Index),
+                             Element_Count (Keep + Drop + Step));
+                  Now : constant Element_Count :=
+                    Cell_Of (Item, Natural (Index),
+                             Element_Count (Keep + Step));
 
-                  V_From : constant Element_Count :=
-                    V_Base + Element_Count (Keep + Drop + Step) * V_Width;
-                  V_Into : constant Element_Count :=
-                    V_Base + Element_Count (Keep + Step) * V_Width;
+                  From : constant Element_Count := Base + Was * KV_Width;
+                  Into : constant Element_Count := Base + Now * KV_Width;
+
+                  V_From : constant Element_Count := V_Base + Was * V_Width;
+                  V_Into : constant Element_Count := V_Base + Now * V_Width;
                begin
                   if Item.Held = Eighth then
                      for Offset in 0 .. KV_Width - 1 loop
                         Item.Key_Row.all (Offset) :=
                           Unpack (Item.Byte_Keys.all,
                                   B.Byte_Count (From + Offset),
-                                  Item.Key_Scales.all
-                                    (Rows_Base
-                                     + Element_Count (Keep + Drop + Step)));
+                                  Item.Key_Scales.all (Rows_Base + Was));
                      end loop;
                   elsif Item.Held = Exact then
                      Item.Key_Row.all (0 .. KV_Width - 1) :=
@@ -6037,8 +6382,7 @@ package body Model_Runner.Llama is
                      Pack_Row
                        (Item.Key_Row.all (0 .. KV_Width - 1),
                         Item.Byte_Keys.all, B.Byte_Count (Into),
-                        Item.Key_Scales.all
-                          (Rows_Base + Element_Count (Keep + Step)));
+                        Item.Key_Scales.all (Rows_Base + Now));
 
                      for Offset in 0 .. V_Width - 1 loop
                         Item.Byte_Values.all
@@ -6046,10 +6390,8 @@ package body Model_Runner.Llama is
                           Item.Byte_Values.all
                             (B.Byte_Count (V_From + Offset));
                      end loop;
-                     Item.Value_Scales.all
-                       (Rows_Base + Element_Count (Keep + Step)) :=
-                       Item.Value_Scales.all
-                         (Rows_Base + Element_Count (Keep + Drop + Step));
+                     Item.Value_Scales.all (Rows_Base + Now) :=
+                       Item.Value_Scales.all (Rows_Base + Was);
                   elsif Item.Held = Exact then
                      Item.Keys.all (Into .. Into + KV_Width - 1) :=
                        Item.Key_Row.all (0 .. KV_Width - 1);
@@ -6131,6 +6473,13 @@ package body Model_Runner.Llama is
       if Item.History /= null then
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
       end if;
+
+      --  And every layer holds the front of the context again, which is
+      --  where a session that has committed nothing begins.
+      if Item.Origin /= null then
+         Item.Origin.all := [others => 0];
+      end if;
+
       Item.Committed := 0;
       if Item.Current /= Closed then
          Item.Current := Ready;
@@ -6280,7 +6629,14 @@ package body Model_Runner.Llama is
             Base      : Element_Count := 0;
             V_Base    : Element_Count := 0;
             Rows_Base : Element_Count := 0;
+            --  The first and the last position this layer may read, said
+            --  as cells rather than positions: a layer that slides a
+            --  window holds them somewhere else, and the blend walks its
+            --  own memory. Every distance the blend takes is a difference
+            --  between two of these, so subtracting the same origin from
+            --  both leaves the arithmetic where it was.
             Earliest  : Element_Count := 0;
+            Upto      : Element_Count := 0;
             Sinks     : T.Real_Array_Access := null;
             Ok        : Boolean := True;
          end record;
@@ -6309,8 +6665,8 @@ package body Model_Runner.Llama is
                Share.Base, Share.V_Base, Share.Rows_Base, KV_Width,
                V_Width, Heads, Head_Size, Value_Size,
                Element_Count (Settings.Group_Size),
-               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
-               Settings.Max_Bias, Reserved, Share.Sinks,
+               Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Share.Upto, Share.Sinks,
                From, To, Item.Score_Room,
                Item.Scores.all, Item.Attention.all, Fine);
          elsif Item.Held = Exact then
@@ -6318,8 +6674,8 @@ package body Model_Runner.Llama is
               (Item.Query.all, Item.Keys.all, Item.Values.all,
                Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
                Value_Size, Element_Count (Settings.Group_Size),
-               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
-               Settings.Max_Bias, Reserved, Share.Sinks,
+               Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Share.Upto, Share.Sinks,
                From, To, Item.Score_Room,
                Item.Scores.all, Item.Attention.all, Fine);
          else
@@ -6328,8 +6684,8 @@ package body Model_Runner.Llama is
                Item.Half_Values.all,
                Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
                Value_Size, Element_Count (Settings.Group_Size),
-               Share.Earliest, Reserved, Scale, Settings.Attention_Cap,
-               Settings.Max_Bias, Reserved, Share.Sinks,
+               Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
+               Settings.Max_Bias, Share.Upto, Share.Sinks,
                From, To, Item.Score_Room,
                Item.Scores.all, Item.Attention.all, Fine);
          end if;
@@ -6536,6 +6892,9 @@ package body Model_Runner.Llama is
          K.Add (Item.Activation.all, Item.Normalized.all);
       end if;
 
+      --  Room for this position in the layers that slide a window.
+      Make_Room (Item, Settings, Reserved);
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  The reserved position was never committed, so the cache still
@@ -6547,16 +6906,18 @@ package body Model_Runner.Llama is
          declare
             Current : Layer renames Source.Layers.all (Index);
             Base    : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
-            Slot    : constant Element_Count := Base + Reserved * KV_Width;
+              Keys_At (Item, Natural (Index));
+            Cell    : constant Element_Count :=
+              Cell_Of (Item, Natural (Index), Reserved);
+            Slot    : constant Element_Count := Base + Cell * KV_Width;
 
             --  Where this layer's row scales begin, which is one a position
             --  rather than one an element.
             Rows_Base : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context);
+              Rows_At (Item, Natural (Index));
             V_Base  : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
-            V_Slot  : constant Element_Count := V_Base + Reserved * V_Width;
+              Values_At (Item, Natural (Index));
+            V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
 
             --  Whether this position reached the device's own cache, which
             --  is what says attention may be done there. False leaves
@@ -6760,11 +7121,11 @@ package body Model_Runner.Llama is
                Pack_Row
                  (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
                   B.Byte_Count (Slot),
-                  Item.Key_Scales.all (Rows_Base + Reserved));
+                  Item.Key_Scales.all (Rows_Base + Cell));
                Pack_Row
                  (Item.Value_Row.all (0 .. V_Width - 1), Item.Byte_Values.all,
                   B.Byte_Count (V_Slot),
-                  Item.Value_Scales.all (Rows_Base + Reserved));
+                  Item.Value_Scales.all (Rows_Base + Cell));
             elsif Item.Held = Exact then
                for Offset in 0 .. KV_Width - 1 loop
                   Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
@@ -6801,10 +7162,13 @@ package body Model_Runner.Llama is
             --  head by division; no key or value head is ever duplicated.
             --
             --  A model with a sliding window sees the window's worth of
-            --  positions ending at this one and no more. The positions
-            --  before that are still in the cache -- narrowing what may be
-            --  read is not the same as holding less, and this holds the
-            --  same amount either way.
+            --  positions ending at this one and no more, and the positions
+            --  before that are no longer in the cache: a layer that slides
+            --  holds the window and a batch rather than the whole context.
+            --  What that changes here is nothing -- Cell_Of says where a
+            --  position sits and the blend is given cells rather than
+            --  positions -- and what it changes elsewhere is a gemma3
+            --  session at its own context, from 1.83 GB to 0.33.
             declare
                First : constant Element_Count :=
                  Earliest (Settings, Reserved, Natural (Index));
@@ -6814,7 +7178,8 @@ package body Model_Runner.Llama is
                  (Base     => Base,
                   V_Base   => V_Base,
                   Rows_Base => Rows_Base,
-                  Earliest => First,
+                  Earliest => Cell_Of (Item, Natural (Index), First),
+                  Upto     => Cell,
                   Sinks    => Current.Sinks,
                   Ok       => True);
                Shared : E.Error_Info;
@@ -7061,12 +7426,12 @@ package body Model_Runner.Llama is
          if Deferred (Index) then
             declare
                At_Key : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * KV_Width + Reserved * KV_Width;
+                 Keys_At (Item, Natural (Index))
+                 + Cell_Of (Item, Natural (Index), Reserved) * KV_Width;
 
                At_Val : constant Element_Count :=
-                 Element_Count (Index) * Element_Count (Item.Context)
-                 * V_Width + Reserved * V_Width;
+                 Values_At (Item, Natural (Index))
+                 + Cell_Of (Item, Natural (Index), Reserved) * V_Width;
 
                Read : Boolean;
             begin
@@ -7646,6 +8011,13 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
+      --  Room for what this pass will add, in the layers that slide a
+      --  window. A round's rows are different sessions at different
+      --  positions, so each is asked for its own.
+      for Which in 0 .. Count - 1 loop
+         Make_Room (Held_By (Which).all, Settings, Sits_At (Which));
+      end loop;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  Nothing was committed, so the cache still describes exactly
@@ -7658,11 +8030,11 @@ package body Model_Runner.Llama is
          declare
             Current : Layer renames Source.Layers.all (Index);
             Base    : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * KV_Width;
+              Keys_At (Item, Natural (Index));
             Rows_Base : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context);
+              Rows_At (Item, Natural (Index));
             V_Base  : constant Element_Count :=
-              Element_Count (Index) * Element_Count (Item.Context) * V_Width;
+              Values_At (Item, Natural (Index));
 
             --  Whether this batch's positions reached the device's cache.
             --  Set as they are written and read where they are attended to,
@@ -8172,9 +8544,13 @@ package body Model_Runner.Llama is
                   KV_At : constant Element_Count := Slot (Which, KV_Width);
                   V_At  : constant Element_Count := Slot (Which, V_Width);
                   Place : constant Element_Count :=
-                    Base + Sits_At (Which) * KV_Width;
+                    Base
+                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                      * KV_Width;
                   V_Place : constant Element_Count :=
-                    V_Base + Sits_At (Which) * V_Width;
+                    V_Base
+                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                      * V_Width;
                begin
                   --  The same bias as the single-token path adds, on each
                   --  token of the batch. A batch that skipped it would
@@ -8223,13 +8599,17 @@ package body Model_Runner.Llama is
                        (Keys.all (KV_At .. KV_At + KV_Width - 1),
                         Held_By (Which).Byte_Keys.all, B.Byte_Count (Place),
                         Held_By (Which).Key_Scales.all
-                          (Rows_Base + Sits_At (Which)));
+                          (Rows_Base
+                           + Cell_Of (Item, Natural (Index),
+                                      Sits_At (Which))));
                      Pack_Row
                        (Values.all (V_At .. V_At + V_Width - 1),
                         Held_By (Which).Byte_Values.all,
                         B.Byte_Count (V_Place),
                         Held_By (Which).Value_Scales.all
-                          (Rows_Base + Sits_At (Which)));
+                          (Rows_Base
+                           + Cell_Of (Item, Natural (Index),
+                                      Sits_At (Which))));
                   elsif Item.Held = Exact then
                      for Offset in 0 .. KV_Width - 1 loop
                         Held_By (Which).Keys.all (Place + Offset) :=
@@ -8446,6 +8826,28 @@ package body Model_Runner.Llama is
                               else Reserved + Count - 1);
                            First_Step : constant Element_Count :=
                              Earliest (Settings, Last_Step, Natural (Index));
+
+                           --  Said as cells of the row's own session,
+                           --  because a round's rows are different sessions
+                           --  and each holds its window somewhere of its
+                           --  own. Every distance the blend takes is a
+                           --  difference between two of these.
+                           First_Cell : constant Element_Count :=
+                             Cell_Of (Held_By (Which).all, Natural (Index),
+                                      First_Step);
+                           Last_Cell  : constant Element_Count :=
+                             Cell_Of (Held_By (Which).all, Natural (Index),
+                                      Last_Step);
+
+                           --  The query's own position, which is not the
+                           --  last one: a model that reads a whole text at
+                           --  once gives every slot of the batch the same
+                           --  last position, and the fall-off with distance
+                           --  is measured from where the query is.
+                           Query_Cell : constant Element_Count :=
+                             Cell_Of (Held_By (Which).all, Natural (Index),
+                                      Sits_At (Which));
+
                            Q_At   : constant Element_Count :=
                              Slot (Which, Wide);
                            B_At   : constant Element_Count :=
@@ -8462,9 +8864,9 @@ package body Model_Runner.Llama is
                                  Base, V_Base, Rows_Base, KV_Width, V_Width,
                                  Heads, Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
-                                 First_Step, Last_Step, Scale,
+                                 First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which), Current.Sinks,
+                                 Query_Cell, Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -8476,9 +8878,9 @@ package body Model_Runner.Llama is
                                  Base, V_Base, KV_Width, V_Width, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
-                                 First_Step, Last_Step, Scale,
+                                 First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which), Current.Sinks,
+                                 Query_Cell, Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -8490,9 +8892,9 @@ package body Model_Runner.Llama is
                                  Base, V_Base, KV_Width, V_Width, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
-                                 First_Step, Last_Step, Scale,
+                                 First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
-                                 Sits_At (Which), Current.Sinks,
+                                 Query_Cell, Current.Sinks,
                                  From, To, Item.Score_Room, Item.Scores.all,
                                  Attend.all (B_At .. B_At + Blend - 1),
                                  Usable);
@@ -8726,12 +9128,10 @@ package body Model_Runner.Llama is
             if Deferred (Index) and then not Owing then
                declare
                   Layer_Keys : constant Element_Count :=
-                    Element_Count (Index) * Element_Count (Item.Context)
-                    * KV_Width;
+                    Keys_At (Item, Natural (Index));
 
                   Layer_Vals : constant Element_Count :=
-                    Element_Count (Index) * Element_Count (Item.Context)
-                    * V_Width;
+                    Values_At (Item, Natural (Index));
 
                   Read : Boolean := True;
                begin
