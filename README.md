@@ -18083,6 +18083,71 @@ device is sixty-seven submissions` already measured those at 55.5 GB/s
 against a part that gives sixty. That is where the remaining 1.07 lives, and
 it is a streaming problem rather than an arrangement one.
 
+### A generated token on the device, taken apart
+
+The budget could not do this and has just been shown why. **Ablation can**:
+take one part out, keep every dispatch and workgroup where it was, and the
+run loses exactly what that part cost. Four of them, each three alternated
+rounds of five readings, twelve generated tokens at a context of about
+eighteen on TinyLlama-1.1B Q8_0:
+
+| | as it is | taken away | costs | a token |
+| --- | ---: | ---: | ---: | ---: |
+| attending | 0.2197 s | 0.2183 | 0.0014 s | **0.12 ms** |
+| the cache read back to the host | 0.2190 | 0.2173 | 0.0017 | **0.14 ms** |
+| the output projection | 0.2177 | 0.2070 | 0.0107 | **0.89 ms** |
+| everything else, by difference | | | | **17.05 ms** |
+
+**Ninety-four per cent of a generated token is the layer products**, and
+what is left is one and a half per cent of vocabulary, eight tenths of a per
+cent of attending and cache copying, and nothing else. There is no fixed
+cost hiding in it. The three sections above spent themselves on 3.3
+milliseconds that was going to be found in submissions, then in dispatches,
+then in attention; this table is what a token is.
+
+**In bytes.** This file is 1,170.8 MB, of which `token_embd.weight` is 69.6
+and is read one row at a time; the layer weights are 1,029.4 MB and
+`output.weight` is 69.6, and a generated token reads every byte of both.
+
+| | bytes | time | |
+| --- | ---: | ---: | ---: |
+| the layer products | 1,029.4 MB | 17.05 ms | **60.4 GB/s** |
+| the output projection | 69.6 MB | 0.89 ms | **78.2 GB/s** |
+| the token | 1,099.0 MB | 18.20 ms | **60.4 GB/s** |
+| llama.cpp's token, same bytes | 1,099.0 MB | 17.18 ms | **64.0 GB/s** |
+
+**So the 1.07 is six per cent of streaming rate and nothing else.** Not an
+arrangement, not a submission count, not a kernel this repository has not
+written: the same bytes, off the same part, four per cent of a byte per
+nanosecond apart. Every section that looked for the gap in the shape of the
+work was looking in the wrong place, and this table is why.
+
+**And the one thing in it that does not fit is the vocabulary product.** It
+reads 69.6 megabytes at **78.2 GB/s** where the layer products read
+1,029.4 at 60.4 -- twenty-nine per cent faster, same part, same format,
+same kernel. If the layer products ran at the vocabulary's rate a token
+would be 13.2 milliseconds against llama.cpp's 17.2, so this is not a small
+question.
+
+What differs is not the row length -- the vocabulary's rows are 2048 long
+and so are the queries' and the gate's inputs -- and not the workgroup
+count, since 5,632 rows and 32,000 rows both bury twelve compute units. What
+differs is that **the vocabulary product is alone in its submission and the
+layer products are fifteen steps of one sequence**, with a barrier wherever
+a step reads what the step before it wrote. A layer's products cannot all be
+in flight at once and the vocabulary's row has nothing to wait for.
+
+That is a hypothesis and it is not tested here. What is measured is the
+difference, and it is the first thing on this page that names a mechanism
+worth twenty-nine per cent. **The number to beat is 78.2 GB/s**, and the
+part evidently gives it.
+
+**A caveat on the last row of the first table.** The layer products' time is
+a residual -- the token less the three things ablated out of it -- and not a
+reading of its own, because there is no way to take a layer's products away
+and still have a token. The three ablations are direct and alternated; the
+17.05 carries whatever they do not.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

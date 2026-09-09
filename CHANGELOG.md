@@ -93,6 +93,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A generated token on the device, decomposed by ablation** -- the first
+  decomposition of one that does not come from the budget, which the entry
+  below shows was reporting a whole layer as attending. Each part taken out
+  in turn, three alternated rounds of five readings: attending 0.12 ms a
+  token, the cache read back to the host 0.14, the output projection 0.89,
+  and **17.05 ms of layer products** -- ninety-four per cent. There is no
+  fixed cost left to explain.
+
+  In bytes: the layer products read 1,029.4 MB at **60.4 GB/s**, the
+  output projection 69.6 MB at **78.2**, the token 1,099.0 MB at 60.4, and
+  llama.cpp's token the same bytes at **64.0**. So the device's 1.07 is six
+  per cent of streaming rate and nothing else -- not an arrangement, not a
+  submission count, not a missing kernel.
+
+  And the vocabulary product is twenty-nine per cent faster than the layer
+  products on the same part, same format and same kernel. It is alone in
+  its submission where a layer's products are fifteen steps of one sequence
+  with barriers between them. Untested, and the first mechanism named on
+  that page worth twenty-nine per cent.
+
 - **Attention costs 0.0013 ms a position and 0.1 ms a token that does not
   depend on the context**, measured by ablation -- `attention.comp` returning
   at the top of `main` with zeros where its blend would go, which removes the
