@@ -34,12 +34,26 @@ Keep a Changelog and the project uses semantic versioning.
   the device untouched. Both windowed models produce the same text they
   produced before, byte for byte, on a 1328-token prompt that slides.
 
-  **The device keeps the whole context and is told so**: it holds its own copy
-  and writes it a position at a time, so a host sliding rows underneath would
-  leave that copy describing positions that have moved. **A saved session
-  says where each layer's run begins** and the format's version is two; a file
-  written by the version before it is refused by version, and a session whose
-  geometry differs is refused by name.
+  **The device slides too and no shader changed.** Its block is this cache's
+  own length, so a narrower cache is a narrower block, and what a slide has to
+  do beyond moving the host's rows is write the moved ones over. The shaders
+  needed nothing because everything they do with a position is a difference --
+  the causal mask, the window derived as `last + 1 - window`, the fall-off
+  with distance -- and subtracting the same origin from both sides of a
+  difference leaves it where it was. The slide settles what the device owes
+  first, and asks only when a layer is about to slide, so the lazy settle that
+  reading a 1419-token prompt on the device is built around still holds. A
+  round's table carries a row for every layer as well as every row, each layer
+  being handed its own slice.
+
+  **One thing is held by construction rather than by a run**: a round that has
+  slid would need 515 positions in each of its members, which on the models to
+  hand is 4608, and the round tests step four. So the per-row, per-layer origin
+  in that table is exercised with every origin at zero.
+
+  **A saved session says where each layer's run begins** and the format's
+  version is two; a file written by the version before it is refused by
+  version, and a session whose geometry differs is refused by name.
 
 - **A seam so that a package which decides what a model says can be shared
   out without knowing what a host is.** `Model_Runner.Shares` declares two

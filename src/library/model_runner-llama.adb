@@ -5160,6 +5160,27 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  What the device wrote and the host has not read back, before any
+      --  of it is moved. Asked only when something is about to slide, so
+      --  the lazy settle this backend was built around still holds for
+      --  every call that does not: a layer slides about once every batch
+      --  of positions.
+      if Item.Owed_Count > 0 then
+         declare
+            Sliding : Boolean := False;
+         begin
+            for Layer in Item.Cells.all'Range loop
+               Sliding := Sliding
+                 or else Upto - Item.Origin.all (Layer)
+                         >= Item.Cells.all (Layer);
+            end loop;
+
+            if Sliding then
+               Settle_Cache (Item);
+            end if;
+         end;
+      end if;
+
       for Layer in Item.Cells.all'Range loop
          declare
             Cells  : constant Element_Count := Item.Cells.all (Layer);
@@ -5241,6 +5262,33 @@ package body Model_Runner.Llama is
                                (Rows_Base + From
                                 .. Rows_Base + From + Moved - 1);
                      end case;
+                  end if;
+
+                  --  And the device's copy of what moved, which is these
+                  --  same bytes in this session's own block. Only the
+                  --  exact storage ever reaches a device, which is what
+                  --  Take_Block asks of a session before it deals it one.
+                  if Moved > 0
+                    and then Item.Seat > 0
+                    and then Item.Held = Exact
+                  then
+                     declare
+                        Sent : Boolean;
+                     begin
+                        Model_Runner.Backend.Device.Put_Cache
+                          (Block_Base (Item) + Keys_Base,
+                           Item.Keys.all
+                             (Keys_Base
+                              .. Keys_Base + Moved * KV_Width - 1),
+                           Sent);
+                        Model_Runner.Backend.Device.Put_Cache
+                          (Block_Base (Item)
+                           + Item.Keys.all'Length + Vals_Base,
+                           Item.Values.all
+                             (Vals_Base
+                              .. Vals_Base + Moved * V_Width - 1),
+                           Sent);
+                     end;
                   end if;
 
                   Item.Origin.all (Layer) := Start;
@@ -6989,9 +7037,11 @@ package body Model_Runner.Llama is
                               + Item.Keys.all'Length + V_Slot),
                      Natural (Heads), Natural (Value_Size),
                      Settings.Group_Size,
-                     Natural (Earliest (Settings, Reserved,
-                                        Natural (Index))),
-                     Natural (Reserved), Natural (Block_Base (Item) + Base),
+                     Natural (Cell_Of (Item, Natural (Index),
+                                       Earliest (Settings, Reserved,
+                                                 Natural (Index)))),
+                     Natural (Cell),
+                     Natural (Block_Base (Item) + Base),
                      Natural (Block_Base (Item)
                               + Item.Keys.all'Length + V_Base),
                      Natural (KV_Width), Natural (V_Width),
@@ -7214,7 +7264,8 @@ package body Model_Runner.Llama is
                     (Item.Query.all, Item.Activation.all,
                      Natural (Heads), Natural (Head_Size),
                      Natural (Value_Size), Settings.Group_Size,
-                     Natural (First), Natural (Reserved),
+                     Natural (Cell_Of (Item, Natural (Index), First)),
+                     Natural (Cell),
                      Natural (Block_Base (Item) + Base),
                      Natural (Block_Base (Item)
                               + Item.Keys.all'Length + V_Base),
@@ -7232,7 +7283,9 @@ package body Model_Runner.Llama is
                   else
                      Attend_There
                        (Item, Source, Item.Query.all, Heads, Head_Size,
-                        Value_Size, First, Reserved, Base, V_Base, KV_Width,
+                        Value_Size,
+                        Cell_Of (Item, Natural (Index), First), Cell,
+                        Base, V_Base, KV_Width,
                         V_Width, Scale, Item.Attention.all, Usable,
                         Sinks => Current.Sinks);
                   end if;
@@ -7245,7 +7298,8 @@ package body Model_Runner.Llama is
                   Model_Runner.Backend.Device.Attend_And_Project
                     (Item.Query.all, Natural (Heads), Natural (Head_Size),
                      Natural (Value_Size), Settings.Group_Size,
-                     Natural (First), Natural (Reserved), Natural (Base),
+                     Natural (Cell_Of (Item, Natural (Index), First)),
+                     Natural (Cell), Natural (Base),
                      Natural (Item.Keys.all'Length + V_Base),
                      Natural (KV_Width), Natural (V_Width), Scale,
                      Settings.Attention_Cap, Current.Attention_Out,
@@ -7257,7 +7311,9 @@ package body Model_Runner.Llama is
                   else
                      Attend_There
                        (Item, Source, Item.Query.all, Heads, Head_Size,
-                        Value_Size, First, Reserved, Base, V_Base, KV_Width,
+                        Value_Size,
+                        Cell_Of (Item, Natural (Index), First), Cell,
+                        Base, V_Base, KV_Width,
                         V_Width, Scale, Item.Attention.all, Usable,
                         Sinks => Current.Sinks);
                   end if;
@@ -7971,8 +8027,8 @@ package body Model_Runner.Llama is
         and then Item.Held = Exact
         and then Members <= Element_Count (Model_Runner.Backend.Device
                                              .Block_Limit)
-        and then Count <= Element_Count (Model_Runner.Backend.Device
-                                           .Table_Rows)
+        and then Count * Element_Count (Item.Owner.Settings.Layers)
+                 <= Element_Count (Model_Runner.Backend.Device.Table_Rows)
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
@@ -7991,18 +8047,36 @@ package body Model_Runner.Llama is
          if Seated then
             declare
                Table : Model_Runner.Backend.Device.Word_List
-                         (1 .. 2 * Natural (Count));
+                         (1 .. 2 * Natural (Count) * Settings.Layers);
                Ok    : Boolean;
             begin
                --  Two words a row rather than a member: rows of one member
                --  read the same block and sit at different positions, which
                --  is what a round with a prompt in it needs said.
-               for Which in 0 .. Count - 1 loop
-                  Table (2 * Natural (Which) + 1) :=
-                    Natural (Sits_At (Which));
-                  Table (2 * Natural (Which) + 2) :=
-                    Natural'Max (Held_By (Which).Seat, 0)
-                    * Natural (Block_Span);
+               --
+               --  AND THE ROWS ARE REPEATED FOR EVERY LAYER, because what
+               --  the shader wants is where a position sits and a layer
+               --  that slides a window holds it somewhere of its own --
+               --  which differs by layer and, a round's rows being
+               --  different sessions, by row. The whole table goes over
+               --  once and each layer is handed the offset of its own
+               --  slice, so this costs a longer write rather than a write
+               --  a layer.
+               for Layer in 0 .. Element_Count (Settings.Layers) - 1 loop
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        Row : constant Natural :=
+                          2 * Natural (Layer * Count + Which);
+                     begin
+                        Table (Row + 1) :=
+                          Natural (Cell_Of (Held_By (Which).all,
+                                            Natural (Layer),
+                                            Sits_At (Which)));
+                        Table (Row + 2) :=
+                          Natural'Max (Held_By (Which).Seat, 0)
+                          * Natural (Block_Span);
+                     end;
+                  end loop;
                end loop;
 
                Model_Runner.Backend.Device.Put_Table (Table_At, Table, Ok);
@@ -8395,19 +8469,24 @@ package body Model_Runner.Llama is
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
                         Natural ((if Rounding then 0
-                                  else Block_Base (Item) + Reserved
-                                       * KV_Width)
+                                  else Block_Base (Item)
+                                       + Cell_Of (Item, Natural (Index),
+                                                  Reserved) * KV_Width)
                                  + Base),
                         Natural ((if Rounding then 0
-                                  else Block_Base (Item) + Reserved
-                                       * V_Width)
+                                  else Block_Base (Item)
+                                       + Cell_Of (Item, Natural (Index),
+                                                  Reserved) * V_Width)
                                  + Item.Keys.all'Length + V_Base),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
-                        Natural (Earliest (Settings, Reserved,
-                                           Natural (Index))),
-                        Natural (if Settings.Causal
-                                 then Reserved else Reserved + Count - 1),
+                        Natural (Cell_Of (Item, Natural (Index),
+                                          Earliest (Settings, Reserved,
+                                                    Natural (Index)))),
+                        Natural (Cell_Of (Item, Natural (Index),
+                                          (if Settings.Causal
+                                           then Reserved
+                                           else Reserved + Count - 1))),
                         Natural ((if Rounding then 0
                                   else Block_Base (Item)) + Base),
                         Natural ((if Rounding then 0
@@ -8432,7 +8511,10 @@ package body Model_Runner.Llama is
                         Lifted    => Lifted_Norms (Source),
                         Max_Bias  => Settings.Max_Bias,
                         Table_At  =>
-                          (if Rounding then Natural (Table_At) else 0),
+                          (if Rounding
+                           then Natural (Table_At
+                                         + 2 * Element_Count (Index) * Count)
+                           else 0),
                         Cancel    => Item.Stopping,
 
                         --  The first layer reads what the host sent and
@@ -8698,11 +8780,13 @@ package body Model_Runner.Llama is
                   --  moves its own end along; attending both ways it is the
                   --  batch's last, and every position shares it.
                   First_Step : constant Element_Count :=
-                    Earliest (Settings, Reserved, Natural (Index));
+                    Cell_Of (Item, Natural (Index),
+                             Earliest (Settings, Reserved, Natural (Index)));
                   Last_Step  : constant Element_Count :=
-                    (if Settings.Causal
-                     then Reserved
-                     else Reserved + Count - 1);
+                    Cell_Of (Item, Natural (Index),
+                             (if Settings.Causal
+                              then Reserved
+                              else Reserved + Count - 1));
 
                   --  A round reads its per-row table out of the cache: a
                   --  row's last position and the block it reads, neither of
@@ -8710,7 +8794,10 @@ package body Model_Runner.Llama is
                   --  a round's rows do not sit one after another in one
                   --  sequence.
                   Table : constant Natural :=
-                    (if Rounding then Natural (Table_At) else 0);
+                    (if Rounding
+                     then Natural (Table_At
+                                   + 2 * Element_Count (Index) * Count)
+                     else 0);
 
                   --  Where this session's own block begins, for a batch. A
                   --  round says nothing here: the kernel adds each row's

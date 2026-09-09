@@ -1667,6 +1667,16 @@ package body Tests.Inference_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
+
+      --  Run twice: once on a model that holds every position for every
+      --  layer, and once on one that slides a window and holds neither.
+      --  A round's rows are different sessions, so each holds its window
+      --  somewhere of its own and a row that read another's cells would be
+      --  reading another member's context -- which is what this test is
+      --  about, said about a cache that moves.
+      procedure Stepped (Window : Natural);
+
+      procedure Stepped (Window : Natural) is
       Image : B.Byte_Array_Access;
 
       Steps : constant := 4;
@@ -1678,7 +1688,7 @@ package body Tests.Inference_Cases is
 
       type Trail is array (1 .. Steps) of Logit_Vector;
    begin
-      Tiny_Model.Build (Image);
+      Tiny_Model.Build (Image, Window => Window);
 
       declare
          Held  : aliased constant B.Byte_Array := Image.all;
@@ -1861,6 +1871,10 @@ package body Tests.Inference_Cases is
       end;
 
       B.Free (Image);
+   end Stepped;
+   begin
+      Stepped (0);
+      Stepped (3);
    end Round_Members_Get_What_They_Would_Alone;
 
    --  A server gives each member what it would have got alone.
