@@ -716,9 +716,18 @@ package Model_Runner.Llama is
    --  it, which is the whole reason a prompt's budget is not a token's --
    --  the token budget under `tests benchmark` models the linear parts and
    --  says in its own output that attention is not among them.
+   --
+   --  Fusing is the one that is not a part of a layer but the whole of one.
+   --  Where a layer goes over to a device as a single sequence, nothing
+   --  between the normalization at its front and the join at its back comes
+   --  back to the host, so the host has one clock reading for the lot and
+   --  no way to divide it. It used to be charged to Attending, which made
+   --  the budget report attending as the largest cost on the device when an
+   --  ablation of attention.comp says attention is a thirtieth of that.
+   --  A phase that cannot be measured is named rather than guessed at.
    type Phase is
      (Normalizing, Projecting, Rotating, Attending, Feeding, Joining,
-      Reading_Out);
+      Fusing, Reading_Out);
 
    --  How long each of them took, in one run.
    type Phase_Times is array (Phase) of Duration;

@@ -7304,7 +7304,11 @@ package body Model_Runner.Llama is
                   end loop;
                end if;
 
-               Charge (Item, Attending, Mark);
+               --  The whole layer, not the attending in it: nothing
+               --  between the normalization at its front and the join at
+               --  its back came back to the host, so this one reading is
+               --  all there is and it is charged where it belongs.
+               Charge (Item, Fusing, Mark);
                goto Layer_Done;
             end if;
 

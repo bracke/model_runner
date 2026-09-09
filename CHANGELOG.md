@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The budget charged a whole fused layer to `Attending`**, which made
+  attending the largest number it reported on the device -- 0.215 s of a
+  0.511 s run, where an ablation of `attention.comp` puts attending at
+  0.0014. Since a generated token's layer goes over as one sequence and
+  comes back once, the host has one clock reading for the lot; it is charged
+  to a new phase, `Fusing`, which says what it is. Two entries of this
+  repository acted on the old reading.
+
 - **A mixture quantized with an importance matrix ignored it for the very
   tensors the mixture exists to protect.** `Encode_Weighted` implemented the
   weighted path for Q4_K only, and a recipe spends its extra bits in Q6_K --
@@ -84,6 +92,21 @@ Keep a Changelog and the project uses semantic versioning.
   drop. Rows move only where a layer straddles the hole.
 
 ### Added
+
+- **Attention costs 0.0013 ms a position and 0.1 ms a token that does not
+  depend on the context**, measured by ablation -- `attention.comp` returning
+  at the top of `main` with zeros where its blend would go, which removes the
+  attending and leaves every dispatch and workgroup where it was. Three
+  alternated rounds: at context 18, 0.2197 s against 0.2183; at context 1431,
+  0.2427 against 0.2200.
+
+  The published figures were 0.0073 ms a position and **3.3 ms a token**, and
+  that 3.3 ms is the quantity this repository has now twice attributed and
+  twice withdrawn. It is not there: it is thirty times smaller, half a per
+  cent of a token. With attention removed entirely a generated token still
+  takes 18.2 ms, so what is left is the products, and those were measured at
+  55.5 GB/s against a part that gives sixty. The gap to llama.cpp is
+  streaming, not arrangement.
 
 - **A dispatch on this device costs under a microsecond, and the 3.3
   milliseconds a token that does not depend on the context is unexplained

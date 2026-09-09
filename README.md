@@ -18010,6 +18010,79 @@ answer. The digest moved, which is how that was caught. Moved one place
 earlier the digest held, and the timing was then a timing of the right thing
 and still an answer to the wrong question.
 
+### Attention is not where the device's token goes, and the budget said it was
+
+The section above withdrew the dispatch price and left the 3.3 milliseconds
+a token unexplained for the second time. **It is not unexplained. It is not
+there.**
+
+`### A generated token on the device is sixty-seven submissions` gets that
+figure by fitting a line through what attending costs against context -- 3.6
+milliseconds a token at about forty positions, 13.9 at about 1450, so
+0.0073 ms a position and 3.3 ms before a single position is read.
+**Measured directly, by taking attention away**: `attention.comp` returns at
+the top of `main` after writing zeros where its blend would go, which leaves
+every dispatch, every workgroup and every other step of the layer exactly
+where they were and removes only the attending. Three alternated rounds, five
+readings each, twelve generated tokens:
+
+| context | as it is | attention taken away | attending |
+| --- | ---: | ---: | ---: |
+| about 18 | 0.2197 s | 0.2183 s | **0.12 ms a token** |
+| about 1431 | 0.2427 s | 0.2200 s | **1.89 ms a token** |
+
+A line through those two gives **0.0013 milliseconds a position and 0.1
+milliseconds a token that does not depend on the context** -- against 0.0073
+and 3.3. Six times cheaper a position and **thirty times smaller a fixed
+cost**, which at 0.1 ms of an 18.3 ms token is half a per cent. The largest
+single cost this repository ever identified on the device is gone, and the
+two entries that tried to explain it were explaining a quantity that no
+longer exists.
+
+**And the instrument that reported it is now known to have been wrong.**
+`--budget` on a six-token prompt and twelve generated tokens said this:
+
+| | |
+| --- | ---: |
+| PROJECTING | 0.262 s |
+| ATTENDING | 0.215 s |
+| everything else | 0.034 s |
+
+0.215 seconds attending, in a run where the ablation says attending costs
+0.0014. The reason is one line: since `### A layer, in one submission`, a
+generated token's layer goes over to the device as a single sequence and
+comes back once, so the host has **one clock reading for the whole layer** --
+and it was charging that reading to `Attending`. The largest number in the
+budget was a layer wearing one part's name.
+
+**Fixed by naming it.** `Fusing` is a phase now, and it says what it is: not
+a part of a layer but the whole of one, on the only path where the host
+cannot divide it. The same run reads
+
+| | |
+| --- | ---: |
+| PROJECTING | 0.262 s (the prompt, which does not fuse) |
+| ATTENDING | 0.000 s |
+| FUSING | 0.215 s (the twelve tokens, which do) |
+| READING_OUT | 0.034 s |
+
+**A phase that cannot be measured is named rather than guessed at**, and the
+test that says so runs a batch unaccounted, turns the budget on, generates
+one token on the device, and asks that `Fusing` holds something and
+`Attending` holds nothing. Charging the fused layer back to `Attending`
+fails it, which is the only reason to believe it. It wants the quantized
+fixture rather than the narrow one: a layer goes over as a sequence only
+where the device keeps its matrices resident, and a seven-kilobyte model of
+binary32 is not worth keeping -- so the check written against the default
+fixture would have passed by never fusing at all.
+
+**What this leaves.** The device's gap to llama.cpp is not attention and not
+dispatches. With attention removed entirely a generated token still takes
+18.2 milliseconds, which is the products -- and `### A generated token on the
+device is sixty-seven submissions` already measured those at 55.5 GB/s
+against a part that gives sixty. That is where the remaining 1.07 lives, and
+it is a streaming problem rather than an arrangement one.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

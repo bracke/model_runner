@@ -213,6 +213,133 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Budget_Accounts_For_A_Batch;
 
+   --------------------------------------------------
+   -- A_Fused_Layer_Is_Not_Charged_To_Attending --
+   --------------------------------------------------
+
+   --  A layer that went over to the device as one sequence is charged to
+   --  Fusing, and to nothing else.
+   --
+   --  It used to be charged to Attending, and that made the budget say
+   --  attending was the largest cost on the device -- 0.215 s of a 0.511 s
+   --  run -- when an ablation of attention.comp puts attention at a
+   --  thirtieth of it. A whole layer wearing one part's name is worse than
+   --  no reading at all, because it is a reading somebody will act on: two
+   --  entries of docs/measured-figures.txt did.
+   --
+   --  What this asks is only what can be asked without a clock: that the
+   --  phase which grows with the context is not the one holding a whole
+   --  layer. A machine with no device is told and not failed.
+   procedure A_Fused_Layer_Is_Not_Charged_To_Attending
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      --  The quantized fixture rather than the narrow one: a layer goes
+      --  over as a sequence only where the device keeps its matrices, and
+      --  a seven-kilobyte model of binary32 is not worth keeping. This is
+      --  the shape the trace says the device holds.
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Able   : Boolean;
+      begin
+         --  The backend is a singleton and the suite leaves it closed, so
+         --  this opens it rather than assuming somebody else did.
+         declare
+            Awake : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+
+            if not Awake then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no device fused a layer here");
+               B.Free (Image);
+               return;
+            end if;
+         end;
+
+         Start (Under, Model_Runner.Backend.Backend_Device, Able);
+
+         if not Able then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device fused a layer here");
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open on the device");
+
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+            Logits   : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+            Spent    : L.Phase_Times;
+         begin
+            --  A prompt first, unaccounted: a batch does not fuse and
+            --  its attending is real attending, which would answer the
+            --  question below with the wrong run's time.
+            L.Evaluate_Batch
+              (Live, Under.Ready, [0, 1, 2], Logits, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the device batch failed: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  And then a generated token, which is the shape that fuses:
+            --  its layers go over one sequence each.
+            L.Account (Live, True);
+
+            L.Evaluate
+              (Live, Under.Ready, 3, Logits, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the device step failed: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Spent := L.Time_Spent (Live);
+
+            --  Something was charged: a budget that measured nothing would
+            --  pass the claim below by measuring nothing.
+            declare
+               Total : Duration := 0.0;
+            begin
+               for Phase in L.Phase loop
+                  Total := Total + Spent (Phase);
+               end loop;
+
+               Assert (Total > 0.0,
+                       "the device budget came back empty, so what it "
+                       & "charges where cannot be asked");
+            end;
+
+            Assert (Spent (L.Fusing) > 0.0,
+                    "a device that fuses a layer charged nothing to "
+                    & "Fusing, so either it did not fuse or the whole "
+                    & "layer is being charged somewhere else again");
+
+            Assert (Spent (L.Attending) = 0.0,
+                    "a fused layer was charged to Attending, which is the "
+                    & "phase that grows with the context -- a whole layer "
+                    & "under that name is what made the budget name "
+                    & "attending as the device's largest cost");
+         end;
+
+         L.Close (Live);
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Fused_Layer_Is_Not_Charged_To_Attending;
+
    --  A causal model cannot do this and must not: change the last token of
    --  a prompt and the first position's state is what it was. So the test
    --  is the same text twice with one later token different, and the
@@ -8153,6 +8280,10 @@ package body Tests.Inference_Cases is
         (T, A_Budget_Accounts_For_A_Batch'Access,
          "a session asked for a budget says where a batch's time went, and "
          & "one not asked says nothing");
+      Register_Routine
+        (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
+         "a layer that went over to the device as one sequence is charged "
+         & "to fusing and not to attending");
    end Register_Tests;
 
 end Tests.Inference_Cases;
