@@ -4,6 +4,7 @@ private with System.Atomic_Counters;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
+with Model_Runner.Shares;
 with Model_Runner.Quantization.Integers;
 with Model_Runner.Tensors;
 
@@ -241,19 +242,16 @@ package Model_Runner.Backend.CPU is
    --  pass that ran entirely on the calling task while the workers sat idle,
    --  and because dragging a blend's twenty parameters into this package to
    --  fix that would put the engine's arithmetic in the backend.
-   type Task_Item is limited interface;
-
-   --  Do the share from First to Last, inclusive.
    --
-   --  @param Item The work.
-   --  @param First First index of the share, zero based.
-   --  @param Last Last index of the share; Last < First is an empty share
-   --    and must do nothing.
-   procedure Run
-     (Item : in out Task_Item; First : Element_Count; Last : Element_Count)
-   is abstract;
-
-   type Task_Item_Access is access all Task_Item'Class;
+   --  IT IS DECLARED IN MODEL_RUNNER.SHARES AND NAMED HERE. A caller that
+   --  wants work shared out used to have to depend on this package, which
+   --  is the one that asks the platform what it has and creates tasks --
+   --  fine for the engine, which runs on a backend by definition, and wrong
+   --  for a package that decides what a model says. Both sides name the
+   --  interface instead, and Sharing below is how a caller that has a pool
+   --  hands it to one that may not know what a pool is.
+   subtype Task_Item is Model_Runner.Shares.Work;
+   subtype Task_Item_Access is Model_Runner.Shares.Work_Access;
 
    --  Cut Items into shares and run Work over each of them.
    --
@@ -285,6 +283,24 @@ package Model_Runner.Backend.CPU is
       Work   : Task_Item_Access;
       Status : out Model_Runner.Errors.Error_Info;
       Cost   : Element_Count := 0);
+
+   --  The pool as something that can be handed to a package that must not
+   --  know what a pool is.
+   --
+   --  Null in, null out, which is what a caller with no pool already
+   --  handles: Model_Runner.Shares says a team that answers False to Whole
+   --  and a team that is not there put the caller in the same position, so
+   --  there is one path rather than two.
+   --
+   --  The access it returns lives as long as the pool does -- it points
+   --  into the pool itself -- so a caller that keeps it must not outlive
+   --  the frame that declared the pool, which is the same rule
+   --  Pool_Reference already has.
+   --
+   --  @param Item Pool to share out through, or null.
+   --  @return A team, or null.
+   function Sharing
+     (Item : Pool_Reference) return Model_Runner.Shares.Team_Access;
 
    --  Allow the products that quantize their activations to a byte.
    --
@@ -500,9 +516,29 @@ private
    --  finish even when a caller forgets to close the pool. The language waits
    --  for the workers at the end of the frame that declares the pool, so there
    --  is no task to deallocate.
+   --  The pool wearing the interface Model_Runner.Shares declares, so that
+   --  a caller can be shared out without naming this package. It holds the
+   --  pool rather than being held by it, and lives inside it so that the
+   --  access Sharing returns needs no allocation and no lifetime of its
+   --  own.
+   type Crew is limited new Model_Runner.Shares.Team with record
+      Held : Pool_Reference := null;
+   end record;
+
+   overriding procedure Divide
+     (Item  : in out Crew;
+      Count : Element_Count;
+      Over  : Model_Runner.Shares.Work_Access;
+      Whole : out Boolean;
+      Cost  : Element_Count := 0);
+
    type Pool (Workers : Worker_Count) is
      limited new Ada.Finalization.Limited_Controlled with record
       Control : aliased Coordinator (Workers);
+
+      --  Set when the pool is opened, because a record cannot point at
+      --  itself while it is being created.
+      Divider : aliased Crew;
       Waking  : aliased Wake_Signal (Workers);
 
       --  How many shares the last matrix product was cut into, which is the

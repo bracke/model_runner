@@ -1,5 +1,6 @@
 with AUnit.Assertions;
 
+with Model_Runner.Backend.CPU;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Interfaces;
@@ -8,6 +9,7 @@ with Model_Runner.Limits;
 with Model_Runner.Kernels;
 with Model_Runner.Numerics;
 with Model_Runner.Sampling;
+with Model_Runner.Shares;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -2505,6 +2507,167 @@ package body Tests.Sampling_Cases is
       end loop;
    end Selecting_And_Sorting_Agree;
 
+   --  A team does not change the token, whatever it is cut into.
+   --
+   --  Sampling walks the vocabulary twice a token -- once for logits that
+   --  are not numbers, once for the highest -- and both walks are now
+   --  handed to whatever team the caller has. Both are reductions, so what
+   --  makes that sound is not that the work is independent but that no
+   --  block reduces into a shared place: the vocabulary is cut into blocks
+   --  whose boundaries do not depend on the team, each block answers into a
+   --  slot of its own, and the slots are combined in block order
+   --  afterwards.
+   --
+   --  So the assertion is equality, at every worker count and against no
+   --  team at all. And it is not one draw: the greedy path breaks a tie
+   --  towards the lowest token identifier, which a combination in the wrong
+   --  order would get wrong only when two blocks hold the same highest
+   --  value -- so the run below plants exactly that, twice, in blocks that
+   --  are far apart.
+   procedure A_Team_Does_Not_Change_The_Token
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package CPU renames Model_Runner.Backend.CPU;
+      use type Model_Runner.Shares.Team_Access;
+
+      Vocabulary : constant := 4096;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1);
+      Broken : N.Real_Array (0 .. Vocabulary - 1);
+      Rules  : S.Configuration;
+
+      --  What each worker count answered, gathered rather than asserted.
+      --
+      --  Nothing is asserted while a pool is alive. An assertion that fails
+      --  raises, and a raise inside the block that declares a pool leaves
+      --  the frame through finalization while its workers are still
+      --  waiting -- which is a hang rather than a failure, and a mutation
+      --  that hangs is a mutation nobody can read. So the loop collects and
+      --  the assertions come after it, where there is no pool left.
+      type Answer is record
+         Alone      : Model_Runner.Tokenizer.Token_Id :=
+           Model_Runner.Tokenizer.No_Token;
+         Shared     : Model_Runner.Tokenizer.Token_Id :=
+           Model_Runner.Tokenizer.No_Token;
+         Had_Team   : Boolean := False;
+         Both_Ok    : Boolean := False;
+         Said_Alone : Long_Long_Integer := -1;
+         Said_Team  : Long_Long_Integer := -1;
+      end record;
+
+      Answers : array (CPU.Worker_Count range 1 .. 8) of Answer;
+   begin
+      --  A spread with no repeats but for the ties planted below, so that a
+      --  walk reading the wrong element answers differently.
+      for Index in Logits'Range loop
+         Logits (Index) :=
+           N.Real (Integer (Index) mod 977) * 0.001
+           - N.Real (Integer (Index) / 977) * 0.5;
+      end loop;
+
+      --  The highest value twice, a long way apart, and again lower down.
+      --  The lower identifier of each pair is the answer.
+      Logits (11) := 9.0;
+      Logits (3000) := 9.0;
+      Logits (500) := 8.5;
+      Logits (2500) := 8.5;
+
+      Broken := Logits;
+
+      declare
+         Grow : N.Real := N.Real'Last;
+      begin
+         --  An infinity, made rather than written: the literal would not
+         --  fit the type and the compiler would say so.
+         Grow := Grow * 16.0;
+         Broken (2222) := Grow;
+         Broken (3333) := Grow;
+      end;
+
+      Rules.Temperature := 0.0;
+
+      for Workers in Answers'Range loop
+         declare
+            Pool : aliased CPU.Pool (Workers);
+            Team : constant Model_Runner.Shares.Team_Access :=
+              CPU.Sharing (Pool'Unchecked_Access);
+
+            Sampler : S.Sampler;
+
+            Alone, Shared, Bad_Alone, Bad_Team :
+              Model_Runner.Tokenizer.Token_Id;
+            One, Two, Three, Four, Opened : E.Error_Info;
+         begin
+            Answers (Workers).Had_Team := Team /= null;
+
+            S.Open (Sampler, Rules, Vocabulary, 1234, Opened);
+
+            S.Sample (Sampler, Logits, Alone, One);
+            S.Sample (Sampler, Logits, Shared, Two, Team);
+            S.Sample (Sampler, Broken, Bad_Alone, Three);
+            S.Sample (Sampler, Broken, Bad_Team, Four, Team);
+
+            Answers (Workers).Alone := Alone;
+            Answers (Workers).Shared := Shared;
+            Answers (Workers).Both_Ok :=
+              E.Is_Ok (Opened) and then E.Is_Ok (One) and then E.Is_Ok (Two)
+              and then Three.Code = E.Sampling_Non_Finite_Logit
+              and then Four.Code = E.Sampling_Non_Finite_Logit;
+
+            if Three.Code = E.Sampling_Non_Finite_Logit then
+               Answers (Workers).Said_Alone := Three.Parameters (1).Int_Value;
+            end if;
+
+            if Four.Code = E.Sampling_Non_Finite_Logit then
+               Answers (Workers).Said_Team := Four.Parameters (1).Int_Value;
+            end if;
+
+            S.Close (Sampler);
+            CPU.Close (Pool);
+         end;
+      end loop;
+
+      for Workers in Answers'Range loop
+         declare
+            Said : constant String :=
+              " at" & CPU.Worker_Count'Image (Workers) & " workers";
+         begin
+            Assert (Answers (Workers).Had_Team,
+                    "a pool that exists answered no team" & Said);
+            Assert (Answers (Workers).Both_Ok,
+                    "a sampling call answered wrongly" & Said);
+            Assert (Answers (Workers).Alone = Answers (Workers).Shared,
+                    "a team chose"
+                    & Model_Runner.Tokenizer.Token_Id'Image
+                        (Answers (Workers).Shared)
+                    & " where no team chose"
+                    & Model_Runner.Tokenizer.Token_Id'Image
+                        (Answers (Workers).Alone) & Said);
+            Assert (Answers (Workers).Alone = 11,
+                    "the tie did not go to the lowest identifier:"
+                    & Model_Runner.Tokenizer.Token_Id'Image
+                        (Answers (Workers).Alone) & Said);
+            Assert (Answers (Workers).Said_Alone
+                    = Answers (Workers).Said_Team,
+                    "the team named token"
+                    & Long_Long_Integer'Image (Answers (Workers).Said_Team)
+                    & " where no team named"
+                    & Long_Long_Integer'Image (Answers (Workers).Said_Alone)
+                    & Said);
+            Assert (Answers (Workers).Said_Alone = 2222,
+                    "the first logit that is not a number was not the one "
+                    & "reported" & Said);
+         end;
+      end loop;
+
+      --  And a team that is not there is a null access, which every caller
+      --  already handles by doing the work itself.
+      Assert (CPU.Sharing (null) = null,
+              "a pool that is not there answered a team");
+   end A_Team_Does_Not_Change_The_Token;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -2625,6 +2788,10 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Rotary_Pairings_Differ'Access,
          "the two rotary pairings rotate different elements");
+      Register_Routine
+        (T, A_Team_Does_Not_Change_The_Token'Access,
+         "a team does not change the token, at every worker count and "
+         & "against no team at all");
       Register_Routine
         (T, Built_In_Formats_Compile'Access,
          "the chat formats this build carries compile and render through "

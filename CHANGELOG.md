@@ -7,6 +7,38 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A seam so that a package which decides what a model says can be shared
+  out without knowing what a host is.** `Model_Runner.Shares` declares two
+  interfaces -- `Work`, something a range of items can be asked of, and
+  `Team`, something that can run the pieces of a job at the same time. The
+  worker pool wears `Team` and hands itself out through one function;
+  `Backend.CPU.Task_Item` is now a name for `Shares.Work` rather than a
+  second interface saying the same thing. `Model_Runner.Sampling` names
+  `Shares` and no backend, and takes a team as an optional argument that
+  defaults to none.
+
+  **What goes through it is the last loop left on the submitting task.**
+  Sampling walks the vocabulary twice a token -- once for logits that are not
+  numbers, once for the highest -- and the second reads two mask arrays and
+  searches the window the repetition penalty keeps, about six unpredictable
+  branches an identifier. That was a quarter of a millisecond of a fifteen
+  millisecond token, on the task that had just finished waiting for five.
+
+  **Both walks are reductions, which is what made this the hard one.** They
+  are cut anyway, and what makes it sound is that no block reduces into a
+  shared place: the vocabulary is divided into a fixed fifty-six blocks, each
+  answers into a slot of its own, and the slots are combined in block order
+  afterwards -- so a tie still goes to the lowest token identifier and the
+  answer does not depend on how many workers a machine has. A test asserts
+  the same token at every worker count from one to eight and against no team
+  at all, with ties planted in blocks a long way apart.
+
+  Alternated four rounds in both orders -- the order reversed once because the
+  1419-token prompt followed it rather than the code -- Q4_0 in panels 1.016
+  times, Q4_K_M 1.022, Q8_0 1.010, the prompt a wash. A fifth round was
+  discarded: its two arms read a fifth apart on that prompt, which is the
+  machine and not the program.
+
 - **The element-wise work between a token's products goes to the pool.** The
   entry above leaves a generated token 91 per cent inside a product, 6.1 per
   cent between one and the next and 2.2 per cent preparing one; this is about

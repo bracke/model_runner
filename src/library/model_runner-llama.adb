@@ -1475,6 +1475,13 @@ package body Model_Runner.Llama is
 
    function Time_Spent (Item : Session) return Phase_Times is (Item.Spent);
 
+   -------------
+   -- Sharing --
+   -------------
+
+   function Sharing (Item : Session) return Model_Runner.Shares.Team_Access
+   is (Workers_CPU.Sharing (Item.Team));
+
    --  Charge what has passed since Mark to a phase, and move Mark to now.
    --
    --  Reading the clock is the whole cost of a budget, so it is read once

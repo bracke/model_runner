@@ -18,6 +18,8 @@ package body Model_Runner.Backend.CPU is
    package E renames Model_Runner.Errors;
    package T renames Model_Runner.Tensors;
 
+   use type Model_Runner.Shares.Work_Access;
+
    --  How long a task looks before it blocks.
    --
    --  Long enough to cover the gap between one product and the next, which
@@ -718,6 +720,46 @@ package body Model_Runner.Backend.CPU is
            (Weight, Vector.all, Count, Target.all, 0, Weight.Rows - 1);
       end if;
    end Serially;
+
+   ------------
+   -- Divide --
+   ------------
+
+   overriding procedure Divide
+     (Item  : in out Crew;
+      Count : Element_Count;
+      Over  : Model_Runner.Shares.Work_Access;
+      Whole : out Boolean;
+      Cost  : Element_Count := 0)
+   is
+      Sent : E.Error_Info;
+   begin
+      Dispatch_Shares (Item.Held, Count, Over, Sent, Cost);
+      Whole := E.Is_Ok (Sent);
+   end Divide;
+
+   -------------
+   -- Sharing --
+   -------------
+
+   function Sharing
+     (Item : Pool_Reference) return Model_Runner.Shares.Team_Access is
+   begin
+      if Item = null then
+         return null;
+      end if;
+
+      --  The pool is not opened here, deliberately. Opening rendezvouses
+      --  with the workers, and a caller that asked for a team in the same
+      --  declarative part that declares the pool would be waiting for tasks
+      --  the language has not activated yet -- the hazard Open's own
+      --  comment describes, and one this walked into the first time. What a
+      --  team needs is the reference, which is the argument; nothing is
+      --  started until a job is posted, where Dispatch_Shares opens the
+      --  pool as it always did.
+      Item.all.Divider.Held := Item;
+      return Item.all.Divider'Unchecked_Access;
+   end Sharing;
 
    ------------------------
    -- Dispatch_Shares --

@@ -11,6 +11,8 @@ package body Model_Runner.Sampling is
    package E renames Model_Runner.Errors;
    package N renames Model_Runner.Numerics;
 
+   use type Model_Runner.Shares.Team_Access;
+
    subtype Element_Count is N.Element_Count;
 
    procedure Free_Candidates is
@@ -699,6 +701,60 @@ package body Model_Runner.Sampling is
       return Value;
    end Adjusted;
 
+   --  The two passes over the vocabulary, cut into blocks.
+   --
+   --  BOTH ARE REDUCTIONS AND BOTH ARE CUT ANYWAY, which is only sound
+   --  because neither reduces into a shared place. The vocabulary is cut
+   --  into a fixed number of blocks -- fixed, so that they do not depend on
+   --  how many shares a team runs -- each block reduces into a slot of its
+   --  own, and the slots are combined in block order afterwards. So the
+   --  answer does not depend on the cuts, which is what
+   --  Model_Runner.Shares asks of anything handed to a team, and a run with
+   --  a team produces the token a run without one produces. A test asserts
+   --  exactly that.
+   --
+   --  Fifty-six blocks because a team here has at most eight shares and a
+   --  count with several small factors divides evenly into more of them
+   --  than a round number does. A vocabulary shorter than that gets one
+   --  token a block and empty blocks after.
+   Blocks : constant Element_Count := 56;
+
+   function Block_Span (Over : Element_Count) return Element_Count
+   is ((Over + Blocks - 1) / Blocks);
+
+   function Block_First
+     (Block : Element_Count; Over : Element_Count) return Element_Count
+   is (Element_Count'Min (Over, Block * Block_Span (Over)));
+
+   function Block_Last
+     (Block : Element_Count; Over : Element_Count) return Element_Count
+   is (Element_Count'Min (Over, (Block + 1) * Block_Span (Over)) - 1);
+
+   type Index_Slots is array (Element_Count range 0 .. Blocks - 1)
+     of Element_Count;
+   type Value_Slots is array (Element_Count range 0 .. Blocks - 1) of Real;
+   type Found_Slots is array (Element_Count range 0 .. Blocks - 1) of Boolean;
+
+   --  What an element of the greedy walk costs when the penalties are on,
+   --  against an element of the blend the pool's inline bound was chosen
+   --  on. It is a mask read, a second mask read and a binary search of the
+   --  window the repetition penalty keeps -- about six unpredictable
+   --  branches -- where that is a multiply and an add. The walk over the
+   --  logits looking for one that is not a number carries no weight at all
+   --  and stays below the bound, which is right: it is a bit test an
+   --  element and there is nothing in it to divide.
+   Greedy_Weight : constant Element_Count := 8;
+
+   --  Whether anything the greedy walk does per token beyond reading the
+   --  logit is switched on. Exactly the branches Adjusted takes, asked once
+   --  rather than thirty-two thousand times.
+   function Penalized (Item : Sampler) return Boolean
+   is (Item.Bias_Used > 0
+       or else Item.Settings.DRY_Multiplier > 0.0
+       or else Item.Settings.Repeat_Penalty /= 1.0
+       or else Item.Settings.Frequency_Penalty /= 0.0
+       or else Item.Settings.Presence_Penalty /= 0.0);
+
    --  Select greedily: the highest logit, breaking ties towards the lowest
    --  token identifier. Deliberately separate from the probabilistic path so
    --  that it cannot touch the generator.
@@ -707,29 +763,104 @@ package body Model_Runner.Sampling is
      (Item   : Sampler;
       Logits : Real_Array;
       Token  : out Token_Id;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Across : Model_Runner.Shares.Team_Access)
    is
+      Over : constant Element_Count := Element_Count (Item.Vocabulary);
+
+      --  The highest adjusted logit of a block, and which token it was.
+      --
+      --  Declared here rather than at the top of the body because it reads
+      --  the sampler and the caller's logits, and neither can be named from
+      --  out there. A tagged type declared in a subprogram is elaborated on
+      --  every call, which the engine measures at about two microseconds;
+      --  this is once a token against a quarter of a millisecond of
+      --  scanning, where the engine's own shares are once a layer and are
+      --  declared outside their loop for that reason.
+      type Greedy_Work is limited new Model_Runner.Shares.Work with record
+         Found : Found_Slots := [others => False];
+         Where : Index_Slots := [others => 0];
+         Value : Value_Slots := [others => 0.0];
+      end record;
+
+      overriding procedure Run
+        (Work : in out Greedy_Work; First : Element_Count;
+         Last : Element_Count);
+
+      overriding procedure Run
+        (Work : in out Greedy_Work; First : Element_Count;
+         Last : Element_Count)
+      is
+         --  Suppressed for the reason the loop it replaces suppressed it:
+         --  the arithmetic can leave a value the check would fire on before
+         --  anything can ask whether it did.
+         pragma Suppress (Validity_Check);
+      begin
+         if First > Last then
+            return;
+         end if;
+
+         for Block in First .. Last loop
+            declare
+               Best : Element_Count := 0;
+               Top  : Real := 0.0;
+               Seen : Boolean := False;
+            begin
+               for Index in Block_First (Block, Over)
+                            .. Block_Last (Block, Over)
+               loop
+                  if not Item.Masked.all (Natural (Index))
+                    and then not Item.Stepped.all (Natural (Index))
+                  then
+                     declare
+                        Here : constant Real := Adjusted (Item, Logits, Index);
+                     begin
+                        if not Seen or else Here > Top then
+                           Seen := True;
+                           Best := Index;
+                           Top := Here;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+
+               Work.Found (Block) := Seen;
+               Work.Where (Block) := Best;
+               Work.Value (Block) := Top;
+            end;
+         end loop;
+      end Run;
+
+      Work  : aliased Greedy_Work;
+      Whole : Boolean := False;
+
       Best       : Token_Id := Model_Runner.Tokenizer.No_Token;
       Best_Logit : Real := 0.0;
    begin
       Status := E.Success;
 
-      for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
-         if not Item.Masked.all (Natural (Index))
-           and then not Item.Stepped.all (Natural (Index))
-         then
-            declare
-               pragma Suppress (Validity_Check);
+      if Across /= null then
+         Across.all.Divide
+           (Blocks, Work'Unchecked_Access, Whole,
+            Cost => Over * (if Penalized (Item) then Greedy_Weight else 1));
+      end if;
 
-               Value : constant Real := Adjusted (Item, Logits, Index);
-            begin
-               if Best = Model_Runner.Tokenizer.No_Token
-                 or else Value > Best_Logit
-               then
-                  Best := Token_Id (Index);
-                  Best_Logit := Value;
-               end if;
-            end;
+      --  No team, or one that could not take the whole of it: the blocks
+      --  are the same blocks and this does all of them.
+      if not Whole then
+         Work.Run (0, Blocks - 1);
+      end if;
+
+      --  Combined in block order, and only a strictly higher value takes
+      --  the answer, so a tie goes to the lowest token identifier exactly
+      --  as one walk over the vocabulary gave it.
+      for Block in 0 .. Blocks - 1 loop
+         if Work.Found (Block)
+           and then (Best = Model_Runner.Tokenizer.No_Token
+                     or else Work.Value (Block) > Best_Logit)
+         then
+            Best := Token_Id (Work.Where (Block));
+            Best_Logit := Work.Value (Block);
          end if;
       end loop;
 
@@ -906,10 +1037,55 @@ package body Model_Runner.Sampling is
      (Item   : in out Sampler;
       Logits : Real_Array;
       Token  : out Token_Id;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Across : Model_Runner.Shares.Team_Access := null)
    is
       Count     : Element_Count := 0;
       Surviving : Element_Count := 0;
+
+      Over : constant Element_Count := Logits'Length;
+
+      --  The first logit of a block that is not a number, if there is one.
+      --  Here for the reason Select_Greedy's own work is: it reads the
+      --  caller's logits, which cannot be named from the top of the body.
+      type Finite_Work is limited new Model_Runner.Shares.Work with record
+         Found : Found_Slots := [others => False];
+         Where : Index_Slots := [others => 0];
+      end record;
+
+      overriding procedure Run
+        (Work : in out Finite_Work; First : Element_Count;
+         Last : Element_Count);
+
+      overriding procedure Run
+        (Work : in out Finite_Work; First : Element_Count;
+         Last : Element_Count)
+      is
+         --  Suppressed at the call site as well as inside Is_Finite: the
+         --  check fires when the argument is evaluated, before the
+         --  predicate written to answer the question ever runs. A logit
+         --  that is not a number is a diagnostic this reports, not a fault.
+         pragma Suppress (Validity_Check);
+      begin
+         if First > Last then
+            return;
+         end if;
+
+         for Block in First .. Last loop
+            for Index in Block_First (Block, Over)
+                         .. Block_Last (Block, Over)
+            loop
+               if not N.Is_Finite (Logits (Logits'First + Index)) then
+                  Work.Found (Block) := True;
+                  Work.Where (Block) := Index;
+                  exit;
+               end if;
+            end loop;
+         end loop;
+      end Run;
+
+      Finite : aliased Finite_Work;
+      Whole  : Boolean := False;
    begin
       Token := Model_Runner.Tokenizer.No_Token;
 
@@ -926,29 +1102,31 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
-      --  2  non-finite logits
-      --
-      --  Suppressed at the call site as well as inside Is_Finite: the check
-      --  fires when the argument is evaluated, before the predicate written
-      --  to answer the question ever runs. A logit that is not a number is a
-      --  diagnostic this loop reports, not a fault.
-      declare
-         pragma Suppress (Validity_Check);
-      begin
-         for Index in Logits'Range loop
-            if not N.Is_Finite (Logits (Index)) then
-               Status := E.Make (E.Sampling_Non_Finite_Logit);
-               E.Add_Integer
-                 (Status, "token", Long_Long_Integer (Index - Logits'First));
-               return;
-            end if;
-         end loop;
-      end;
+      --  2  non-finite logits, in blocks so that a team can take them.
+      if Across /= null then
+         Across.all.Divide
+           (Blocks, Finite'Unchecked_Access, Whole, Cost => Over);
+      end if;
+
+      if not Whole then
+         Finite.Run (0, Blocks - 1);
+      end if;
+
+      --  Read in block order, so the token reported is the first one in the
+      --  vocabulary however the blocks were cut.
+      for Block in 0 .. Blocks - 1 loop
+         if Finite.Found (Block) then
+            Status := E.Make (E.Sampling_Non_Finite_Logit);
+            E.Add_Integer
+              (Status, "token", Long_Long_Integer (Finite.Where (Block)));
+            return;
+         end if;
+      end loop;
 
       --  Greedy mode short-circuits the whole probabilistic pipeline and does
       --  not consume random state.
       if Is_Greedy (Item.Settings) then
-         Select_Greedy (Item, Logits, Token, Status);
+         Select_Greedy (Item, Logits, Token, Status, Across);
          return;
       end if;
 

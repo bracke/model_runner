@@ -4,6 +4,7 @@ with Interfaces;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
+with Model_Runner.Shares;
 with Model_Runner.Tokenizer;
 
 --  Token selection from raw logits.
@@ -325,11 +326,18 @@ package Model_Runner.Sampling is
    --  @param Status Success, Sampling_Vocabulary_Mismatch,
    --    Sampling_Non_Finite_Logit, Sampling_No_Candidates or
    --    Sampling_Invalid_Distribution.
+   --  @param Across A team to divide the two passes over the vocabulary
+   --    across, or null to make both of them here. It changes nothing about
+   --    the answer: the passes are cut into a fixed number of blocks
+   --    whatever the team does with them, each block reduces into a slot of
+   --    its own, and the slots are combined in block order afterwards -- so
+   --    the token is the same token however many shares ran, and with none.
    procedure Sample
      (Item   : in out Sampler;
       Logits : Real_Array;
       Token  : out Token_Id;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Across : Model_Runner.Shares.Team_Access := null);
 
    --  Largest number of alternatives an explanation will carry.
    Max_Alternatives : constant := 32;

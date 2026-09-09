@@ -379,7 +379,11 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe`, `gpt-oss`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`, `gpt2`, `bert`, `nomic-bert` and `jina-bert-v2`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gpt-oss a mixture too, and the only architecture here with an attention sink -- one learned score a head that joins the softmax's denominator and takes none of the weight, which lets a head attend to nothing -- and with a gate that is not the sigmoid-weighted one: both projections held at a limit, the logistic at a steeper slope, and one added to the up projection, so it reaches the second vector and is not an activation followed by a multiply. It alternates a window as gemma2 does and turns the windowed layers on a base of their own as gemma3 does, and carries biases on its router, on each of an expert's three projections and on the way out of attention; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once; gemma2 those three and four more -- a normalization after each sublayer as well as before it, a bound on the attention scores and another on the logits, both applied as a scaled hyperbolic tangent, and a sliding window on every other layer rather than on all of them; gemma3 keeps the two normalizations, drops the two bounds, normalizes query and key heads as qwen3 does, windows five layers in six, and turns those five on a rotation base of their own; phi3 nothing at all in its arithmetic and everything in where its weights are -- the queries, keys and values in one tensor and the gate and up projection in another, taken out as views at a row offset rather than copied; falcon a different block rather than a different detail -- one normalization a block instead of two, with attention and the feed-forward both reading it and both adding to the same residual, a normalization that subtracts the mean and carries a bias rather than the root-mean-square form every other architecture here uses, and a feed-forward with no gate at all: one projection up, a Gaussian error unit, one projection down; and phi2 that arrangement with a bias on every projection instead of on none. Bert is the one that is not a decoder at all: it reads a whole text and produces a state for every position of it, attending both ways, normalizing after each residual add rather than before each sublayer, and learning a row for the token, a row for its position and a row for its segment where every other architecture here learns one. It carries no projection from a state to a token, so `run` is refused by name and `embed` is what it is for. nomic-bert is that arrangement with three parts swapped -- it rotates rather than learning a row for the position, writes its queries, keys and values fused, and gates its feed-forward -- and carries no bias on any projection at all -- the three attention biases in one vector as their matrices are in one tensor, one on the way out of attention, one on each side of the feed-forward, and one on the output projection itself, which is added to every logit. jina-bert-v2 is that arrangement again with the positions taken away entirely: it neither rotates nor learns a row for where a token is, and is told instead by a fall-off in the attention scores, one slope a head, taken off after the scale and before the softmax and unsigned -- a position is as far from what follows it as from what came before. Its ladder of slopes has two branches and the second is only reached where the head count is not a power of two, which twelve heads is; it gates its feed-forward by the Gaussian unit where nomic-bert gates by the sigmoid-weighted one, and shifts what it projects down and nothing else. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, uniformly across layers. A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse. Any number of sessions may be open on one prepared model at once: a model carries no per-evaluation state -- the activations, the normalized copies and the query and key rows all belong to the session -- so a second sequence costs its own cache and nothing else. Held by a test that interleaves two sessions a token at a time and checks each gets what it would have got alone; interleaved rather than sequential, because sequential sessions pass even on a model that does hold such state. Anything that would write to the model is refused while a session is open. `--prompt` asks for several: the model is read once and answers each in turn, which is what the sessions buy |
-| Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
+| Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state, and
+both walks over the vocabulary -- the one looking for a logit that is not a
+number and the one looking for the highest -- divide across whatever workers
+the caller has, into blocks that do not move when the team does, so the token
+is the same at every worker count and with none; xoshiro256++ seeded per session. `--logit-bias TOKEN=X` nudges a token; `--logprobs N` reports what the model made of each position, from a plain softmax over the raw logits with none of the sampling applied |
 | Stops | End-of-sequence, stop tokens, stop strings matched across token boundaries with earliest-then-longest resolution and no leaked bytes |
 | Generation | Prefill, decode loop, streaming to an output sink, eight completion reasons, statistics against a monotonic clock, bounded text retention |
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
@@ -1178,6 +1182,16 @@ abstractions. No package below the presentation layer writes to standard
 output or standard error, depends on the message catalog, or depends on
 terminal styling.
 
+**Work crosses the layering downwards through one pair of interfaces rather
+than upwards through a dependency.** `Model_Runner.Shares` declares `Work` --
+something a range of items can be asked of -- and `Team` -- something that
+can run the pieces of a job at the same time. The worker pool in the CPU
+backend wears `Team`; the engine's shares and the sampler's wear `Work`. That
+is how a package which decides what a model says gets shared out without
+naming a package that asks the platform what it has and creates tasks. What a
+team may be handed is bounded by one rule, stated there: the answer must not
+depend on where the cuts fall.
+
 ## Security posture
 
 Every GGUF file is untrusted input. Counts are checked against explicit limits
@@ -1230,8 +1244,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.342 s** -- 0.041 s evaluating the prompt and 0.299 s generating --
-and **1.82 s** of processor time, the median of three runs. Loading the model
+take **0.340 s** -- 0.041 s evaluating the prompt and 0.299 s generating --
+and **1.81 s** of processor time, the median of three runs. Loading the model
 costs a further **0.065 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1239,7 +1253,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.083 s** for 8.66 s of
+f32`, taken back to back in the same sitting, is **1.076 s** for 8.60 s of
 processor time. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
@@ -1643,10 +1657,10 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.342 s | **0.244 s** |
-| -- evaluating the prompt | 0.041 s | 0.027 s |
-| -- generating | 0.299 s | **0.216 s** |
-| -- processor time | 1.82 s | **0.09 s** |
+| 6-token prompt, 12 generated | 0.340 s | **0.244 s** |
+| -- evaluating the prompt | 0.041 s | 0.028 s |
+| -- generating | 0.299 s | **0.215 s** |
+| -- processor time | 1.81 s | **0.14 s** |
 | 110-token prompt, one token | 0.314 s | **0.102 s** |
 | -- evaluating the prompt | 0.286 s | **0.082 s** |
 | -- processor time | 2.33 s | **0.02 s** |
@@ -6667,10 +6681,10 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 390.1 t/s | **39.4 t/s** |
-| llama.cpp, processor | 396.1 t/s | 40.6 t/s |
-| model_runner, device | 1571.4 t/s | 52.6 t/s |
-| llama.cpp, device | 1679.3 t/s | 58.6 t/s |
+| model_runner, processor | **390.1 t/s** | **39.8 t/s** |
+| llama.cpp, processor | 387.5 t/s | 40.6 t/s |
+| model_runner, device | 1527.8 t/s | 53.5 t/s |
+| llama.cpp, device | 1646.9 t/s | 58.2 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
 were measuring a machine that had gone back to sleep -- see `### A prompt too
@@ -6689,25 +6703,26 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **312.7 t/s** | **39.4 t/s** |
-| llama.cpp, processor | 305.5 t/s | 40.6 t/s |
-| model_runner, device | **1968.1 t/s** | 52.6 t/s |
-| llama.cpp, device | 1892.5 t/s | 58.6 t/s |
+| model_runner, processor | **313.4 t/s** | **39.8 t/s** |
+| llama.cpp, processor | 307.2 t/s | 40.6 t/s |
+| model_runner, device | **1979.1 t/s** | 53.5 t/s |
+| llama.cpp, device | 1898.1 t/s | 58.2 t/s |
 
-**Both long prompts are ahead and the generated token is within three per
-cent.** 312.7 against 305.5 on the processor at 1419 tokens, 1968.1 against
-1892.5 on the device, and 39.4 against 40.6 generating -- **1.03 behind,
-where it was 1.07 two sections above**. The short prompts are 1.02 and 1.07
-behind.
+**Every processor row is ahead but one, and that one is within two per
+cent.** 390.1 against 387.5 at 110 tokens, 313.4 against 307.2 at 1419, and
+39.8 against 40.6 generating -- **1.02 behind, where it was 1.07 three
+sections above**. The device's long prompt is ahead too, 1979.1 against
+1898.1; its short prompt and its generated token are 1.08 and 1.09 behind and
+nothing in those three sections touched either.
 
 **THE WHOLE TABLE IS TAKEN AGAIN, BOTH SIDES, EVERY TIME.** This machine is
 a fifteen-watt part and its rows move a few per cent between sittings for
 reasons that are not the program: llama.cpp's own processor prompt has read
-397.6, 392.8 and 396.1 at 110 tokens across three of them, and 319.3, 312.4
-and 305.5 at 1419. That is what taking both sides in one sitting is for, and
-it is why the row worth reading is the one that moved against the machine
-rather than with it -- the generated token, which has gone 1.07, 1.04, 1.03
-while everything around it wandered.
+397.6, 392.8, 396.1 and 387.5 at 110 tokens across four of them, and 319.3,
+312.4, 305.5 and 307.2 at 1419. That is what taking both sides in one sitting
+is for, and it is why the row worth reading is the one that moved against the
+machine rather than with it -- the generated token, which has gone 1.07,
+1.04, 1.03, 1.02 while everything around it wandered.
 
 **The device's long prompt was the row that moved, and the commit that
 published it could not reproduce it either.** It read 1800.8 t/s -- 0.788 s
@@ -8484,6 +8499,91 @@ a 15 ms token**. It is element-wise and would divide perfectly. It is in
 `Model_Runner.Sampling`, which decides what a model says and has no business
 knowing what a host has; giving it a pool is a seam rather than an
 optimization, and it is not in this change.
+
+### The seam, and the last loop through it
+
+The section above ends by naming what was left: the greedy selection, 32,000
+token identifiers walked on the task that had just finished waiting for five,
+about a quarter of a millisecond of a fifteen-millisecond token. It also
+names why it was left -- the walk is in `Model_Runner.Sampling`, which
+decides what a model says, and the pool is in `Model_Runner.Backend.CPU`,
+which asks the platform what it has and creates tasks. A package that may be
+compiled into a program with no backend at all cannot depend on one.
+
+**So neither of them depends on the other, and both depend on two
+interfaces.** `Model_Runner.Shares` declares `Work` -- something a range of
+items can be asked of -- and `Team` -- something that can run the pieces of a
+job at the same time. The pool wears `Team`; anything that wants sharing
+wears `Work`; `Task_Item`, which the engine's own shares have used since
+attention was shared out, is now a name for `Shares.Work` rather than a
+second interface saying the same thing. Sampling's context clause names
+`Model_Runner.Shares` and nothing else new, and the pool becomes a team
+through one function on it.
+
+**What is hard here is that both walks are reductions.** Everything shared
+out before this was element-wise: the answer at an index reads that index,
+so a share computes what the whole computed and where the cuts fall does not
+matter. A walk looking for the highest logit is not that. Cut it carelessly
+and the answer depends on how many workers a machine happens to have, which
+is the one thing this program will not do -- `--threads` may change what a
+run costs and may not change what it says.
+
+**It is cut anyway, and what makes it sound is that no block reduces into a
+shared place.** The vocabulary is divided into a fixed fifty-six blocks --
+fixed, so the blocks do not move when the team does -- each block answers
+into a slot of its own, and the slots are combined afterwards in block
+order, taking a later one only when it is strictly higher. That reproduces
+the tie-breaking of a single walk exactly: the lowest token identifier wins.
+The same shape carries the other walk, where the slot holds the first logit
+of its block that is not a number and the combination reports the first
+block that found one.
+
+**Whether it is worth waking anyone for is the pool's own bound, and the
+walk says what its elements cost.** A generated token's greedy walk reads two
+mask arrays and searches the window the repetition penalty keeps -- about six
+unpredictable branches an identifier, against a multiply and an add for the
+blend the bound was set on -- so it carries a weight of eight, exactly as the
+gated middle does. **The walk looking for logits that are not numbers carries
+no weight and stays below the bound**, which is right: it is a bit test an
+element and there is nothing in it to divide.
+
+**One mistake, and the test found it rather than a measurement.** `Sharing`
+opened the pool before handing it out, which seemed tidy -- a team that works
+the moment you have it. Opening rendezvouses with the workers, and a caller
+that asks for a team in the same declarative part that declares the pool is
+waiting for tasks the language has not activated yet. The suite hung. Opening
+is left where it was, in the first job posted; a team is the reference and
+nothing more.
+
+**Held by equality at every worker count.** The test samples the same logits
+with no team and with teams of one through eight workers and asserts the same
+token, and it plants the case a wrong combination would get wrong: the
+highest value twice, in blocks a long way apart, so that a combination in the
+wrong order takes the higher identifier. It asserts the tie went to the lower
+one. Then it does the same for a logit that is not a number, planted twice,
+and asserts both paths name the first.
+
+**What it is worth, alternated four rounds, both orders.** The first three ran
+the old arm first and the fourth ran it second, because the first three showed
+the 1419-token prompt slower in the new arm every time and a difference that
+follows the order rather than the code is the machine warming between them --
+which reversing confirmed, the prompt going the other way at once. **A fifth
+round was discarded and is recorded here**: its two arms read 5.677 and 4.599
+seconds on that prompt, a fifth apart, which is not a measurement of anything
+this repository changed.
+
+| | before | after | |
+| --- | ---: | ---: | ---: |
+| Q4_0 in panels | 63.99, 64.52, 64.41, 63.10 t/s | 65.38, 65.08, 65.04, 66.03 t/s | 1.016 |
+| Q4_K_M in panels | 52.92, 52.79, 53.31, 53.12 | 53.91, 53.90, 54.51, 55.19 | 1.022 |
+| Q8_0 | 38.44, 38.54, 38.86, 38.59 | 38.75, 38.85, 39.09, 39.11 | 1.010 |
+| the 1419-token prompt, Q8_0 | 5.298, 5.338, 5.310, 5.398 s | 5.366, 5.341, 5.432, 5.383 s | a wash |
+
+Every reading of the four-bit and the k-quant arms is outside every reading of
+the other; the eight-bit rows overlap by one, which is what a two-thirds of a
+per cent difference looks like on a part that moves this much between
+sittings.
+
 
 ### The block-exponent format, the last one -- and two arrays at one address
 
@@ -11217,9 +11317,9 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.342 s | 29 ms a token |
-| the same model at two bits | 1.320 s | 110 ms a token |
-| the first, drafted by the second | 2.975 s | 24 proposed, 7 accepted |
+| TinyLlama-1.1B at eight bits | 0.340 s | 28 ms a token |
+| the same model at two bits | 1.308 s | 109 ms a token |
+| the first, drafted by the second | 2.957 s | 24 proposed, 7 accepted |
 
 The two-bit file is a third of the size on disk and costs nearly three times
 as much per token to run, because what it saves in bytes it spends unpacking

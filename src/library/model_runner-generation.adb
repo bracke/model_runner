@@ -1,6 +1,7 @@
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Shares;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
@@ -124,6 +125,12 @@ package body Model_Runner.Generation is
         Model_Runner.Stops.Longest_String (Stop_Set);
 
       Sampler : S.Sampler;
+
+      --  The session's workers, as the sampler can take them. Sampling
+      --  walks the vocabulary twice a token and both walks used to run on
+      --  the task that had just finished waiting for five.
+      Sharing : constant Model_Runner.Shares.Team_Access :=
+        L.Sharing (Session);
 
       --  Where the generated text has got to in the grammar, when there is
       --  one. Started below, once the prompt is behind us: a grammar
@@ -690,7 +697,7 @@ package body Model_Runner.Generation is
                Opened.all := Logits.all;
             end if;
 
-            S.Sample (Sampler, Logits.all, Guess, Local);
+            S.Sample (Sampler, Logits.all, Guess, Local, Sharing);
             if E.Is_Error (Local) then
                Conclude (Runtime_Error, Local);
                Failed := True;
@@ -721,7 +728,7 @@ package body Model_Runner.Generation is
                   return;
                end if;
 
-               S.Sample (Sampler, Aside.all, Guess, Local);
+               S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
                   Failed := True;
@@ -968,7 +975,7 @@ package body Model_Runner.Generation is
                      Verified_At := Verified_At + 1;
                      Token := Verified.all (Verified_At);
                   else
-                     S.Sample (Sampler, Logits.all, Token, Status);
+                     S.Sample (Sampler, Logits.all, Token, Status, Sharing);
                      if E.Is_Error (Status) then
                         Conclude (Runtime_Error, Status);
                         exit Decode_Loop;

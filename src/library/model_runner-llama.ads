@@ -13,6 +13,7 @@ with Model_Runner.Kernels;
 with Model_Runner.Limits;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
+with Model_Runner.Shares;
 with Model_Runner.Progress;
 with Model_Runner.Templates;
 with Model_Runner.Tensors;
@@ -779,6 +780,24 @@ package Model_Runner.Llama is
    --  @param Item Session to read.
    --  @return The times, one per phase.
    function Time_Spent (Item : Session) return Phase_Times;
+
+   --  The session's worker pool, as something that can be handed to a
+   --  package that must not know what a pool is.
+   --
+   --  Sampling is the caller this exists for. It walks the vocabulary twice
+   --  a token -- once for logits that are not numbers and once for the
+   --  highest -- and both walks ran on the task that had just finished
+   --  waiting for five, which the budget in the README puts at a quarter of
+   --  a millisecond of a fifteen-millisecond token. It may not depend on a
+   --  backend, so it takes a Model_Runner.Shares.Team instead and this is
+   --  where the engine's own pool becomes one.
+   --
+   --  Null where the session runs on no pool, which is what a null team
+   --  means everywhere: the caller does the work itself.
+   --
+   --  @param Item Session to read.
+   --  @return A team, or null.
+   function Sharing (Item : Session) return Model_Runner.Shares.Team_Access;
 
    --  Estimate the memory a session with the requested capacity would need.
    --
