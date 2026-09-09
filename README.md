@@ -18122,31 +18122,72 @@ written: the same bytes, off the same part, four per cent of a byte per
 nanosecond apart. Every section that looked for the gap in the shape of the
 work was looking in the wrong place, and this table is why.
 
-**And the one thing in it that does not fit is the vocabulary product.** It
-reads 69.6 megabytes at **78.2 GB/s** where the layer products read
-1,029.4 at 60.4 -- twenty-nine per cent faster, same part, same format,
-same kernel. If the layer products ran at the vocabulary's rate a token
-would be 13.2 milliseconds against llama.cpp's 17.2, so this is not a small
-question.
+**And one row of it was wrong.** The vocabulary product looked like 78.2
+GB/s -- twenty-nine per cent faster than the layer products, same part, same
+format, same kernel -- and the hypothesis offered for it was that the
+vocabulary product is alone in its submission where a layer's products are
+fifteen steps of one sequence with barriers between them. **Both the figure
+and the hypothesis are gone**, and what replaces them is the next section.
 
-What differs is not the row length -- the vocabulary's rows are 2048 long
-and so are the queries' and the gate's inputs -- and not the workgroup
-count, since 5,632 rows and 32,000 rows both bury twelve compute units. What
-differs is that **the vocabulary product is alone in its submission and the
-layer products are fifteen steps of one sequence**, with a barrier wherever
-a step reads what the step before it wrote. A layer's products cannot all be
-in flight at once and the vocabulary's row has nothing to wait for.
+### One call costs 64 microseconds and then streams at 63 GB/s
 
-That is a hypothesis and it is not tested here. What is measured is the
-difference, and it is the first thing on this page that names a mechanism
-worth twenty-nine per cent. **The number to beat is 78.2 GB/s**, and the
-part evidently gives it.
+The way to test whether a layer's shapes are slower than the vocabulary's is
+to run them alone and see. `tests device-bench` times a single product of a
+named shape, submitted by itself, and now does it at **one vector** -- which
+is the shape a generated token asks for and the only one bound by the
+weights rather than by the arithmetic. Two rounds, q8_0, TinyLlama's own
+shapes and the vocabulary's:
 
-**A caveat on the last row of the first table.** The layer products' time is
-a residual -- the token less the three things ablated out of it -- and not a
-reading of its own, because there is no way to take a layer's products away
-and still have a token. The three ablations are direct and alternated; the
-17.05 carries whatever they do not.
+| | bytes | a product | |
+| --- | ---: | ---: | ---: |
+| keys, 256 by 2048 | 0.56 MB | 74.7 us | 7.5 GB/s |
+| query, 2048 by 2048 | 4.46 MB | 136.7 us | 32.6 GB/s |
+| gate, 5632 by 2048 | 12.26 MB | 255.0 us | 48.0 GB/s |
+| down, 2048 by 5632 | 12.26 MB | 255.7 us | 47.9 GB/s |
+| vocabulary, 32000 by 2048 | 69.63 MB | 1162.7 us | 59.9 GB/s |
+
+**Those five are one line: 64.3 microseconds a call and 63.4 GB/s after
+it**, and every one of them sits within 2.2 per cent of it. `gate` and `down`
+are the same bytes shaped opposite ways -- 5,632 rows of 2,048 against 2,048
+rows of 5,632 -- and they read 255.0 and 255.7. A row product's time is its
+bytes and one call, and nothing else.
+
+**So there is no shape difference, and therefore nothing for the sequencing
+to explain.** The hypothesis is refused before it was built against.
+
+**And the 78.2 GB/s was an artefact of how it was measured.** Taking the
+output projection out of a token loses 0.89 ms; the same product run alone
+takes 1.16 ms, of which 1.10 is streaming. Removing the last product of a
+token removes *less than the product costs*, so **ablation by difference
+measures a part's marginal cost, not its cost** -- which is exactly right for
+the question "what would removing this save" and wrong for "what does this
+cost". The three ablations in the table above are marginal costs and should
+be read as such; this bench is the direct reading.
+
+**What the corrected picture says.** A token's 1,099 MB at the kernel's own
+63.4 GB/s would take **17.33 ms**. It takes 18.20, and llama.cpp's takes
+17.18.
+
+| | |
+| --- | ---: |
+| the products alone, at this kernel's rate | 17.33 ms |
+| llama.cpp's whole token | 17.18 ms |
+| this engine's whole token | 18.20 ms |
+
+**So llama.cpp's row product is about one per cent faster than this one, and
+the rest of the 1.07 is overhead this engine carries around its products and
+llama.cpp does not** -- 0.87 milliseconds of it, of which 0.12 is attending,
+0.14 is the cache copied back to the host, 0.06 is the one call a token
+waits on, and **0.55 is not yet located**. That is the next thing, and it is
+a smaller and better-posed question than any of the three the sections above
+went after.
+
+**One more thing the curve shows.** Past about seventy megabytes a matrix
+drifts off the line: 139 MB reads 2.9 per cent slow, 209 MB 12.9, and 418 MB
+forty-six. So does a matrix of the vocabulary's own bytes in rows four times
+as long -- 8,000 by 8,192 reads 8.9 per cent slow. Neither is explained here.
+The first looks like residency and the second like row length, and no model
+this program runs has a matrix in either range.
 
 ## License
 

@@ -829,7 +829,7 @@ package body Device_Bench is
          --  TinyLlama's own, and the vocabulary projection that closes a
          --  run. The two narrow ones are the grouped keys and values: an
          --  eighth of the rows of the query beside them, at the same width.
-         Table : constant array (1 .. 18) of Shape :=
+         Table : constant array (1 .. 28) of Shape :=
            [("query     ",  2048, 2048, 128),
             ("keys      ",   256, 2048, 128),
             ("out proj  ",  2048, 2048, 128),
@@ -865,7 +865,39 @@ package body Device_Bench is
             --  "out proj" -- the same shape -- thirty per cent apart, and
             --  what this asks is whether the difference is the shape or
             --  the position in the table.
-            ("query last",  2048, 2048, 128)];
+            ("query last",  2048, 2048, 128),
+
+            --  And every one of them at ONE vector, which is the shape a
+            --  generated token asks for and the only shape that is bound
+            --  by the weights rather than by the arithmetic. A token's
+            --  layer products read 1,029 MB at 60.4 GB/s and its
+            --  vocabulary product reads 69.6 at 78.2, twenty-nine per cent
+            --  apart on the same kernel and the same format -- and the
+            --  standing hypothesis is that the difference is not the shape
+            --  but the sequence: the vocabulary product is alone in its
+            --  submission and a layer's products are fifteen steps with a
+            --  barrier wherever one reads what the last wrote.
+            --
+            --  These are alone in their submissions, every one of them. If
+            --  the layer shapes read what the vocabulary reads, the shape
+            --  is innocent and the hypothesis stands. If they read 60, it
+            --  is the shape and the hypothesis is wrong.
+            ("one query ",  2048, 2048, 1),
+            ("one keys  ",   256, 2048, 1),
+            ("one gate  ",  5632, 2048, 1),
+            ("one down  ",  2048, 5632, 1),
+            ("one vocab ", 32000, 2048, 1),
+            ("one vocab2", 32000, 2048, 1),
+
+            --  And larger again, at one vector, to separate the fixed cost
+            --  of a call from the rate it streams at: two points cannot
+            --  do it and four can. The last is the same bytes as the
+            --  vocabulary in a quarter of the rows, which asks whether the
+            --  rate is about bytes or about how they are shaped.
+            ("one big   ", 64000, 2048, 1),
+            ("one bigger", 96000, 2048, 1),
+            ("one huge  ", 96000, 4096, 1),
+            ("one square",  8000, 8192, 1)];
       begin
          for Which of Table loop
             declare

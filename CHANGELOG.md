@@ -107,11 +107,29 @@ Keep a Changelog and the project uses semantic versioning.
   per cent of streaming rate and nothing else -- not an arrangement, not a
   submission count, not a missing kernel.
 
-  And the vocabulary product is twenty-nine per cent faster than the layer
-  products on the same part, same format and same kernel. It is alone in
-  its submission where a layer's products are fifteen steps of one sequence
-  with barriers between them. Untested, and the first mechanism named on
-  that page worth twenty-nine per cent.
+  The twenty-nine per cent this entry first claimed for the vocabulary
+  product, and the sequencing hypothesis offered for it, are both withdrawn
+  below.
+
+- **A single-vector row product costs 64.3 microseconds a call and then
+  streams at 63.4 GB/s**, which `tests device-bench` now measures at the
+  shapes a generated token actually asks for. Five of them from 0.56 MB to
+  69.63 MB sit on that one line within 2.2 per cent -- including `gate` and
+  `down`, the same bytes shaped opposite ways, at 255.0 and 255.7
+  microseconds. **A row product's time is its bytes and one call.**
+
+  So the layer shapes are not slower than the vocabulary's, there was
+  nothing for the sequencing hypothesis to explain, and the 78.2 GB/s that
+  prompted it was an artefact: taking the output projection out of a token
+  loses 0.89 ms where the product alone costs 1.16. **Ablation by difference
+  measures a part's marginal cost, not its cost.**
+
+  Corrected, a token's 1,099 MB at this kernel's own rate would take 17.33
+  ms; llama.cpp's whole token takes 17.18 and this one takes 18.20. So
+  llama.cpp's row product is about one per cent faster and the rest of the
+  1.07 is 0.87 ms of overhead around the products -- 0.12 attending, 0.14
+  copying the cache back, 0.06 the one call a token waits on, and 0.55 not
+  yet located.
 
 - **Attention costs 0.0013 ms a position and 0.1 ms a token that does not
   depend on the context**, measured by ablation -- `attention.comp` returning

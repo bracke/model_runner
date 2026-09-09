@@ -18924,3 +18924,59 @@ panels 4D5F01C6F9DF4A57 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  through the gate before each of the thirty readings, alternated
 # model: TinyLlama-1.1B-Chat Q8_0 on the device, twelve generated tokens
+
+# 2026-09-09, the hypothesis tested and refused, and one line under every
+# shape a token asks for.
+#
+#   THE CLAIM UNDER TEST, from the entry above: the vocabulary product
+#   reads at 78.2 GB/s and the layer products at 60.4, and the difference
+#   is that the vocabulary product is alone in its submission where a
+#   layer's products are fifteen steps of one sequence with barriers.
+#
+#   THE TEST: run the layer's own shapes alone, at one vector, which is the
+#   shape a generated token asks for and the only one bound by the weights
+#   rather than the arithmetic. tests device-bench, q8_0, two rounds:
+#
+#     keys        256 x 2048    0.56 MB     74.7 us    7.5 GB/s
+#     query      2048 x 2048    4.46       136.7      32.6
+#     gate       5632 x 2048   12.26       255.0      48.0
+#     down       2048 x 5632   12.26       255.7      47.9
+#     vocabulary 32000 x 2048  69.63      1162.7      59.9
+#
+#   THOSE FIVE ARE ONE LINE: 64.3 US A CALL AND 63.4 GB/S AFTER IT, every
+#   one within 2.2 per cent of it. gate and down are the same bytes shaped
+#   opposite ways -- 5,632 rows of 2,048 against 2,048 of 5,632 -- and read
+#   255.0 and 255.7. A row product's time is its bytes and one call.
+#
+#   SO THERE IS NO SHAPE DIFFERENCE and nothing for the sequencing to
+#   explain. REFUSED.
+#
+#   AND THE 78.2 GB/S WAS THE METHOD. Taking the output projection out of a
+#   token loses 0.89 ms; the product alone costs 1.16, of which 1.10 is
+#   streaming. Removing the last product of a token removes LESS than the
+#   product costs, so ABLATION BY DIFFERENCE MEASURES A PART'S MARGINAL
+#   COST, NOT ITS COST -- right for "what would removing this save", wrong
+#   for "what does this cost". The three ablations in the entry above are
+#   marginal costs and are to be read as such.
+#
+#   THE CORRECTED PICTURE. A token's 1,099 MB at this kernel's own 63.4
+#   GB/s would take 17.33 ms. llama.cpp's whole token takes 17.18 and this
+#   one takes 18.20. So llama.cpp's row product is about one per cent
+#   faster than this one and THE REST OF THE 1.07 IS OVERHEAD AROUND THE
+#   PRODUCTS: 0.12 ms attending, 0.14 copying the cache back, 0.06 the one
+#   call a token waits on, and 0.55 NOT YET LOCATED. Smaller and better
+#   posed than the three questions the entries above went after.
+#
+#   AND WHERE THE LINE STOPS. Past about seventy megabytes a matrix drifts
+#   off it -- 139 MB by 2.9 per cent, 209 MB by 12.9, 418 MB by 46 -- and so
+#   does the vocabulary's own bytes in rows four times as long, 8,000 by
+#   8,192, by 8.9. The first looks like residency and the second like row
+#   length; neither is established, and no model this program runs has a
+#   matrix in either range.
+#
+#   The 64.3 us a call is the same quantity this file measured at 82.7 us
+#   for a call before it computes anything, from the other direction and
+#   two arrangements later.
+#
+# load:  device-bench times a product against its own clock, not the host's
+# model: no model; matrices allocated for the shapes named
