@@ -72,18 +72,27 @@ Keep a Changelog and the project uses semantic versioning.
 ### Added
 
 - **`tests quantize`: the engine writes a format at last.** It read twelve
-  and wrote none. This writes five -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 -- which
-  is llama.cpp's `llama-quantize` for the formats whose encoding is a rule
-  rather than a search. The k-quants pick their scales by an iterative
-  search and are not here.
+  and wrote none. This writes seven -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K
+  and Q6_K -- which is llama.cpp's `llama-quantize`. Five encode by a rule;
+  the two k-quants **search**, trying nineteen or twenty-one candidate
+  scales and keeping the best weighted fit.
 
   **The check is exact and it is the other implementation.** Both pointed at
-  the same eight-bit file, compared tensor by tensor: **201 tensors the
-  same, 0 differing, for all five formats** -- byte for byte, including the
+  the same eight-bit file, compared tensor by tensor: **201 tensors the same
+  and 0 differing for six of the seven** -- byte for byte, including the
   parts of the rule that look like mistakes and are not, the truncation
   toward zero after adding a half and the clamp on the high side only.
-  `--against` compares tensors rather than whole files, because headers
-  differ for reasons that are not the encoding.
+  Q6_K searches and still agrees exactly, which was the open question.
+
+  **Q4_K parts company seven times: 1,081 bytes of 619,094,016, or 1.7 parts
+  per million**, the first eight bytes of a thirty-six-million-byte
+  `output.weight`. That is candidate comparisons falling the other side of a
+  tie and not a disagreement about the rule, which would differ everywhere
+  rather than one byte in a million; `-ffp-contract=off` changes nothing, so
+  it is not the compiler folding a multiply and an add either. Pointing
+  `tests perplexity` at one file with the other as its baseline gives
+  **divergence 0.000000 and 100.0 per cent top-token agreement** over 1,020
+  positions, so nothing the model believes turns on those bytes.
 
   **And the rule was not what this repository had.** `Fixtures.Encode_Four_Bit`
   scales a block from its minimum and maximum and serves both Q4_0 and

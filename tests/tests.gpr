@@ -36,6 +36,16 @@ project Tests is
            --  This project documents a 120 column limit; the
            --  generated profile would otherwise impose 79.
            "-gnatyM120");
+      --  The quantizer transcribes another implementation's arithmetic and
+      --  is judged by writing the same bytes it does, so the compiler may
+      --  not rearrange it. Contraction -- folding a multiply and an add into
+      --  one instruction that rounds once rather than twice -- is a
+      --  rearrangement, and the searches in that unit decide between
+      --  candidates by comparing sums that it would change.
+      for Switches ("quantizer.adb") use
+        Tests_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
+           "-gnatyM120", "-ffp-contract=off");
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the

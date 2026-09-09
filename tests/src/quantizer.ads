@@ -22,11 +22,20 @@ with Model_Runner.GGUF;
 --  a Q4_0 reader accepts" is a weaker claim than "quantizes as Q4_0 is
 --  defined", and until this package only the first one was made.
 --
---  WHAT IS HERE AND WHAT IS NOT. Five formats whose encoding is a rule:
---  Q8_0, Q4_0, Q4_1, Q5_0 and Q5_1. The k-quants are not, and are not here:
---  llama.cpp chooses their scales by an iterative search over candidates
---  rather than by a closed form, and matching that is a different piece of
---  work rather than a longer version of this one.
+--  WHAT IS HERE. Five formats whose encoding is a closed-form rule -- Q8_0,
+--  Q4_0, Q4_1, Q5_0 and Q5_1 -- and one that is not: Q6_K, whose scale for
+--  each run of sixteen comes out of a SEARCH. Nineteen candidate inverse
+--  scales are tried around the one the largest magnitude suggests, and the
+--  one whose weighted least-squares fit is best is kept. Nothing about that
+--  is closed form, and it is here because the question it raises is worth an
+--  answer: two implementations that agree on the arithmetic can still part
+--  company where two candidates are near-tied, and whether they do is a
+--  measurement rather than a matter of opinion.
+--
+--  Q4_K searches too, and over a scale AND a minimum together: twenty-one
+--  candidate inverse scales, each solving a weighted least-squares fit for
+--  both at once and keeping whichever pair fits best. Q2_K, Q3_K and Q5_K
+--  are the same family and are not here yet.
 --
 --  Every rule below is transcribed from `ggml/src/ggml-quants.c`, including
 --  the parts that look like mistakes and are not: the truncation toward zero
@@ -43,12 +52,18 @@ package Quantizer is
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
 
    --  The formats this can write.
-   type Target is (Q8_0, Q4_0, Q4_1, Q5_0, Q5_1);
+   type Target is (Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K, Q6_K);
 
-   --  Elements in one block, which is thirty-two for all five of these.
-   --  A format with another block would make this a function of one; until
-   --  there is one, saying so twice would be two places to keep in step.
-   Block : constant Element_Count := 32;
+   --  Elements in one block. Thirty-two for the ones that carry a scale
+   --  each, and a super-block of two hundred and fifty-six for the k-quant,
+   --  which carries sixteen scales and a factor over them.
+   --
+   --  @param Item The format.
+   --  @return Its block in elements.
+   function Block_Of (Item : Target) return Element_Count
+   is (case Item is
+          when Q8_0 | Q4_0 | Q4_1 | Q5_0 | Q5_1 => 32,
+          when Q4_K | Q6_K => 256);
 
    --  Bytes one block occupies.
    --
@@ -60,7 +75,9 @@ package Quantizer is
           when Q4_0 => 18,
           when Q4_1 => 20,
           when Q5_0 => 22,
-          when Q5_1 => 24);
+          when Q5_1 => 24,
+          when Q4_K => 144,
+          when Q6_K => 210);
 
    --  The tensor type each target writes, for the header to name.
    --
@@ -72,7 +89,9 @@ package Quantizer is
           when Q4_0 => Model_Runner.GGUF.Type_Q4_0,
           when Q4_1 => Model_Runner.GGUF.Type_Q4_1,
           when Q5_0 => Model_Runner.GGUF.Type_Q5_0,
-          when Q5_1 => Model_Runner.GGUF.Type_Q5_1);
+          when Q5_1 => Model_Runner.GGUF.Type_Q5_1,
+          when Q4_K => Model_Runner.GGUF.Type_Q4_K,
+          when Q6_K => Model_Runner.GGUF.Type_Q6_K);
 
    --  Encode values into blocks of a format.
    --
@@ -98,6 +117,8 @@ package Quantizer is
           when Q4_0 => "q4_0",
           when Q4_1 => "q4_1",
           when Q5_0 => "q5_0",
-          when Q5_1 => "q5_1");
+          when Q5_1 => "q5_1",
+          when Q4_K => "q4_k",
+          when Q6_K => "q6_k");
 
 end Quantizer;

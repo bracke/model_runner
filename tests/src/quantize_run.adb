@@ -67,7 +67,9 @@ package body Quantize_Run is
                 & (if Item.First_Up = 0 then ""
                    else "; first apart " & Item.First_Apart (1 .. Item.First_Up)
                         & " by" & Long_Long_Integer'Image (Item.Apart_Bytes)
-                        & " bytes"))
+                        & " bytes,"
+                        & Long_Long_Integer'Image (Item.Apart_Total)
+                        & " bytes apart in all"))
         & "; took " & Say.Image (Long_Float (Item.Seconds), 2) & " s";
    end Summary;
 
@@ -157,6 +159,8 @@ package body Quantize_Run is
                      end if;
                   end loop;
 
+                  Result.Apart_Total := Result.Apart_Total + Apart;
+
                   if Apart = 0 then
                      Result.Same := Result.Same + 1;
                   else
@@ -218,8 +222,8 @@ package body Quantize_Run is
       Quantizer.Named (Format, Wanted, Known);
       if not Known then
          Result.Missing := True;
-         Note ("this writes q8_0, q4_0, q4_1, q5_0 and q5_1, and not "
-               & Format);
+         Note ("this writes q8_0, q4_0, q4_1, q5_0, q5_1, q4_k and q6_k, "
+               & "and not " & Format);
          return;
       end if;
 
@@ -422,7 +426,7 @@ package body Quantize_Run is
                --  quantized file does with them.
                Convert : constant Boolean :=
                  Rank > 1
-                 and then Count mod G.U64 (Quantizer.Block) = 0
+                 and then Count mod G.U64 (Quantizer.Block_Of (Wanted)) = 0
                  and then Kind /= Quantizer.Type_Of (Wanted);
 
                Raw : B.Byte_Array_Access :=

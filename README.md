@@ -17623,10 +17623,10 @@ below.
 
 ### Writing a format, and the check that it is the format
 
-This engine read twelve formats and wrote none. `tests quantize` writes five
-of them -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 -- which is llama.cpp's
-`llama-quantize` for the formats whose encoding is a rule rather than a
-search.
+This engine read twelve formats and wrote none. `tests quantize` writes seven
+-- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K and Q6_K -- which is llama.cpp's
+`llama-quantize`. Five of them encode by a rule. The other two **search**,
+and that is the interesting half.
 
 **The encoders were here and the rule was not.** The fixture builder has had
 encoders since it had fixtures, and `Fixtures.Encode_Four_Bit` serves both
@@ -17658,20 +17658,43 @@ tests quantize --model MODEL-Q8_0 --format q4_0 \
   --out ours.gguf --against theirs.gguf
 ```
 
-| format | tensors the same | differing | absent |
+| format | tensors the same | differing | bytes apart, of 619 million |
 | --- | ---: | ---: | ---: |
 | q8_0 | 201 | 0 | 0 |
 | q4_0 | 201 | 0 | 0 |
 | q4_1 | 201 | 0 | 0 |
 | q5_0 | 201 | 0 | 0 |
 | q5_1 | 201 | 0 | 0 |
+| q6_K | 201 | 0 | 0 |
+| q4_K | 194 | **7** | **1,081** |
 
-**Every tensor of every format, byte for byte**, including the parts of the
-rule that look like mistakes and are not: the truncation toward zero after
-adding a half, which makes the rounding asymmetric about zero, and the clamp
-that is on the high side only. A quantizer that rounded correctly would write
-better blocks and different files, and the point of this one is to write the
-same files.
+**The five rules and one of the two searches agree byte for byte**, including
+the parts of the rule that look like mistakes and are not: the truncation
+toward zero after adding a half, which makes the rounding asymmetric about
+zero, and the clamp that is on the high side only. A quantizer that rounded
+correctly would write better blocks and different files, and the point of
+this one is to write the same files.
+
+**Q6_K searches and still agrees exactly**, which was the open question. Its
+scale for each run of sixteen is chosen by trying nineteen candidates around
+the one the largest magnitude suggests and keeping the best weighted fit; two
+implementations comparing floating-point error sums could have parted company
+at any near-tie, and across 156 tensors of this model they never did.
+
+**Q4_K searches over a scale and a minimum together, and parts company seven
+times.** 1,081 bytes of 619,094,016 -- **1.7 parts per million** -- with the
+first at `output.weight`, eight bytes of thirty-six million. That is a
+handful of candidate comparisons falling the other side of a tie, and not a
+disagreement about the rule: a rule read differently produces a file that
+differs everywhere, not one in a million. Compiling the unit with
+`-ffp-contract=off` changes nothing, so it is not the compiler folding a
+multiply and an add either.
+
+**And the two files say the same thing.** `tests perplexity` was pointed at
+one with the other as its baseline: **divergence 0.000000 nats, top token
+agreed 100.0 per cent** over 1,020 positions. The instruments two sections
+above measure the artifact this section makes, and what they say about those
+1,081 bytes is that nothing the model believes turns on them.
 
 The comparison is of tensors and not of whole files: the headers differ for
 reasons that are not the encoding -- key order, what a writer puts in its
@@ -17689,9 +17712,10 @@ at a higher precision than the name on the file, which is why the comparison
 above passes `--pure` to turn that off: a file this writes is the format it
 says all the way through.
 
-**The k-quants are not here and are not a longer version of this.** Their
-scales come out of an iterative search over candidates rather than a closed
-form, and matching that is its own piece of work.
+**Q2_K, Q3_K, Q5_K and the two IQ formats are not here yet.** Q5_K is the
+same family as Q4_K and would use the same search; Q2_K and Q3_K search over
+scales that are themselves quantized by a further search; the IQ formats
+index a table of levels and choose by yet another rule.
 
 ## License
 

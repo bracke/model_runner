@@ -19363,3 +19363,55 @@ panels F2E5A0240ED35949 src/library/model_runner-quantization-interleave.ads src
 # load:  the quantizing is not a timing and was not gated; the stability
 #        readings went through the gate as the table did
 # model: TinyLlama-1.1B-Chat Q8_0, written out five ways
+
+# 2026-09-09, the k-quants, and what a search costs two implementations.
+#
+#   WHAT WAS ADDED. Q6_K and Q4_K to tests quantize, which is where the
+#   entry above left off: those two do not encode by a rule, they SEARCH.
+#   Q6_K tries nineteen candidate inverse scales for each run of sixteen and
+#   keeps the best weighted least-squares fit; Q4_K tries twenty-one for each
+#   run of thirty-two and fits a scale AND a minimum at each, then quantizes
+#   the eight scales and eight minimums it found by a further rule.
+#
+#   THE QUESTION THE ENTRY ABOVE RAISED, and the answer:
+#
+#     format   same   differing   bytes apart of 619,094,016
+#      q8_0     201       0                0
+#      q4_0     201       0                0
+#      q4_1     201       0                0
+#      q5_0     201       0                0
+#      q5_1     201       0                0
+#      q6_K     201       0                0
+#      q4_K     194       7             1,081
+#
+#   Q6_K SEARCHES AND STILL AGREES EXACTLY, across 156 tensors of this
+#   model: two implementations comparing floating-point error sums could
+#   have parted at any near-tie and never did.
+#
+#   Q4_K PARTS SEVEN TIMES, BY 1.7 PARTS PER MILLION. The first is
+#   output.weight, eight bytes of thirty-six million. That is the shape of a
+#   handful of near-ties and not of a rule read differently, which would
+#   differ everywhere. Two things were ruled out: compiling the unit with
+#   -ffp-contract=off changes nothing, so it is not a multiply and an add
+#   being folded; and the count is stable run to run, so it is not anything
+#   unrepeatable.
+#
+#   AND WHAT THOSE BYTES ARE WORTH, measured with the instrument two entries
+#   above, one file against the other as its baseline:
+#
+#     divergence 0.000000 nats, top token agreed 100.0 per cent, 1,020
+#     positions
+#
+#   Nothing the model believes turns on them.
+#
+#   THE COST OF SEARCHING, for a reader deciding whether to wait: q4_0 takes
+#   17 s over this model and q6_K takes 220, q4_K 250. The search is
+#   nineteen or twenty-one passes over every run where a rule is one.
+#
+#   NO FIGURE GROUP AND NO RESTAMP. What is above is a comparison of bytes
+#   and not a timing, and it is reproducible from the two commands quoted in
+#   the README.
+#
+# load:  not gated; the quantizing is not a timing. The divergence reading
+#        went through the gate.
+# model: TinyLlama-1.1B-Chat Q8_0, written out seven ways

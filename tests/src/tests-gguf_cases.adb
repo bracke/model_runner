@@ -493,18 +493,18 @@ package body Tests.GGUF_Cases is
       --  scale is decided by a value the minimum-and-maximum rule would also
       --  have found -- the two rules see the same block and disagree about
       --  what to do with it.
-      Rising : Model_Runner.Numerics.Real_Array (0 .. 31);
+      Rising : Model_Runner.Numerics.Real_Array (0 .. 255);
    begin
       for Index in Rising'Range loop
          Rising (Index) :=
-           Model_Runner.Numerics.Real (Index + 1) / 32.0;
+           Model_Runner.Numerics.Real (Index + 1) / 256.0;
       end loop;
 
       declare
          As_Four : constant Model_Runner.Bytes.Byte_Array :=
-           Quantizer.Encode (Rising, Quantizer.Q4_0);
+           Quantizer.Encode (Rising (0 .. 31), Quantizer.Q4_0);
          As_Four_One : constant Model_Runner.Bytes.Byte_Array :=
-           Quantizer.Encode (Rising, Quantizer.Q4_1);
+           Quantizer.Encode (Rising (0 .. 31), Quantizer.Q4_1);
       begin
          Assert (As_Four'Length = 18,
                  "a Q4_0 block is not eighteen bytes");
@@ -526,8 +526,12 @@ package body Tests.GGUF_Cases is
       --  the formats the assertion above cannot separate.
       for Into in Quantizer.Target loop
          declare
+            --  One block of whichever size this format's is.
+            Span : constant Model_Runner.Numerics.Element_Count :=
+              Quantizer.Block_Of (Into);
+
             Bytes : constant Model_Runner.Bytes.Byte_Array :=
-              Quantizer.Encode (Rising, Into);
+              Quantizer.Encode (Rising (0 .. Span - 1), Into);
 
             Room : Q.Block_Buffer;
             Ok   : Boolean;
@@ -542,17 +546,19 @@ package body Tests.GGUF_Cases is
               (case Into is
                   when Quantizer.Q8_0 => 255.0,
                   when Quantizer.Q4_0 | Quantizer.Q4_1 => 15.0,
-                  when Quantizer.Q5_0 | Quantizer.Q5_1 => 31.0);
+                  when Quantizer.Q5_0 | Quantizer.Q5_1 => 31.0,
+                  when Quantizer.Q4_K => 15.0,
+                  when Quantizer.Q6_K => 63.0);
 
             Step : constant Model_Runner.Numerics.Real :=
-              (Rising (Rising'Last) - Rising (Rising'First)) / Levels;
+              (Rising (Span - 1) - Rising (0)) / Levels;
          begin
             Q.Decode_Block (Quantizer.Type_Of (Into), Bytes, 0, Room, Ok);
             Assert (Ok,
                     "the decoder refused what the encoder wrote for "
                     & Quantizer.Name_Of (Into));
 
-            for Index in Rising'Range loop
+            for Index in 0 .. Span - 1 loop
                Apart := Model_Runner.Numerics.Real'Max
                  (Apart, abs (Room (Index) - Rising (Index)));
             end loop;

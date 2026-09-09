@@ -49,6 +49,10 @@ package Quantize_Run is
       First_Up    : Natural := 0;
       Apart_Bytes : Long_Long_Integer := 0;
 
+      --  And across every tensor, which is what says whether a difference
+      --  is a disagreement about the rule or a handful of near-ties.
+      Apart_Total : Long_Long_Integer := 0;
+
       Seconds : Duration := 0.0;
    end record;
 
