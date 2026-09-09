@@ -2,6 +2,7 @@ with Ada.Text_IO;
 
 with AUnit.Assertions;
 
+with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
 
@@ -92,19 +93,42 @@ package body Tests.Inference_Cases is
    end record;
 
    --  Parse and prepare the tiny model, asserting each stage.
-   procedure Start (Item : in out Harness) is
+   procedure Start
+     (Item    : in out Harness;
+      Backend : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
+      Ready   : out Boolean)
+   is
       Status : E.Error_Info;
    begin
+      Ready := False;
+
       Containers.Reader.Parse (Item.Parsed, Item.Source, Status => Status);
       Assert (E.Is_Ok (Status),
               "tiny model did not parse: "
               & E.Error_Code'Image (Status.Code));
 
-      L.Prepare (Item.Ready, Item.Parsed, Item.Source, Status => Status);
+      L.Prepare
+        (Item.Ready, Item.Parsed, Item.Source,
+         Backend => Backend, Status => Status);
+
+      --  A machine with no device is not a failure of anything this asks
+      --  about, and the caller is told rather than the test refused.
+      if Status.Code = E.Backend_No_Device then
+         return;
+      end if;
+
       Assert (E.Is_Ok (Status),
               "tiny model did not prepare: "
               & E.Error_Code'Image (Status.Code));
       Assert (L.Is_Ready (Item.Ready), "model not marked ready");
+      Ready := True;
+   end Start;
+
+   procedure Start (Item : in out Harness) is
+      Ready : Boolean;
+   begin
+      Start (Item, Ready => Ready);
    end Start;
 
    --------------------------------------------
@@ -6165,6 +6189,221 @@ package body Tests.Inference_Cases is
               & "a window that has slid, by" & Long_Float'Image (Worst));
    end A_Window_That_Slides_Answers_The_Same;
 
+   --  A shift on a cache that has slid renumbers what the layer holds,
+   --  and holds nothing it should not.
+   --
+   --  THIS RAISED. Shift keeps the first Keep positions and moves the rest
+   --  down, and it found both ends through Cell_Of -- a position's distance
+   --  from the lowest one its layer still holds. On a layer that has slid,
+   --  the positions a shift promises to keep are the first ones the window
+   --  dropped, so that distance went below zero and the shift raised rather
+   --  than shifting. Every architecture that slides, any context long
+   --  enough to have slid: which is every context the window was built for.
+   --
+   --  What a shift means to such a layer is only a renumbering. It holds
+   --  the newest positions and those are exactly the ones that survive, so
+   --  each key is turned back and stays in the cell it is in, and the
+   --  layer's origin moves by Drop. Nothing is copied.
+   --
+   --  HOW THIS CHECKS THAT THE RENUMBERING IS RIGHT rather than merely
+   --  survivable. Every layer of this fixture slides and there are two of
+   --  them, so a window of three reaches at most four positions back
+   --  through the pair: a logit at position P is decided by the tokens at
+   --  P - 4 .. P. Twenty positions after the shift, nothing before it can
+   --  reach the answer. So the shifted run and a run that never had the
+   --  dropped tokens at all must agree TO THE BIT, and an origin off by
+   --  Drop makes the shifted one read the wrong three neighbours and
+   --  answer differently.
+   procedure A_Shift_On_A_Window_Renumbers_What_It_Holds
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      --  Past the window and a batch, so that every layer has slid before
+      --  the shift is asked for.
+      Room   : constant := 600;
+      Length : constant := 518;
+
+      Keep   : constant := 0;
+      Drop   : constant := 100;
+
+      --  Longer than the four positions a two-layer window of three can
+      --  reach back through, by enough that the margin is not the point.
+      Tail   : constant := 20;
+
+      Prompt : Vocab.Token_Array (1 .. Length);
+      After  : Vocab.Token_Array (1 .. Tail);
+
+      Image  : B.Byte_Array_Access;
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind);
+
+      --  The same question of whichever backend will answer it. The device
+      --  keeps its own copy of the cache and a shift edits the host's, so
+      --  the answer here is a different claim on each: that the renumbering
+      --  is right, and that what it renumbered reached the device.
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind) is
+         Shifted, Fresh : Logit_Vector := [others => 0.0];
+
+         --  And the first token after the shift, whose window still reaches
+         --  back into what was kept: what the turn-back is checked by.
+         First_Shifted, First_Fresh : Logit_Vector := [others => 0.0];
+
+         Apart, Near : Long_Float := 0.0;
+
+         Where : constant String :=
+           " on " & Model_Runner.Text.To_Lower
+                      (Model_Runner.Backend.Backend_Kind'Image (Backend));
+      begin
+         --  What the engine says after a shift on a cache that has slid.
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Able   : Boolean;
+         begin
+            Start (Under, Backend, Able);
+
+            if not Able then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no device shifted a window here");
+               return;
+            end if;
+
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open" & Where);
+
+            for Token of Prompt loop
+               L.Evaluate
+                 (Live, Under.Ready, Token, Shifted, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed" & Where & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Shift (Live, Under.Ready, Keep, Drop, Status);
+            Assert (E.Is_Ok (Status),
+                    "a shift on a cache that has slid was refused" & Where
+                    & ": " & E.Error_Code'Image (Status.Code));
+            Assert (L.Position (Live) = Length - Drop,
+                    "the shift left" & Natural'Image (L.Position (Live))
+                    & " positions, not" & Natural'Image (Length - Drop)
+                    & Where);
+
+            for Index in After'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, After (Index), Shifted,
+                  Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the continuation after a shift failed" & Where);
+
+               if Index = After'First then
+                  First_Shifted := Shifted;
+               end if;
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         --  And what it says having never read the dropped tokens.
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Able   : Boolean;
+         begin
+            Start (Under, Backend, Able);
+            Assert (Able, "the second model was refused" & Where);
+
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the second session did not open" & Where);
+
+            for Index in Drop + 1 .. Length loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Fresh,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "the retained prompt failed" & Where);
+            end loop;
+
+            for Index in After'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, After (Index), Fresh, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the second continuation failed" & Where);
+
+               if Index = After'First then
+                  First_Fresh := Fresh;
+               end if;
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         for Index in Fresh'Range loop
+            Apart := Long_Float'Max
+              (Apart, abs (Long_Float (Shifted (Index) - Fresh (Index))));
+            Near := Long_Float'Max
+              (Near,
+               abs (Long_Float (First_Shifted (Index) - First_Fresh (Index))));
+         end loop;
+
+         --  The token right after the shift, which the retained keys decide.
+         --  Near rather than equal: those keys were turned for the positions
+         --  they were written at and turned back again, where the second
+         --  session's were turned once, and two rotations that compose to
+         --  the same angle do not compose to the same bits. A key that was
+         --  not turned back at all is a hundred positions out and nowhere
+         --  near.
+         Assert (Near < 1.0E-3,
+                 "the token after a shift on a window disagrees with a run "
+                 & "that never read what was dropped, by"
+                 & Long_Float'Image (Near) & Where
+                 & " -- the keys the window still holds were not renumbered");
+
+         Assert (Apart < 1.0E-4,
+                 "a shifted window answers differently from a run that never "
+                 & "read what it dropped, by" & Long_Float'Image (Apart)
+                 & Where
+                 & " -- the renumbering left the layer reading the wrong "
+                 & "positions");
+      end On;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) :=
+           Vocab.Token_Id (4 + ((Index - 1) * 7 + Index / 13) mod 5);
+      end loop;
+
+      for Index in After'Range loop
+         After (Index) := Vocab.Token_Id (4 + (Index * 3) mod 5);
+      end loop;
+
+      Tiny_Model.Build (Image, Window => 3, Room => Room);
+
+      On (Model_Runner.Backend.Backend_CPU);
+
+      declare
+         Ready : Boolean;
+      begin
+         Model_Runner.Backend.Device.Close;
+         Model_Runner.Backend.Device.Open (Ready);
+
+         if Ready then
+            On (Model_Runner.Backend.Backend_Device);
+            Model_Runner.Backend.Device.Close;
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device shifted a window here");
+         end if;
+      end;
+
+      B.Free (Image);
+   end A_Shift_On_A_Window_Renumbers_What_It_Holds;
+
    procedure Refused_Generation_Names_Its_Reason
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7052,6 +7291,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, A_Shift_On_A_Window_Renumbers_What_It_Holds'Access,
+         "a shift on a cache that has slid renumbers what the layer "
+         & "holds");
       Register_Routine
         (T, A_Window_That_Slides_Answers_The_Same'Access,
          "a window that has slid answers what the independent "

@@ -376,7 +376,7 @@ keeps the reference from promising diagnostics the program cannot emit.
 | Kernels | Scalar reference add, multiply, scale, dot, RMS normalization, softmax, SiLU, rotary encoding, with `Wide_Real` accumulation for length-dependent reductions |
 | Tokenizer | SentencePiece (`llama`) vocabulary: scores, token types, special tokens, byte fallback, greedy highest-score merge encoding. Byte-pair (`gpt2`) vocabulary: merge tables by rank, byte-level stand-in alphabet, and five cutting rules named by `tokenizer.ggml.pre` -- eight values of that key select between them, since an absent key cuts as `gpt-2` does, `starcoder` with it, and `llama-bpe` as `llama3` does -- a vocabulary naming any other being refused by name rather than cut by the wrong one. WordPiece (`bert`) vocabulary: the text folded before anything is looked up -- lower-cased, accents off, punctuation and ideographs cut loose -- and each word then spelled from the front with the longest piece the vocabulary carries, a piece that starts a word carrying a leading U+2581 and one that continues it written bare, and a word no run of pieces spells given back as one unknown rather than as the pieces that did match. All three with UTF-8-boundary-safe incremental decoding. A special-token identifier that is absent leaves the token unset; one that names no token refuses the model rather than being ignored |
 | Chat templates | Bounded allowlisted engine: `for`, `if`/`elif`/`else`, `set`, comments, `+`-joined output, `==`/`!=`/`and`/`or`/`not` with parentheses, `is defined`/`is none`/`in`, `trim`, `length` and `tojson`, message indexing, front slicing such as `messages[1:]`, cuts at a position such as `content[:n]` and `content[n:]`, brackets round part of a sum, a choice written on one line -- `A if C else B` -- `loop.first`/`last`/`index`, whitespace control -- `{%- -%}`, `{{- -}}`, `{%+`, and the line a block tag stands on, whose indentation and closing line break are the template's own shape rather than text the model was trained to see -- counting loops, namespaces, the string methods a reasoning model's template takes its own reply apart with together with the `first` and `last` filters that say which end of a cut is wanted, and the tool-calling branch: the tools a caller offered, walked and written with `tojson`, and the calls a turn asked for, walked and written field by field. A loop over the conversation may name its variable anything; `message` is the name a turn's fields are read through, so a loop calling its variable something else walks the list and leaves that name alone, which is what a template that walks the conversation backwards relies on. `+` runs text together and adds numbers, which is the rule the language it is written in has and what `messages[loop.index0 + 1]` means, and a sum answers as a number whether it is assigned, compared or printed. Enough that the templates current Llama-3, Qwen3 and Qwen3-MoE files ship with render, each of the last two checked against Python's jinja2 conversation for conversation. Where a model's own template is outside the subset, this build carries the format itself -- `--chat-template llama3`, `chatml`, `gemma`, `phi3` or `qwen3-coder`, the last being Qwen3-Coder's template said in the subset because that one opens with a macro, and the same bytes as it for every conversation that has no tools in it. Compiled and validated at load time; `macro`, `include` and `import` are rejected there, while a value the engine cannot compute -- a function call, date formatting, arithmetic on things that are not numbers -- is refused if the render reaches it |
-| Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe`, `gpt-oss`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`, `gpt2`, `bert`, `nomic-bert` and `jina-bert-v2`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gpt-oss a mixture too, and the only architecture here with an attention sink -- one learned score a head that joins the softmax's denominator and takes none of the weight, which lets a head attend to nothing -- and with a gate that is not the sigmoid-weighted one: both projections held at a limit, the logistic at a steeper slope, and one added to the up projection, so it reaches the second vector and is not an activation followed by a multiply. It alternates a window as gemma2 does and turns the windowed layers on a base of their own as gemma3 does, and carries biases on its router, on each of an expert's three projections and on the way out of attention; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once; gemma2 those three and four more -- a normalization after each sublayer as well as before it, a bound on the attention scores and another on the logits, both applied as a scaled hyperbolic tangent, and a sliding window on every other layer rather than on all of them; gemma3 keeps the two normalizations, drops the two bounds, normalizes query and key heads as qwen3 does, windows five layers in six, and turns those five on a rotation base of their own; phi3 nothing at all in its arithmetic and everything in where its weights are -- the queries, keys and values in one tensor and the gate and up projection in another, taken out as views at a row offset rather than copied; falcon a different block rather than a different detail -- one normalization a block instead of two, with attention and the feed-forward both reading it and both adding to the same residual, a normalization that subtracts the mean and carries a bias rather than the root-mean-square form every other architecture here uses, and a feed-forward with no gate at all: one projection up, a Gaussian error unit, one projection down; and phi2 that arrangement with a bias on every projection instead of on none. Bert is the one that is not a decoder at all: it reads a whole text and produces a state for every position of it, attending both ways, normalizing after each residual add rather than before each sublayer, and learning a row for the token, a row for its position and a row for its segment where every other architecture here learns one. It carries no projection from a state to a token, so `run` is refused by name and `embed` is what it is for. nomic-bert is that arrangement with three parts swapped -- it rotates rather than learning a row for the position, writes its queries, keys and values fused, and gates its feed-forward -- and carries no bias on any projection at all -- the three attention biases in one vector as their matrices are in one tensor, one on the way out of attention, one on each side of the feed-forward, and one on the output projection itself, which is added to every logit. jina-bert-v2 is that arrangement again with the positions taken away entirely: it neither rotates nor learns a row for where a token is, and is told instead by a fall-off in the attention scores, one slope a head, taken off after the scale and before the softmax and unsigned -- a position is as far from what follows it as from what came before. Its ladder of slopes has two branches and the second is only reached where the head count is not a power of two, which twelve heads is; it gates its feed-forward by the Gaussian unit where nomic-bert gates by the sigmoid-weighted one, and shifts what it projects down and nothing else. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, and the layers that slide one hold the window and a batch rather than the whole context -- a gemma3 session at its own 32,768 costs 0.33 GB where it cost 1.83, on the processor and on the device alike A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
+| Architecture profile | `llama`, `qwen2`, `qwen3`, `qwen3moe`, `gpt-oss`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`, `gpt2`, `bert`, `nomic-bert` and `jina-bert-v2`, each read under its own metadata keys and refused by name otherwise, with the refusal naming every one this build reads. All are the same shape with a difference: qwen2 a bias on each attention projection -- required, not optional -- and the split rotary pairing, element *i* against element *i + rotary/2* rather than against its neighbour; qwen3 no biases and a root-mean-square normalization of every query and key head before the rotation, equally required; qwen3moe that again with the feed-forward block behind a router; gpt-oss a mixture too, and the only architecture here with an attention sink -- one learned score a head that joins the softmax's denominator and takes none of the weight, which lets a head attend to nothing -- and with a gate that is not the sigmoid-weighted one: both projections held at a limit, the logistic at a steeper slope, and one added to the up projection, so it reaches the second vector and is not an activation followed by a multiply. It alternates a window as gemma2 does and turns the windowed layers on a base of their own as gemma3 does, and carries biases on its router, on each of an expert's three projections and on the way out of attention; gemma three differences of its own -- the normalization gain is one plus the stored weight rather than the weight, because its weights are trained around zero; the embedding row is multiplied by the square root of the embedding width before the first layer; and the feed-forward gate is a Gaussian error unit rather than a logistic one. Each of the three produces a plausible wrong answer rather than a refusal when it is missed, which is why each is crossed against the independent implementation rather than checked once; gemma2 those three and four more -- a normalization after each sublayer as well as before it, a bound on the attention scores and another on the logits, both applied as a scaled hyperbolic tangent, and a sliding window on every other layer rather than on all of them; gemma3 keeps the two normalizations, drops the two bounds, normalizes query and key heads as qwen3 does, windows five layers in six, and turns those five on a rotation base of their own; phi3 nothing at all in its arithmetic and everything in where its weights are -- the queries, keys and values in one tensor and the gate and up projection in another, taken out as views at a row offset rather than copied; falcon a different block rather than a different detail -- one normalization a block instead of two, with attention and the feed-forward both reading it and both adding to the same residual, a normalization that subtracts the mean and carries a bias rather than the root-mean-square form every other architecture here uses, and a feed-forward with no gate at all: one projection up, a Gaussian error unit, one projection down; and phi2 that arrangement with a bias on every projection instead of on none. Bert is the one that is not a decoder at all: it reads a whole text and produces a state for every position of it, attending both ways, normalizing after each residual add rather than before each sublayer, and learning a row for the token, a row for its position and a row for its segment where every other architecture here learns one. It carries no projection from a state to a token, so `run` is refused by name and `embed` is what it is for. nomic-bert is that arrangement with three parts swapped -- it rotates rather than learning a row for the position, writes its queries, keys and values fused, and gates its feed-forward -- and carries no bias on any projection at all -- the three attention biases in one vector as their matrices are in one tensor, one on the way out of attention, one on each side of the feed-forward, and one on the output projection itself, which is added to every logit. jina-bert-v2 is that arrangement again with the positions taken away entirely: it neither rotates nor learns a row for where a token is, and is told instead by a fall-off in the attention scores, one slope a head, taken off after the scale and before the softmax and unsigned -- a position is as far from what follows it as from what came before. Its ladder of slopes has two branches and the second is only reached where the head count is not a power of two, which twelve heads is; it gates its feed-forward by the Gaussian unit where nomic-bert gates by the sigmoid-weighted one, and shifts what it projects down and nothing else. Metadata validation in which an absent optional key takes a default and a present-but-unusable one refuses the model, derived-width divisibility, separate key and value head widths read from the file when it states them, rejection of rotary scaling this does not compute, tensor resolution and shape validation, tied-output aliasing. Sliding-window attention is read and applied: each position attends to the window's worth of positions ending at itself, and the layers that slide one hold the window and a batch rather than the whole context -- a gemma3 session at its own 32,768 costs 0.33 GB where it cost 1.83, on the processor and, since the session geometry stopped excluding it, on the device A mixture of experts is read and applied: a router a layer, the highest few experts run for each position and summed in proportion to their shares. Rotary scaling is read and applied for `none`, `linear` and `yarn`, together with a `rope_freqs.weight` table of per-dimension divisors when the file carries one |
 | Execution | Embedding lookup, per-layer RMS norm, Q/K/V projection, rotary encoding, grouped-query causal attention without duplicating key or value heads, output projection, SiLU-gated feed-forward, residuals, raw logits |
 | KV cache and session | Explicit cache sized with checked arithmetic, transactional commit, state machine, reset preserving allocations, committed-prefix reuse. Any number of sessions may be open on one prepared model at once: a model carries no per-evaluation state -- the activations, the normalized copies and the query and key rows all belong to the session -- so a second sequence costs its own cache and nothing else. Held by a test that interleaves two sessions a token at a time and checks each gets what it would have got alone; interleaved rather than sequential, because sequential sessions pass even on a model that does hold such state. Anything that would write to the model is refused while a session is open. `--prompt` asks for several: the model is read once and answers each in turn, which is what the sessions buy |
 | Sampling | Documented pipeline: vocabulary check, non-finite rejection, masks, per-token biases, sequence penalty, repetition penalty, frequency and presence penalties, temperature, top-k, tail-free, locally typical, top-p, min-p, exclude-top-choices, renormalize, select. Everything that acts on a token acts on the greedy path too, which is where a caller can check by hand what a penalty did -- they did not, for as long as they have existed. Mirostat v2 replaces the truncation filters rather than joining them and is refused alongside any of them, because two answers to one question is not a configuration. Greedy is tie-broken to the lowest token and consumes no random state, and
@@ -8670,6 +8670,57 @@ gives the mark it gave before, and replacing each row's origin with the first
 row's gives the same mark, because at that length there is nothing to tell
 apart. What is held is the shape; what is not held by a run is the case where
 two members of one round have slid to different places.
+
+### The device was not sliding, and three lines said so
+
+Everything the section above describes was built and none of it ran. The
+paragraph headed *The device slides too* was written about code that the
+session geometry never reached: `Open` decided how many cells a layer gets
+under a condition that read
+
+```ada
+Windowed : constant Boolean :=
+  Settings.Window > 0
+  and then Source.Able.Kind /= Backend_Device;
+```
+
+-- so on the device every layer got the whole context, nothing ever slid,
+and the shader arguments that commit changed were handed `Cell_Of` of an
+origin that stayed zero. **Which is exactly why the digests matched and no
+figure moved.** The evidence that should have been asked for was the
+memory, and it was not:
+
+| gemma3 at its own 32,768 | before | after |
+| --- | ---: | ---: |
+| peak resident, processor | 1.16 GB | 1.16 GB |
+| peak resident, device | **2.62 GB** | **1.22 GB** |
+
+| gemma2 | before | after |
+| --- | ---: | ---: |
+| peak resident, device | **3.49 GB** | **3.12 GB** |
+
+The device was carrying 1.40 GB of cache it had been told twice not to,
+while this file said it cost 0.33.
+
+**And a second line under it.** `Take_Block` numbers seats from zero and
+tests `Item.Seat >= 0` for whether a session holds one; the slide's write to
+the device tested `Item.Seat > 0`. A single session always gets seat zero,
+so the rows a slide moved never reached the device for any run that was not
+the second one open at the time. With the geometry excluded that was
+harmless -- nothing slid. With it corrected it would have been a wrong
+answer on the device for every windowed architecture past its window, and
+the two had to be fixed in the same commit to be fixed at all.
+
+**What holds it now**: the conformance sweep, which compares this engine
+against the independent transformer on both backends -- 41,780 sequences,
+none outside tolerance -- and the fixture check across the windowed
+architectures on `BACKEND_DEVICE`. What is still not held by a run is the
+device's copy after a `Shift`: the tiny fixture never takes a device block
+at all -- `Whole_Layer_Fits` and its neighbours turn the block down at that
+size -- so the shift test exercises the device's evaluation path and not its
+cache, and removing that write leaves every test passing. It is written the
+way the slide's write is written, one line below it, and that is the whole
+of what stands behind it.
 
 **A saved session says where each layer's run begins.** One run a layer from
 position zero stopped being a faithful record the moment a layer stopped
@@ -17248,6 +17299,43 @@ Eight figure groups were restamped rather than re-measured. What changed in
 the measuring tools is two calls to `Warmth` and a clause in each summary
 line, both outside every clock -- the first before the model is opened, the
 second after everything is closed -- so nothing between the clocks moved.
+
+### A rolling context on a window, which raised
+
+`Shift` is the rolling context: keep the first *Keep* positions, drop the
+next *Drop*, move the rest down and turn each moved key back by the angle
+those dropped positions stand for. It found both ends of that move through
+`Cell_Of` -- a position's distance from the lowest one its layer still holds
+-- which was the identity until a window slid.
+
+On a layer that has slid it is not. **The positions a shift promises to keep
+are the first ones a window drops**, so the distance went below zero and the
+call raised rather than shifting: every architecture that slides, any context
+long enough to have slid, which is every context the window was built for.
+`--context-shift` on gemma2, gemma3 and gpt-oss was broken by the commit that
+made the cache narrow, and nothing noticed because the shift tests are all on
+a model that does not slide.
+
+What a shift means to such a layer is only a renumbering. It holds the newest
+positions and those are exactly the ones that survive, so each key is turned
+back and **stays in the cell it is in**, and what moves is the layer's origin,
+by `Drop`. Rows move only where a layer straddles the hole -- where its origin
+falls inside the dropped range -- and then only far enough to close it. So the
+fix costs no copying at all on the layers that slide.
+
+**The test is exact rather than a survival check.** Every layer of the
+fixture slides and there are two of them, so a window of three reaches at
+most four positions back through the pair: a logit at position *P* is decided
+by the tokens at *P - 4 .. P*. Twenty positions after the shift, nothing
+before it can reach the answer -- so the shifted run and a run that never
+read the dropped tokens must agree to the bit, and an origin off by `Drop`
+makes the shifted one read the wrong three neighbours. A second assertion
+takes the token *immediately* after the shift, whose window still reaches
+back into what was kept, and holds it to 1e-3 rather than to the bit: those
+keys were turned for the positions they were written at and turned back
+again, where the other run's were turned once, and two rotations composing to
+the same angle do not compose to the same bits. That is the assertion the
+turn-back is held by -- deleting it, the first one passes.
 
 ## License
 

@@ -5,6 +5,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The device was never given the narrow cache, and the rolling context
+  raised on one.** Three faults from the two commits that windowed the
+  key/value cache, found together because each hid the next.
+
+  `Open` decided a layer's cell count under a condition that excluded the
+  device outright, so on the device every layer held the whole context and
+  nothing ever slid -- while this project's own pages said a gemma3 session
+  cost 0.33 GB "on the processor and on the device alike". **It cost 2.62 GB
+  of peak resident memory where it now costs 1.22**, and gemma2 3.49 against
+  3.12. The digests matched and no figure moved because the device path the
+  earlier commit added was unreachable, which is exactly what made it look
+  right.
+
+  Under that, the write that carries a slide's moved rows to the device
+  tested `Item.Seat > 0`, where seats are numbered from zero and a lone
+  session always gets seat zero. Harmless while nothing slid; a wrong answer
+  on the device for every windowed architecture once the geometry was
+  corrected, so the two are one fix.
+
+  And `Shift` -- the rolling context -- raised on any cache that had slid.
+  It found both ends of its move through a position's distance from the
+  lowest one its layer still holds, and **the positions a shift promises to
+  keep are the first ones a window drops**, so that distance went below
+  zero. `--context-shift` was broken on gemma2, gemma3 and gpt-oss for any
+  context long enough to have slid, which is every context the window exists
+  for. A shift on such a layer is only a renumbering: each key is turned
+  back and stays in the cell it is in, and the layer's origin moves by the
+  drop. Rows move only where a layer straddles the hole.
+
 ### Added
 
 - **A thermometer beside every published figure, and a load bound a

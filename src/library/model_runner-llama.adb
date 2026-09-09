@@ -5985,11 +5985,7 @@ package body Model_Runner.Llama is
          --  section exists to refuse.
          Margin : constant Element_Count := Element_Count (Max_Batch);
 
-         Windowed : constant Boolean :=
-           Settings.Window > 0
-           and then Model_Runner.Backend."/="
-                      (Source.Able.Kind,
-                       Model_Runner.Backend.Backend_Device);
+         Windowed : constant Boolean := Settings.Window > 0;
       begin
          Item.Cells := new Cell_Counts (0 .. Layers - 1);
          Item.At_Keys := new Cell_Counts (0 .. Layers - 1);
@@ -6369,26 +6365,63 @@ package body Model_Runner.Llama is
 
       --  Every layer, every moved position: the key turned back by the angle
       --  Drop stands for and written where it now belongs, the value copied.
+      --
+      --  A LAYER THAT SLIDES A WINDOW DOES NOT HOLD WHAT THIS PROMISES TO
+      --  KEEP. The first Keep positions are the ones a caller must not lose
+      --  and they are the first ones a window drops, so on a slid layer the
+      --  front of the cache is not there to be kept and the arithmetic that
+      --  assumed it was went below zero -- this raised rather than shifted,
+      --  on every architecture that slides, for any context long enough to
+      --  have slid. Which is the whole of what the window was built for.
+      --
+      --  What a shift means to such a layer is only a renumbering. It holds
+      --  the newest positions and those are exactly the ones that survive,
+      --  so each key is turned back by the angle Drop stands for and stays
+      --  in the cell it is in; what moves is the layer's origin, by Drop.
+      --  The rows move only where a layer straddles the hole -- where its
+      --  origin falls inside the dropped range -- and then only far enough
+      --  to close it.
       for Index in Item.Owner.Layers'Range loop
          declare
+            Layer : constant Natural := Natural (Index);
+
+            --  The lowest position this layer still holds, before and
+            --  after. Zero and zero for a layer that holds everything,
+            --  which is what this was before a window slid.
+            Low : constant Element_Count :=
+              (if Item.Origin = null then 0 else Item.Origin.all (Layer));
+
+            Settled : constant Element_Count :=
+              (if Low <= Element_Count (Keep) then Low
+               elsif Low >= Element_Count (Keep + Drop)
+               then Low - Element_Count (Drop)
+               else Element_Count (Keep));
+
             Base : constant Element_Count :=
-              Keys_At (Item, Natural (Index));
+              Keys_At (Item, Layer);
             V_Base : constant Element_Count :=
-              Values_At (Item, Natural (Index));
+              Values_At (Item, Layer);
             Rows_Base : constant Element_Count :=
-              Rows_At (Item, Natural (Index));
+              Rows_At (Item, Layer);
          begin
             for Step in 0 .. Moved - 1 loop
                declare
-                  --  Where the two positions sit in this layer, which is
-                  --  not the positions themselves for a layer that slides
-                  --  a window.
+                  --  What the position was and what it becomes.
+                  Held_At : constant Element_Count :=
+                    Element_Count (Keep + Drop + Step);
+                  Ends_At : constant Element_Count :=
+                    Element_Count (Keep + Step);
+
+                  --  Where the two sit in this layer, which is not the
+                  --  positions themselves for a layer that slides a window
+                  --  -- and for one that has slid past this position, is
+                  --  nowhere at all.
+                  Absent : constant Boolean := Held_At < Low;
+
                   Was : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
-                             Element_Count (Keep + Drop + Step));
+                    (if Absent then 0 else Held_At - Low);
                   Now : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
-                             Element_Count (Keep + Step));
+                    (if Absent then 0 else Ends_At - Settled);
 
                   From : constant Element_Count := Base + Was * KV_Width;
                   Into : constant Element_Count := Base + Now * KV_Width;
@@ -6396,69 +6429,98 @@ package body Model_Runner.Llama is
                   V_From : constant Element_Count := V_Base + Was * V_Width;
                   V_Into : constant Element_Count := V_Base + Now * V_Width;
                begin
-                  if Item.Held = Eighth then
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Item.Key_Row.all (Offset) :=
-                          Unpack (Item.Byte_Keys.all,
-                                  B.Byte_Count (From + Offset),
-                                  Item.Key_Scales.all (Rows_Base + Was));
-                     end loop;
-                  elsif Item.Held = Exact then
-                     Item.Key_Row.all (0 .. KV_Width - 1) :=
-                       Item.Keys.all (From .. From + KV_Width - 1);
-                  else
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Item.Key_Row.all (Offset) :=
-                          N.To_Real (Item.Half_Keys.all (From + Offset));
-                     end loop;
-                  end if;
+                  if not Absent then
+                     if Item.Held = Eighth then
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Item.Key_Row.all (Offset) :=
+                             Unpack (Item.Byte_Keys.all,
+                                     B.Byte_Count (From + Offset),
+                                     Item.Key_Scales.all (Rows_Base + Was));
+                        end loop;
+                     elsif Item.Held = Exact then
+                        Item.Key_Row.all (0 .. KV_Width - 1) :=
+                          Item.Keys.all (From .. From + KV_Width - 1);
+                     else
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Item.Key_Row.all (Offset) :=
+                             N.To_Real (Item.Half_Keys.all (From + Offset));
+                        end loop;
+                     end if;
 
-                  K.Apply_Rotary
-                    (Item.Key_Row.all, KV_Heads, Head_Size,
-                     Element_Count (Settings.Rotary), Drop,
-                     Turn_Base (Settings, Natural (Index)),
-                     Settings.Scaling, Turns (Source),
-                     Settings.Pairing, Backwards => True);
+                     K.Apply_Rotary
+                       (Item.Key_Row.all, KV_Heads, Head_Size,
+                        Element_Count (Settings.Rotary), Drop,
+                        Turn_Base (Settings, Natural (Index)),
+                        Settings.Scaling, Turns (Source),
+                        Settings.Pairing, Backwards => True);
 
-                  if Item.Held = Eighth then
-                     --  Turned back and written again, which is a second
-                     --  rounding of a row that was already rounded once.
-                     --  A rolling context in this storage loses a little
-                     --  more of what it keeps every time it rolls, and that
-                     --  is the price of the storage rather than a fault in
-                     --  the shift.
-                     Pack_Row
-                       (Item.Key_Row.all (0 .. KV_Width - 1),
-                        Item.Byte_Keys.all, B.Byte_Count (Into),
-                        Item.Key_Scales.all (Rows_Base + Now));
+                     if Item.Held = Eighth then
+                        --  Turned back and written again, which is a second
+                        --  rounding of a row that was already rounded once.
+                        --  A rolling context in this storage loses a little
+                        --  more of what it keeps every time it rolls, and that
+                        --  is the price of the storage rather than a fault in
+                        --  the shift.
+                        Pack_Row
+                          (Item.Key_Row.all (0 .. KV_Width - 1),
+                           Item.Byte_Keys.all, B.Byte_Count (Into),
+                           Item.Key_Scales.all (Rows_Base + Now));
 
-                     for Offset in 0 .. V_Width - 1 loop
-                        Item.Byte_Values.all
-                          (B.Byte_Count (V_Into + Offset)) :=
-                          Item.Byte_Values.all
-                            (B.Byte_Count (V_From + Offset));
-                     end loop;
-                     Item.Value_Scales.all (Rows_Base + Now) :=
-                       Item.Value_Scales.all (Rows_Base + Was);
-                  elsif Item.Held = Exact then
-                     Item.Keys.all (Into .. Into + KV_Width - 1) :=
-                       Item.Key_Row.all (0 .. KV_Width - 1);
-                     Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
-                       Item.Values.all (V_From .. V_From + V_Width - 1);
-                  else
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Item.Half_Keys.all (Into + Offset) :=
-                          N.To_Half (Item.Key_Row.all (Offset));
-                     end loop;
-                     for Offset in 0 .. V_Width - 1 loop
-                        Item.Half_Values.all (V_Into + Offset) :=
-                          Item.Half_Values.all (V_From + Offset);
-                     end loop;
+                        for Offset in 0 .. V_Width - 1 loop
+                           Item.Byte_Values.all
+                             (B.Byte_Count (V_Into + Offset)) :=
+                             Item.Byte_Values.all
+                               (B.Byte_Count (V_From + Offset));
+                        end loop;
+                        Item.Value_Scales.all (Rows_Base + Now) :=
+                          Item.Value_Scales.all (Rows_Base + Was);
+                     elsif Item.Held = Exact then
+                        Item.Keys.all (Into .. Into + KV_Width - 1) :=
+                          Item.Key_Row.all (0 .. KV_Width - 1);
+                        Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
+                          Item.Values.all (V_From .. V_From + V_Width - 1);
+                     else
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Item.Half_Keys.all (Into + Offset) :=
+                             N.To_Half (Item.Key_Row.all (Offset));
+                        end loop;
+                        for Offset in 0 .. V_Width - 1 loop
+                           Item.Half_Values.all (V_Into + Offset) :=
+                             Item.Half_Values.all (V_From + Offset);
+                        end loop;
+                     end if;
                   end if;
                end;
             end loop;
+
+            if Item.Origin /= null then
+               Item.Origin.all (Layer) := Settled;
+            end if;
          end;
       end loop;
+
+      --  And the device's copy, which every edit above has just made stale.
+      --
+      --  It always had been. A block is filled once when it is granted and
+      --  kept up to date a position at a time as positions are written, so
+      --  nothing carried a shift's edits across -- a rolling context on the
+      --  device attended to the conversation it had before the roll, with
+      --  no error and no sign. A shift happens once a context, so the whole
+      --  cache goes over rather than the rows that moved.
+      if Item.Seat > 0 and then Item.Held = Exact then
+         declare
+            Sent : Boolean;
+         begin
+            Model_Runner.Backend.Device.Put_Cache
+              (Block_Base (Item), Item.Keys.all, Sent);
+
+            if Sent then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Block_Base (Item) + Item.Keys.all'Length,
+                  Item.Values.all, Sent);
+            end if;
+         end;
+      end if;
 
       --  And the history, which is what a restored context is checked
       --  against and what a prefix comparison reads.
