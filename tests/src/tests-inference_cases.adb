@@ -1702,201 +1702,202 @@ package body Tests.Inference_Cases is
       procedure Stepped (Window : Natural);
 
       procedure Stepped (Window : Natural) is
-      Image : B.Byte_Array_Access;
+         Image : B.Byte_Array_Access;
 
-      Steps : constant := 4;
+         Steps : constant := 4;
 
-      First_Prompt  : constant array (1 .. Steps) of Vocab.Token_Id :=
-        [4, 5, 6, 7];
-      Second_Prompt : constant array (1 .. Steps) of Vocab.Token_Id :=
-        [9, 8, 7, 6];
+         First_Prompt  : constant array (1 .. Steps) of Vocab.Token_Id :=
+           [4, 5, 6, 7];
+         Second_Prompt : constant array (1 .. Steps) of Vocab.Token_Id :=
+           [9, 8, 7, 6];
 
-      type Trail is array (1 .. Steps) of Logit_Vector;
-   begin
-      Tiny_Model.Build (Image, Window => Window);
-
-      declare
-         Held  : aliased constant B.Byte_Array := Image.all;
-         Under : Harness (Held'Access);
-
-         Alone_First, Alone_Second : Trail :=
-           [others => [others => 0.0]];
-
-         Row    : Logit_Vector := [others => 0.0];
-         Status : E.Error_Info;
+         type Trail is array (1 .. Steps) of Logit_Vector;
       begin
-         Start (Under);
-
-         --  Each on its own, keeping what it said at every step rather than
-         --  only at the last: a round is compared step for step.
-         declare
-            Live : L.Session;
-         begin
-            L.Open (Live, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the first session did not open");
-
-            for Step in First_Prompt'Range loop
-               L.Evaluate (Live, Under.Ready, First_Prompt (Step),
-                           Alone_First (Step), Status => Status);
-               Assert (E.Is_Ok (Status), "the first sequence failed");
-            end loop;
-
-            L.Close (Live);
-         end;
+         Tiny_Model.Build (Image, Window => Window);
 
          declare
-            Live : L.Session;
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+
+            Alone_First, Alone_Second : Trail :=
+              [others => [others => 0.0]];
+
+            Row    : Logit_Vector := [others => 0.0];
+            Status : E.Error_Info;
          begin
-            L.Open (Live, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the second session did not open");
+            Start (Under);
 
-            for Step in Second_Prompt'Range loop
-               L.Evaluate (Live, Under.Ready, Second_Prompt (Step),
-                           Alone_Second (Step), Status => Status);
-               Assert (E.Is_Ok (Status), "the second sequence failed");
-            end loop;
+            --  Each on its own, keeping what it said at every step rather than
+            --  only at the last: a round is compared step for step.
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the first session did not open");
 
-            L.Close (Live);
-         end;
+               for Step in First_Prompt'Range loop
+                  L.Evaluate (Live, Under.Ready, First_Prompt (Step),
+                              Alone_First (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "the first sequence failed");
+               end loop;
 
-         --  The two differ, or the comparison below would hold however
-         --  badly the rows collided.
-         declare
-            Same : Boolean := True;
-         begin
-            for Index in Logit_Vector'Range loop
-               if Alone_First (Steps) (Index)
-                 /= Alone_Second (Steps) (Index)
-               then
-                  Same := False;
-                  exit;
-               end if;
-            end loop;
+               L.Close (Live);
+            end;
 
-            Assert (not Same,
-                    "the two sequences produce the same logits, so this "
-                    & "fixture cannot tell a collision from a coincidence");
-         end;
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the second session did not open");
 
-         --  And now as a round: one token from each, in one pass.
-         declare
-            One, Two : aliased L.Session;
+               for Step in Second_Prompt'Range loop
+                  L.Evaluate (Live, Under.Ready, Second_Prompt (Step),
+                              Alone_Second (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "the second sequence failed");
+               end loop;
 
-            Both : Model_Runner.Tensors.Real_Array_Access := null;
-         begin
-            L.Open (One, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the first of a round did not open");
+               L.Close (Live);
+            end;
 
-            L.Open (Two, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the second of a round did not open");
+            --  The two differ, or the comparison below would hold however
+            --  badly the rows collided.
+            declare
+               Same : Boolean := True;
+            begin
+               for Index in Logit_Vector'Range loop
+                  if Alone_First (Steps) (Index)
+                    /= Alone_Second (Steps) (Index)
+                  then
+                     Same := False;
+                     exit;
+                  end if;
+               end loop;
 
-            Model_Runner.Tensors.Allocate
-              (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
-            Assert (Both /= null, "the round had no room for its logits");
+               Assert (not Same,
+                       "the two sequences produce the same logits, so this "
+                       & "fixture cannot tell a collision from a coincidence");
+            end;
 
-            for Step in First_Prompt'Range loop
+            --  And now as a round: one token from each, in one pass.
+            declare
+               One, Two : aliased L.Session;
+
+               Both : Model_Runner.Tensors.Real_Array_Access := null;
+            begin
+               L.Open (One, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the first of a round did not open");
+
+               L.Open (Two, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the second of a round did not open");
+
+               Model_Runner.Tensors.Allocate
+                 (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
+               Assert (Both /= null, "the round had no room for its logits");
+
+               for Step in First_Prompt'Range loop
+                  L.Evaluate_Round
+                    (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+                     Source  => Under.Ready,
+                     Tokens  =>
+                       [First_Prompt (Step), Second_Prompt (Step)],
+                     Logits  => Both,
+                     Status  => Status);
+
+                  Assert (E.Is_Ok (Status),
+                          "a round of two failed at step"
+                          & Integer'Image (Step) & ": "
+                          & E.Error_Code'Image (Status.Code));
+
+                  for Index in Logit_Vector'Range loop
+                     Row (Index) := Both.all (Both.all'First + Index);
+                  end loop;
+
+                  for Index in Logit_Vector'Range loop
+                     Assert (Row (Index) = Alone_First (Step) (Index),
+                             "the first member of a round differed from the "
+                             & "same sequence run alone, at step"
+                             & Integer'Image (Step) & " element"
+                             & N.Element_Count'Image (Index));
+                  end loop;
+
+                  for Index in Logit_Vector'Range loop
+                     Row (Index) :=
+                       Both.all (Both.all'First
+                                 + N.Element_Count (Tiny_Model.Vocabulary)
+                                 + Index);
+                  end loop;
+
+                  for Index in Logit_Vector'Range loop
+                     Assert (Row (Index) = Alone_Second (Step) (Index),
+                             "the second member of a round differed from the "
+                             & "same sequence run alone, at step"
+                             & Integer'Image (Step) & " element"
+                             & N.Element_Count'Image (Index));
+                  end loop;
+               end loop;
+
+               Assert (L.Position (One) = Steps
+                       and then L.Position (Two) = Steps,
+                       "the members of a round did not each advance by one "
+                       & "position a step");
+
+               --  And what a round refuses. The rows have to add up to what
+               --  the members were given -- one apiece unless a share list
+               --  says otherwise -- and a member that is not open cannot be in
+               --  one: both are refused by name, because a round that ran
+               --  anyway would give somebody another sequence's attention.
                L.Evaluate_Round
                  (Members => [One'Unchecked_Access, Two'Unchecked_Access],
                   Source  => Under.Ready,
-                  Tokens  =>
-                    [First_Prompt (Step), Second_Prompt (Step)],
+                  Tokens  => [1 => First_Prompt (1)],
                   Logits  => Both,
                   Status  => Status);
 
-               Assert (E.Is_Ok (Status),
-                       "a round of two failed at step"
-                       & Integer'Image (Step) & ": "
+               Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                       "a round with fewer tokens than rows was not "
+                       & "refused as a shape: "
                        & E.Error_Code'Image (Status.Code));
 
-               for Index in Logit_Vector'Range loop
-                  Row (Index) := Both.all (Both.all'First + Index);
-               end loop;
+               --  And a share list that does not name every member.
+               L.Evaluate_Round
+                 (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+                  Source  => Under.Ready,
+                  Tokens  => [First_Prompt (1), Second_Prompt (1)],
+                  Logits  => Both,
+                  Shares  => [1 => 2],
+                  Status  => Status);
 
-               for Index in Logit_Vector'Range loop
-                  Assert (Row (Index) = Alone_First (Step) (Index),
-                          "the first member of a round differed from the "
-                          & "same sequence run alone, at step"
-                          & Integer'Image (Step) & " element"
-                          & N.Element_Count'Image (Index));
-               end loop;
+               Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                       "a round whose shares name fewer members than it has "
+                       & "was not refused as a shape: "
+                       & E.Error_Code'Image (Status.Code));
 
-               for Index in Logit_Vector'Range loop
-                  Row (Index) :=
-                    Both.all (Both.all'First
-                              + N.Element_Count (Tiny_Model.Vocabulary)
-                              + Index);
-               end loop;
+               L.Close (Two);
 
-               for Index in Logit_Vector'Range loop
-                  Assert (Row (Index) = Alone_Second (Step) (Index),
-                          "the second member of a round differed from the "
-                          & "same sequence run alone, at step"
-                          & Integer'Image (Step) & " element"
-                          & N.Element_Count'Image (Index));
-               end loop;
-            end loop;
+               L.Evaluate_Round
+                 (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+                  Source  => Under.Ready,
+                  Tokens  => [First_Prompt (1), Second_Prompt (1)],
+                  Logits  => Both,
+                  Status  => Status);
 
-            Assert (L.Position (One) = Steps and then L.Position (Two) = Steps,
-                    "the members of a round did not each advance by one "
-                    & "position a step");
+               Assert (Status.Code = E.Lifecycle_Session_Closed,
+                       "a round holding a closed member was not refused: "
+                       & E.Error_Code'Image (Status.Code));
 
-            --  And what a round refuses. The rows have to add up to what
-            --  the members were given -- one apiece unless a share list
-            --  says otherwise -- and a member that is not open cannot be in
-            --  one: both are refused by name, because a round that ran
-            --  anyway would give somebody another sequence's attention.
-            L.Evaluate_Round
-              (Members => [One'Unchecked_Access, Two'Unchecked_Access],
-               Source  => Under.Ready,
-               Tokens  => [1 => First_Prompt (1)],
-               Logits  => Both,
-               Status  => Status);
+               Model_Runner.Tensors.Free (Both);
+               L.Close (One);
+               L.Close (Two);
+            end;
 
-            Assert (Status.Code = E.Tensor_Shape_Mismatch,
-                    "a round with fewer tokens than rows was not "
-                    & "refused as a shape: "
+            L.Close (Under.Ready, Status);
+            Assert (E.Is_Ok (Status),
+                    "the model would not close after a round: "
                     & E.Error_Code'Image (Status.Code));
-
-            --  And a share list that does not name every member.
-            L.Evaluate_Round
-              (Members => [One'Unchecked_Access, Two'Unchecked_Access],
-               Source  => Under.Ready,
-               Tokens  => [First_Prompt (1), Second_Prompt (1)],
-               Logits  => Both,
-               Shares  => [1 => 2],
-               Status  => Status);
-
-            Assert (Status.Code = E.Tensor_Shape_Mismatch,
-                    "a round whose shares name fewer members than it has "
-                    & "was not refused as a shape: "
-                    & E.Error_Code'Image (Status.Code));
-
-            L.Close (Two);
-
-            L.Evaluate_Round
-              (Members => [One'Unchecked_Access, Two'Unchecked_Access],
-               Source  => Under.Ready,
-               Tokens  => [First_Prompt (1), Second_Prompt (1)],
-               Logits  => Both,
-               Status  => Status);
-
-            Assert (Status.Code = E.Lifecycle_Session_Closed,
-                    "a round holding a closed member was not refused: "
-                    & E.Error_Code'Image (Status.Code));
-
-            Model_Runner.Tensors.Free (Both);
-            L.Close (One);
-            L.Close (Two);
          end;
 
-         L.Close (Under.Ready, Status);
-         Assert (E.Is_Ok (Status),
-                 "the model would not close after a round: "
-                 & E.Error_Code'Image (Status.Code));
-      end;
-
-      B.Free (Image);
-   end Stepped;
+         B.Free (Image);
+      end Stepped;
    begin
       Stepped (0);
       Stepped (3);

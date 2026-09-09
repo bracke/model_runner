@@ -17875,6 +17875,44 @@ What the third row does establish is worth having on its own: it reproduces
 the 0.044413 published in that table to the digit, sittings apart, which is
 the instrument saying it is repeatable.
 
+**A mixture and a matrix are two gains and they are nearly independent.**
+The two sit at right angles -- a recipe decides *which tensors* get more
+bits, a matrix decides *which columns within a tensor* are worth protecting
+-- so the honest question is whether having both is worth more than either.
+Four files, same model, same 1,020 positions, all Q4_K against q8_0:
+
+| | no matrix | this collector's matrix |
+| --- | ---: | ---: |
+| `--pure` | 0.061860 (84.2 %) | 0.026051 (91.0 %) |
+| the `q4_k_m` mixture | 0.040723 (87.6 %) | **0.018332 (91.8 %)** |
+
+**Both cuts hold in the presence of the other.** The matrix is worth 2.37
+times without the mixture and 2.22 with it; the mixture is worth 1.52 times
+without the matrix and 1.42 with it. Multiplying the two single gains
+against the pure figure predicts 0.0261 x 0.0407 / 0.0619 = 0.01714, and the
+measured corner is 0.01833 -- **seven per cent short of independent**, which
+is the small overlap you would expect from two mechanisms that both end up
+spending bits on the same important tensors. Together they take Q4_K's
+divergence from 0.0619 to 0.0183, a factor of **3.4**, and agreement on the
+top token from 84.2 to 91.8 per cent.
+
+**And the fourth cell is what caught a bug the other three could not.**
+`Encode_Weighted` had a weighted path for Q4_K and none for Q6_K, so this
+corner -- the only one of the four that is both mixed and weighted -- was
+quantizing its twenty-one lifted tensors as though no matrix had been given:
+21 tensors differing by 24,693,024 bytes against llama.cpp, where the same
+mixture without a matrix differed by 1,022. Pure-with-a-matrix never reaches
+Q6_K and mixture-without-one has no matrix to ignore; neither could see it.
+The fix is one argument -- llama.cpp's `make_qx_quants(16, 32, x, L, 1, qw)`
+against the same call with a null weight -- and it takes the file back to 1
+tensor differing by 1,022 bytes.
+
+Worth noting for its own sake: **24 megabytes of different bytes moved the
+divergence from 0.018484 to 0.018332**, four tenths of a per cent. The
+figure above was very nearly right while the code under it was wrong, which
+is the argument for checking files against llama.cpp byte by byte rather
+than trusting that a good number means a correct implementation.
+
 One naming difference, and it is llama.cpp's rather than a choice made here:
 llama.cpp calls its Q2_K *mixture* plain `Q2_K`, which in this tool is the
 name of the pure format. `--format q2_k` writes Q2_K through the file;
@@ -17887,6 +17925,58 @@ attention values -- three questions every model checkable here answers no,
 and three transcriptions not made. `Recipes.Fits` says so and the tool stops,
 because a file written as though a Falcon were a llama would differ for a
 reason nothing here records.
+
+### What a dispatch costs, and where the fixed cost went
+
+`### A generated token on the device is sixty-seven submissions` fits a line
+through attention against context and finds **3.3 milliseconds a token that
+does not depend on the context at all** -- thirteen and a half per cent of a
+generated token, spent before a single position is read. That entry
+attributed it to sixty-seven submissions, then the submission count fell to
+twenty-three and the attribution was withdrawn. The cost stayed measured and
+unexplained.
+
+**It is the dispatches.** Priced directly, by appending one redundant
+normalization to every layer -- twenty-two more dispatches a token, reading
+what the layer produced and writing where nothing reads it:
+
+| | twelve tokens, generating | mean |
+| --- | --- | ---: |
+| as it is | 0.219, 0.217, 0.218 s | 0.2180 |
+| twenty-two dispatches more | 0.221, 0.223, 0.220 s | 0.2213 |
+
+The ranges do not overlap and the digest is `5abff916f9d83ca6` either way,
+which is the point of choosing a normalization nothing reads. 3.3 ms over
+twelve tokens is 0.275 ms a token over twenty-two dispatches: **12.5
+microseconds a dispatch**.
+
+**And a layer dispatches about fifteen times** -- a normalization, three
+projections, two rotations, two placements, attention, the attention output,
+the feed-forward's normalization, its gate and up, the combination, the
+projection down. Both joins fold into the products before them and dispatch
+nothing. Twenty-two layers is about 330 dispatches a token, and 330 at 12.5
+microseconds is **4.1 milliseconds** -- the same quantity as the 3.3 the
+regression found, arrived at from the other end.
+
+**So the ceiling on this line of work is eighteen per cent of a generated
+token**, and that is where the device's remaining 1.07 against llama.cpp
+actually lives. What is available cheaply is much less: llama.cpp fuses
+`add + rms_norm`, which is the join folding this engine already does, and
+`rms_norm + mul`, which `norm.comp` already does by carrying the gain. The
+one fusion left is `rope_set_rows` -- the placement into the cache folded
+into the rotation before it, and the value placement into the product before
+that. Twenty-two to forty-four dispatches, **0.275 to 0.55 ms, 1.5 to 3.0
+per cent**.
+
+That is worth building and is not built here. What this section is for is
+the number: the price of a dispatch on this part was not known, the fixed
+cost had been called unexplained twice, and a fusion proposed against it
+would have been proposed against a hope. It is 12.5 microseconds, and the
+first attempt at measuring it was wrong in a way worth recording -- the
+redundant step was appended *after* the layer's final join, which made it the
+last step, and a layer hands back its last step. The digest moved, which is
+how it was caught. Moved one place earlier, the digest holds and the number
+means what it says.
 
 ## License
 

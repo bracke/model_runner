@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A mixture quantized with an importance matrix ignored it for the very
+  tensors the mixture exists to protect.** `Encode_Weighted` implemented the
+  weighted path for Q4_K only, and a recipe spends its extra bits in Q6_K --
+  so a `q4_k_m --imatrix` file, which is how essentially every such file in
+  the world is made, had its twenty-one lifted tensors quantized as though
+  no matrix had been given. Against llama.cpp: **21 tensors differing by
+  24,693,024 bytes, now 1 differing by 1,022** -- the same as the mixture
+  without a matrix.
+
+  It took the fourth cell of a four-cell check to find: pure-with-a-matrix
+  never reaches Q6_K and mixture-without-one has no matrix to ignore. The
+  fix is one argument -- the matrix standing in for the value squared in
+  `make_qx_quants` -- and both paths now share one body rather than two.
+
 - **A batch's every-position logits were projected one position at a time.**
   `Evaluate_Batch` fills a caller's `Every` by pushing each position through
   the output matrix separately -- reading all sixty-five megabytes of it per
@@ -70,6 +84,30 @@ Keep a Changelog and the project uses semantic versioning.
   drop. Rows move only where a layer straddles the hole.
 
 ### Added
+
+- **The price of a dispatch on the device: 12.5 microseconds**, and with it
+  an explanation for a cost this repository has twice called unexplained.
+  The 3.3 ms a token that does not depend on the context -- thirteen and a
+  half per cent of a generated token -- was attributed to submissions, then
+  the submission count fell and the attribution was withdrawn. Priced
+  directly by appending one redundant normalization a layer (0.2180 s
+  generating against 0.2213, ranges not overlapping, digest unmoved), a
+  dispatch costs 12.5 us; a layer dispatches about fifteen times; 330
+  dispatches a token at that price is **4.1 ms**, the same quantity the
+  regression found from the other end.
+
+  So the ceiling on dispatch-reduction is eighteen per cent of a generated
+  token, and the one fusion llama.cpp has that this engine does not --
+  `rope_set_rows` -- is worth 1.5 to 3.0 per cent of it. The other two,
+  `add + rms_norm` and `rms_norm + mul`, are already here: joins fold into
+  the products before them and `norm.comp` carries the gain.
+
+- **A mixture and an importance matrix are nearly independent gains**, shown
+  by measuring all four corners rather than the two that were already here.
+  Q4_K against q8_0 over 1,020 positions: pure 0.061860, pure with a matrix
+  0.026051, the `q4_k_m` mixture 0.040723, and both **0.018332** -- a factor
+  of 3.4 from the plain file, and only seven per cent short of what the two
+  single gains predict if they did not overlap at all.
 
 - **The k-quant mixtures: `q4_k_m` and its family.** `llama-quantize` does
   not write one format through a file -- asked for Q4_K_M it writes Q4_K

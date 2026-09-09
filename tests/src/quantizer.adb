@@ -102,14 +102,29 @@ package body Quantizer is
      (Values  : Real_Array;
       Most    : Integer;
       Levels  : out Level_Run;
-      Scale   : out N.Real);
+      Scale   : out N.Real;
+      Weights : Real_Array;
+      Told    : Boolean := False);
 
    procedure Fit_Run
      (Values  : Real_Array;
       Most    : Integer;
       Levels  : out Level_Run;
-      Scale   : out N.Real)
+      Scale   : out N.Real;
+      Weights : Real_Array;
+      Told    : Boolean := False)
    is
+      --  What a value is worth to the fit: its own square where nobody
+      --  said, and what an importance matrix says where somebody did. That
+      --  one substitution is the whole of the reference's weighted Q6_K --
+      --  `make_qx_quants(16, 32, x, L, 1, qw)` against the same call with a
+      --  null weight -- and it is what a mixture's extra bits are spent
+      --  through, so leaving it out quantized the twenty-one tensors a
+      --  recipe lifts as though no matrix had been given.
+      function Weight_At (Index : Element_Count) return N.Real
+      is (if Told
+          then Weights (Weights'First + (Index - Values'First))
+          else Values (Index) * Values (Index));
       Amax   : N.Real := 0.0;
       Signed : N.Real := 0.0;
 
@@ -139,8 +154,7 @@ package body Quantizer is
               Integer'Max (-Most,
                            Integer'Min (Most - 1,
                                         Nearest (Over * Values (Index))));
-            Weight : constant N.Real :=
-              Values (Index) * Values (Index);
+            Weight : constant N.Real := Weight_At (Index);
          begin
             Levels (Integer (Index - Values'First)) := Level + Most;
             Sum_LX := Sum_LX + Weight * Values (Index) * N.Real (Level);
@@ -168,8 +182,7 @@ package body Quantizer is
                          (-Most,
                           Integer'Min (Most - 1,
                                        Nearest (Try * Values (Index))));
-                     Weight : constant N.Real :=
-                       Values (Index) * Values (Index);
+                     Weight : constant N.Real := Weight_At (Index);
                   begin
                      Try_LX := Try_LX
                        + Weight * Values (Index) * N.Real (Level);
@@ -786,7 +799,17 @@ package body Quantizer is
    -- Encode --
    ------------
 
-   function Encode (Values : Real_Array; Into : Target) return Byte_Array is
+   --  The whole encoding, with or without an importance matrix.
+   --
+   --  One body rather than two, because a weighted quantization differs
+   --  from a plain one in a handful of places and duplicating a hundred
+   --  lines of packing to reach them is how the two drift apart.
+   function Encoded
+     (Values  : Real_Array;
+      Heft    : Real_Array;
+      Told    : Boolean;
+      Into    : Target) return Byte_Array
+   is
       Span   : constant Element_Count := Block_Of (Into);
       Width  : constant B.Byte_Count := Bytes_Of (Into);
       Blocks : constant Element_Count := Values'Length / Span;
@@ -1841,7 +1864,18 @@ package body Quantizer is
                            Fit  : N.Real;
                         begin
                            Fit_Run
-                             (Values (At_Run .. At_Run + 15), 32, Here, Fit);
+                             (Values (At_Run .. At_Run + 15), 32, Here, Fit,
+                              Weights =>
+                                (if Told
+                                 then Heft
+                                        (Heft'First
+                                         + ((At_Run - Values'First)
+                                            mod Heft'Length)
+                                         .. Heft'First
+                                            + ((At_Run - Values'First)
+                                               mod Heft'Length) + 15)
+                                 else Values (At_Run .. At_Run + 15)),
+                              Told => Told);
                            Scales (Run) := Fit;
 
                            for Index in Here'Range loop
@@ -2018,7 +2052,14 @@ package body Quantizer is
       end loop;
 
       return Result;
-   end Encode;
+   end Encoded;
+
+   ------------
+   -- Encode --
+   ------------
+
+   function Encode (Values : Real_Array; Into : Target) return Byte_Array
+   is (Encoded (Values, Values, False, Into));
 
    ---------------------
    -- Encode_Weighted --
@@ -2036,9 +2077,19 @@ package body Quantizer is
       Result : Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
         [others => 0];
    begin
-      --  Only Q4_K takes a matrix here. The rest fall back to the plain
-      --  encoding, which is what the reference does for a format whose
-      --  weighted path it has not been given.
+      --  Q6_K's weighted path is its plain one with the matrix standing in
+      --  for the value squared, so it goes through the same body. Q4_K's is
+      --  a different search and has its own below. Everything else falls
+      --  back to the plain encoding, which is what the reference does for a
+      --  format whose weighted path it has not been given -- and which is
+      --  now true of fewer formats than it was: a mixture spends its extra
+      --  bits in Q6_K, so a file quantized with a matrix and a recipe had
+      --  its most important twenty-one tensors quantized as though there
+      --  were no matrix.
+      if Into = Q6_K then
+         return Encoded (Values, Weights, True, Into);
+      end if;
+
       if Into /= Q4_K then
          return Encode (Values, Into);
       end if;

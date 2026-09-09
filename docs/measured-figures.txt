@@ -18631,3 +18631,93 @@ panels B18C46B2D587910B src/library/model_runner-quantization-interleave.ads src
 #
 # load:  through the gate before each reading; the part at 54 to 92 C
 # model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+
+# 2026-09-09, what a dispatch costs, and where the fixed cost went.
+#
+#   The 3.3 ms a token that does not depend on the context -- thirteen and a
+#   half per cent of a generated token -- was attributed to sixty-seven
+#   submissions; the submission count then fell to twenty-three and the
+#   attribution was withdrawn. The cost stayed measured and unexplained. It
+#   is priced here directly, by appending one redundant normalization to
+#   every layer: twenty-two more dispatches a token, reading what the layer
+#   produced and writing where nothing reads it.
+#
+#     twelve tokens, generating          mean
+#     as it is      0.219  0.217  0.218  0.2180
+#     +22 a token   0.221  0.223  0.220  0.2213
+#
+#   THE RANGES DO NOT OVERLAP and the output digest is 5abff916f9d83ca6 in
+#   all six rounds, which is the point of choosing a step nothing reads.
+#   3.3 ms over twelve tokens is 0.275 ms a token over twenty-two
+#   dispatches: 12.5 MICROSECONDS A DISPATCH.
+#
+#   AND A LAYER DISPATCHES ABOUT FIFTEEN TIMES -- a normalization, three
+#   projections, two rotations, two placements, attention, the attention
+#   output, the feed-forward normalization, gate and up, the combination,
+#   the projection down; both joins fold into the products before them and
+#   dispatch nothing. Twenty-two layers is about 330 a token, and 330 at
+#   12.5 us is 4.1 ms -- the same quantity the regression against context
+#   found, arrived at from the other end. THE FIXED COST IS THE DISPATCHES.
+#
+#   SO THE CEILING on removing dispatches is 3.3 of 18.2 ms, EIGHTEEN PER
+#   CENT of a generated token, and that is where the device's remaining
+#   1.07 against llama.cpp lives. What is available cheaply is much less:
+#   of llama.cpp's three fusions, add+rms_norm is the join folding already
+#   done here and rms_norm+mul is norm.comp carrying the gain. The one left
+#   is rope_set_rows -- 22 to 44 dispatches, 0.275 to 0.55 ms, 1.5 to 3.0
+#   per cent. Not built.
+#
+#   THE FIRST ATTEMPT AT THIS WAS WRONG in a way worth recording. The
+#   redundant step was appended after the layer's final join, which made it
+#   the layer's last step, and a layer hands back its last step -- so the
+#   probe changed the answer. The digest moved, which is how it was caught.
+#   Moved one place earlier the digest holds, and only then does the timing
+#   mean what it says.
+#
+# load:  through the gate before each of the six rounds, alternated
+# model: TinyLlama-1.1B-Chat Q4_K_M on the device, 22 layers
+
+# 2026-09-09, a mixture and a matrix are nearly independent, and the fourth
+# cell found a bug the other three could not.
+#
+#   Q4_K against the eight-bit model, 1,020 positions, four files:
+#
+#                       no matrix        this collector's matrix
+#     --pure            0.061860 84.2 %  0.026051 91.0 %
+#     the q4_k_m mix    0.040723 87.6    0.018332 91.8
+#
+#   BOTH CUTS HOLD IN THE PRESENCE OF THE OTHER. The matrix is worth 2.37
+#   times alone and 2.22 with the mixture; the mixture 1.52 alone and 1.42
+#   with the matrix. Multiplying the single gains predicts 0.0261 x 0.0407
+#   / 0.0619 = 0.01714 and the corner measures 0.01833 -- SEVEN PER CENT
+#   SHORT OF INDEPENDENT, the overlap of two mechanisms that both end up
+#   spending bits on the same tensors. Together, 0.0619 to 0.0183 is 3.4
+#   times, and 84.2 to 91.8 per cent on the top token.
+#
+#   AND THE FOURTH CELL CAUGHT WHAT THE OTHER THREE COULD NOT.
+#   Encode_Weighted had a weighted path for Q4_K and none for Q6_K, and a
+#   recipe spends its extra bits in Q6_K -- so the only corner that is both
+#   mixed and weighted quantized its twenty-one lifted tensors as though no
+#   matrix had been given:
+#
+#     before   180 the same, 21 differing, 24,693,024 bytes apart
+#     after    200 the same,  1 differing,      1,022 bytes apart
+#
+#   which is the mixture's own figure without a matrix. Pure-with-a-matrix
+#   never reaches Q6_K and mixture-without-one has no matrix to ignore;
+#   neither cell alone could see it. The fix is one argument, llama.cpp's
+#   make_qx_quants (16, 32, x, L, 1, qw) against the same call with a null
+#   weight, and the two encode paths now share one body.
+#
+#   TWENTY-FOUR MEGABYTES OF DIFFERENT BYTES MOVED THE DIVERGENCE FROM
+#   0.018484 TO 0.018332 -- four tenths of a per cent. The number was very
+#   nearly right while the code under it was wrong, which is the argument
+#   for comparing files byte by byte against another implementation rather
+#   than trusting that a good reading means a correct one.
+#
+#   NO GROUP IS RESTAMPED for this: the fix is in quantizer.adb, which is a
+#   tool that writes files rather than a source any published timing depends
+#   on, and it is in no group. The engine reading those files is unchanged.
+#
+# load:  through the gate before each reading; the part at 56 to 90 C
+# model: TinyLlama-1.1B-Chat Q8_0, written out four ways
