@@ -159,7 +159,7 @@ package body Tool_Commands is
 
    Takes_Quantize : aliased constant String :=
      "--model PATH --format NAME [--out PATH] [--against PATH]"
-     & " [--imatrix PATH]";
+     & " [--imatrix PATH]  (NAME is a format or a k-quant mixture)";
 
    Takes_Perplexity : aliased constant String :=
      "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"

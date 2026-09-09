@@ -42,6 +42,15 @@ package Quantize_Run is
       Weighted  : Natural := 0;
       Unweighted : Natural := 0;
 
+      --  How many tensors a mixture gave something other than its base
+      --  format, which is the whole of what a mixture is.
+      Bumped    : Natural := 0;
+
+      --  And the first tensor the two files do not even agree the shape of,
+      --  which is a different fault from disagreeing about its bytes.
+      First_Odd : String (1 .. 100) := [others => ' '];
+      Odd_Up    : Natural := 0;
+
       Bytes_In  : Long_Long_Integer := 0;
       Bytes_Out : Long_Long_Integer := 0;
 

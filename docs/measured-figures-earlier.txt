@@ -4796,3 +4796,955 @@
 # load:  0.23 to 4.07 across the sitting, 0.48 to 0.51 in the quiet window
 # model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
 #
+# Moved here from docs/measured-figures.txt when that file passed
+# the megabyte a file in this repository may be, for the second
+# time. The fingerprint groups stayed; it is the prose that moved.
+
+# here: it is the prose that moved.
+
+# 2026-09-01, three items priced, none kept, and one of the three premises
+# was wrong.
+#
+#   The device prompt has no fixed cost worth finding. The list said a
+#   110-token device prompt carries about thirty-five milliseconds that a
+#   1419-token one carries too, from the two lengths not lying on a line
+#   through the origin. Voided every compute shader at once, that prompt
+#   reads 0.008 s against 0.104 -- so ninety-two per cent of it is in the
+#   shaders and eight milliseconds is everything else. There is no fixed
+#   cost outside the work.
+#
+#   Where the short prompt's gap is instead: matrix_product costs 0.088 s of
+#   the 0.104 at 110 tokens and 0.604 of 0.850 at 1419, which is 0.80
+#   milliseconds a token against 0.425. The tile product is one and nine
+#   tenths times as expensive per token at the shorter length, and that is
+#   the whole of the 1.51 against 1.11.
+#
+#   Not the batch, which was the first thing asked. The long prompt in one
+#   batch of 1536 reads 0.845 s against 0.831 in three of 512; at 256 it is
+#   0.852, at 128 0.919, at 64 1.549. The short prompt is one batch at every
+#   size down to 128 and reads 0.102 to 0.103 throughout. Coarser is
+#   slightly worse and finer is much worse, and neither is the fixed cost.
+#
+#   And a limit of the method itself, worth writing down. Voiding one kernel
+#   at a time in the 110-token prompt:
+#
+#     none voided        0.104 s        rotate + place         0.075 s
+#     matrix_product     0.016          + norm                 0.072
+#     attention_matrix   0.072          five small together    0.069
+#     combine            0.073          all six                0.008
+#     norm               0.071
+#     rotate             0.074
+#     place              0.076
+#
+#   Each of the five small kernels appears to cost about thirty-two
+#   milliseconds alone and all five together cost thirty-five. That cannot
+#   be true of any of them. At a prompt this short, removing one kernel
+#   stops measuring that kernel -- place costs nothing at all at 1419
+#   tokens and appears to cost twenty-eight milliseconds here -- and only
+#   the two ends of the table can be trusted. Every earlier budget in this
+#   file was taken on the long prompt, where the same kernels do add up, and
+#   that is the length to take it at.
+#
+#   The strip kernel's scale table, priced and refused. It holds the weight
+#   scale times the activation scale, one number for every row, block and
+#   vector of a panel, and the insertion reads it as the broadcast operand
+#   of its fused multiply-add. Removing the multiply and the load that feeds
+#   it -- a build that answers wrongly, and only a ceiling -- reads:
+#
+#     as it is           5.842, 5.925, 5.853 s
+#                        329821, 329989 million instructions
+#     multiply removed   5.526, 5.686, 5.650 s
+#                        320482, 320493, 320499 million instructions
+#
+#   Three and a half per cent of the prompt and 2.9 of its instructions.
+#   Neither route to it works.
+#
+#   Reading the eight activation scales once for a block rather than once
+#   for each of the panel's four rows is bit for bit the same and slower:
+#   6.083 s against 5.929, and a Q4_K prompt 0.621 against 0.578. GNAT was
+#   already doing it; materializing the eight as an aggregate is what the
+#   change actually added.
+#
+#   Moving the multiply into the insertion does not pay either, and the
+#   arithmetic says so without a build. The table would go entirely: scale
+#   the converted dot product by the weight scale and let the multiply-add
+#   broadcast the activation scale straight out of the per-call table. But
+#   the insertion holds two rows and eight vectors, so that is sixteen extra
+#   vmulps for every block, against three or four instructions the table
+#   costs for the same block -- and it would move every processor digest,
+#   because (W x V) . dot rounds the scales together and V . (W . dot)
+#   rounds the scaled dot. Four times the work to be less exact.
+#
+#   The two small prompt kernels are not overheads at all. quantize_blocks
+#   reads 2.1 per cent of a prompt in a profile; removing it takes the
+#   prompt from 5.888 s to 6.734, because without a quantized activation
+#   the integer path refuses and the floating-point one runs instead. It is
+#   a purchase, not a cost. mat_mul_range_packed reads 3.4 per cent;
+#   removing it takes the prompt to 1.541 s, because it is the procedure
+#   that dispatches the whole product rather than a kernel beside it, and
+#   its share is only the part the strip kernels do not inline. Neither is
+#   a target and neither was ever three per cent of anything.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0 and Q4_K_M
+#
+# 2026-09-01, the feed-forward's activation was running on one core, and the
+# processor's long prompt is level with llama.cpp.
+#
+#   A profile sorted by thread rather than by symbol. silu and multiply --
+#   the gate unit and the multiply by the up projection -- appear on the main
+#   task and on no worker at all, where every other hot symbol appears on all
+#   eight. They are 1.18 and 0.59 per cent of the samples collected, and at
+#   35.66 seconds of processor time in 5.93 of wall that is about 0.63
+#   seconds of the prompt on one core of eight.
+#
+#   Three of this block's loops over a batch already went to the pool. This
+#   is the fifth and was never named: a batch is five hundred and twelve
+#   positions of five thousand six hundred and thirty-two numbers, twenty-two
+#   times over. Elementwise like the others, so a share is the same
+#   arithmetic in the same order and the answers do not move.
+#
+#     on one core    5.882, 6.009, 5.930 s evaluating the long prompt
+#                    0.460, 0.475 s at 110 tokens
+#     shared out     5.350, 5.355, 5.391 s
+#                    0.394, 0.465, 0.448 s
+#
+#   Nine and seven tenths per cent, every reading of one arm below every
+#   reading of the other, and 1a26d24d33b8957b both ways. The device row does
+#   not move -- 0.854, 0.875, 0.896 against 0.854, 0.864, 0.889 -- because a
+#   device takes the whole gated block at once and never runs this loop.
+#
+#   What is worth keeping is the sort order. Every profile in this file
+#   before this one was sorted by symbol, and by symbol these two kernels
+#   read 1.8 per cent of a prompt and look like rounding. A symbol's share of
+#   the samples is its share of the time only when the samples are spread
+#   evenly across the threads, and a worker pool is exactly the arrangement
+#   in which they are not.
+#
+#   Five groups moved. One sitting, gated to a load under 0.7 and a settled
+#   part before the first reading rather than only cooled:
+#
+#     1419-token prompt, 12 generated  cpu 5.695 s wall, 5.273 evaluating,
+#                                      37.00 s processor, load 0.80
+#                                      device 1.197 s wall, 0.893 evaluating,
+#                                      0.27 s processor
+#     six-token prompt, 12 generated   cpu 0.412 s wall, 0.060 and 0.355,
+#                                      1.86 s processor; loading 0.070 s
+#                                      device 0.268 s wall, 0.034 and 0.234,
+#                                      0.08 s processor
+#     the same at --arith f32          1.540 s, 11.16 s processor
+#     the same, twelve-token, device   cpu 0.417 s (0.058 and 0.357), 1.90 s
+#     110-token prompt                 cpu 0.382 s (0.381), 2.82 s processor
+#                                      device 0.105 s (0.104), 0.01 s
+#     64 generated, six-token prompt   cpu 1.964 s (1.902), device 1.320 s
+#                                      (1.273)
+#     seven workers against fifteen    0.412 s and 1.86 s processor against
+#                                      0.546 s and 2.94 s
+#     eight shares against fifteen     0.412 s and 1.86 s against 0.464 s
+#                                      and 2.48 s
+#     four tokens, cpu                 0.061 s prompt, 0.119 s generating
+#     four tokens, reference           6.094 s prompt, 4.024 s generating
+#     drafting                         model 0.425 s, two-bit 1.904 s,
+#                                      drafted 3.891 s, 24 proposed 7
+#                                      accepted
+#     q4_k 110-token prompt            0.509 s; ten generated 0.487 s
+#     llama-bench 95b8e33e1, -r 3      pp110 311.68 +/- 23.50 --device none,
+#                                      1650.10 +/- 22.64 -ngl 99,
+#                                      677.85 +/- 28.91 -ngl 0
+#                                      pp1419 269.84 +/- 0.81 --device none,
+#                                      1751.90 +/- 0.72 -ngl 99
+#                                      tg64 39.24 +/- 0.03 and 55.36 +/- 0.48
+#
+#   The processor reads the long prompt at 269.1 tokens a second against
+#   llama.cpp's 269.84, which is a gap of 1.00 -- level, for the first time
+#   on either side of this comparison, where it was 2.7 when this work began.
+#   The reading is checked against the rule the entry before this one added:
+#   5.273 s here sits inside the 5.350 to 5.391 the alternated A/B read in a
+#   different window, so it is a sitting and not a window.
+#
+#   Digests held: 33f48397f89839f6, 5abff916f9d83ca6, cbf29ce484222325,
+#   448c2ed68ec342ee, 3248ac1bb7011de0, 1a26d24d33b8957b, 5f85f06494f88de4,
+#   7fbdc947563a2fde, 4b6e8e99ae285b2a.
+#
+# load:  0.80 at the first reading, 4.78 by the last
+# model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
+#
+# 2026-09-01, two accumulators in the generating kernel: seventeen per cent
+# at one worker, and refused because of what it does to drafting.
+#
+#   First the cheap probe, and it is refuted. The generating side reads
+#   1.17 gigabytes a token through four-kilobyte pages, which is two hundred
+#   and eighty-five thousand of them, and a page walk apiece would be a
+#   plausible reason to be at 40 GB/s where llama.cpp is at 46. Counted:
+#   11.1 million second-level TLB misses over sixty-four tokens, a hundred
+#   and seventy-three thousand a token, which at twenty-five cycles each is
+#   about eight tenths of one per cent of the run. It is not the page
+#   tables.
+#
+#   What it is, below three workers, is the accumulator. Rows_Singly keeps
+#   one binary32 accumulator for a row and adds a block into it with a fused
+#   multiply-add, so consecutive blocks are a dependent chain four cycles
+#   long apiece. Two accumulators, even blocks into one and odd into the
+#   other, folded once at the end:
+#
+#     one worker      4.447, 4.388, 4.367 s generating
+#                     3.641, 3.672 s with two
+#     two workers     1.947, 1.926 s against 1.867, 1.842
+#     three workers   1.883, 1.825 s against 1.801
+#     five workers    1.867, 1.858 s against 1.834, 1.824
+#     seven workers   1.871, 1.888, 1.878 s against 1.998, 1.856, 1.845
+#
+#   Seventeen per cent at one worker, four at two, three at three, two at
+#   five and one at seven. The fewer the workers the more it is worth, which
+#   is the same shape every instruction cut on this side has had: the chain
+#   is the wall while one core is running and the bus is the wall once three
+#   are.
+#
+#   Refused, and the reason is not the speed. It moves two digests -- the
+#   twelve-token run from 33f48397f89839f6 to 5abff916f9d83ca6 and the
+#   sixty-four-token one from 3248ac1bb7011de0 to 448c2ed68ec342ee -- and
+#   both of those are answers this program already gives elsewhere: they are
+#   what --arith f32 says and what the device says. So the two-accumulator
+#   sum is nearer the exact one, not further.
+#
+#   But it moves only the single-vector kernel, and the batch kernel cannot
+#   follow. Rows_By_Strips holds eighteen accumulators in ymm8 to ymm25, one
+#   for every row and vector of its tile, and doubling them does not fit in
+#   thirty-two registers. The two kernels then sum a row's blocks in
+#   different orders -- and drafting depends on their agreeing. In the
+#   sitting taken with the change in, the drafted twelve-token run printed
+#   33f48397f89839f6 and the undrafted one 5abff916f9d83ca6: a draft
+#   proposes a token at a time and the model checks several at once, so one
+#   answer comes from the strip kernel and the other from the single-vector
+#   one. The guarantee this repository states -- that a drafted run produces
+#   exactly what the model would have produced alone -- was false in a
+#   published figure.
+#
+#   Nothing caught it. The suite passed 294 of 294 and the sweep read 28344
+#   sequences with none outside tolerance; the test that runs a prompt with
+#   and without a draft did not diverge on its own model. What caught it was
+#   the sitting's own table, printing the two digests one line apart, which
+#   is a person reading rather than a check firing -- the second time in this
+#   file that has been the case.
+#
+#   So the constraint is worth writing down, because it is not obvious and
+#   nothing enforces it: Rows_Singly and Rows_By_Strips must sum a row's
+#   blocks in the same order and the same precision. They do today because
+#   both were written with one accumulator a row, and either one changing
+#   alone breaks drafting.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
+#
+# 2026-09-01, three more attempts on the two remaining gaps, all level.
+#
+#   The generating side, after the page tables and the accumulator. A
+#   software prefetch of the weights, one instruction in an eleven-
+#   instruction loop, at two distances:
+#
+#     as it is         1.869, 1.906, 1.876 s generating
+#     256 bytes ahead  1.870, 1.876, 1.866
+#     512 bytes ahead  1.871, 1.870, 1.872
+#
+#   Level at both distances, and bit for bit the same answer. The rows a
+#   worker walks are contiguous and the hardware prefetcher has them
+#   already; there was nothing for the instruction to ask for.
+#
+#   So the generating gap -- 40 GB/s against llama.cpp's 46 for the same
+#   bytes -- is now three things it is not. Not the page tables, at eight
+#   tenths of one per cent. Not the accumulator chain, which is worth
+#   seventeen per cent at one worker and one at seven and cannot be taken
+#   anyway. Not the prefetcher.
+#
+#   The device's combining step, and a piece of reasoning that was wrong.
+#   It costs seventy-one milliseconds of a 1419-token device prompt, moves
+#   about 1.06 gigabytes, and so runs at sixteen gigabytes a second on a
+#   part that does several times that. An invocation read two halves and
+#   wrote one -- two bytes a lane -- and that looked like the reason.
+#
+#   It is not. Four values to an invocation, through f16vec4 and vec4
+#   aliases of the same bindings with a guard for a shape that would not
+#   line up, and a dispatch a quarter the size:
+#
+#     one value an invocation   0.844, 0.845, 0.850 s
+#     four                      0.844, 0.846, 0.843
+#
+#   Level, and the generating row and the short prompt level with it. The
+#   mistake was thinking of a lane's access width as the unit. A wave is
+#   sixty-four lanes reading consecutive halves, which is a hundred and
+#   twenty-eight contiguous bytes coalesced into two cache lines whatever
+#   the per-lane width; widening the lane makes fewer, larger requests for
+#   the same bytes, and a kernel with no reuse and nothing to hide behind
+#   them is no better for it.
+#
+#   Nor is it the unit. Replacing the whole activation with an addition --
+#   a build that answers wrongly, and only a ceiling -- reads 0.837 s
+#   against 0.844: seven milliseconds of the seventy-one, a tenth.
+#
+#   Which leaves the sixteen gigabytes a second unexplained, and worth
+#   recording as a bound rather than a bug: `norm` costs sixty-nine
+#   milliseconds and moves about the same, so the two elementwise kernels
+#   sit at the same rate. Whatever holds them is shared, is not their
+#   arithmetic and is not how wide a lane reads.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-01, the memory kind, and an arithmetic error in the entry above.
+#
+#   The entry above leaves the device's two elementwise kernels at sixteen
+#   gigabytes a second with the access width and the arithmetic both ruled
+#   out, and names the memory kind as what was never tested. This machine
+#   offers eleven kinds over two heaps, and the ones that matter are three:
+#
+#     type 3  device-local, host-visible, host-coherent   heap 1, the
+#                                                         device's own
+#     type 5  host-visible, host-coherent, host-cached    heap 0, not the
+#                                                         device's own
+#     type 0  device-local and nothing else               heap 1
+#
+#   The engine allocates uploads and scratch out of type 3, results out of
+#   type 5, and nothing at all out of type 0. The argument for trying it:
+#   host-coherent is a promise that a processor write is seen without
+#   anyone being told, and the way a driver keeps that promise is to stop
+#   the device caching the memory -- so a scratch buffer nothing maps might
+#   be read through to memory on every access for a guarantee it does not
+#   need.
+#
+#   The half-precision buffer is the one to test: three regions of it,
+#   read and written by the tile product and by the combining step, and
+#   nothing maps it. Given its own kind, with an Own field on the engine
+#   beside Upload and Download:
+#
+#     type 3, as it is    0.859, 0.845, 0.855 s evaluating the long prompt
+#                         1.236, 1.252, 1.234 s generating
+#     type 0, its own     0.831, 0.847, 0.848 s
+#                         1.254, 1.235, 1.235 s
+#
+#   Nine tenths of one per cent on the prompt and nothing on the
+#   generation, which is the noise. The driver is not giving up the cache
+#   for coherence, or the kernels were never waiting on it. Not kept.
+#
+#   And the entry above overstated the problem it was chasing. Sixteen
+#   gigabytes a second counted one dispatch of the combining kernel a
+#   layer. There are three: the gated middle, and the two residual joins,
+#   which are the same two arms in and one out on a narrower width and go
+#   through the same shader. Counted properly a prompt moves about two
+#   gigabytes through it rather than one, and the rate is nearer
+#   twenty-eight gigabytes a second. That is still under half of what this
+#   part should do, but it is not the sixth that made the item worth
+#   putting at the top of a list, and the item was ranked on a number this
+#   file now corrects.
+#
+#   So: the access width does not explain it, the arithmetic does not, and
+#   the memory kind does not; and the figure it was measured against was
+#   nearly twice too small.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-01, a share a worker, decided before any of them started -- and
+# the processor's long prompt passes llama.cpp.
+#
+#   The list said to stop guessing at the generating gap and read what
+#   llama.cpp does. Its Q8_0 dot product is the same kernel as this one:
+#   one accumulator, eight lanes, a fused multiply-add a block, the sign
+#   trick where this has the bias one, and no repacking of Q8_0 weights.
+#   The kernels are not the difference.
+#
+#   The scheduling is. ggml_compute_forward_mul_mat cuts the output rows
+#   into chunks of sixteen and hands them out through an atomic counter,
+#   falling back to a fixed cut only when there would be fewer than four
+#   chunks a thread. This program cut a product into one contiguous range
+#   for every worker, worked out before any of them started -- which is
+#   right when the workers run at the same speed, and on a fifteen-watt part
+#   sharing its boost between eight cores they do not. A job is not done
+#   until its slowest range is, and every worker that finished early sat in
+#   the spin loop waiting for one that had not.
+#
+#   So a worker takes its next tile from an atomic counter. The grid is
+#   anchored at row zero and a tile is never split, so which task computes a
+#   row does not change how the row is summed and the answer is bit for bit
+#   what the fixed cut produced -- the property Partition was arranged
+#   around and the reason the note above it exists.
+#
+#     a range a worker   5.412, 5.297, 5.564 s evaluating the long prompt
+#                        0.406, 0.417, 0.403 s at 110 tokens
+#                        1.919, 1.916, 1.896 s generating
+#     a tile at a time   4.781, 4.796, 4.971 s
+#                        0.370, 0.355, 0.370 s
+#                        1.893, 1.895, 1.886 s
+#
+#   Eleven per cent of the long prompt, nine of the short one and one of a
+#   generated token: the shapes with the most tiles to hand out gain most,
+#   and a generated token is one vector wide and already memory-bound.
+#
+#   Every digest holds at one worker, three, four and seven --
+#   33f48397f89839f6 for twelve tokens whatever the worker count -- which is
+#   the invariant the fixed cut was arranged around.
+#
+#   Six groups moved. One sitting, gated to a load under 0.7 and a settled
+#   part before the first reading:
+#
+#     1419-token prompt, 12 generated  cpu 5.278 s wall, 4.855 evaluating,
+#                                      37.47 s processor, load 0.51
+#                                      device 1.198 s wall, 0.894 evaluating
+#     six-token prompt, 12 generated   cpu 0.413 s wall, 0.061 and 0.351,
+#                                      1.81 s processor; loading 0.070 s
+#                                      device 0.263 s wall, 0.031 and 0.232,
+#                                      0.07 s processor
+#     the same at --arith f32          1.214 s, 9.48 s processor
+#     the same, twelve-token, device   cpu 0.396 s (0.053 and 0.346), 1.77 s
+#     110-token prompt                 cpu 0.361 s (0.360), 2.77 s processor
+#                                      device 0.107 s (0.106), 0.02 s
+#     64 generated, six-token prompt   cpu 1.906 s (1.847), device 1.319 s
+#                                      (1.272)
+#     seven workers against fifteen    0.413 s and 1.81 s processor against
+#                                      0.480 s and 2.58 s
+#     eight shares against fifteen     0.413 s and 1.81 s against 0.439 s
+#                                      and 2.40 s
+#     workers one, two, four, seven    25.086, 8.653, 6.164, 4.983 s
+#                                      evaluating the long prompt
+#     four tokens, cpu                 0.054 s prompt, 0.114 s generating
+#     four tokens, reference           5.980 s prompt, 3.984 s generating
+#     drafting                         model 0.403 s, two-bit 1.596 s,
+#                                      drafted 3.488 s, 24 proposed 7
+#                                      accepted
+#     q4_k 110-token prompt            0.475 s; ten generated 0.478 s
+#     shares, pinned, one vector       2407 to 13464 Me/s, seven at 12241
+#     shares, pinned, thirty-two       4439 to 21470 Me/s, seven at 22675
+#     shares, open, one vector         eight 12895, seven 12399
+#     shares, open, thirty-two         eight 22340, seven 22894
+#     q4_k against q8_0, pinned        13181 against 13464 with one vector,
+#                                      21632 against 21470 batched,
+#                                      2384 against 2407 serially
+#     reference against cpu, serial    2.39x q8_0, 2.35x q4_k, 3.00x f32
+#     llama-bench 95b8e33e1, -r 3      pp110 329.35 +/- 17.42 --device none,
+#                                      1578.85 +/- 45.40 -ngl 99,
+#                                      701.76 +/- 67.69 -ngl 0
+#                                      pp1419 268.77 +/- 2.49 --device none,
+#                                      1760.03 +/- 1.27 -ngl 99
+#                                      tg64 38.80 +/- 0.30 and 55.60 +/- 0.01
+#
+#   The processor reads the long prompt at 292.3 tokens a second against
+#   llama.cpp's 268.77 -- one and nine hundredths times faster, where it was
+#   level one commit ago and 2.7 times behind when this work began. Seven
+#   workers against one reads 5.03x where the sitting before read 4.11x.
+#
+#   Digests held: 33f48397f89839f6, 5abff916f9d83ca6, cbf29ce484222325,
+#   448c2ed68ec342ee, 3248ac1bb7011de0, 1a26d24d33b8957b, 5f85f06494f88de4,
+#   7fbdc947563a2fde, 4b6e8e99ae285b2a.
+#
+#   The tail of this is worth naming. Three of the last five things tried on
+#   the processor were arithmetic and all three were level or refused. This
+#   one is not arithmetic at all: the same instructions in the same order,
+#   handed out differently. A profile could not have found it either -- it
+#   is not a symbol, it is workers idle in a spin loop this file had already
+#   decided was earning its keep.
+#
+# load:  0.51 at the first reading, 4.80 by the last
+# model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
+#
+# 2026-09-01, where the device's gap is now, and a bound that was a bug.
+#
+#   The map is several changes out of date. Taken again -- ours by voiding
+#   each shader in turn on the 1419-token prompt, llama.cpp's from
+#   GGML_VK_PERF_LOGGER=1 on the same prompt and the same file, summed over
+#   its three batches:
+#
+#     matrix products              595 ms here,  about 575 there   1.03x
+#     attention                    108 ms,       80 ms             1.35x
+#     the normalization             69 ms,       21 ms             3.3x
+#     the gated middle and joins    71 ms,       61 ms (GLU + ADD) 1.16x
+#     the rotation                  10 ms,       15 ms (ROPE)      ahead
+#
+#   The matrix row has caught up. Ours runs at about 4.9 teraflops and
+#   theirs at 5.0, where the entry that opened this comparison had ours at
+#   3.4 and theirs at 4.9 and put eighty-four per cent of the gap in that
+#   one row. The tall-tile arguments stand and the work they were about is
+#   done.
+#
+#   And the entry above this one is wrong where it says the elementwise
+#   kernels are at a bound. It ruled out the access width, the arithmetic
+#   and the memory kind and concluded the sixteen gigabytes a second was
+#   the part rather than the shader. It was the shader: llama.cpp's
+#   rms_norm.comp is binary32 and ours was binary64 the whole way through --
+#   eight squares a lane, eight folding steps and eight scaled stores, all
+#   doubles, on a consumer RDNA3 part that runs double at a sixteenth of
+#   single.
+#
+#   The double was deliberate and the shader's own comment argued for it: a
+#   tree fold is a different association from the processor's in-order sum,
+#   and binary64 kept the difference in the last bits. But a pairwise fold
+#   of two thousand and forty-eight squares carries a relative error of a
+#   few parts in ten million and the epsilon added to the mean is a thousand
+#   times that.
+#
+#     binary64   0.838, 0.845, 0.843 s evaluating the long prompt
+#                0.100, 0.103, 0.105 s at 110 tokens
+#                1.257, 1.237, 1.236 s generating
+#     binary32   0.823, 0.832, 0.840 s
+#                0.101, 0.100, 0.101 s
+#                1.225, 1.241, 1.240 s
+#
+#   One and three tenths per cent of the long prompt and two of the short
+#   one, which is less than the arithmetic suggested: the double was not the
+#   whole of that kernel's slowness either. Every digest holds, including
+#   cbf29ce484222325, which both backends print for the 110-token prompt.
+#   And the shader stops requiring shaderFloat64, which is a device feature
+#   it had been asking for on behalf of a sum that never needed it.
+#
+#   The lane count was swept in the same sitting and is already right: two
+#   hundred and fifty-six reads 0.832 s where five hundred and twelve reads
+#   0.837 and a hundred and twenty-eight 0.844.
+#
+#   Two groups moved. One sitting, from a load of 0.26 and a settled part:
+#
+#     1419-token prompt, 12 generated  cpu 5.040 s wall, 4.632 evaluating,
+#                                      36.00 s processor, load 0.26
+#                                      device 1.103 s wall, 0.821 evaluating
+#     six-token prompt, 12 generated   cpu 0.393 s wall, 0.053 and 0.340,
+#                                      1.76 s processor
+#                                      device 0.251 s wall, 0.033 and 0.217,
+#                                      0.07 s processor
+#     110-token prompt                 cpu 0.351 s (0.350), 2.73 s processor
+#                                      device 0.095 s (0.094), 0.01 s
+#     64 generated, six-token prompt   cpu 1.895 s (1.842), device 1.243 s
+#                                      (1.181)
+#     llama-bench 95b8e33e1, -r 3      pp110 310.97 +/- 15.93 --device none,
+#                                      1644.41 +/- 78.52 -ngl 99,
+#                                      782.11 +/- 17.33 -ngl 0
+#                                      pp1419 272.51 +/- 3.12 --device none,
+#                                      1823.14 +/- 4.66 -ngl 99
+#                                      tg64 41.01 +/- 0.13 and 59.10 +/- 0.18
+#
+#   Both processor prompt rows are ahead now -- 306.4 tokens a second
+#   against 272.5 at 1419 and 314.3 against 311.0 at 110 -- and the device's
+#   long prompt is 1.05 behind, its closest yet. llama.cpp read faster in
+#   this sitting than in the one before it on every row; the machine was
+#   quieter and both sides moved together, which is what a comparison taken
+#   in one sitting is for.
+#
+#   Digests held: 33f48397f89839f6, 5abff916f9d83ca6, cbf29ce484222325,
+#   448c2ed68ec342ee, 3248ac1bb7011de0, 1a26d24d33b8957b.
+#
+# load:  0.26 to 1.77 across the sitting
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-02, the normalization taken apart, and nothing kept.
+#
+#   The item this came from said the normalization was 2.8 times behind and
+#   worth thirty-seven milliseconds, and named the eight barriers of its
+#   fold as the mechanism. Both halves of that were wrong, and the number
+#   was stale: it came from a removal sweep taken several commits before the
+#   binary32 change, and the kernel has been re-measured since.
+#
+#   Taken apart on the long prompt, each part voided in turn against a
+#   0.830-second baseline:
+#
+#     as it is                                   0.830 s
+#     the sum pass gone, a constant gain         0.834
+#     the output pass gone                       0.794
+#     neither pass                               0.795
+#
+#   So the whole kernel is thirty-five milliseconds, not fifty-eight, and
+#   llama.cpp's is twenty-one: 1.7 times behind and fourteen milliseconds of
+#   an 830-millisecond prompt. Not the largest thing left on that side.
+#
+#   And the fold is not any of it. Eight halvings is eight barriers across
+#   four waves; folded in two turns instead -- thirty-two partials to each
+#   of eight lanes, then those eight -- it reads 0.835 against 0.830. The
+#   barriers were free, which is why the subgroup reduction that item was
+#   really proposing was not built.
+#
+#   The sum pass is free too, which the table above says plainly: removing
+#   the first read of the row and the squares makes the kernel no faster.
+#   Everything is in the output pass -- and inside that pass the reads are
+#   free as well. Writing a constant, reading neither the row nor the gain,
+#   still reads 0.832.
+#
+#   So the whole cost of this kernel is its store. And the store is not
+#   slow for its width: a binary32 store of twice the bytes reads 0.819,
+#   eleven milliseconds faster than the half-precision one -- but that
+#   variant writes the result buffer rather than the half-precision buffer,
+#   and packing two halves into one four-byte store of the same buffer
+#   reads 0.838. It is not the width. It is which buffer is written.
+#
+#   Which points somewhere this file has already looked and not found
+#   anything: the result buffer is host-cached memory out of the heap that
+#   is not the device's own, and the half buffer is the device's own and
+#   host-coherent. The entry two above this one moved the half buffer to a
+#   kind that is the device's own and nothing else and measured nothing.
+#   That was the right idea tested at the wrong end -- it looked for a
+#   faster read where the cost is a write -- and it is the open question
+#   this leaves.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-02, the open question above, asked the other way and still no.
+#
+#   The entry above ends with a buffer written by the normalization costing
+#   eleven milliseconds more than a buffer written by nothing else, and
+#   names the memory kind as the thing to try -- this time for the write
+#   rather than the read.
+#
+#   Both ends were tried. Host-cached memory out of the heap that is not the
+#   device's own, which is what the result buffer uses and what was eleven
+#   milliseconds faster to write:
+#
+#     as it is                   0.830 s evaluating the long prompt
+#     the half buffer cached     0.860
+#
+#   Thirty milliseconds worse, because the tile product reads that buffer on
+#   every dispatch and a read out of that heap is what this file already
+#   knew to be slow. Fast to write and slow to read is not a trade a buffer
+#   read far more than it is written can take.
+#
+#   And the other end, the kind that is the device's own and nothing else --
+#   no host bits, so no coherence to keep and nothing forcing a write past a
+#   cache. Four rounds this time rather than three:
+#
+#     host-visible and coherent  0.832, 0.839, 0.829, 0.825 s
+#     the device's own alone     0.819, 0.830, 0.823, 0.836
+#
+#   Half a per cent, with the arms overlapping at both ends. The same answer
+#   the read-side test gave, on four rounds instead of three, and the same
+#   verdict.
+#
+#   So the eleven milliseconds is neither the heap, nor the property bits,
+#   nor the width of the store, nor what is in it. What is left untried is
+#   the one thing the two variants also differ in: the half-precision buffer
+#   is written by the normalization, read by the tile product, written by
+#   the tile product and read by the combining step, all inside one
+#   submission -- so every barrier in a layer is a barrier over that buffer.
+#   The result buffer, in the variant that was faster, was touched by
+#   nothing else in the sequence. That is the next thing to ask, and it is
+#   about barriers rather than about memory.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-02, what the barriers cost, which bounds the question above.
+#
+#   A layer's steps are a chain -- normalize, three projections, rotate,
+#   attend, project out, join, normalize, two arms, combine, project down,
+#   join -- and the engine walks a memory barrier in wherever a step reads
+#   what a step before it wrote. About ten a layer, twenty-two layers, three
+#   batches: something over six hundred in a 1419-token prompt.
+#
+#   Priced by removing them, which answers wrongly and is only a ceiling:
+#
+#     as it is                         0.830 s evaluating the long prompt
+#                                      1.225 s generating
+#     no barriers at all               0.809
+#                                      1.199
+#
+#   Twenty-one milliseconds of eight hundred and thirty, which is two and a
+#   half per cent and the whole budget for anything barrier-shaped. The
+#   eleven milliseconds the entry above is chasing is half of that, and it
+#   cannot be the count: both of those variants issue the same barriers in
+#   the same places.
+#
+#   Split, by asking for one that orders execution and asks for no cache
+#   work -- no memory barrier in the call at all, which is not correct and
+#   is only a measurement:
+#
+#     write-to-read over all memory    0.830 s
+#     execution only                   0.816
+#
+#   So seven milliseconds is the drain -- a dispatch waiting for the one
+#   before it to empty, which is what a chain of dependent steps is -- and
+#   fourteen is the cache work. That fourteen is what a shader read after a
+#   shader write requires on this part: the per-unit vector caches have to be
+#   invalidated or a compute unit may read a line another wrote. It answered
+#   correctly without them in this run, which is luck about which lines
+#   collided and not a property to keep.
+#
+#   Nothing here is removable, and the ceiling is what the entry is worth
+#   writing for: two and a half per cent, most of it required. The eleven
+#   milliseconds remains unexplained, but it is now bounded by a number
+#   small enough that it is not the next thing to chase.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-02, attention read line by line against llama.cpp's, and nothing
+# to take from it.
+#
+#   Attention is a hundred and eight milliseconds of a device prompt against
+#   llama.cpp's eighty -- 1.35 times, twenty-eight milliseconds, and the
+#   largest named item left on that side. So flash_attn_cm1.comp was read
+#   through rather than sampled, beside this kernel.
+#
+#   They are the same design, step for step:
+#
+#     the scores            a cooperative matrix product of the queries
+#                           against a tile of keys, stored to shared memory
+#     the softmax           read back into ordinary registers, the running
+#                           maximum and total kept there, everything
+#                           accumulated so far rescaled by the exponential
+#                           of the change in maximum
+#     the weighing          a second cooperative matrix product, its result
+#                           stored to shared memory and added into those
+#                           same registers
+#
+#   That last step is the one this file thought might be theirs alone --
+#   keeping the output in registers so it can be rescaled, because a
+#   cooperative matrix cannot be. It is not: coopMatStore into pvsh and
+#   Of[r][d] += pvsh[...] is exactly what this kernel does with pacc and ss.
+#   The tile is the same too, sixteen query rows by sixty-four cached
+#   positions, which get_fa_tuning_params_coopmat1 gives this device and
+#   which this kernel already used.
+#
+#   The one difference is the four subgroups, and that was built two entries
+#   below this one and is fourteen per cent slower here.
+#
+#   The one parameter left unswept is the query block, and it is at its
+#   peak. It must be a multiple of sixteen for the instruction, so there are
+#   two candidates:
+#
+#     sixteen query rows    0.830 s evaluating the long prompt
+#     thirty-two           0.911
+#
+#   Ten per cent worse, the same answer every taller tile on this device has
+#   given. Sixteen it is.
+#
+#   So the twenty-eight milliseconds is not the tile, not the structure, not
+#   the split and not the block. Reading the other runtime's source has
+#   twice now been the thing that found an answer on the processor side and
+#   twice now found nothing here, which is worth recording as a result about
+#   the two sides rather than about attention: this program's device kernels
+#   are shaped the way the other runtime's are, and where they differ it is
+#   because this part measured against the difference.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0
+#
+# 2026-09-02, the share count a generated token was tuned to.
+#
+#   A generated token reads every weight once and multiplies each once, so
+#   the memory path answers rather than the arithmetic and it saturates
+#   before the cores do. This program gives a generated token four shares
+#   where a prompt takes eight.
+#
+#   Four was measured against a pool that no longer exists. Under the fixed
+#   cut a fifth and a sixth share bought nothing and cost a straggler; the
+#   entry two above this one replaced that cut with a tile taken from an
+#   atomic counter, and the constant beside it was never asked again.
+#
+#   Swept on the pool that is there now, two rounds of sixty-four tokens:
+#
+#     three shares   2.047 s generating,  6.77 s of processor time
+#     four           1.872,               7.91
+#     five           1.812,               9.35
+#     six            1.794,              10.88
+#     eight          1.790,              14.08
+#
+#   Alternated against four over three rounds, every reading of one arm
+#   below every reading of the other:
+#
+#     four   1.836, 1.856, 1.849 s generating, 7.80, 7.90, 7.92 processor
+#     five   1.800, 1.801, 1.795,              9.29, 9.30, 9.28
+#     six    1.794, 1.781, 1.790,             10.83, 10.84, 10.85
+#
+#   Five is two and seven tenths per cent of the wall for eighteen more of
+#   the processor; six is three and a tenth for thirty-eight; eight is level
+#   with six for fifty. Five takes seven eighths of what there is to take
+#   for less than half of what six spends on it, which is the trade the
+#   worker default is chosen on and a better one than the hyperthreading
+#   this file has already refused.
+#
+#   The prompt is untouched, 5.00 s both ways, because a batch keeps every
+#   share. The digest holds at every count, which the tile-anchored cut is
+#   what guarantees.
+#
+#   Six groups moved. One sitting, from a load of 0.27 and a settled part:
+#
+#     1419-token prompt, 12 generated  cpu 5.281 s wall, 4.869 evaluating,
+#                                      37.58 s processor, load 0.27
+#                                      device 1.131 s wall, 0.841 evaluating
+#     six-token prompt, 12 generated   cpu 0.389 s wall, 0.054 and 0.337,
+#                                      2.05 s processor; loading 0.074 s
+#                                      device 0.260 s wall, 0.033 and 0.227,
+#                                      0.06 s processor
+#     the same at --arith f32          1.263 s, 9.97 s processor
+#     the same, twelve-token, device   cpu 0.399 s (0.054 and 0.345), 2.09 s
+#     110-token prompt                 cpu 0.372 s (0.371), 2.87 s processor
+#                                      device 0.104 s (0.102), 0.02 s
+#     64 generated, six-token prompt   cpu 1.890 s (1.837), 9.47 s processor
+#                                      device 1.320 s (1.266)
+#     seven workers against fifteen    0.389 s and 2.05 s against 0.491 s
+#                                      and 3.09 s
+#     eight shares against fifteen     0.389 s and 2.05 s against 0.427 s
+#                                      and 2.68 s
+#     workers one, two, four, seven    25.169, 8.684, 6.209, 5.022 s
+#     four tokens, cpu                 0.059 s prompt, 0.113 s generating
+#     four tokens, reference           5.946 s prompt, 3.994 s generating
+#     drafting                         model 0.393 s, two-bit 1.659 s,
+#                                      drafted 3.378 s, 24 proposed 7
+#                                      accepted
+#     q4_k 110-token prompt            0.443 s; ten generated 0.353 s
+#     shares, pinned, one vector       2414 to 13265 Me/s, seven at 12498
+#     shares, pinned, thirty-two       4552 to 22110 Me/s, seven at 22489
+#     shares, open, one vector         eight 13241, seven 12192
+#     shares, open, thirty-two         eight 22269, seven 21748
+#     q4_k against q8_0, pinned        13349 against 13265 with one vector,
+#                                      22114 against 22110 batched,
+#                                      2391 against 2414 serially
+#     reference against cpu, serial    2.34x q8_0, 2.32x q4_k, 3.00x f32
+#     llama-bench 95b8e33e1, -r 3      pp110 339.50 +/- 25.21 --device none,
+#                                      1647.16 +/- 43.29 -ngl 99,
+#                                      676.06 +/- 21.05 -ngl 0
+#                                      pp1419 269.11 +/- 1.28 --device none,
+#                                      1802.39 +/- 10.50 -ngl 99
+#                                      tg64 39.16 +/- 0.23 and 55.52 +/- 0.06
+#
+#   The processor reads the long prompt at 291.4 tokens a second against
+#   llama.cpp's 269.1, one and eight hundredths times faster, and generates
+#   at 34.8 against 39.2, a gap of 1.12 from 1.18.
+#
+#   Digests held: 33f48397f89839f6, 5abff916f9d83ca6, cbf29ce484222325,
+#   448c2ed68ec342ee, 3248ac1bb7011de0, 1a26d24d33b8957b, 5f85f06494f88de4,
+#   7fbdc947563a2fde, 4b6e8e99ae285b2a.
+#
+#   This is the fourth constant in this program found to be right when it
+#   was measured and wrong afterwards, and the pattern is worth the line: a
+#   tuned constant is a measurement, and a measurement has a date.
+#
+# load:  0.27 to 5.29 across the sitting
+# model: TinyLlama-1.1B-Chat Q8_0, and Q4_K_M and Q2_K beside it
+#
+# 2026-09-02, three constants asked again, and all three stand.
+#
+#   The entry above ends by saying a tuned constant is a measurement with a
+#   date. Three more were asked. None of them moves, and two of the three
+#   sweeps are worth having anyway because they say how much the choice
+#   matters.
+#
+#   The chunk grain, which the pool takes a worker's next piece from. It has
+#   never been swept: it was set to the row tile because that is what the
+#   tiling requires as a floor, and the floor was never tested against
+#   anything above it. llama.cpp hands out sixteen rows, and sixty-four for
+#   a large matrix, which is a deliberate two-value choice in
+#   ggml_compute_forward_mul_mat. Two rounds, medians of three:
+#
+#     one tile, 32 rows     4.793, 4.861 s evaluating the long prompt
+#                           1.823, 1.827 s generating
+#                           0.360, 0.372 s at 110 tokens
+#     two tiles, 64         5.010, 5.008    1.834, 1.831    0.393, 0.376
+#     three tiles, 96       5.183, 5.345    1.840, 1.832    0.425, 0.391
+#     four tiles, 128       5.589, 5.544    1.872, 1.873    0.417, 0.444
+#
+#   One tile is the best of them and the curve is monotone: two costs four
+#   per cent of the long prompt, three eight and four fifteen. The floor is
+#   also the optimum, which is luck rather than design -- the grain cannot
+#   go below a tile without splitting one, and splitting one would change
+#   which kernel a row's tile takes and move the answers at different worker
+#   counts. So the constant is right and the reason it is right is not the
+#   reason it was chosen.
+#
+#   The two thresholds that gate the pool. A batch below sixteen positions
+#   keeps its elementwise loops on the calling task; that was measured when
+#   three such loops went to the pool and there are five now. Swept over
+#   one, eight, sixteen and sixty-four, two rounds:
+#
+#     generating   1.800, 1.803, 1.808, 1.804 s
+#                  1.797, 1.801, 1.805, 1.810
+#     drafted      3.044, 3.052, 3.019, 3.051
+#                  3.006, 2.983, 2.964, 3.049
+#
+#   Flat everywhere, which is the answer: a batch of one or five positions
+#   has so little elementwise work that neither sharing it nor keeping it
+#   can be seen. Sixteen stands because nothing argues against it.
+#
+#   The activation quantizer keeps a run under two hundred and fifty-six
+#   blocks to itself, and that one does matter:
+#
+#     sixty-four blocks    1.909 s generating, 10.00 s of processor time
+#     two hundred and      1.801,               9.26
+#       fifty-six
+#     a thousand and       1.797,               9.27
+#       twenty-four
+#
+#   Six per cent worse at sixty-four and level at a thousand: a generated
+#   token's sixty-four blocks are quantized faster than a pool can be told
+#   about them, which is exactly what the constant was put there to say.
+#   Two hundred and fifty-six is on the flat and stays.
+#
+#   And the batch, five hundred and twelve, which was swept on the device
+#   recently and never on the processor since the prompt path changed three
+#   times under it:
+#
+#     256    4.973, 4.685 s cpu    0.863, 0.874 s device
+#     512    4.925, 4.850          0.860, 0.874
+#     768    4.834, 4.835          0.853
+#     1024   4.779, 4.816          0.845, 0.875
+#
+#   Two per cent across a fourfold range with the arms overlapping -- the
+#   256 arm holds both the slowest reading and the fastest. Nothing to
+#   choose, and five hundred and twelve is also what the other runtime uses,
+#   so it stays.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  under 1.05 before every reading
+# model: TinyLlama-1.1B-Chat Q8_0, with Q2_K as the draft
+#
+# 2026-09-02, the short device prompt: the premise refuted, and the other
+# runtime's tile table read.
+#
+#   The device's 110-token prompt is 1.53 times behind, the widest ratio in
+#   this file. The reason offered was occupancy: a 110-column batch is one
+#   column tile wide, so a 2048-row product dispatches sixty-four workgroups
+#   onto twelve compute units and the tail is a large part of the whole. A
+#   narrower column tile would double the count.
+#
+#     a hundred and twenty-eight columns   0.101 s at 110 tokens
+#                                          0.841 s at 1419
+#     sixty-four                           0.103
+#                                          0.846
+#
+#   Nothing at 110 and slightly worse at 1419, with twice the workgroups.
+#   That is the fourth independent measurement on this device to say
+#   occupancy is not the constraint, after the taller product tile, the
+#   staged operands and the four-subgroup attention.
+#
+#   So the other runtime's short prompt was measured rather than reasoned
+#   about, with GGML_VK_PERF_LOGGER on the same file and the same length,
+#   taking the warm block:
+#
+#     matrix products    63.1 ms of 74.0    85 per cent
+#     the gated middle    2.70
+#     the residual adds   1.83
+#     the normalization   1.93
+#     attention           1.53
+#     the rotation        1.22
+#
+#   Which is the same shape as ours: eighty-five per cent matrix products
+#   there and eighty-five here, 63.1 milliseconds against our 88 of 104. The
+#   whole of the difference at this length is in the one row, and it is the
+#   row we are level with at five hundred and twelve columns.
+#
+#   Their rates by shape say where it goes. At n=110 they read 2908, 3765,
+#   575 and 4073 gigaflops for the four products a layer makes; at n=512
+#   they read 4552, 5581, 2097 and 5002. So they lose between a quarter and
+#   a third going from five hundred and twelve columns to a hundred and ten,
+#   and we lose forty-seven per cent -- 0.80 milliseconds a token against
+#   0.425. The narrow one, the 256-row key and value projection, is the

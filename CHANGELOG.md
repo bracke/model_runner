@@ -71,6 +71,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The k-quant mixtures: `q4_k_m` and its family.** `llama-quantize` does
+  not write one format through a file -- asked for Q4_K_M it writes Q4_K
+  *mostly*, lifting attention's values and the feed-forward's down
+  projection to Q6_K in particular layers and the output projection
+  throughout. Every comparison this repository made before passed `--pure`
+  to turn that off. `tests quantize --format q4_k_m` writes the mixtures
+  people actually download.
+
+  Against `llama-quantize` with no `--pure`, **every tensor gets the type
+  llama.cpp gives it** -- nothing absent in any recipe -- and what remains
+  is the parts-per-million disagreement the k-quant searches already had.
+
+  **It found a fault a well-formed file hides.** The policy asks which layer
+  a tensor is in, and llama.cpp answers with a running counter, which is
+  right for llama.cpp because it walks a list its loader ordered by layer. A
+  reader walking the file walks the order the converter wrote, and for this
+  model that is lexicographic -- `blk.1`, `blk.10`, `blk.11`, and `blk.2`
+  twelve places later. Counting put a tenth of the layers' extra bits on the
+  wrong ones: twenty tensors of two hundred and one, in a file of exactly
+  the right size that loaded and generated text. The layer now comes from
+  the name; a test offers the tensors in the file's order and fails if the
+  answer changes.
+
+  What the transcription does not cover -- Falcons, mixtures of experts, and
+  models large enough that eight heads share their attention values -- is
+  refused by name rather than written as though it were a llama.
+
 - **`tests imatrix`, `tests quantize --imatrix`, and the last five
   formats.** An importance matrix records how much each input channel of
   each weight matrix actually carried over a corpus; a quantizer given one

@@ -14,6 +14,7 @@ with Model_Runner.Text;
 
 with Fixtures;
 with Quantizer;
+with Recipes;
 
 package body Quantize_Run is
 
@@ -35,6 +36,7 @@ package body Quantize_Run is
    use type B.Byte;
    use type N.Real;
    use type T.Real_Array_Access;
+   use type Quantizer.Target;
    use type N.Element_Count;
    use type B.Byte_Array_Access;
    use type Ada.Streams.Stream_Element_Offset;
@@ -59,6 +61,8 @@ package body Quantize_Run is
         Natural'Image (Item.Tensors) & " tensors,"
         & Natural'Image (Item.Converted) & " converted,"
         & Natural'Image (Item.Copied) & " copied"
+        & (if Item.Bumped = 0 then ""
+           else "," & Natural'Image (Item.Bumped) & " above the base")
         & (if Item.Weighted + Item.Unweighted = 0 then ""
            else "," & Natural'Image (Item.Weighted) & " weighted,"
                 & Natural'Image (Item.Unweighted) & " not named by the "
@@ -72,6 +76,8 @@ package body Quantize_Run is
                 & " tensors the same,"
                 & Natural'Image (Item.Differing) & " differing,"
                 & Natural'Image (Item.Absent) & " absent"
+                & (if Item.Odd_Up = 0 then ""
+                   else "; first odd " & Item.First_Odd (1 .. Item.Odd_Up))
                 & (if Item.First_Up = 0 then ""
                    else "; first apart " & Item.First_Apart (1 .. Item.First_Up)
                         & " by" & Long_Long_Integer'Image (Item.Apart_Bytes)
@@ -219,6 +225,25 @@ package body Quantize_Run is
                       /= Containers.Tensor_Format (Over, Mate)
             then
                Result.Absent := Result.Absent + 1;
+
+               if Result.Odd_Up = 0 then
+                  declare
+                     Told : constant String :=
+                       Name & " ours "
+                       & G.Tensor_Type'Image
+                           (Containers.Tensor_Format (Here, Index))
+                       & " theirs "
+                       & (if Mate = 0 then "absent"
+                          else G.Tensor_Type'Image
+                                 (Containers.Tensor_Format (Over, Mate)));
+                     Room : constant Natural :=
+                       Natural'Min (Told'Length, Result.First_Odd'Length);
+                  begin
+                     Result.First_Odd (1 .. Room) :=
+                       Told (Told'First .. Told'First + Room - 1);
+                     Result.Odd_Up := Room;
+                  end;
+               end if;
             else
                declare
                   Bytes : constant G.U64 :=
@@ -303,15 +328,26 @@ package body Quantize_Run is
 
       Wanted  : Quantizer.Target;
       Known   : Boolean;
+
+      --  A mixture, where the name was one. A recipe writes its base
+      --  format nearly everywhere and something else on the tensors
+      --  llama.cpp has decided deserve it.
+      Mixed   : Recipes.Recipe;
+      Mixture : Boolean;
+
       Started : Ada.Real_Time.Time;
    begin
       Result := (others => <>);
 
       Quantizer.Named (Format, Wanted, Known);
-      if not Known then
+      Recipes.Named (Format, Mixed, Mixture);
+
+      if Mixture then
+         Wanted := Recipes.Base_Of (Mixed);
+      elsif not Known then
          Result.Missing := True;
-         Note ("this writes q8_0, q4_0, q4_1, q5_0, q5_1, q4_k and q6_k, "
-               & "and not " & Format);
+         Note ("this writes twelve formats and the k-quant mixtures, and "
+               & "not " & Format);
          return;
       end if;
 
@@ -337,6 +373,9 @@ package body Quantize_Run is
 
          Maker  : Fixtures.Builder;
          Made   : B.Byte_Array_Access := null;
+
+         Model_Shape : Recipes.Shape;
+         Walked      : Recipes.Progress;
       begin
          if Matrix /= "" then
             Files.Open (Weights_Source, Matrix, Status => Status);
@@ -370,6 +409,65 @@ package body Quantize_Run is
             Note ("the model would not parse: "
                   & E.Error_Code'Image (Status.Code));
             return;
+         end if;
+
+         --  What the policy asks about the model, where a mixture was
+         --  named. The architecture decides several branches and the
+         --  grouping decides one, and a model the transcription does not
+         --  cover is refused rather than written wrongly.
+         if Mixture then
+            declare
+               Kind : constant String :=
+                 (if Containers.Has (Item, "general.architecture")
+                  then Containers.String_Value (Item, "general.architecture")
+                  else "");
+
+               Whole  : Long_Long_Integer;
+               Said   : E.Error_Info;
+
+               function Number (Key : String; Default : Natural) return Natural
+               is
+                  Held : Long_Long_Integer;
+                  Told : E.Error_Info;
+               begin
+                  if not Containers.Has (Item, Kind & Key) then
+                     return Default;
+                  end if;
+                  Containers.Get_Integer
+                    (Item, Kind & Key, 0, Long_Long_Integer (Natural'Last),
+                     Held, Told);
+                  return (if E.Is_Error (Told) then Default
+                          else Natural (Held));
+               end Number;
+
+               Heads    : constant Natural := Number (".attention.head_count", 1);
+               KV_Heads : constant Natural :=
+                 Number (".attention.head_count_kv", Heads);
+               Experts  : constant Natural := Number (".expert_count", 0);
+
+               Held : Long_Long_Integer := 0;
+            begin
+               pragma Unreferenced (Whole, Said);
+
+               for Which in 1 .. Containers.Tensor_Count (Item) loop
+                  Held := Held
+                    + Long_Long_Integer
+                        (Containers.Tensor_Elements (Item, Which));
+               end loop;
+
+               if not Recipes.Fits (Kind, Experts, Held) then
+                  Note ("this model is one llama.cpp's mixture policy treats "
+                        & "specially and this transcription does not: " & Kind);
+                  goto Give_Up;
+               end if;
+
+               Model_Shape :=
+                 (Layers  => Number (".block_count", 0),
+                  Grouped =>
+                    (if KV_Heads = 0 then 1 else Heads / KV_Heads),
+                  Tied    =>
+                    Containers.Find_Tensor (Item, "output.weight") = 0);
+            end;
          end if;
 
          --  Every metadata entry, in the order the file holds them. A key
@@ -538,10 +636,20 @@ package body Quantize_Run is
                --  its elements fill whole blocks. A norm or a bias is a
                --  vector and stays what it is, which is what every
                --  quantized file does with them.
+               --  What this tensor gets: the one format asked for, or
+               --  whatever the mixture says of this tensor in particular.
+               Into_Type : constant Quantizer.Target :=
+                 (if Mixture
+                  then Recipes.Type_For
+                         (Mixed, Name, Model_Shape, Walked,
+                          Long_Long_Integer
+                            (Containers.Tensor_Dimension (Item, Index, 1)))
+                  else Wanted);
+
                Convert : constant Boolean :=
                  Rank > 1
-                 and then Count mod G.U64 (Quantizer.Block_Of (Wanted)) = 0
-                 and then Kind /= Quantizer.Type_Of (Wanted);
+                 and then Count mod G.U64 (Quantizer.Block_Of (Into_Type)) = 0
+                 and then Kind /= Quantizer.Type_Of (Into_Type);
 
                Raw : B.Byte_Array_Access :=
                  new B.Byte_Array (0 .. B.Byte_Count (Bytes) - 1);
@@ -630,13 +738,13 @@ package body Quantize_Run is
                         declare
                            Written : constant B.Byte_Array :=
                              (if Heft = null
-                              then Quantizer.Encode (Values.all, Wanted)
+                              then Quantizer.Encode (Values.all, Into_Type)
                               else Quantizer.Encode_Weighted
-                                     (Values.all, Heft.all, Wanted));
+                                     (Values.all, Heft.all, Into_Type));
                         begin
                            Fixtures.Add_Tensor
                              (Maker, Name, Shape,
-                              Quantizer.Type_Of (Wanted), Written);
+                              Quantizer.Type_Of (Into_Type), Written);
                            Result.Bytes_Out :=
                              Result.Bytes_Out
                              + Long_Long_Integer (Written'Length);
@@ -652,6 +760,10 @@ package body Quantize_Run is
 
                      T.Free (Values);
                      Result.Converted := Result.Converted + 1;
+
+                     if Into_Type /= Wanted then
+                        Result.Bumped := Result.Bumped + 1;
+                     end if;
                   end;
                else
                   Fixtures.Add_Tensor (Maker, Name, Shape, Kind, Raw.all);

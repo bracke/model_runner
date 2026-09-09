@@ -17793,6 +17793,101 @@ are parallel, and every product walks a list of two hundred names to turn a
 view into a name it could have been told once. Both are fixable and neither
 is fixed.
 
+### The mixtures people actually ship
+
+`llama-quantize` does not write one format through a file. Asked for
+`Q4_K_M` it writes Q4_K **mostly**: the feed-forward's down projection and
+attention's values are Q6_K in some layers and not others, and the output
+projection is Q6_K throughout. Every comparison above passed `--pure` to turn
+that off, which measured the encoders honestly and left the recipes
+unwritten. `tests quantize --format q4_k_m` writes them.
+
+**The recipe is the only part of quantizing that is an opinion.** Which
+levels a block gets is arithmetic. Which tensors deserve more bits is a
+judgement, and llama.cpp keeps one in a single function of ninety-nine
+branches, accumulated over years. This is that judgement for the mixtures a
+llama-shaped model is distributed in -- transcribed, not invented, and
+checked against the file the other implementation writes.
+
+**And it found a fault that a well-formed file hides.** The policy asks which
+layer a tensor is in, and llama.cpp answers with a running counter, which is
+right for llama.cpp because it walks a list its loader built in layer order.
+A reader walking the file walks the order the converter wrote, and for this
+model that is **lexicographic**: `blk.0`, `blk.1`, `blk.10`, `blk.11`, and
+`blk.2` twelve places later. Counting put a tenth of the layers' extra bits
+on the wrong ones -- twenty tensors of two hundred and one, in a file of
+exactly the right size that loaded and generated text. The layer now comes
+from the name, which is what llama.cpp itself falls back to when its own
+counter cannot be trusted. A test offers the tensors in the file's order and
+fails if the answer changes.
+
+Against `llama-quantize` with no `--pure`, tensor by tensor:
+
+| recipe | tensors above the base | same | differing | bytes apart |
+| --- | ---: | ---: | ---: | ---: |
+| q2_k_m | 67 | 197 | 4 | 7 |
+| q3_k_s | 1 | 190 | 11 | 14 |
+| q3_k_m | 67 | 194 | 7 | 7 |
+| q3_k_l | 67 | 194 | 7 | 7 |
+| q4_k_s | 7 | 200 | 1 | 1,022 |
+| q4_k_m | 21 | 200 | 1 | 1,022 |
+| **q5_k_s** | 1 | **201** | **0** | **0** |
+| **q5_k_m** | 21 | **201** | **0** | **0** |
+
+**Every tensor gets the type llama.cpp gives it** -- nothing absent in any
+row -- and what is left is the parts-per-million disagreement the k-quant
+searches already had, now confined to whichever tensors a recipe sends to
+those formats.
+
+**Two of the eight are byte for byte exact**, and Q5_K_M is the interesting
+one: *pure* Q5_K had eight tensors differing by 129 bytes, and the mixture
+has none, because it lifts to Q6_K precisely the tensors those near-ties
+were landing on. A recipe is not only a size trade; on this model it also
+happens to move the search off the ground where two implementations can
+disagree.
+
+**What a mixture buys.** Q4_K, divergence from the eight-bit model over the
+same 1,020 positions:
+
+| | divergence, nats | top token agreed |
+| --- | ---: | ---: |
+| ours, `--pure` | 0.061860 | 84.2 % |
+| **ours, the `q4_k_m` mixture** | **0.040723** | **87.6 %** |
+| a vendor's own `q4_k_m` | 0.044413 | 87.9 % |
+
+**A third less divergence for twenty-one tensors' worth of extra bits** --
+0.0619 to 0.0407, which is 1.52 times. The first two rows are like for like:
+both files are written here, both from the eight-bit model, both measured
+against it.
+
+**The third row is not comparable to the first two, and this is the second
+time this page has had to say so.** A file written here is quantized *from*
+q8_0 and measured *against* q8_0, so it shares that rounding with the
+baseline and is flattered by it; the vendor's file was quantized from higher
+precision, so measuring it against q8_0 counts two roundings rather than
+one. Ours reading lower than theirs is mostly evidence of a shared source.
+Repairing that properly wants a half-precision file of this model, which is
+not here -- and `### What a format costs the predictions` above is twelve
+vendor files measured the same way as each other, so its rows remain
+comparable among themselves and not with these.
+
+What the third row does establish is worth having on its own: it reproduces
+the 0.044413 published in that table to the digit, sittings apart, which is
+the instrument saying it is repeatable.
+
+One naming difference, and it is llama.cpp's rather than a choice made here:
+llama.cpp calls its Q2_K *mixture* plain `Q2_K`, which in this tool is the
+name of the pure format. `--format q2_k` writes Q2_K through the file;
+`--format q2_k_m` writes the mixture.
+
+**What the policy does not cover is refused rather than guessed.** Its
+branches ask whether the model is a Falcon, whether it routes between
+experts, and whether it is large enough that eight heads share their
+attention values -- three questions every model checkable here answers no,
+and three transcriptions not made. `Recipes.Fits` says so and the tool stops,
+because a file written as though a Falcon were a llama would differ for a
+reason nothing here records.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

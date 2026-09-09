@@ -5,6 +5,7 @@ with AUnit.Assertions;
 with Interfaces;
 
 with Quantizer;
+with Recipes;
 
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
@@ -480,6 +481,123 @@ package body Tests.GGUF_Cases is
    --  Nothing noticed for as long as there have been encoders here, because
    --  the fixture check decodes what the encoder wrote: what it holds is the
    --  decoder, and an encoder only has to be self-consistent to pass it.
+   --  A mixture gives particular tensors more bits, and which ones is
+   --  decided by the layer in the tensor's name.
+   --
+   --  THE NAME AND NOT THE ORDER, which is the fault this holds. The
+   --  reference decides by a running counter, which is right for it because
+   --  it walks a list its loader built in layer order. A reader walking the
+   --  file walks the order the converter wrote, and for a llama-shaped GGUF
+   --  that is lexicographic: blk.0, blk.1, blk.10, blk.11, and blk.2 twelve
+   --  places later. Counting gave a tenth of the layers their extra bits on
+   --  the wrong ones -- twenty tensors of two hundred, in a file of exactly
+   --  the right size that loaded and ran.
+   --
+   --  So the tensors below are offered in that order on purpose.
+   procedure A_Mixture_Reads_The_Layer_From_The_Name
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      use type Quantizer.Target;
+
+      Small : constant Recipes.Shape :=
+        (Layers => 22, Grouped => 8, Tied => False);
+
+      --  Every ffn_down of a twenty-two layer model, in the order a file
+      --  holds them rather than in the order the layers run.
+      Order : constant array (1 .. 22) of Natural :=
+        [0, 1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+         2, 20, 21, 3, 4, 5, 6, 7, 8, 9];
+
+      --  The layers llama.cpp spends more on for a model of twenty-two:
+      --  the first eighth, the last eighth, and every third of the rest.
+      More : constant array (0 .. 21) of Boolean :=
+        [0 | 1 | 4 | 7 | 10 | 13 | 16 | 19 | 20 | 21 => True,
+         others => False];
+
+      Walked : Recipes.Progress;
+   begin
+      for Which of Order loop
+         declare
+            Name : constant String :=
+              "blk." & Model_Runner.Text.Trim (Natural'Image (Which))
+              & ".ffn_down.weight";
+
+            Got : constant Quantizer.Target :=
+              Recipes.Type_For
+                (Recipes.Q4_K_M, Name, Small, Walked, 5632);
+
+            Wanted : constant Quantizer.Target :=
+              (if More (Which) then Quantizer.Q6_K else Quantizer.Q4_K);
+         begin
+            Assert (Got = Wanted,
+                    Name & " was given "
+                    & Quantizer.Name_Of (Got) & " where "
+                    & Quantizer.Name_Of (Wanted) & " is what the layer in "
+                    & "its name asks for -- the order it arrived in is not "
+                    & "the order its layers run");
+         end;
+      end loop;
+
+      --  The output projection is six bits under every mixture here, and
+      --  the embedding is not unless it is the same tensor.
+      declare
+         Fresh : Recipes.Progress;
+      begin
+         Assert (Recipes.Type_For
+                   (Recipes.Q4_K_M, "output.weight", Small, Fresh, 2048)
+                 = Quantizer.Q6_K,
+                 "the output projection was not lifted to six bits");
+
+         Assert (Recipes.Type_For
+                   (Recipes.Q4_K_M, "token_embd.weight", Small, Fresh, 2048)
+                 = Quantizer.Q4_K,
+                 "an untied embedding was lifted, which no mixture here "
+                 & "does");
+
+         declare
+            Shared : constant Recipes.Shape :=
+              (Layers => 22, Grouped => 8, Tied => True);
+         begin
+            Assert (Recipes.Type_For
+                      (Recipes.Q4_K_M, "token_embd.weight", Shared, Fresh,
+                       2048)
+                    = Quantizer.Q6_K,
+                    "an embedding that is also the output projection was "
+                    & "not quantized as the output projection is");
+         end;
+      end;
+
+      --  A different mixture, a different rule: Q4_K_S lifts the first four
+      --  attention-value matrices and no others, where Q4_K_M lifts the
+      --  ones the layer rule names.
+      declare
+         Fresh : Recipes.Progress;
+      begin
+         Assert (Recipes.Type_For
+                   (Recipes.Q4_K_S, "blk.3.attn_v.weight", Small, Fresh, 2048)
+                 = Quantizer.Q5_K,
+                 "Q4_K_S did not lift the fourth attention-value matrix");
+         Assert (Recipes.Type_For
+                   (Recipes.Q4_K_S, "blk.4.attn_v.weight", Small, Fresh, 2048)
+                 = Quantizer.Q4_K,
+                 "Q4_K_S lifted the fifth attention-value matrix, which it "
+                 & "does not");
+      end;
+
+      --  And a model the transcription does not cover is refused rather
+      --  than written as though it were a llama.
+      Assert (Recipes.Fits ("llama", 0, 1_100_000_000),
+              "a plain llama was refused by the mixture policy");
+      Assert (not Recipes.Fits ("falcon", 0, 1_100_000_000),
+              "a falcon was accepted, and llama.cpp's policy branches on it "
+              & "at nearly every rule");
+      Assert (not Recipes.Fits ("llama", 8, 1_100_000_000),
+              "a mixture of experts was accepted, which takes another "
+              & "branch again");
+   end A_Mixture_Reads_The_Layer_From_The_Name;
+
    procedure The_Block_Formats_Encode_By_Their_Own_Rule
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6517,6 +6635,10 @@ package body Tests.GGUF_Cases is
         (T, Accessors_Refuse_Every_Way'Access,
          "every accessor refuses a key it cannot read, whichever way it is "
          & "wrong");
+      Register_Routine
+        (T, A_Mixture_Reads_The_Layer_From_The_Name'Access,
+         "a mixture reads the layer from the tensor's name and not "
+         & "from the order it arrived in");
       Register_Routine
         (T, The_Block_Formats_Encode_By_Their_Own_Rule'Access,
          "the block formats encode by their own rule, and Q4_0's "
