@@ -11446,9 +11446,12 @@ Short prompts and drafting -- which reads four to eight positions at a time
 comes next. The real model then reads several proposals in one pass and says
 what it would have said at each of those positions; the proposals it agrees
 with are what the run produces. Because this runs only at temperature zero, a
-proposal either is the model's own choice or it is not, so the text is
-exactly what the model would have produced alone -- held by a test that runs
-the same prompt with and without a draft and compares.
+proposal either is the model's own choice or it is not, so the text is what
+the model would have produced alone -- held by a test that runs the same
+prompt with and without a draft and compares. Up to one thing, which
+`### Drafting out of the context` below measures: a drafted run reads its
+positions in a batch and an undrafted one reads them singly, and those two
+are not bit-for-bit the same arithmetic.
 
 What it saves is passes over the big model's weights: however many proposals
 are accepted, they cost one pass. What it costs is the draft model's own
@@ -11601,6 +11604,35 @@ where it belongs: a round records what it verifies as it verifies it, and the
 emitting stops recording when a round is doing it. Both paths now answer
 identically at 1.1 -- checked through the command, at one proposal a round
 and at four.
+
+**And the difference that was left after that is not drafting.** `tests
+speed` still read a different digest for `--draft-model` than for no draft on
+one prompt, and the cause is that a drafted run's tokens come out of a batch
+where an undrafted run's come out of single evaluations. Those two are not
+the same arithmetic:
+
+```
+tests speed --model qwen3 --prompt-file P --batch-size 1    4c7c64cc5dbd3aa7
+tests speed --model qwen3 --prompt-file P --batch-size 2    693f988b17fd427c
+tests speed --model qwen3 --prompt-file P --batch-size 8    693f988b17fd427c
+tests speed --model qwen3 --prompt-file P --batch-size 512  693f988b17fd427c
+```
+
+**No drafting anywhere in those four**, and the first one answers
+differently from the other three. The same sweep on TinyLlama and the quoting
+prompt gives one digest at all three sizes, so this is a position that
+happened to be nearly tied rather than a systematic difference: the first
+generated token of that prompt reads a log probability of -1.8155 when the
+prompt is read a token at a time and -1.8310 when it is read in batches, the
+same token either way, and some later position was closer than that gap.
+
+So **the guarantee is exact up to the difference between the batched and the
+single-token paths**, and that is a smaller claim than the one this section
+opened with. Both paths are held against the independent implementation
+inside the conformance tolerance, and neither is held against the other;
+where a position is nearer a tie than they are to each other, a drafted run
+and an undrafted one part company. The test that holds the guarantee uses a
+fixture where they do not.
 
 `--draft-lookup` and `--draft-model` together are refused rather than
 resolved. They are two sources of proposals and a round takes one; choosing

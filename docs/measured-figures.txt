@@ -19095,13 +19095,30 @@ panels EDE5877CFBC26F73 src/library/model_runner-quantization-interleave.ads src
 #   the test that holds the guarantee uses the greedy configuration, whose
 #   penalty is 1.0, and the command's default is 1.1.
 #
-#   ONE THING LEFT OPEN, said here rather than left to be found. Through the
-#   command the two drafting paths now agree at 1.1. Through `tests speed`
-#   --draft-model still differs from plain at 1.1 while --draft-lookup
-#   agrees, at one proposal a round as well as four. The engine is the thing
-#   the guarantee is about and the engine is right; what the measuring tool
-#   does differently with a second model file is not known, and this file
-#   has caught that tool sampling differently from the command once before.
+#   ONE THING LEFT OPEN when this entry was first written, and closed the
+#   same day. Through `tests speed` --draft-model still read a different
+#   digest from plain at 1.1 where --draft-lookup agreed. IT IS NOT
+#   DRAFTING. A drafted run's tokens come out of a batch and an undrafted
+#   run's out of single evaluations, and those are not the same arithmetic:
+#
+#     qwen3, the same prompt, NO DRAFTING AT ALL
+#       --batch-size 1     4c7c64cc5dbd3aa7
+#       --batch-size 2     693f988b17fd427c
+#       --batch-size 8     693f988b17fd427c
+#       --batch-size 512   693f988b17fd427c
+#
+#   The same sweep on TinyLlama and the quoting prompt gives one digest at
+#   all three sizes, so this is a nearly tied position rather than a
+#   systematic difference. The size of the difference: the first generated
+#   token of that prompt reads a log probability of -1.815483 read a token
+#   at a time and -1.831034 read in batches -- the same token either way,
+#   and some later position was closer than 0.0155.
+#
+#   So the guarantee drafting makes is exact UP TO the difference between
+#   the batched and the single-token paths. Both are held against the
+#   independent implementation inside the conformance tolerance and neither
+#   is held against the other, which is the right arrangement and a smaller
+#   claim than the README made.
 #
 #   SIX GROUPS RESTAMPED, NOT RE-MEASURED. Nothing a published figure runs
 #   through changed: Drafting is false without --draft-tokens, the lookup is

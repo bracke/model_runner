@@ -18,6 +18,14 @@ Keep a Changelog and the project uses semantic versioning.
   emitting stops recording when a round is doing it. Found by a lookup
   drafting for a model quoting itself.
 
+  What was left over after that fix turned out not to be drafting: a drafted
+  run reads its positions in a batch and an undrafted one reads them singly,
+  and the two are not bit-for-bit the same arithmetic. With no drafting
+  anywhere, `--batch-size 1` answers one prompt differently from
+  `--batch-size 2`, `8` and `512`, which agree with each other. So the
+  guarantee is exact up to that difference, which is a smaller claim than
+  the documentation made and is now what it says.
+
 - **The device was never given the narrow cache, and the rolling context
   raised on one.** Three faults from the two commits that windowed the
   key/value cache, found together because each hid the next.
