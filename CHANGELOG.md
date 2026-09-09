@@ -71,6 +71,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests imatrix`, `tests quantize --imatrix`, and the last five
+  formats.** An importance matrix records how much each input channel of
+  each weight matrix actually carried over a corpus; a quantizer given one
+  spends its levels where the model spends its attention. llama.cpp's
+  `llama-imatrix` and its `--imatrix`, both halves.
+
+  **What it buys**, which this repository could not say before. Q4_K
+  `--pure`, divergence from the eight-bit model: **0.061860 with no matrix,
+  0.027716 with one collected on held-out text** -- twice the accuracy for a
+  corpus and a few minutes. A matrix collected on the text the divergence is
+  measured on reads 0.026051, and that six-per-cent gap is the overfit,
+  measured for both collectors rather than assumed away.
+
+  Ours cannot agree with llama.cpp's byte for byte -- two matrices from two
+  forward passes hold different sums, so every quantized tensor differs --
+  so the check is the divergence, and ours does the job slightly better.
+  Ours weights 155 matrices where theirs weights 154, because theirs
+  excludes the output projection.
+
+  The engine gained one seam for it: `Llama.Watcher`, told the name of every
+  matrix a session is about to multiply by. A view carries an address and no
+  name, so `Resolve` writes the pair down. It costs a null check a product,
+  and the twelve-token figure was alternated to say so -- 0.341 s, digest
+  unmoved.
+
+  **And Q2_K, Q3_K, Q5_K, IQ4_NL and IQ4_XS**, which makes twelve quantized
+  formats: every one `llama-quantize` writes for this model. Against it,
+  tensor by tensor: **nine agree byte for byte and three are off by parts
+  per million** -- q3_K by fourteen bytes of 473 million, q5_K by 129 of
+  756 million, q4_K by 1,081 of 619 million. The three that part are the
+  ones whose search is finest; Q2_K, Q6_K and both table formats search too
+  and agree exactly.
+
 - **`tests quantize`: the engine writes a format at last.** It read twelve
   and wrote none. This writes seven -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K
   and Q6_K -- which is llama.cpp's `llama-quantize`. Five encode by a rule;

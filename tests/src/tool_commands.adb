@@ -24,6 +24,7 @@ package body Tool_Commands is
    Name_Device_Bench   : aliased constant String := "device-bench";
    Name_Perplexity     : aliased constant String := "perplexity";
    Name_Quantize       : aliased constant String := "quantize";
+   Name_Imatrix        : aliased constant String := "imatrix";
 
    Nothing : aliased constant String := "";
 
@@ -52,8 +53,10 @@ package body Tool_Commands is
      " --model --system --prompt --assistant --calls --tool --tools"
      & " --template --generation-prompt ";
    Opts_Likeness  : aliased constant String := " --model --names ";
+   Opts_Imatrix   : aliased constant String :=
+     " --model --text --chunk --chunks --threads --out ";
    Opts_Quantize  : aliased constant String :=
-     " --model --format --out --against ";
+     " --model --format --out --against --imatrix ";
    Opts_Perplex   : aliased constant String :=
      " --model --against --text --chunk --chunks --threads --backend"
      & " --anyway --wait ";
@@ -144,17 +147,25 @@ package body Tool_Commands is
    Says_Perplexity : aliased constant String :=
      "what a quantization costs the model's predictions";
 
+   Says_Imatrix : aliased constant String :=
+     "collect an importance matrix by running a corpus";
+
+   Takes_Imatrix : aliased constant String :=
+     "--model PATH --out PATH [--text PATH] [--chunk N] [--chunks N]"
+     & " [--threads N]";
+
    Says_Quantize : aliased constant String :=
      "write a model out again in another format";
 
    Takes_Quantize : aliased constant String :=
-     "--model PATH --format NAME [--out PATH] [--against PATH]";
+     "--model PATH --format NAME [--out PATH] [--against PATH]"
+     & " [--imatrix PATH]";
 
    Takes_Perplexity : aliased constant String :=
      "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"
      & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]";
 
-   Held : constant array (1 .. 22) of Command :=
+   Held : constant array (1 .. 23) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -171,6 +182,8 @@ package body Tool_Commands is
        Says_Perplexity'Access, Opts_Perplex'Access),
       (Name_Quantize'Access, Takes_Quantize'Access,
        Says_Quantize'Access, Opts_Quantize'Access),
+      (Name_Imatrix'Access, Takes_Imatrix'Access,
+       Says_Imatrix'Access, Opts_Imatrix'Access),
       (Name_Benchmark'Access, Takes_Benchmark'Access, Says_Benchmark'Access,
        Opts_Benchmark'Access),
       (Name_External'Access, Takes_External'Access, Says_External'Access,

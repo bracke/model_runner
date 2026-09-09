@@ -547,8 +547,12 @@ package body Tests.GGUF_Cases is
                   when Quantizer.Q8_0 => 255.0,
                   when Quantizer.Q4_0 | Quantizer.Q4_1 => 15.0,
                   when Quantizer.Q5_0 | Quantizer.Q5_1 => 31.0,
+                  when Quantizer.Q2_K => 3.0,
+                  when Quantizer.Q3_K => 7.0,
                   when Quantizer.Q4_K => 15.0,
-                  when Quantizer.Q6_K => 63.0);
+                  when Quantizer.Q5_K => 31.0,
+                  when Quantizer.Q6_K => 63.0,
+                  when Quantizer.IQ4_NL | Quantizer.IQ4_XS => 15.0);
 
             Step : constant Model_Runner.Numerics.Real :=
               (Rising (Span - 1) - Rising (0)) / Levels;

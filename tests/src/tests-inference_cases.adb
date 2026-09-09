@@ -6624,6 +6624,151 @@ package body Tests.Inference_Cases is
       end;
    end A_Seat_Keeps_What_Two_Prompts_Share;
 
+   --  A session tells a watcher which matrix every product reads, and
+   --  answers exactly what it answers with nobody watching.
+   --
+   --  The seam exists because only the engine knows what it is about to
+   --  multiply by: a view carries an address and a length and no name, and
+   --  a name is what an importance matrix is keyed by. What has to be true
+   --  of it is two things -- that the names are the file's own names, and
+   --  that being watched changes nothing -- and the second is the one worth
+   --  a test, because a seam that perturbed the arithmetic would produce a
+   --  matrix about a model nobody runs.
+   procedure A_Watcher_Is_Told_The_Names_And_Changes_Nothing
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Room   : constant := 64;
+      Length : constant := 6;
+
+      Prompt : Vocab.Token_Array (1 .. Length);
+      Image  : B.Byte_Array_Access;
+
+      Most_Names : constant := 64;
+
+      --  A watcher that writes down what it was told and nothing else.
+      type Listener is limited new L.Watcher with record
+         Names : Model_Runner.Text.Bounded_List (1 .. Most_Names) :=
+           [others => Model_Runner.Text.Empty];
+         Up    : Natural := 0;
+         Calls : Natural := 0;
+         Rows  : Natural := 0;
+      end record;
+
+      overriding procedure Note
+        (Item   : in out Listener;
+         Which  : String;
+         Values : Model_Runner.Numerics.Real_Array;
+         Rows   : Model_Runner.Numerics.Element_Count);
+
+      overriding procedure Note
+        (Item   : in out Listener;
+         Which  : String;
+         Values : Model_Runner.Numerics.Real_Array;
+         Rows   : Model_Runner.Numerics.Element_Count)
+      is
+         Seen : Boolean := False;
+      begin
+         Item.Calls := Item.Calls + 1;
+         Item.Rows := Item.Rows + Natural (Rows);
+
+         if Values'Length = 0 then
+            return;
+         end if;
+
+         for Index in 1 .. Item.Up loop
+            Seen := Seen
+              or else Model_Runner.Text.To_String (Item.Names (Index)) = Which;
+         end loop;
+
+         if not Seen and then Item.Up < Most_Names then
+            Item.Up := Item.Up + 1;
+            Item.Names (Item.Up) := Model_Runner.Text.To_Bounded (Which);
+         end if;
+      end Note;
+
+      Quiet, Watched : Logit_Vector := [others => 0.0];
+      Heard : aliased Listener;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) := Vocab.Token_Id (4 + (Index * 3) mod 5);
+      end loop;
+
+      Tiny_Model.Build (Image, Room => Room);
+
+      for Listening in Boolean'Range loop
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            if Listening then
+               L.Watch (Live, Heard'Unchecked_Access);
+            end if;
+
+            for Token of Prompt loop
+               declare
+                  Row : Logit_Vector := [others => 0.0];
+               begin
+                  L.Evaluate
+                    (Live, Under.Ready, Token, Row, Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+
+                  if Listening then
+                     Watched := Row;
+                  else
+                     Quiet := Row;
+                  end if;
+               end;
+            end loop;
+
+            L.Watch (Live, null);
+            L.Close (Live);
+         end;
+      end loop;
+
+      B.Free (Image);
+
+      --  It was told something, and the something is a matrix of this
+      --  model rather than a name of its own invention.
+      Assert (Heard.Calls > 0,
+              "a watched run reported no products at all");
+      Assert (Heard.Up > 0, "a watched run named no matrices");
+
+      declare
+         Found : Boolean := False;
+      begin
+         for Index in 1 .. Heard.Up loop
+            Found := Found
+              or else Model_Runner.Text.To_String (Heard.Names (Index))
+                      = "blk.0.attn_q.weight";
+         end loop;
+
+         Assert (Found,
+                 "a watched run never named blk.0.attn_q.weight, which every "
+                 & "token of this architecture multiplies by");
+      end;
+
+      --  A product a token, at least, for each matrix it named.
+      Assert (Heard.Rows >= Heard.Up * Length,
+              "a watched run reported" & Natural'Image (Heard.Rows)
+              & " rows over" & Natural'Image (Heard.Up) & " matrices and"
+              & Natural'Image (Length) & " tokens, which is fewer than one "
+              & "row a matrix a token");
+
+      --  And the arithmetic is the arithmetic.
+      Assert (Model_Runner.Numerics."=" (Quiet, Watched),
+              "a watched run answered differently from an unwatched one, so "
+              & "the seam is not free");
+   end A_Watcher_Is_Told_The_Names_And_Changes_Nothing;
+
    procedure Reading_Again_After_A_Rewind_Answers_The_Same
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7779,6 +7924,10 @@ package body Tests.Inference_Cases is
         (T, A_Seat_Keeps_What_Two_Prompts_Share'Access,
          "a served caller keeps what its prompt shares with the one "
          & "its seat last held, and exactly that much");
+      Register_Routine
+        (T, A_Watcher_Is_Told_The_Names_And_Changes_Nothing'Access,
+         "a watcher is told which matrix every product reads, and the "
+         & "run answers what it answers unwatched");
       Register_Routine
         (T, Reading_Again_After_A_Rewind_Answers_The_Same'Access,
          "rewinding and reading the same token again answers what it "

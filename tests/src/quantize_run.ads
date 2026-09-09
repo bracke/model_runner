@@ -35,6 +35,13 @@ package Quantize_Run is
       Converted : Natural := 0;
       Copied    : Natural := 0;
 
+      --  How many of the converted ones the importance matrix named, and
+      --  how many it did not. A matrix that names none of them is a matrix
+      --  for another model, and a run that said nothing about it would look
+      --  like a run that used one.
+      Weighted  : Natural := 0;
+      Unweighted : Natural := 0;
+
       Bytes_In  : Long_Long_Integer := 0;
       Bytes_Out : Long_Long_Integer := 0;
 
@@ -63,12 +70,16 @@ package Quantize_Run is
    --  @param Into Path to write, or the empty string to write nothing --
    --    which is what a caller comparing two files that already exist wants.
    --  @param Against A file to compare the tensors against, or empty.
+   --  @param Matrix An importance matrix, as llama-imatrix writes one, or
+   --    the empty string for none. A tensor the matrix does not name is
+   --    quantized plainly, and how many were is in the report.
    --  @param Result What it did.
    procedure Run
      (Path    : String;
       Format  : String;
       Into    : String;
       Against : String;
+      Matrix  : String;
       Result  : out Report);
 
    --  One line saying what it did.

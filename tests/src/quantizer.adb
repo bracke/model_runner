@@ -217,7 +217,12 @@ package body Quantizer is
       Most    : Integer;
       Levels  : out Level_Run;
       Least   : out N.Real;
-      Scale   : out N.Real);
+      Scale   : out N.Real;
+      From    : N.Real := -1.0;
+      By      : N.Real := 0.1;
+      Steps   : Natural := 20;
+      Weighed : Boolean := False;
+      By_Size : Boolean := False);
 
    procedure Fit_Run_And_Min
      (Values  : Real_Array;
@@ -225,8 +230,19 @@ package body Quantizer is
       Most    : Integer;
       Levels  : out Level_Run;
       Least   : out N.Real;
-      Scale   : out N.Real)
+      Scale   : out N.Real;
+      From    : N.Real := -1.0;
+      By      : N.Real := 0.1;
+      Steps   : Natural := 20;
+      Weighed : Boolean := False;
+      By_Size : Boolean := False)
    is
+      --  How far a level lands from its value, counted either way: the
+      --  square of the miss, or its size. Q2_K asks for the size and every
+      --  other format here asks for the square, which is `use_mad` in the
+      --  reference and is one word rather than a second search.
+      function Missed (Apart : N.Real) return N.Real
+      is (if By_Size then abs Apart else Apart * Apart);
       Smallest : N.Real := Values (Values'First);
       Largest  : N.Real := Values (Values'First);
       Sum_W    : N.Real := Weights (Weights'First);
@@ -254,7 +270,11 @@ package body Quantizer is
          Smallest := 0.0;
       end if;
 
-      if Largest = Smallest then
+      --  The weighted path treats a run whose largest value is at or below
+      --  its minimum as empty, where the plain one only treats an exactly
+      --  flat run that way. It matters for a run that is all negative:
+      --  the minimum is clamped to zero above it and the largest is not.
+      if (if Weighed then Largest <= Smallest else Largest = Smallest) then
          Levels := [others => 0];
          Least := -Smallest;
          Scale := 0.0;
@@ -278,14 +298,14 @@ package body Quantizer is
             Levels (Integer (Index - Values'First)) := Level;
             Best := Best
               + Weights (Weights'First + (Index - Values'First))
-                * Apart * Apart;
+                * Missed (Apart);
          end;
       end loop;
 
-      for Step in 0 .. 20 loop
+      for Step in 0 .. Steps loop
          declare
             Try : constant N.Real :=
-              (-1.0 + 0.1 * N.Real (Step) + N.Real (Most))
+              (From + By * N.Real (Step) + N.Real (Most))
               / (Largest - Smallest);
 
             Sum_L  : N.Real := 0.0;
@@ -342,7 +362,7 @@ package body Quantizer is
                            Error := Error
                              + Weights
                                  (Weights'First + (Index - Values'First))
-                               * Apart * Apart;
+                               * Missed (Apart);
                         end;
                      end loop;
 
@@ -360,6 +380,407 @@ package body Quantizer is
 
       Least := -Smallest;
    end Fit_Run_And_Min;
+
+   --  A run of positive numbers quantized against their largest, refined --
+   --  llama.cpp's make_qp_quants.
+   --
+   --  Where the searches above choose a scale for a run of weights, this
+   --  chooses one for a run of SCALES: the eight or sixteen a super-block
+   --  found, which have themselves to be written in six bits. Nine
+   --  candidates, then five passes of moving one level at a time while any
+   --  move improves the weighted fit.
+   procedure Fit_Positives
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Most    : Integer;
+      Levels  : out Level_Run;
+      Scale   : out N.Real);
+
+   procedure Fit_Positives
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Most    : Integer;
+      Levels  : out Level_Run;
+      Scale   : out N.Real)
+   is
+      function Weight_Of (Index : Element_Count) return N.Real
+      is (Weights (Weights'First + (Index - Values'First)));
+
+      Largest : N.Real := 0.0;
+      Over    : N.Real;
+
+      Best   : N.Real := 0.0;
+      Sum_LX : N.Real := 0.0;
+      Sum_L2 : N.Real := 0.0;
+   begin
+      for Index in Values'Range loop
+         Largest := N.Real'Max (Largest, Values (Index));
+      end loop;
+
+      if Largest < Nothing_There then
+         Levels := [others => 0];
+         Scale := 0.0;
+         return;
+      end if;
+
+      Over := N.Real (Most) / Largest;
+
+      for Index in Values'Range loop
+         Levels (Integer (Index - Values'First)) :=
+           Nearest (Over * Values (Index));
+      end loop;
+
+      Scale := 1.0 / Over;
+
+      for Index in Values'Range loop
+         declare
+            Apart : constant N.Real :=
+              Values (Index)
+              - Scale * N.Real (Levels (Integer (Index - Values'First)));
+         begin
+            Best := Best + Weight_Of (Index) * Apart * Apart;
+         end;
+      end loop;
+
+      for Step in -4 .. 4 loop
+         if Step /= 0 then
+            declare
+               Try : constant N.Real :=
+                 (0.1 * N.Real (Step) + N.Real (Most)) / Largest;
+               Back : constant N.Real := 1.0 / Try;
+
+               Error : N.Real := 0.0;
+            begin
+               for Index in Values'Range loop
+                  declare
+                     Level : constant Integer :=
+                       Integer'Min (Most, Nearest (Try * Values (Index)));
+                     Apart : constant N.Real :=
+                       Values (Index) - Back * N.Real (Level);
+                  begin
+                     Error := Error + Weight_Of (Index) * Apart * Apart;
+                  end;
+               end loop;
+
+               if Error < Best then
+                  Best := Error;
+                  Over := Try;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      for Index in Values'Range loop
+         declare
+            Level : constant Integer :=
+              Integer'Min (Most, Nearest (Over * Values (Index)));
+         begin
+            Levels (Integer (Index - Values'First)) := Level;
+            Sum_LX := Sum_LX
+              + Weight_Of (Index) * Values (Index) * N.Real (Level);
+            Sum_L2 := Sum_L2
+              + Weight_Of (Index) * N.Real (Level) * N.Real (Level);
+         end;
+      end loop;
+
+      --  And five passes of moving one level at a time. A move is kept when
+      --  it improves the fit, which is asked as a comparison of products
+      --  rather than of the two ratios they stand for.
+      for Pass in 1 .. 5 loop
+         declare
+            Moved : Natural := 0;
+         begin
+            for Index in Values'Range loop
+               declare
+                  Slot   : constant Integer := Integer (Index - Values'First);
+                  Weight : constant N.Real := Weight_Of (Index);
+
+                  Less_LX : N.Real :=
+                    Sum_LX - Weight * Values (Index) * N.Real (Levels (Slot));
+                  Less_L2 : N.Real :=
+                    Sum_L2
+                    - Weight * N.Real (Levels (Slot)) * N.Real (Levels (Slot));
+               begin
+                  if Less_LX > 0.0 and then Less_L2 > 0.0 then
+                     declare
+                        Fresh : constant Integer :=
+                          Integer'Min
+                            (Most,
+                             Nearest (Values (Index) * Less_L2 / Less_LX));
+                     begin
+                        if Fresh /= Levels (Slot) then
+                           Less_LX := Less_LX
+                             + Weight * Values (Index) * N.Real (Fresh);
+                           Less_L2 := Less_L2
+                             + Weight * N.Real (Fresh) * N.Real (Fresh);
+
+                           if Less_LX * Less_LX * Sum_L2
+                              > Sum_LX * Sum_LX * Less_L2
+                           then
+                              Levels (Slot) := Fresh;
+                              Sum_LX := Less_LX;
+                              Sum_L2 := Less_L2;
+                              Moved := Moved + 1;
+                           end if;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+
+            exit when Moved = 0;
+         end;
+      end loop;
+
+      Scale := (if Sum_L2 > 0.0 then Sum_LX / Sum_L2 else 0.0);
+   end Fit_Positives;
+
+   --  A signed run fitted and then refined one level at a time --
+   --  llama.cpp's make_q3_quants with its rmse pass on.
+   --
+   --  Where Fit_Run above sweeps candidate scales, this takes one scale
+   --  from the largest magnitude and then improves the levels: five passes
+   --  of moving each level to wherever the running fit says it should be,
+   --  keeping the move when the fit improves. Q3_K is the only format here
+   --  that asks for it.
+   procedure Fit_Signed
+     (Values : Real_Array;
+      Most   : Integer;
+      Levels : out Level_Run;
+      Scale  : out N.Real);
+
+   procedure Fit_Signed
+     (Values : Real_Array;
+      Most   : Integer;
+      Levels : out Level_Run;
+      Scale  : out N.Real)
+   is
+      Amax   : N.Real := 0.0;
+      Signed : N.Real := 0.0;
+
+      Sum_LX : N.Real := 0.0;
+      Sum_L2 : N.Real := 0.0;
+   begin
+      for Index in Values'Range loop
+         if abs Values (Index) > Amax then
+            Amax := abs Values (Index);
+            Signed := Values (Index);
+         end if;
+      end loop;
+
+      if Amax < Nothing_There then
+         Levels := [others => 0];
+         Scale := 0.0;
+         return;
+      end if;
+
+      declare
+         Over : constant N.Real := N.Real (-Most) / Signed;
+      begin
+         for Index in Values'Range loop
+            declare
+               Level : constant Integer :=
+                 Integer'Max
+                   (-Most,
+                    Integer'Min (Most - 1,
+                                 Nearest (Over * Values (Index))));
+               Weight : constant N.Real :=
+                 Values (Index) * Values (Index);
+            begin
+               Levels (Integer (Index - Values'First)) := Level;
+               Sum_LX := Sum_LX + Weight * Values (Index) * N.Real (Level);
+               Sum_L2 := Sum_L2 + Weight * N.Real (Level) * N.Real (Level);
+            end;
+         end loop;
+      end;
+
+      for Pass in 1 .. 5 loop
+         declare
+            Moved : Natural := 0;
+         begin
+            for Index in Values'Range loop
+               declare
+                  Slot   : constant Integer := Integer (Index - Values'First);
+                  Weight : constant N.Real :=
+                    Values (Index) * Values (Index);
+
+                  Less_LX : N.Real :=
+                    Sum_LX - Weight * Values (Index) * N.Real (Levels (Slot));
+               begin
+                  if Less_LX > 0.0 then
+                     declare
+                        Less_L2 : N.Real :=
+                          Sum_L2
+                          - Weight * N.Real (Levels (Slot))
+                            * N.Real (Levels (Slot));
+
+                        Fresh : constant Integer :=
+                          Integer'Max
+                            (-Most,
+                             Integer'Min
+                               (Most - 1,
+                                Nearest (Values (Index) * Less_L2 / Less_LX)));
+                     begin
+                        if Fresh /= Levels (Slot) then
+                           Less_LX := Less_LX
+                             + Weight * Values (Index) * N.Real (Fresh);
+                           Less_L2 := Less_L2
+                             + Weight * N.Real (Fresh) * N.Real (Fresh);
+
+                           if Less_L2 > 0.0
+                             and then Less_LX * Less_LX * Sum_L2
+                                      > Sum_LX * Sum_LX * Less_L2
+                           then
+                              Levels (Slot) := Fresh;
+                              Sum_LX := Less_LX;
+                              Sum_L2 := Less_L2;
+                              Moved := Moved + 1;
+                           end if;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+
+            exit when Moved = 0;
+         end;
+      end loop;
+
+      for Slot in Levels'Range loop
+         Levels (Slot) := Levels (Slot) + Most;
+      end loop;
+
+      Scale := (if Sum_L2 > 0.0 then Sum_LX / Sum_L2 else 0.0);
+   end Fit_Signed;
+
+   --  The sixteen levels a non-linear nibble indexes, spaced finely near
+   --  zero and coarsely away from it. This is the table itself and not a
+   --  rule that generates it: llama.cpp writes the numbers out and so does
+   --  this, because a table is what the format is.
+   Levels_IQ4 : constant array (0 .. 15) of Integer :=
+     [-127, -104, -83, -65, -49, -35, -22, -10,
+        1,   13,  25,  38,  53,  69,  89, 113];
+
+   --  Which level a value is nearest, by a binary search of the table and
+   --  then a comparison of the two it falls between.
+   function Nearest_Level (Item : N.Real) return Integer;
+
+   function Nearest_Level (Item : N.Real) return Integer is
+      Low  : Integer := 0;
+      High : Integer := 15;
+   begin
+      if Item <= N.Real (Levels_IQ4 (0)) then
+         return 0;
+      end if;
+
+      if Item >= N.Real (Levels_IQ4 (15)) then
+         return 15;
+      end if;
+
+      while High - Low > 1 loop
+         declare
+            Middle : constant Integer := (Low + High) / 2;
+         begin
+            if Item < N.Real (Levels_IQ4 (Middle)) then
+               High := Middle;
+            else
+               Low := Middle;
+            end if;
+         end;
+      end loop;
+
+      return (if Item - N.Real (Levels_IQ4 (High - 1))
+                 < N.Real (Levels_IQ4 (High)) - Item
+              then High - 1 else High);
+   end Nearest_Level;
+
+   --  One run of thirty-two fitted against the table.
+   --
+   --  A first scale from the largest magnitude, then fifteen candidates
+   --  around it, each judged by how well the levels the table gives fit the
+   --  values -- the same comparison of products the other searches use, so
+   --  that a near-tie falls the same way.
+   procedure Fit_Table_Run
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Levels  : out Level_Run;
+      Scale   : out N.Real);
+
+   procedure Fit_Table_Run
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Levels  : out Level_Run;
+      Scale   : out N.Real)
+   is
+      Amax   : N.Real := 0.0;
+      Signed : N.Real := 0.0;
+
+      Sum_QX : N.Real := 0.0;
+      Sum_Q2 : N.Real := 0.0;
+      Best   : N.Real;
+   begin
+      for Index in Values'Range loop
+         if abs Values (Index) > Amax then
+            Amax := abs Values (Index);
+            Signed := Values (Index);
+         end if;
+      end loop;
+
+      if Amax < Nothing_There then
+         Levels := [others => 0];
+         Scale := 0.0;
+         return;
+      end if;
+
+      declare
+         Over : constant N.Real :=
+           1.0 / (-Signed / N.Real (Levels_IQ4 (0)));
+      begin
+         for Index in Values'Range loop
+            declare
+               Slot : constant Integer :=
+                 Nearest_Level (Over * Values (Index));
+               Level : constant N.Real := N.Real (Levels_IQ4 (Slot));
+               Weight : constant N.Real :=
+                 Weights (Weights'First + (Index - Values'First));
+            begin
+               Levels (Integer (Index - Values'First)) := Slot;
+               Sum_QX := Sum_QX + Weight * Level * Values (Index);
+               Sum_Q2 := Sum_Q2 + Weight * Level * Level;
+            end;
+         end loop;
+      end;
+
+      Scale := (if Sum_Q2 > 0.0 then Sum_QX / Sum_Q2 else 0.0);
+      Best := Scale * Sum_QX;
+
+      for Step in -7 .. 7 loop
+         declare
+            Try : constant N.Real :=
+              (N.Real (Step) + N.Real (Levels_IQ4 (0))) / Signed;
+
+            Try_QX : N.Real := 0.0;
+            Try_Q2 : N.Real := 0.0;
+         begin
+            for Index in Values'Range loop
+               declare
+                  Level : constant N.Real :=
+                    N.Real (Levels_IQ4 (Nearest_Level (Try * Values (Index))));
+                  Weight : constant N.Real :=
+                    Weights (Weights'First + (Index - Values'First));
+               begin
+                  Try_QX := Try_QX + Weight * Level * Values (Index);
+                  Try_Q2 := Try_Q2 + Weight * Level * Level;
+               end;
+            end loop;
+
+            if Try_Q2 > 0.0 and then Try_QX * Try_QX > Best * Try_Q2 then
+               Scale := Try_QX / Try_Q2;
+               Best := Scale * Try_QX;
+            end if;
+         end;
+      end loop;
+   end Fit_Table_Run;
 
    ------------
    -- Encode --
@@ -481,6 +902,181 @@ package body Quantizer is
                                 and 16#FF#);
                         end loop;
                      end if;
+                  end;
+
+               when Q3_K =>
+                  declare
+                     --  Sixteen runs of sixteen at three bits, signed: the
+                     --  scale of each run comes from Fit_Signed, the
+                     --  sixteen scales are themselves written as six-bit
+                     --  signed numbers split across twelve bytes, and each
+                     --  level's top bit lives in a mask of its own.
+                     Runs : constant Element_Count := Span / 16;
+
+                     Levels : Level_Run (0 .. Integer (Span) - 1) :=
+                       [others => 0];
+                     Scales : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+
+                     Widest : N.Real := 0.0;
+                     Signed : N.Real := 0.0;
+
+                     Packed : array (0 .. 11) of Interfaces.Unsigned_8 :=
+                       [others => 0];
+                  begin
+                     for Run in 0 .. Integer (Runs) - 1 loop
+                        declare
+                           At_Run : constant Element_Count :=
+                             First + Element_Count (Run) * 16;
+
+                           Here : Level_Run (0 .. 15);
+                           Fit  : N.Real;
+                        begin
+                           Fit_Signed
+                             (Values (At_Run .. At_Run + 15), 4, Here, Fit);
+
+                           Scales (Run) := Fit;
+
+                           for Index in Here'Range loop
+                              Levels (Run * 16 + Index) := Here (Index);
+                           end loop;
+
+                           if abs Fit > Widest then
+                              Widest := abs Fit;
+                              Signed := Fit;
+                           end if;
+                        end;
+                     end loop;
+
+                     if Signed /= 0.0 then
+                        declare
+                           Over : constant N.Real := -32.0 / Signed;
+                        begin
+                           for Run in 0 .. Integer (Runs) - 1 loop
+                              declare
+                                 Level : Integer :=
+                                   Integer'Max
+                                     (-32,
+                                      Integer'Min
+                                        (31,
+                                         Nearest (Over * Scales (Run))))
+                                   + 32;
+                              begin
+                                 if Run < 8 then
+                                    Packed (Run) := Packed (Run)
+                                      or Interfaces.Unsigned_8
+                                           (Level mod 16);
+                                 else
+                                    Packed (Run - 8) := Packed (Run - 8)
+                                      or Interfaces.Shift_Left
+                                           (Interfaces.Unsigned_8
+                                              (Level mod 16), 4);
+                                 end if;
+
+                                 Level := Level / 16;
+                                 Packed (Run mod 4 + 8) :=
+                                   Packed (Run mod 4 + 8)
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Unsigned_8 (Level mod 256),
+                                         2 * (Run / 4));
+                              end;
+                           end loop;
+
+                           Put_Half (Result, At_Byte + 108, 1.0 / Over);
+                        end;
+                     else
+                        Put_Half (Result, At_Byte + 108, 0.0);
+                     end if;
+
+                     for Which in Packed'Range loop
+                        Result (At_Byte + 96 + B.Byte_Count (Which)) :=
+                          B.Byte (Packed (Which));
+                     end loop;
+
+                     declare
+                        Held_D : constant N.Real :=
+                          N.To_Real
+                            (N.To_Half
+                               (if Signed /= 0.0
+                                then Signed / (-32.0) else 0.0));
+                     begin
+                        for Run in 0 .. Integer (Runs) - 1 loop
+                           declare
+                              Low : constant Interfaces.Unsigned_8 :=
+                                (if Run < 8
+                                 then Packed (Run) and 16#0F#
+                                 else Interfaces.Shift_Right
+                                        (Packed (Run - 8), 4));
+
+                              High : constant Interfaces.Unsigned_8 :=
+                                Interfaces.Shift_Right
+                                  (Packed (Run mod 4 + 8), 2 * (Run / 4))
+                                and 3;
+
+                              Step : constant Integer :=
+                                Integer (Low)
+                                + Integer (High) * 16 - 32;
+
+                              Apart : constant N.Real :=
+                                Held_D * N.Real (Step);
+                           begin
+                              if Apart /= 0.0 then
+                                 for Index in 0 .. 15 loop
+                                    Levels (Run * 16 + Index) :=
+                                      Integer'Max
+                                        (-4,
+                                         Integer'Min
+                                           (3,
+                                            Nearest
+                                              (Values
+                                                 (First
+                                                  + Element_Count
+                                                      (Run * 16 + Index))
+                                               / Apart)))
+                                      + 4;
+                                 end loop;
+                              end if;
+                           end;
+                        end loop;
+                     end;
+
+                     --  The top bit of every level into a mask, eight
+                     --  elements to a bit position and thirty-two bytes of
+                     --  it; the two that remain into the quants.
+                     declare
+                        At_Mask : Integer := 0;
+                        Bit     : Interfaces.Unsigned_8 := 1;
+                     begin
+                        for Index in 0 .. Integer (Span) - 1 loop
+                           if Levels (Index) > 3 then
+                              Result (At_Byte + B.Byte_Count (At_Mask)) :=
+                                B.Byte
+                                  (Interfaces.Unsigned_8
+                                     (Result
+                                        (At_Byte + B.Byte_Count (At_Mask)))
+                                   or Bit);
+                              Levels (Index) := Levels (Index) - 4;
+                           end if;
+
+                           At_Mask := At_Mask + 1;
+                           if At_Mask = Integer (Span) / 8 then
+                              At_Mask := 0;
+                              Bit := Interfaces.Shift_Left (Bit, 1);
+                           end if;
+                        end loop;
+                     end;
+
+                     for Group in 0 .. Integer (Span) / 128 - 1 loop
+                        for Index in 0 .. 31 loop
+                           Result (At_Byte + 32
+                                   + B.Byte_Count (Group * 32 + Index)) :=
+                             B.Byte
+                               (Levels (Group * 128 + Index)
+                                + Levels (Group * 128 + Index + 32) * 4
+                                + Levels (Group * 128 + Index + 64) * 16
+                                + Levels (Group * 128 + Index + 96) * 64);
+                        end loop;
+                     end loop;
                   end;
 
                when Q4_K =>
@@ -682,6 +1278,542 @@ package body Quantizer is
                                    + Levels (Pair * 64 + Index + 32) * 16);
                            end loop;
                         end loop;
+                     end;
+                  end;
+
+               when IQ4_NL | IQ4_XS =>
+                  declare
+                     Runs : constant Element_Count := Span / 32;
+
+                     Levels : Level_Run (0 .. Integer (Span) - 1) :=
+                       [others => 0];
+                     Scales : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+
+                     Widest : N.Real := 0.0;
+                     Signed : N.Real := 0.0;
+
+                     --  The whole super-block's spread, which the weights
+                     --  are measured against for the wide format and is not
+                     --  used by the narrow one.
+                     Squared : N.Real := 0.0;
+                     Sigma2  : N.Real;
+
+                     At_Quants : constant B.Byte_Count :=
+                       (if Into = IQ4_NL then 2 else 8);
+                  begin
+                     for Index in Element_Count range 0 .. Span - 1 loop
+                        Squared := Squared
+                          + Values (First + Index) * Values (First + Index);
+                     end loop;
+                     Sigma2 := 2.0 * Squared / N.Real (Span);
+                     pragma Unreferenced (Sigma2);
+
+                     for Run in 0 .. Integer (Runs) - 1 loop
+                        declare
+                           At_Run : constant Element_Count :=
+                             First + Element_Count (Run) * 32;
+
+                           Here    : Level_Run (0 .. 31);
+                           Weights : Real_Array (0 .. 31);
+                           Fit     : N.Real;
+                        begin
+                           --  Unweighted, the value squared is the weight,
+                           --  which is what the reference uses where no
+                           --  importance matrix was given.
+                           for Index in Element_Count range 0 .. 31 loop
+                              Weights (Index) :=
+                                Values (At_Run + Index)
+                                * Values (At_Run + Index);
+                           end loop;
+
+                           Fit_Table_Run
+                             (Values (At_Run .. At_Run + 31), Weights,
+                              Here, Fit);
+
+                           Scales (Run) := Fit;
+
+                           for Index in Here'Range loop
+                              Levels (Run * 32 + Index) := Here (Index);
+                           end loop;
+
+                           if abs Fit > Widest then
+                              Widest := abs Fit;
+                              Signed := Fit;
+                           end if;
+                        end;
+                     end loop;
+
+                     if Into = IQ4_XS then
+                        declare
+                           Scale : constant N.Real := -Signed / 32.0;
+                           Over  : constant N.Real :=
+                             (if Scale /= 0.0 then 1.0 / Scale else 0.0);
+
+                           Low_Half : array (0 .. 3) of Interfaces.Unsigned_8
+                             := [others => 0];
+                           High     : Interfaces.Unsigned_16 := 0;
+                        begin
+                           Put_Half (Result, At_Byte, Scale);
+
+                           for Run in 0 .. Integer (Runs) - 1 loop
+                              declare
+                                 Step : Integer :=
+                                   Integer'Max
+                                     (-32,
+                                      Integer'Min
+                                        (31,
+                                         Nearest (Over * Scales (Run))));
+                                 Apart : constant N.Real :=
+                                   Scale * N.Real (Step);
+                                 Back : constant N.Real :=
+                                   (if Apart /= 0.0 then 1.0 / Apart
+                                    else 0.0);
+                              begin
+                                 for Index in 0 .. 31 loop
+                                    Levels (Run * 32 + Index) :=
+                                      Nearest_Level
+                                        (Back
+                                         * Values
+                                             (First
+                                              + Element_Count
+                                                  (Run * 32 + Index)));
+                                 end loop;
+
+                                 Step := Step + 32;
+
+                                 if Run mod 2 = 0 then
+                                    Low_Half (Run / 2) :=
+                                      Interfaces.Unsigned_8 (Step mod 16);
+                                 else
+                                    Low_Half (Run / 2) := Low_Half (Run / 2)
+                                      or Interfaces.Shift_Left
+                                           (Interfaces.Unsigned_8
+                                              (Step mod 16), 4);
+                                 end if;
+
+                                 High := High
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Unsigned_16 (Step / 16),
+                                         2 * (Run mod 8));
+                              end;
+                           end loop;
+
+                           Result (At_Byte + 2) :=
+                             B.Byte (High and 16#FF#);
+                           Result (At_Byte + 3) :=
+                             B.Byte (Interfaces.Shift_Right (High, 8));
+
+                           for Which in Low_Half'Range loop
+                              Result (At_Byte + 4 + B.Byte_Count (Which)) :=
+                                B.Byte (Low_Half (Which));
+                           end loop;
+                        end;
+                     else
+                        declare
+                           Over : constant N.Real :=
+                             (if Scales (0) /= 0.0 then 1.0 / Scales (0)
+                              else 0.0);
+                        begin
+                           Put_Half (Result, At_Byte, Scales (0));
+
+                           for Index in 0 .. 31 loop
+                              Levels (Index) :=
+                                Nearest_Level
+                                  (Over
+                                   * Values
+                                       (First + Element_Count (Index)));
+                           end loop;
+                        end;
+                     end if;
+
+                     --  Two levels to a byte, the second sixteen positions
+                     --  along rather than one.
+                     for Group in 0 .. Integer (Span) / 32 - 1 loop
+                        for Index in 0 .. 15 loop
+                           Result (At_Byte + At_Quants
+                                   + B.Byte_Count (Group * 16 + Index)) :=
+                             B.Byte
+                               (Levels (Group * 32 + Index)
+                                + Levels (Group * 32 + 16 + Index) * 16);
+                        end loop;
+                     end loop;
+                  end;
+
+               when Q2_K =>
+                  declare
+                     --  Sixteen runs of sixteen with two bits apiece, and
+                     --  the sixteen scales and sixteen minimums packed four
+                     --  bits each into one byte a run. The search is the
+                     --  same one Q4_K and Q5_K use with the error counted
+                     --  by size rather than by square, which is what two
+                     --  bits a value make worth doing.
+                     Runs : constant Element_Count := Span / 16;
+
+                     Levels : Level_Run (0 .. Integer (Span) - 1) :=
+                       [others => 0];
+                     Scales : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+                     Least  : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+
+                     Widest_Scale : N.Real := 0.0;
+                     Widest_Least : N.Real := 0.0;
+
+                     Packed : array (0 .. 15) of Interfaces.Unsigned_8 :=
+                       [others => 0];
+                  begin
+                     for Run in 0 .. Integer (Runs) - 1 loop
+                        declare
+                           At_Run : constant Element_Count :=
+                             First + Element_Count (Run) * 16;
+
+                           Here    : Level_Run (0 .. 15);
+                           Weights : Real_Array (0 .. 15);
+                           Fit     : N.Real;
+                           Low     : N.Real;
+                        begin
+                           for Index in Element_Count range 0 .. 15 loop
+                              Weights (Index) := abs Values (At_Run + Index);
+                           end loop;
+
+                           Fit_Run_And_Min
+                             (Values (At_Run .. At_Run + 15), Weights, 3,
+                              Here, Low, Fit,
+                              From => -0.5, By => 0.1, Steps => 15,
+                              By_Size => True);
+
+                           Scales (Run) := Fit;
+                           Least (Run) := Low;
+
+                           for Index in Here'Range loop
+                              Levels (Run * 16 + Index) := Here (Index);
+                           end loop;
+
+                           if Fit > Widest_Scale then
+                              Widest_Scale := Fit;
+                           end if;
+                           if Low > Widest_Least then
+                              Widest_Least := Low;
+                           end if;
+                        end;
+                     end loop;
+
+                     if Widest_Scale > 0.0 then
+                        declare
+                           Over : constant N.Real := 15.0 / Widest_Scale;
+                        begin
+                           for Run in 0 .. Integer (Runs) - 1 loop
+                              Packed (Run) :=
+                                Interfaces.Unsigned_8
+                                  (Nearest (Over * Scales (Run)) mod 256);
+                           end loop;
+                        end;
+                        Put_Half (Result, At_Byte + 80, Widest_Scale / 15.0);
+                     else
+                        Put_Half (Result, At_Byte + 80, 0.0);
+                     end if;
+
+                     if Widest_Least > 0.0 then
+                        declare
+                           Over : constant N.Real := 15.0 / Widest_Least;
+                        begin
+                           for Run in 0 .. Integer (Runs) - 1 loop
+                              Packed (Run) := Packed (Run)
+                                or Interfaces.Shift_Left
+                                     (Interfaces.Unsigned_8
+                                        (Nearest (Over * Least (Run))
+                                         mod 256),
+                                      4);
+                           end loop;
+                        end;
+                        Put_Half (Result, At_Byte + 82, Widest_Least / 15.0);
+                     else
+                        Put_Half (Result, At_Byte + 82, 0.0);
+                     end if;
+
+                     for Which in Packed'Range loop
+                        Result (At_Byte + B.Byte_Count (Which)) :=
+                          B.Byte (Packed (Which));
+                     end loop;
+
+                     declare
+                        Held_D : constant N.Real :=
+                          N.To_Real
+                            (N.To_Half
+                               (if Widest_Scale > 0.0
+                                then Widest_Scale / 15.0 else 0.0));
+                        Held_M : constant N.Real :=
+                          N.To_Real
+                            (N.To_Half
+                               (if Widest_Least > 0.0
+                                then Widest_Least / 15.0 else 0.0));
+                     begin
+                        for Run in 0 .. Integer (Runs) - 1 loop
+                           declare
+                              Apart : constant N.Real :=
+                                Held_D
+                                * N.Real (Packed (Run) and 16#0F#);
+                              Lift : constant N.Real :=
+                                Held_M
+                                * N.Real
+                                    (Interfaces.Shift_Right (Packed (Run), 4));
+                           begin
+                              if Apart /= 0.0 then
+                                 for Index in 0 .. 15 loop
+                                    Levels (Run * 16 + Index) :=
+                                      Integer'Max
+                                        (0,
+                                         Integer'Min
+                                           (3,
+                                            Nearest
+                                              ((Values
+                                                  (First
+                                                   + Element_Count
+                                                       (Run * 16 + Index))
+                                                + Lift) / Apart)));
+                                 end loop;
+                              end if;
+                           end;
+                        end loop;
+                     end;
+
+                     --  Four levels to a byte, a hundred and twenty-eight
+                     --  elements at a time.
+                     for Group in 0 .. Integer (Span) / 128 - 1 loop
+                        for Index in 0 .. 31 loop
+                           Result (At_Byte + 16
+                                   + B.Byte_Count (Group * 32 + Index)) :=
+                             B.Byte
+                               (Levels (Group * 128 + Index)
+                                + Levels (Group * 128 + Index + 32) * 4
+                                + Levels (Group * 128 + Index + 64) * 16
+                                + Levels (Group * 128 + Index + 96) * 64);
+                        end loop;
+                     end loop;
+                  end;
+
+               when Q5_K =>
+                  declare
+                     --  Q4_K's search with a wider window and twice the
+                     --  levels: sixteen candidates from a half below rather
+                     --  than twenty-one from one below, and thirty-one
+                     --  levels a run rather than fifteen. The fifth bit of
+                     --  each level lives apart, two bits a byte across four
+                     --  groups of sixty-four.
+                     Runs : constant Element_Count := Span / 32;
+
+                     Levels : Level_Run (0 .. Integer (Span) - 1) :=
+                       [others => 0];
+                     Scales : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+                     Least  : array (0 .. Integer (Runs) - 1) of N.Real :=
+                       [others => 0.0];
+
+                     Widest_Scale : N.Real := 0.0;
+                     Widest_Least : N.Real := 0.0;
+                  begin
+                     for Run in 0 .. Integer (Runs) - 1 loop
+                        declare
+                           At_Run : constant Element_Count :=
+                             First + Element_Count (Run) * 32;
+
+                           Here    : Level_Run (0 .. 31);
+                           Weights : Real_Array (0 .. 31);
+
+                           Squared : N.Real := 0.0;
+                           Fit     : N.Real;
+                           Low     : N.Real;
+                        begin
+                           for Index in Element_Count range 0 .. 31 loop
+                              Squared := Squared
+                                + Values (At_Run + Index)
+                                  * Values (At_Run + Index);
+                           end loop;
+
+                           declare
+                              Middling : constant N.Real :=
+                                N.Real (N.Sqrt
+                                          (N.Wide_Real (Squared / 32.0)));
+                           begin
+                              for Index in Element_Count range 0 .. 31 loop
+                                 Weights (Index) :=
+                                   Middling + abs Values (At_Run + Index);
+                              end loop;
+                           end;
+
+                           Fit_Run_And_Min
+                             (Values (At_Run .. At_Run + 31), Weights, 31,
+                              Here, Low, Fit,
+                              From => -0.5, By => 0.1, Steps => 15);
+
+                           Scales (Run) := Fit;
+                           Least (Run) := Low;
+
+                           for Index in Here'Range loop
+                              Levels (Run * 32 + Index) := Here (Index);
+                           end loop;
+
+                           if Fit > Widest_Scale then
+                              Widest_Scale := Fit;
+                           end if;
+                           if Low > Widest_Least then
+                              Widest_Least := Low;
+                           end if;
+                        end;
+                     end loop;
+
+                     declare
+                        Over_Scale : constant N.Real :=
+                          (if Widest_Scale > 0.0
+                           then 63.0 / Widest_Scale else 0.0);
+                        Over_Least : constant N.Real :=
+                          (if Widest_Least > 0.0
+                           then 63.0 / Widest_Least else 0.0);
+
+                        Packed : array (0 .. 11) of Interfaces.Unsigned_8 :=
+                          [others => 0];
+                     begin
+                        for Run in 0 .. Integer (Runs) - 1 loop
+                           declare
+                              Step_S : constant Interfaces.Unsigned_8 :=
+                                Interfaces.Unsigned_8
+                                  (Integer'Min
+                                     (63,
+                                      Nearest (Over_Scale * Scales (Run))));
+                              Step_M : constant Interfaces.Unsigned_8 :=
+                                Interfaces.Unsigned_8
+                                  (Integer'Min
+                                     (63,
+                                      Nearest (Over_Least * Least (Run))));
+                           begin
+                              if Run < 4 then
+                                 Packed (Run) := Step_S;
+                                 Packed (Run + 4) := Step_M;
+                              else
+                                 Packed (Run + 4) :=
+                                   (Step_S and 16#0F#)
+                                   or Interfaces.Shift_Left
+                                        (Step_M and 16#0F#, 4);
+                                 Packed (Run - 4) := Packed (Run - 4)
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Shift_Right (Step_S, 4),
+                                         6);
+                                 Packed (Run) := Packed (Run)
+                                   or Interfaces.Shift_Left
+                                        (Interfaces.Shift_Right (Step_M, 4),
+                                         6);
+                              end if;
+                           end;
+                        end loop;
+
+                        Put_Half (Result, At_Byte, Widest_Scale / 63.0);
+                        Put_Half (Result, At_Byte + 2, Widest_Least / 63.0);
+
+                        for Which in Packed'Range loop
+                           Result (At_Byte + 4 + B.Byte_Count (Which)) :=
+                             B.Byte (Packed (Which));
+                        end loop;
+
+                        declare
+                           Held_D : constant N.Real :=
+                             N.To_Real (N.To_Half (Widest_Scale / 63.0));
+                           Held_M : constant N.Real :=
+                             N.To_Real (N.To_Half (Widest_Least / 63.0));
+                        begin
+                           for Run in 0 .. Integer (Runs) - 1 loop
+                              declare
+                                 Step_S, Step_M : Interfaces.Unsigned_8;
+                              begin
+                                 if Run < 4 then
+                                    Step_S := Packed (Run) and 63;
+                                    Step_M := Packed (Run + 4) and 63;
+                                 else
+                                    Step_S :=
+                                      (Packed (Run + 4) and 16#0F#)
+                                      or Interfaces.Shift_Left
+                                           (Interfaces.Shift_Right
+                                              (Packed (Run - 4), 6), 4);
+                                    Step_M :=
+                                      Interfaces.Shift_Right
+                                        (Packed (Run + 4), 4)
+                                      or Interfaces.Shift_Left
+                                           (Interfaces.Shift_Right
+                                              (Packed (Run), 6), 4);
+                                 end if;
+
+                                 declare
+                                    Apart : constant N.Real :=
+                                      Held_D * N.Real (Step_S);
+                                    Lift  : constant N.Real :=
+                                      Held_M * N.Real (Step_M);
+                                 begin
+                                    if Apart /= 0.0 then
+                                       for Index in 0 .. 31 loop
+                                          Levels (Run * 32 + Index) :=
+                                            Integer'Max
+                                              (0,
+                                               Integer'Min
+                                                 (31,
+                                                  Nearest
+                                                    ((Values
+                                                        (First
+                                                         + Element_Count
+                                                             (Run * 32
+                                                              + Index))
+                                                      + Lift) / Apart)));
+                                       end loop;
+                                    end if;
+                                 end;
+                              end;
+                           end loop;
+                        end;
+
+                        --  Four bits a level in the nibbles, and the fifth
+                        --  apart: two bits of each of the thirty-two bytes
+                        --  of qh, one group of sixty-four at a time.
+                        declare
+                           Low_Bit  : Interfaces.Unsigned_8 := 1;
+                           High_Bit : Interfaces.Unsigned_8 := 2;
+                        begin
+                           for Group in 0 .. Integer (Span) / 64 - 1 loop
+                              for Index in 0 .. 31 loop
+                                 declare
+                                    A : Integer :=
+                                      Levels (Group * 64 + Index);
+                                    C : Integer :=
+                                      Levels (Group * 64 + Index + 32);
+                                    At_High : constant B.Byte_Count :=
+                                      At_Byte + 16 + B.Byte_Count (Index);
+                                 begin
+                                    if A > 15 then
+                                       A := A - 16;
+                                       Result (At_High) :=
+                                         B.Byte
+                                           (Interfaces.Unsigned_8
+                                              (Result (At_High)) or Low_Bit);
+                                    end if;
+
+                                    if C > 15 then
+                                       C := C - 16;
+                                       Result (At_High) :=
+                                         B.Byte
+                                           (Interfaces.Unsigned_8
+                                              (Result (At_High))
+                                            or High_Bit);
+                                    end if;
+
+                                    Result (At_Byte + 48
+                                            + B.Byte_Count
+                                                (Group * 32 + Index)) :=
+                                      B.Byte (A + C * 16);
+                                 end;
+                              end loop;
+
+                              Low_Bit := Interfaces.Shift_Left (Low_Bit, 2);
+                              High_Bit := Interfaces.Shift_Left (High_Bit, 2);
+                           end loop;
+                        end;
                      end;
                   end;
 
@@ -887,6 +2019,210 @@ package body Quantizer is
 
       return Result;
    end Encode;
+
+   ---------------------
+   -- Encode_Weighted --
+   ---------------------
+
+   function Encode_Weighted
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target) return Byte_Array
+   is
+      Span   : constant Element_Count := Block_Of (Into);
+      Width  : constant B.Byte_Count := Bytes_Of (Into);
+      Blocks : constant Element_Count := Values'Length / Span;
+
+      Result : Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
+        [others => 0];
+   begin
+      --  Only Q4_K takes a matrix here. The rest fall back to the plain
+      --  encoding, which is what the reference does for a format whose
+      --  weighted path it has not been given.
+      if Into /= Q4_K then
+         return Encode (Values, Into);
+      end if;
+
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant Element_Count := Values'First + Block * Span;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Runs : constant Element_Count := Span / 32;
+
+            Levels : Level_Run (0 .. Integer (Span) - 1) := [others => 0];
+
+            Scales : Real_Array (0 .. Runs - 1) := [others => 0.0];
+            Least  : Real_Array (0 .. Runs - 1) := [others => 0.0];
+
+            --  What each run's weights add up to, which is what the fit of
+            --  the scales below is itself weighted by: a run the corpus
+            --  leaned on decides more of the super-block's scale.
+            Heft : Real_Array (0 .. Runs - 1) := [others => 0.0];
+
+            --  The whole super-block's spread, which the weighting is
+            --  measured against rather than each run's own.
+            Squared : N.Real := 0.0;
+            Sigma2  : N.Real;
+         begin
+            for Index in Element_Count range 0 .. Span - 1 loop
+               Squared := Squared
+                 + Values (First + Index) * Values (First + Index);
+            end loop;
+            Sigma2 := 2.0 * Squared / N.Real (Span);
+
+            for Run in 0 .. Runs - 1 loop
+               declare
+                  At_Run : constant Element_Count := First + Run * 32;
+
+                  Here    : Level_Run (0 .. 31);
+                  Mine    : Real_Array (0 .. 31);
+                  Sum     : N.Real := 0.0;
+                  Fit     : N.Real;
+                  Low     : N.Real;
+               begin
+                  for Index in Element_Count range 0 .. 31 loop
+                     Mine (Index) :=
+                       --  The matrix is one row long and every row of the
+                       --  matrix meets the same columns, so a position in
+                       --  the whole tensor asks the matrix about its column
+                       --  and not about itself.
+                       Weights
+                         (Weights'First
+                          + (Block * Span + Run * 32 + Index)
+                            mod Weights'Length)
+                       * N.Real
+                           (N.Sqrt
+                              (N.Wide_Real
+                                 (Sigma2
+                                  + Values (At_Run + Index)
+                                    * Values (At_Run + Index))));
+                     Sum := Sum + Mine (Index);
+                  end loop;
+
+                  Heft (Run) := Sum;
+
+                  Fit_Run_And_Min
+                    (Values (At_Run .. At_Run + 31), Mine, 15, Here, Low, Fit,
+                     From => -0.9, By => 0.05, Steps => 36, Weighed => True);
+
+                  Scales (Run) := Fit;
+                  Least (Run) := Low;
+
+                  for Index in Here'Range loop
+                     Levels (Integer (Run) * 32 + Index) := Here (Index);
+                  end loop;
+               end;
+            end loop;
+
+            declare
+               Steps_S, Steps_M : Level_Run (0 .. Integer (Runs) - 1);
+               Block_D, Block_M : N.Real;
+
+               Packed : array (0 .. 11) of Interfaces.Unsigned_8 :=
+                 [others => 0];
+            begin
+               Fit_Positives (Scales, Heft, 63, Steps_S, Block_D);
+               Fit_Positives (Least, Heft, 63, Steps_M, Block_M);
+
+               for Run in 0 .. Integer (Runs) - 1 loop
+                  declare
+                     Step_S : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8 (Steps_S (Run) mod 256);
+                     Step_M : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8 (Steps_M (Run) mod 256);
+                  begin
+                     if Run < 4 then
+                        Packed (Run) := Step_S;
+                        Packed (Run + 4) := Step_M;
+                     else
+                        Packed (Run + 4) :=
+                          (Step_S and 16#0F#)
+                          or Interfaces.Shift_Left (Step_M and 16#0F#, 4);
+                        Packed (Run - 4) := Packed (Run - 4)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Step_S, 4), 6);
+                        Packed (Run) := Packed (Run)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Shift_Right (Step_M, 4), 6);
+                     end if;
+                  end;
+               end loop;
+
+               Put_Half (Result, At_Byte, Block_D);
+               Put_Half (Result, At_Byte + 2, Block_M);
+
+               for Which in Packed'Range loop
+                  Result (At_Byte + 4 + B.Byte_Count (Which)) :=
+                    B.Byte (Packed (Which));
+               end loop;
+
+               declare
+                  Held_D : constant N.Real :=
+                    N.To_Real (N.To_Half (Block_D));
+                  Held_M : constant N.Real :=
+                    N.To_Real (N.To_Half (Block_M));
+               begin
+                  for Run in 0 .. Integer (Runs) - 1 loop
+                     declare
+                        Step_S, Step_M : Interfaces.Unsigned_8;
+                     begin
+                        if Run < 4 then
+                           Step_S := Packed (Run) and 63;
+                           Step_M := Packed (Run + 4) and 63;
+                        else
+                           Step_S :=
+                             (Packed (Run + 4) and 16#0F#)
+                             or Interfaces.Shift_Left
+                                  (Interfaces.Shift_Right
+                                     (Packed (Run - 4), 6), 4);
+                           Step_M :=
+                             Interfaces.Shift_Right (Packed (Run + 4), 4)
+                             or Interfaces.Shift_Left
+                                  (Interfaces.Shift_Right
+                                     (Packed (Run), 6), 4);
+                        end if;
+
+                        declare
+                           Apart : constant N.Real :=
+                             Held_D * N.Real (Step_S);
+                           Lift  : constant N.Real :=
+                             Held_M * N.Real (Step_M);
+                        begin
+                           if Apart /= 0.0 then
+                              for Index in 0 .. 31 loop
+                                 Levels (Run * 32 + Index) :=
+                                   Integer'Max
+                                     (0,
+                                      Integer'Min
+                                        (15,
+                                         Nearest
+                                           ((Values
+                                               (First
+                                                + Element_Count
+                                                    (Run * 32 + Index))
+                                             + Lift) / Apart)));
+                              end loop;
+                           end if;
+                        end;
+                     end;
+                  end loop;
+               end;
+
+               for Pair in 0 .. Integer (Span) / 64 - 1 loop
+                  for Index in 0 .. 31 loop
+                     Result (At_Byte + 16
+                             + B.Byte_Count (Pair * 32 + Index)) :=
+                       B.Byte (Levels (Pair * 64 + Index)
+                               + Levels (Pair * 64 + Index + 32) * 16);
+                  end loop;
+               end loop;
+            end;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Weighted;
 
    -----------
    -- Named --

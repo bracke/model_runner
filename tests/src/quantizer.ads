@@ -32,10 +32,19 @@ with Model_Runner.GGUF;
 --  company where two candidates are near-tied, and whether they do is a
 --  measurement rather than a matter of opinion.
 --
---  Q4_K searches too, and over a scale AND a minimum together: twenty-one
---  candidate inverse scales, each solving a weighted least-squares fit for
---  both at once and keeping whichever pair fits best. Q2_K, Q3_K and Q5_K
---  are the same family and are not here yet.
+--  Q4_K and Q5_K search too, and over a scale AND a minimum together: a
+--  window of candidate inverse scales, each solving a weighted
+--  least-squares fit for both at once and keeping whichever pair fits best.
+--  The two differ only in the window -- twenty-one steps from -1.0 by 0.1
+--  against sixteen from -0.5 -- and in how many levels they have to spend.
+--  Q2_K and Q3_K are the same family with fewer levels, and Q3_K refines
+--  its levels one at a time instead of sweeping.
+--
+--  IQ4_NL and IQ4_XS do not name a number at all: a nibble indexes a table
+--  of sixteen levels, spaced finely near zero, and a value is quantized by
+--  a binary search of that table. Fifteen candidate scales are tried around
+--  the one the largest magnitude suggests, and IQ4_XS then writes the eight
+--  scales it found as six-bit numbers split across two fields.
 --
 --  Every rule below is transcribed from `ggml/src/ggml-quants.c`, including
 --  the parts that look like mistakes and are not: the truncation toward zero
@@ -52,7 +61,9 @@ package Quantizer is
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
 
    --  The formats this can write.
-   type Target is (Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K, Q6_K);
+   type Target is
+     (Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K,
+      IQ4_NL, IQ4_XS);
 
    --  Elements in one block. Thirty-two for the ones that carry a scale
    --  each, and a super-block of two hundred and fifty-six for the k-quant,
@@ -63,7 +74,8 @@ package Quantizer is
    function Block_Of (Item : Target) return Element_Count
    is (case Item is
           when Q8_0 | Q4_0 | Q4_1 | Q5_0 | Q5_1 => 32,
-          when Q4_K | Q6_K => 256);
+          when Q2_K | Q3_K | Q4_K | Q5_K | Q6_K | IQ4_XS => 256,
+          when IQ4_NL => 32);
 
    --  Bytes one block occupies.
    --
@@ -76,8 +88,13 @@ package Quantizer is
           when Q4_1 => 20,
           when Q5_0 => 22,
           when Q5_1 => 24,
+          when Q2_K => 84,
+          when Q3_K => 110,
           when Q4_K => 144,
-          when Q6_K => 210);
+          when Q5_K => 176,
+          when Q6_K => 210,
+          when IQ4_NL => 18,
+          when IQ4_XS => 136);
 
    --  The tensor type each target writes, for the header to name.
    --
@@ -90,8 +107,13 @@ package Quantizer is
           when Q4_1 => Model_Runner.GGUF.Type_Q4_1,
           when Q5_0 => Model_Runner.GGUF.Type_Q5_0,
           when Q5_1 => Model_Runner.GGUF.Type_Q5_1,
+          when Q2_K => Model_Runner.GGUF.Type_Q2_K,
+          when Q3_K => Model_Runner.GGUF.Type_Q3_K,
           when Q4_K => Model_Runner.GGUF.Type_Q4_K,
-          when Q6_K => Model_Runner.GGUF.Type_Q6_K);
+          when Q5_K => Model_Runner.GGUF.Type_Q5_K,
+          when Q6_K => Model_Runner.GGUF.Type_Q6_K,
+          when IQ4_NL => Model_Runner.GGUF.Type_IQ4_NL,
+          when IQ4_XS => Model_Runner.GGUF.Type_IQ4_XS);
 
    --  Encode values into blocks of a format.
    --
@@ -99,6 +121,34 @@ package Quantizer is
    --  @param Into Which format to write.
    --  @return The encoded bytes, indexed from zero.
    function Encode (Values : Real_Array; Into : Target) return Byte_Array;
+
+   --  The same, weighted by how much each input channel matters.
+   --
+   --  An importance matrix says, for each column of a weight matrix, how
+   --  much the activations that meet it actually carried over a corpus. A
+   --  quantizer given one spends its levels where the model spends its
+   --  attention, and llama.cpp's `--imatrix` is this.
+   --
+   --  IT IS NOT THE SAME SEARCH WITH A WEIGHT VECTOR ADDED. The reference
+   --  takes a different path for a weighted quantization: the candidate
+   --  window is wider and finer -- thirty-seven steps from -0.9 by 0.05,
+   --  against twenty-one from -1.0 by 0.1 -- and the sub-block scales it
+   --  finds are then fitted by a search of their own rather than divided by
+   --  their largest. Two searches where the plain path has one.
+   --
+   --  Weights must be as long as one row of the matrix, and are the same for
+   --  every row of it: the matrix says what a column is worth, and a column
+   --  is worth that wherever it appears.
+   --
+   --  @param Values Values to encode, a whole number of blocks of them.
+   --  @param Weights One row's worth of importance, repeated per row by the
+   --    caller slicing Values a row at a time.
+   --  @param Into Which format to write.
+   --  @return The encoded bytes, indexed from zero.
+   function Encode_Weighted
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target) return Byte_Array;
 
    --  What a name says, or a name the caller mistyped.
    --
@@ -118,7 +168,12 @@ package Quantizer is
           when Q4_1 => "q4_1",
           when Q5_0 => "q5_0",
           when Q5_1 => "q5_1",
+          when Q2_K => "q2_k",
+          when Q3_K => "q3_k",
           when Q4_K => "q4_k",
-          when Q6_K => "q6_k");
+          when Q5_K => "q5_k",
+          when Q6_K => "q6_k",
+          when IQ4_NL => "iq4_nl",
+          when IQ4_XS => "iq4_xs");
 
 end Quantizer;

@@ -49,6 +49,7 @@ with Project_Tools.Text;
 with Packaging;
 with Pristine;
 with Host_Load;
+with Imatrix_Run;
 with Perplexity_Run;
 with Quantize_Run;
 with Speed_Run;
@@ -1096,6 +1097,61 @@ begin
          end if;
       end;
 
+   elsif Command = "imatrix" then
+      --  Collect an importance matrix by running a corpus through the
+      --  model, which is the other half of --imatrix above.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Number (Name : String; Default : Natural) return Natural is
+            Said : constant String := Option (Name, "");
+         begin
+            if Said = "" then
+               return Default;
+            end if;
+            return Natural'Value (Said);
+         exception
+            when others =>
+               return Default;
+         end Number;
+
+         Result : Imatrix_Run.Report;
+      begin
+         if Option ("--model", "") = "" or else Option ("--out", "") = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "imatrix: --model and --out are required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         Imatrix_Run.Run
+           (Path    => Option ("--model", ""),
+            Text    =>
+              Option ("--text", "../tests/fixtures/perplexity-corpus.txt"),
+            Chunk   => Positive'Max (2, Number ("--chunk", 512)),
+            Chunks  => Number ("--chunks", 0),
+            Threads => Number ("--threads",
+                               Model_Runner.Platform.Core_Count - 1),
+            Into    => Option ("--out", ""),
+            Result  => Result);
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Imatrix_Run.Summary (Result));
+
+         if not Result.Ran then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
    elsif Command = "quantize" then
       --  Write a model out again in another format, and say whether the
       --  bytes are the ones another implementation writes.
@@ -1126,6 +1182,7 @@ begin
             Format  => Option ("--format", ""),
             Into    => Option ("--out", ""),
             Against => Option ("--against", ""),
+            Matrix  => Option ("--imatrix", ""),
             Result  => Result);
 
          Ada.Text_IO.Put_Line

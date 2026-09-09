@@ -30,7 +30,11 @@ package body Quantize_Run is
    use type G.Tensor_Type;
    use type G.U64;
    use type G.Value_Type;
+   subtype Element_Count is N.Element_Count;
+
    use type B.Byte;
+   use type N.Real;
+   use type T.Real_Array_Access;
    use type N.Element_Count;
    use type B.Byte_Array_Access;
    use type Ada.Streams.Stream_Element_Offset;
@@ -55,6 +59,10 @@ package body Quantize_Run is
         Natural'Image (Item.Tensors) & " tensors,"
         & Natural'Image (Item.Converted) & " converted,"
         & Natural'Image (Item.Copied) & " copied"
+        & (if Item.Weighted + Item.Unweighted = 0 then ""
+           else "," & Natural'Image (Item.Weighted) & " weighted,"
+                & Natural'Image (Item.Unweighted) & " not named by the "
+                & "matrix")
         & (if Item.Bytes_Out = 0 then ""
            else ";" & Long_Long_Integer'Image (Item.Bytes_In)
                 & " bytes in," & Long_Long_Integer'Image (Item.Bytes_Out)
@@ -72,6 +80,85 @@ package body Quantize_Run is
                         & " bytes apart in all"))
         & "; took " & Say.Image (Long_Float (Item.Seconds), 2) & " s";
    end Summary;
+
+   -----------------
+   -- Read_Matrix --
+   -----------------
+
+   --  One tensor's importance, as a vector over its columns.
+   --
+   --  The file holds the sum of the squares of everything that met each
+   --  column and, beside it, how many rows went into that sum. What a
+   --  caller wants is the mean, so the division happens here: llama.cpp
+   --  does the same, and a count of zero is a column nothing reached, which
+   --  is given a weight of one rather than an infinity.
+   procedure Read_Matrix
+     (From   : in out Files.File_Source;
+      File   : Containers.Container;
+      Sums   : Positive;
+      Counts : Positive;
+      Row    : Element_Count;
+      Into   : out T.Real_Array_Access;
+      Status : out E.Error_Info);
+
+   procedure Read_Matrix
+     (From   : in out Files.File_Source;
+      File   : Containers.Container;
+      Sums   : Positive;
+      Counts : Positive;
+      Row    : Element_Count;
+      Into   : out T.Real_Array_Access;
+      Status : out E.Error_Info)
+   is
+      Raw : B.Byte_Array_Access :=
+        new B.Byte_Array (0 .. B.Byte_Count (Row) * 4 - 1);
+      Tally : B.Byte_Array (0 .. 3) := [others => 0];
+      Ok : Boolean;
+   begin
+      Into := null;
+
+      Files.Read
+        (From, B.Byte_Count (Containers.Tensor_Offset (File, Sums)),
+         Raw.all, Status);
+      if E.Is_Error (Status) then
+         B.Free (Raw);
+         return;
+      end if;
+
+      Files.Read
+        (From, B.Byte_Count (Containers.Tensor_Offset (File, Counts)),
+         Tally, Status);
+      if E.Is_Error (Status) then
+         B.Free (Raw);
+         return;
+      end if;
+
+      T.Allocate (Row, Into);
+
+      declare
+         Held : T.Real_Array (0 .. 0);
+      begin
+         Q.Decode_Blocks (G.Type_F32, Tally, 0, 1, Held, Ok);
+
+         if not Ok or else Held (0) <= 0.0 then
+            Into.all := [others => 1.0];
+            B.Free (Raw);
+            return;
+         end if;
+
+         Q.Decode_Blocks (G.Type_F32, Raw.all, 0, Row, Into.all, Ok);
+
+         if not Ok then
+            Into.all := [others => 1.0];
+         else
+            for Index in Into.all'Range loop
+               Into.all (Index) := Into.all (Index) / Held (0);
+            end loop;
+         end if;
+      end;
+
+      B.Free (Raw);
+   end Read_Matrix;
 
    -------------
    -- Compare --
@@ -200,6 +287,7 @@ package body Quantize_Run is
       Format  : String;
       Into    : String;
       Against : String;
+      Matrix  : String;
       Result  : out Report)
    is
       procedure Note (Item : String);
@@ -240,9 +328,35 @@ package body Quantize_Run is
          Item   : Containers.Container;
          Status : E.Error_Info;
 
+         --  The importance matrix, read as the container it is: one vector
+         --  a weight tensor named `<tensor>.in_sum2`, and beside it a
+         --  `<tensor>.counts` holding how many rows went into the sum.
+         Weights_Source : aliased Files.File_Source;
+         Weights_File   : Containers.Container;
+         Have_Weights   : Boolean := False;
+
          Maker  : Fixtures.Builder;
          Made   : B.Byte_Array_Access := null;
       begin
+         if Matrix /= "" then
+            Files.Open (Weights_Source, Matrix, Status => Status);
+            if E.Is_Error (Status) then
+               Note ("the matrix would not open: "
+                     & E.Error_Code'Image (Status.Code));
+               return;
+            end if;
+
+            Containers.Reader.Parse
+              (Weights_File, Weights_Source, Status => Status);
+            if E.Is_Error (Status) then
+               Files.Close (Weights_Source);
+               Note ("the matrix would not parse: "
+                     & E.Error_Code'Image (Status.Code));
+               return;
+            end if;
+
+            Have_Weights := True;
+         end if;
          Files.Open (Source, Path, Status => Status);
          if E.Is_Error (Status) then
             Note ("the model would not open: "
@@ -473,15 +587,67 @@ package body Quantize_Run is
                      end if;
 
                      declare
-                        Written : constant B.Byte_Array :=
-                          Quantizer.Encode (Values.all, Wanted);
+                        --  What the matrix says this tensor's columns are
+                        --  worth, if it names it. The sums it holds are
+                        --  over however many rows went through, so they are
+                        --  divided by that count before anything reads
+                        --  them.
+                        Row : constant Element_Count :=
+                          Element_Count
+                            (Containers.Tensor_Dimension (Item, Index, 1));
+
+                        Named : constant Natural :=
+                          (if Have_Weights
+                           then Containers.Find_Tensor
+                                  (Weights_File, Name & ".in_sum2")
+                           else 0);
+
+                        Counted : constant Natural :=
+                          (if Named = 0 then 0
+                           else Containers.Find_Tensor
+                                  (Weights_File, Name & ".counts"));
+
+                        Use_Matrix : constant Boolean :=
+                          Named /= 0 and then Counted /= 0
+                          and then Containers.Tensor_Elements
+                                     (Weights_File, Named) = G.U64 (Row);
+
+                        Heft : T.Real_Array_Access := null;
                      begin
-                        Fixtures.Add_Tensor
-                          (Maker, Name, Shape,
-                           Quantizer.Type_Of (Wanted), Written);
-                        Result.Bytes_Out :=
-                          Result.Bytes_Out
-                          + Long_Long_Integer (Written'Length);
+                        if Use_Matrix then
+                           Read_Matrix
+                             (Weights_Source, Weights_File, Named, Counted,
+                              Row, Heft, Status);
+
+                           if E.Is_Error (Status) then
+                              T.Free (Values);
+                              B.Free (Raw);
+                              Note ("the matrix would not read for " & Name);
+                              goto Give_Up;
+                           end if;
+                        end if;
+
+                        declare
+                           Written : constant B.Byte_Array :=
+                             (if Heft = null
+                              then Quantizer.Encode (Values.all, Wanted)
+                              else Quantizer.Encode_Weighted
+                                     (Values.all, Heft.all, Wanted));
+                        begin
+                           Fixtures.Add_Tensor
+                             (Maker, Name, Shape,
+                              Quantizer.Type_Of (Wanted), Written);
+                           Result.Bytes_Out :=
+                             Result.Bytes_Out
+                             + Long_Long_Integer (Written'Length);
+                        end;
+
+                        if Heft /= null then
+                           T.Free (Heft);
+                           Result.Weighted := Result.Weighted + 1;
+                        elsif Have_Weights then
+                           Result.Unweighted := Result.Unweighted + 1;
+                        end if;
                      end;
 
                      T.Free (Values);
@@ -549,6 +715,10 @@ package body Quantize_Run is
          Result.Ran := True;
 
          <<Give_Up>>
+         if Have_Weights then
+            Containers.Close (Weights_File);
+            Files.Close (Weights_Source);
+         end if;
          Containers.Close (Item);
          Files.Close (Source);
       end;

@@ -7,7 +7,6 @@ with System.Storage_Elements;
 with Model_Runner.Arithmetic;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
-with Model_Runner.Text;
 with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
@@ -89,6 +88,10 @@ package body Model_Runner.Llama is
    package P renames Model_Runner.Progress;
    package T renames Model_Runner.Tensors;
    package Workers_CPU renames Model_Runner.Backend.CPU;
+
+   --  Which matrix a view is, for a watcher. Declared here because the
+   --  product wrappers below are above its body.
+   function Named_As (Item : Model'Class; Which : T.View) return String;
 
    --  Bytes one cache element occupies, in each of the two storages a
    --  session may ask for. Exact is the correctness baseline every published
@@ -1069,6 +1072,19 @@ package body Model_Runner.Llama is
          if E.Is_Error (Status) then
             E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
          end if;
+
+         --  Where this matrix is, against what it is called. This is the
+         --  one moment the two are in the same place: a view has an address
+         --  and no name, and a name is what a watcher asks about.
+         if E.Is_Ok (Status) and then Item.Named /= null then
+            if Item.Named_Up < Item.Named.all'Length then
+               Item.Named_Up := Item.Named_Up + 1;
+               Item.Named.all (Item.Named_Up) :=
+                 (Base   => Result.Base,
+                  Offset => Result.Offset,
+                  Name   => Model_Runner.Text.To_Bounded (Name));
+            end if;
+         end if;
       end;
    end Resolve;
 
@@ -1730,6 +1746,12 @@ package body Model_Runner.Llama is
       end if;
 
       Mem.Initialize (Item.Accounting, Bounds, Bounds.Max_Model_Bytes);
+
+      --  Room for what every matrix will be called. One entry a tensor the
+      --  file holds, which is more than the matrices among them and is the
+      --  bound rather than the count.
+      Item.Named := new Named_View_List (1 .. Containers.Tensor_Count (Source));
+      Item.Named_Up := 0;
 
       --  The backend's own account of what it can do, taken once and kept
       --  with the model. The case has no others: a backend added to the
@@ -3046,6 +3068,17 @@ package body Model_Runner.Llama is
       Target : T.Real_Array_Access;
       Status : out E.Error_Info) is
    begin
+      --  What this product was given, where anything asked to be told.
+      if Item.Seen /= null then
+         declare
+            Which : constant String := Named_As (Item.Owner.all, Weight);
+         begin
+            if Which /= "" then
+               Item.Seen.Note (Which, Vector.all, 1);
+            end if;
+         end;
+      end if;
+
       case Item.Owner.Able.Kind is
          when Model_Runner.Backend.Backend_CPU =>
             Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status);
@@ -3085,6 +3118,23 @@ package body Model_Runner.Llama is
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
+      --  Every matrix of the group, because a group is what a generated
+      --  token's three projections are: hooking only the single product
+      --  below would miss them, and did -- a watched run named the
+      --  feed-forward's matrices and none of attention's.
+      if Item.Seen /= null then
+         for Index in Weights'Range loop
+            declare
+               Which : constant String :=
+                 Named_As (Item.Owner.all, Weights (Index));
+            begin
+               if Which /= "" then
+                  Item.Seen.Note (Which, Vector.all, 1);
+               end if;
+            end;
+         end loop;
+      end if;
+
       if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device then
          Model_Runner.Backend.Device.Dispatch_Group
            (Weights, Vector, Into, Status, Item.Stopping);
@@ -3116,6 +3166,27 @@ package body Model_Runner.Llama is
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info) is
    begin
+      if Item.Seen /= null then
+         declare
+            Which : constant String := Named_As (Item.Owner.all, Weight);
+
+            --  Exactly the rows this product will read, and not whatever
+            --  the buffer happens to be: a round hands a buffer sized for
+            --  the whole batch and multiplies a few of its rows, so a
+            --  watcher dividing the buffer by the count would take a
+            --  column width several times too wide.
+            Room : constant Element_Count := Count * Weight.Columns;
+         begin
+            if Which /= "" and then Vectors.all'Length >= Room then
+               Item.Seen.Note
+                 (Which,
+                  Vectors.all (Vectors.all'First
+                               .. Vectors.all'First + Room - 1),
+                  Count);
+            end if;
+         end;
+      end if;
+
       case Item.Owner.Able.Kind is
          when Model_Runner.Backend.Backend_CPU =>
             Workers_CPU.Dispatch_Batch
@@ -6338,6 +6409,37 @@ package body Model_Runner.Llama is
 
       return Lowest;
    end Reusable_From;
+
+   -----------
+   -- Watch --
+   -----------
+
+   procedure Watch (Item : in out Session; By : Watcher_Access) is
+   begin
+      Item.Seen := By;
+   end Watch;
+
+   --  Which matrix this view is, or the empty string where nothing said.
+   --
+   --  A walk rather than a map: a model has a few hundred matrices and a
+   --  product is a few million multiplies, so the walk is not measurable
+   --  and a map would be a structure to keep in step with Resolve.
+   function Named_As (Item : Model'Class; Which : T.View) return String is
+   begin
+      if Item.Named = null then
+         return "";
+      end if;
+
+      for Index in 1 .. Item.Named_Up loop
+         if Item.Named.all (Index).Base = Which.Base
+           and then Item.Named.all (Index).Offset = Which.Offset
+         then
+            return Model_Runner.Text.To_String (Item.Named.all (Index).Name);
+         end if;
+      end loop;
+
+      return "";
+   end Named_As;
 
    function Committed_Token (Item : Session; Index : Natural) return Token_Id is
    begin

@@ -17,6 +17,7 @@ with Model_Runner.Shares;
 with Model_Runner.Progress;
 with Model_Runner.Templates;
 with Model_Runner.Tensors;
+with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 
 --  The supported Llama-compatible decoder-only profile.
@@ -960,6 +961,46 @@ package Model_Runner.Llama is
    --  @return The lowest safe position, or zero when any is safe.
    function Reusable_From (Item : Session) return Natural;
 
+   --  Something told what every matrix product was given.
+   --
+   --  An importance matrix is a record of how much each input channel of
+   --  each weight matrix actually carried over a corpus, and the only place
+   --  that can be known is inside the engine, at the moment a product is
+   --  about to happen. This is the seam: a session may be handed one of
+   --  these, and it will be told the name of every weight matrix it
+   --  multiplies by and the vectors it multiplies.
+   --
+   --  Nothing here computes anything with it. What a caller does with the
+   --  vectors -- sum their squares, count them, write a file -- is the
+   --  caller's, which is why this is an interface and not a switch: the
+   --  engine's part is knowing which matrix it is about to read, and that is
+   --  the part only the engine knows.
+   --
+   --  IT COSTS A NULL CHECK A PRODUCT when nothing is watching, which is
+   --  every run that is not collecting a matrix.
+   type Watcher is limited interface;
+
+   --  One matrix product, before it happens.
+   --
+   --  @param Item The watcher.
+   --  @param Which The weight matrix's name, as the file names it.
+   --  @param Values The vectors about to be multiplied by it, laid out a
+   --    row at a time.
+   --  @param Rows How many vectors Values holds.
+   procedure Note
+     (Item   : in out Watcher;
+      Which  : String;
+      Values : Real_Array;
+      Rows   : Element_Count) is abstract;
+
+   type Watcher_Access is access all Watcher'Class;
+
+   --  Have a session report every product to a watcher.
+   --
+   --  @param Item Session to watch.
+   --  @param By The watcher, or null to stop.
+   procedure Watch (Item : in out Session; By : Watcher_Access);
+
    --  Token committed at a position.
    --
    --  Used by interactive mode to check that a re-rendered conversation is an
@@ -1378,6 +1419,17 @@ private
    type Layer_Array is array (Natural range <>) of Layer;
    type Layer_Array_Access is access Layer_Array;
 
+   --  A matrix's name against where its bytes begin, for a watcher to ask
+   --  which matrix a product is about to read.
+   type Named_View is record
+      Base   : System.Address := System.Null_Address;
+      Offset : Model_Runner.Bytes.Byte_Count := 0;
+      Name   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+   end record;
+
+   type Named_View_List is array (Positive range <>) of Named_View;
+   type Named_View_Access is access Named_View_List;
+
    type Model is limited new Ada.Finalization.Limited_Controlled with record
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
@@ -1402,6 +1454,20 @@ private
       --  own bytes, and the file's arena stays mapped for whatever was not
       --  repacked.
       Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  What every resolved matrix is called, against where it lives.
+      --
+      --  A view carries an address and a length and no name, which is right
+      --  -- a name is a fact about a file and a view is a fact about memory
+      --  -- and it leaves nothing to tell a watcher which matrix it is
+      --  looking at. Resolve knows both at once and writes the pair down
+      --  here, and that is the only place the two ever meet.
+      --
+      --  Read only by a run that is watching, and a linear walk when it is:
+      --  two hundred comparisons against a product of a million multiplies.
+      Named       : Named_View_Access := null;
+      Named_Up    : Natural := 0;
+
       Layers      : Layer_Array_Access := null;
       Embeddings  : aliased Model_Runner.Tensors.View;
 
@@ -1607,6 +1673,9 @@ private
       At_Keys   : Cell_Counts_Access := null;
       At_Values : Cell_Counts_Access := null;
       At_Rows   : Cell_Counts_Access := null;
+
+      --  Something being told what every product was given, or null.
+      Seen      : Watcher_Access := null;
       Origin    : Cell_Counts_Access := null;
    end record;
 
