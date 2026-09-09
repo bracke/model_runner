@@ -18721,3 +18721,68 @@ panels B18C46B2D587910B src/library/model_runner-quantization-interleave.ads src
 #
 # load:  through the gate before each reading; the part at 56 to 90 C
 # model: TinyLlama-1.1B-Chat Q8_0, written out four ways
+
+# 2026-09-09, the entry above is wrong, and a fusion built and refused.
+#
+#   THE DISPATCH PRICE IS WITHDRAWN. The entry two above prices a dispatch
+#   at 12.5 us from a probe of twenty-two redundant NORMALIZATIONS a token,
+#   and reads 330 dispatches a token as 4.1 ms -- the fixed cost from the
+#   other end. The same probe with a redundant CACHE WRITE instead, the
+#   layer's keys put in the cache a second time, same values same places,
+#   twenty-two more dispatches a token and no fold in any of them:
+#
+#     twelve tokens, generating                          mean
+#     as it is       0.219 0.218 0.220 0.218 0.220 s     0.2190
+#     +22 writes     0.220 0.220 0.219 0.219 0.218       0.2192
+#
+#   NOTHING. 0.2 ms over twelve tokens is the noise. The bound this puts on
+#   a dispatch of that shape is under two microseconds and the estimate is
+#   under one, so 330 a token is half a millisecond at worst rather than
+#   four. THE FIXED COST IS NOT THE DISPATCHES and is unexplained again --
+#   which is now twice it has been attributed and twice withdrawn, and the
+#   second withdrawal at least cost a measurement rather than an argument.
+#
+#   WHAT THE 12.5 US ACTUALLY WAS: a normalization. One workgroup over
+#   2,048 elements, an eight-step fold with a barrier at each, on a part
+#   with twelve compute units -- a twelfth of the machine, serializing
+#   inside it. A cache write is one workgroup over 256 elements and no
+#   fold. Two probes of the same dispatch count, one costing 3.3 ms over
+#   twelve tokens and the other nothing, say the price of a step here is
+#   the work inside it and not the call, and that ONE WORKGROUP WITH A FOLD
+#   IN IT is the expensive shape. That is what to look for next.
+#
+#   AND ROPE_SET_ROWS, BUILT AND REFUSED. llama.cpp's remaining fusion, the
+#   rotation and the cache write in one kernel. Built: rotate_place.comp,
+#   the two shaders' bodies in one invocation, writing the turned vector
+#   where the rotation wrote it and into the cache besides; a placing step
+#   that folds into the rotation before it the way a join folds into the
+#   product before it, staying in the sequence so an index a caller wrote
+#   still means what it meant; two more push words (Stride and At_First,
+#   the block 32 bytes to 40), a fifth binding for the cache where a
+#   product binds a folded join's residual, its own module and pipeline.
+#
+#   CORRECT: conformance 41,780 sequences, 0 outside tolerance, and twelve
+#   tokens answer 5abff916f9d83ca6. Mutating the fused kernel's cache write
+#   moves that digest to 27a57e62042c83c1, which is how the path was shown
+#   to be the one running rather than assumed to be.
+#
+#     twelve tokens, generating                                    mean
+#     two kernels   0.219 0.220 0.219 0.221 0.216 0.220 0.220 0.220  0.21938
+#     one kernel    0.219 0.219 0.216 0.219 0.220 0.219 0.221 0.220  0.21913
+#
+#   0.25 ms over twelve tokens, fourteen times smaller than the 1.5 per
+#   cent the dispatch argument promised, inside a spread of five. REFUSED,
+#   as the split-k reduce was: the words are in the history, not the tree.
+#
+#   Also written down because it will be wanted again: the sixteen compiled
+#   shader constants were reproduced byte for byte from their sources, so
+#   the flags are known rather than guessed. glslangValidator -V for
+#   attention, combine, row_product, half_batch, norm, rotate, place; -V
+#   --target-env vulkan1.1 with -DSUBGROUPS -DWIDE, with -DSUBGROUPS
+#   -DQUERY_TILE, with -DSUBGROUPS -DWIDE -DHALVED, and with those plus
+#   -DGROUPED for the four other attentions; -V --target-env vulkan1.3 for
+#   attention_matrix and for matrix_product, again with -DMORE_FORMATS,
+#   with -DNARROW, and with both.
+#
+# load:  through the gate before each of the twenty-six rounds, alternated
+# model: TinyLlama-1.1B-Chat Q8_0 on the device, 22 layers, twelve tokens

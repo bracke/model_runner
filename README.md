@@ -17926,57 +17926,89 @@ and three transcriptions not made. `Recipes.Fits` says so and the tool stops,
 because a file written as though a Falcon were a llama would differ for a
 reason nothing here records.
 
-### What a dispatch costs, and where the fixed cost went
+### What a dispatch costs, and where the fixed cost still does not go
 
 `### A generated token on the device is sixty-seven submissions` fits a line
 through attention against context and finds **3.3 milliseconds a token that
-does not depend on the context at all** -- thirteen and a half per cent of a
-generated token, spent before a single position is read. That entry
-attributed it to sixty-seven submissions, then the submission count fell to
-twenty-three and the attribution was withdrawn. The cost stayed measured and
-unexplained.
+does not depend on the context at all** -- eighteen per cent of a generated
+token, spent before a single position is read. That entry attributed it to
+sixty-seven submissions, then the submission count fell to twenty-three and
+the attribution was withdrawn. **This section attributed it to dispatches,
+and that attribution is withdrawn too** -- by a second measurement, made the
+same day, which is why the withdrawal is here rather than in a later entry.
 
-**It is the dispatches.** Priced directly, by appending one redundant
-normalization to every layer -- twenty-two more dispatches a token, reading
-what the layer produced and writing where nothing reads it:
+**The first measurement.** Appending one redundant normalization to every
+layer -- twenty-two more dispatches a token, reading what the layer produced
+and writing where nothing reads it:
 
 | | twelve tokens, generating | mean |
 | --- | --- | ---: |
 | as it is | 0.219, 0.217, 0.218 s | 0.2180 |
-| twenty-two dispatches more | 0.221, 0.223, 0.220 s | 0.2213 |
+| twenty-two normalizations more | 0.221, 0.223, 0.220 s | 0.2213 |
 
-The ranges do not overlap and the digest is `5abff916f9d83ca6` either way,
-which is the point of choosing a normalization nothing reads. 3.3 ms over
-twelve tokens is 0.275 ms a token over twenty-two dispatches: **12.5
-microseconds a dispatch**.
+3.3 ms over twelve tokens is 0.275 ms a token over twenty-two more steps:
+**12.5 microseconds each**. A layer dispatches about fifteen times, twenty-two
+layers is 330 a token, and 330 at 12.5 microseconds is 4.1 milliseconds --
+the same quantity the regression found, arrived at from the other end. That
+was the argument, and it was wrong.
 
-**And a layer dispatches about fifteen times** -- a normalization, three
-projections, two rotations, two placements, attention, the attention output,
-the feed-forward's normalization, its gate and up, the combination, the
-projection down. Both joins fold into the products before them and dispatch
-nothing. Twenty-two layers is about 330 dispatches a token, and 330 at 12.5
-microseconds is **4.1 milliseconds** -- the same quantity as the 3.3 the
-regression found, arrived at from the other end.
+**What was wrong with it.** A normalization is not a representative
+dispatch. It is one workgroup over two thousand and forty-eight elements
+with an eight-step fold and a barrier at each step, on a part with twelve
+compute units -- so it uses a twelfth of the machine and serializes inside
+it. The 12.5 microseconds is that, not the call.
 
-**So the ceiling on this line of work is eighteen per cent of a generated
-token**, and that is where the device's remaining 1.07 against llama.cpp
-actually lives. What is available cheaply is much less: llama.cpp fuses
-`add + rms_norm`, which is the join folding this engine already does, and
-`rms_norm + mul`, which `norm.comp` already does by carrying the gain. The
-one fusion left is `rope_set_rows` -- the placement into the cache folded
-into the rotation before it, and the value placement into the product before
-that. Twenty-two to forty-four dispatches, **0.275 to 0.55 ms, 1.5 to 3.0
-per cent**.
+**The second measurement says so.** The same probe with a cache write
+instead: the layer's keys written into the cache a *second* time, the same
+two hundred and fifty-six values into the same places, twenty-two more
+dispatches a token and no fold in any of them. Five rounds, alternated:
 
-That is worth building and is not built here. What this section is for is
-the number: the price of a dispatch on this part was not known, the fixed
-cost had been called unexplained twice, and a fusion proposed against it
-would have been proposed against a hope. It is 12.5 microseconds, and the
-first attempt at measuring it was wrong in a way worth recording -- the
-redundant step was appended *after* the layer's final join, which made it the
-last step, and a layer hands back its last step. The digest moved, which is
-how it was caught. Moved one place earlier, the digest holds and the number
-means what it says.
+| | twelve tokens, generating | mean |
+| --- | --- | ---: |
+| as it is | 0.219, 0.218, 0.220, 0.218, 0.220 s | 0.2190 |
+| twenty-two cache writes more | 0.220, 0.220, 0.219, 0.219, 0.218 s | 0.2192 |
+
+**Nothing.** Twenty-two more dispatches a token cost 0.2 milliseconds over
+twelve tokens, which is the noise. The upper bound this puts on a dispatch of
+that shape is under two microseconds, and the point estimate is under one.
+Three hundred and thirty a token is then half a millisecond at worst, not
+four -- so the fixed cost is not the dispatches, and it goes back to being
+what it was: **measured, reproducible, and unexplained.**
+
+**And the fusion the first argument recommended is worth nothing.**
+`rope_set_rows` -- llama.cpp's rotation and cache write in one kernel -- was
+built here to see: `rotate_place.comp`, the two shaders' bodies in one
+invocation; a placing step that folds into the rotation before it the way a
+join folds into the product before it, staying in the sequence so that every
+index a caller wrote keeps meaning what it meant; two more push words, a
+fifth binding for the cache, its own pipeline. It is correct -- the
+conformance suite passes, 41,780 sequences with none outside tolerance, and
+twelve tokens still answer `5abff916f9d83ca6`. Eight rounds, alternated:
+
+| | twelve tokens, generating | mean |
+| --- | --- | ---: |
+| the two kernels | 0.219, 0.220, 0.219, 0.221, 0.216, 0.220, 0.220, 0.220 | 0.21938 |
+| the one kernel | 0.219, 0.219, 0.216, 0.219, 0.220, 0.219, 0.221, 0.220 | 0.21913 |
+
+A quarter of a millisecond over twelve tokens, fourteen times smaller than
+the 1.5 per cent the dispatch argument promised, and inside a spread of five
+milliseconds. **Built, correct, and refused**, as the split-k reduce was:
+the words are in the history and not in the tree.
+
+**What is worth keeping is the shape of the cost.** Two probes of
+twenty-two dispatches a token, one costing 3.3 ms over twelve tokens and the
+other costing nothing, say that on this part the price of a step is the work
+inside it and not the call -- and that a step which occupies one workgroup
+and folds inside it is the expensive shape. That is a different thing to look
+for than a dispatch count, and it is what the next attempt at the 3.3
+milliseconds should look for.
+
+**A note on how the first probe was got wrong twice.** Its redundant step
+was first appended *after* the layer's final join, which made it the layer's
+last step -- and a layer hands back its last step, so the probe changed the
+answer. The digest moved, which is how that was caught. Moved one place
+earlier the digest held, and the timing was then a timing of the right thing
+and still an answer to the wrong question.
 
 ## License
 

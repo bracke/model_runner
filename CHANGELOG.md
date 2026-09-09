@@ -85,22 +85,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **The price of a dispatch on the device: 12.5 microseconds**, and with it
-  an explanation for a cost this repository has twice called unexplained.
-  The 3.3 ms a token that does not depend on the context -- thirteen and a
-  half per cent of a generated token -- was attributed to submissions, then
-  the submission count fell and the attribution was withdrawn. Priced
-  directly by appending one redundant normalization a layer (0.2180 s
-  generating against 0.2213, ranges not overlapping, digest unmoved), a
-  dispatch costs 12.5 us; a layer dispatches about fifteen times; 330
-  dispatches a token at that price is **4.1 ms**, the same quantity the
-  regression found from the other end.
+- **A dispatch on this device costs under a microsecond, and the 3.3
+  milliseconds a token that does not depend on the context is unexplained
+  again.** An entry added earlier the same day priced a dispatch at 12.5
+  microseconds by appending one redundant normalization a layer, and read
+  330 dispatches a token as 4.1 ms -- the fixed cost, from the other end.
+  The same probe with a cache write instead, twenty-two more dispatches a
+  token and no fold in any of them, costs **0.2 ms over twelve tokens**,
+  which is the noise. The 12.5 microseconds was the normalization: one
+  workgroup over 2,048 elements with an eight-step fold, on twelve compute
+  units. The attribution to dispatches is withdrawn.
 
-  So the ceiling on dispatch-reduction is eighteen per cent of a generated
-  token, and the one fusion llama.cpp has that this engine does not --
-  `rope_set_rows` -- is worth 1.5 to 3.0 per cent of it. The other two,
-  `add + rms_norm` and `rms_norm + mul`, are already here: joins fold into
-  the products before them and `norm.comp` carries the gain.
+  What the pair of probes does establish is the shape of the cost: on this
+  part what a step costs is the work inside it, and a step that occupies one
+  workgroup and folds inside it is the expensive shape. That is what the
+  next attempt at the 3.3 ms should look for.
+
+- **`rope_set_rows` built, correct, and refused.** llama.cpp fuses the
+  rotation with the cache write; the other two fusions it has are already
+  here (a join folds into the product before it, and `norm.comp` carries the
+  gain). Built as `rotate_place.comp` with a placing step that folds into the
+  rotation the way a join folds into a product: conformance passes, 41,780
+  sequences with none outside tolerance, and twelve tokens still answer
+  `5abff916f9d83ca6`. Eight alternated rounds put it at 0.25 ms over twelve
+  tokens -- fourteen times smaller than the dispatch argument promised and
+  inside the spread. The words are in the history and not in the tree.
 
 - **A mixture and an importance matrix are nearly independent gains**, shown
   by measuring all four corners rather than the two that were already here.
