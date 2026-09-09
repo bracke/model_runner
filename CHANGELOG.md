@@ -100,14 +100,18 @@ Keep a Changelog and the project uses semantic versioning.
   away is worth 0.425, of which attending is 0.12 and **rotating and
   combining are nothing**.
 
-  Inside a normalization the eight-step fold is **free** and the first read
-  of the row is three quarters of the cost: both passes read the same 2,048
-  floats, the second finds them in cache, and the first is one workgroup of
-  256 lanes issuing eight dependent loads a lane with nothing else on the
-  part to hide them behind. Since a dispatch inside a recorded sequence
-  costs under a microsecond, a normalization split across twelve workgroups
-  is one more dispatch for twelve times the lanes on the part that costs.
-  Not built.
+  Two explanations for where inside a normalization it sits were built and
+  both refused. **Fetching four and then eight values before adding any of
+  them** -- the adds left in order, so the sum is bit for bit the sum it was
+  and the digest holds -- is worth 0.024 ms a token over seven alternated
+  rounds, a tenth of the pass and inside the spread. **Summing the weight
+  instead of the activation**, the same width read by every layer of every
+  token and as warm as a buffer gets, does not read faster either. So it is
+  neither a chain of dependent loads nor a cold first read.
+
+  What is left would split the sum across workgroups, which associates it
+  differently and moves the answer -- a price not paid here for one and a
+  half per cent.
 
   A token now reads: products 17.33 ms, normalizations 0.32, attending 0.12,
   the cache copied back 0.14, the one call waited on 0.06, and **0.25 still

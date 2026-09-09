@@ -18229,13 +18229,39 @@ them behind. `norm.comp`'s own comment argues the fold down from three
 earlier shapes and is right to; what it does not say is that the fold was
 never what this costs.
 
-**Which points somewhere, because a dispatch is free.** `### One call costs
-64 microseconds` measures a *call* at 64 microseconds, and the entry above it
-measures a *dispatch inside a sequence already recorded* at under one. A
-normalization split across twelve workgroups -- a pass of partial sums, then
-the fold, then a scaling pass that has no ordering in it at all -- is one
-more dispatch and twelve times the lanes on the part of it that costs.
-Nothing here has built that.
+**And the mechanism that suggested does not survive contact.** If the first
+pass costs because a lane's loads are a chain -- the add cannot start until
+the load lands and the next load is not issued until the add is written --
+then fetching several before adding any of them fixes it. **Built, and worth
+nothing.** Four at a time and then eight, the adds left in the order they
+were in so the sum is bit for bit the sum it was and the digest stays
+`5abff916f9d83ca6`:
+
+| | twelve tokens, generating | |
+| --- | --- | ---: |
+| a value at a time | 0.219, 0.222, 0.217, 0.218, 0.219, 0.219, 0.218 | 0.21886 |
+| eight at a time | 0.218, 0.219, 0.217, 0.218, 0.220, 0.221, 0.217 | 0.21857 |
+
+Seven alternated rounds and 0.024 ms a token between them, which is a
+tenth of what the pass costs and inside the spread. Four at a time reads the
+same. **Refused**, and the words are in the history.
+
+**Nor is it that the first read is cold.** The second pass reads the same
+row and finds it in cache; the obvious story is that the first read pays a
+DRAM trip after the barrier that published the product before it. Tested by
+summing the *weight* instead -- the same width, read by every layer of every
+token and as warm as a buffer on this part gets -- the reading does not fall:
+0.2197 against 0.2173 for the activation over three rounds. **A warm row
+sums no faster than a fresh one.**
+
+So the normalizations cost 0.3 milliseconds a token, both explanations for
+where inside them are refuted by direct test, and the internal split that
+suggested them -- fold free, second pass 0.058, first pass 0.258 -- rests on
+differences at the edge of what this instrument resolves and should be read
+that way. The only thing left that would touch the number is splitting the
+sum across workgroups, and that associates it differently: it would move the
+answer, which is a price this repository has not paid for one and a half per
+cent.
 
 **What a generated token is, as far as it has been taken apart:**
 

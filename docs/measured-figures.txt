@@ -19036,3 +19036,49 @@ panels 4D5F01C6F9DF4A57 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  through the gate before each of the thirty-three readings
 # model: TinyLlama-1.1B-Chat Q8_0 on the device, twelve generated tokens
+
+# 2026-09-09, the normalization unrolled, built and refused, and two
+# mechanisms refuted with it.
+#
+#   THE CLAIM UNDER TEST, from the entry above: a normalization's first pass
+#   is three quarters of its cost because a lane's loads are a chain -- the
+#   add cannot start until the load lands and the next load is not issued
+#   until the add is written -- and one workgroup on twelve compute units
+#   has nothing to hide that behind.
+#
+#   BUILT: the sum fetches four values, and then eight, before adding any of
+#   them, with the adds left in the order they were in. Bit for bit the same
+#   sum, and twelve tokens answer 5abff916f9d83ca6 either way.
+#
+#     a value at a time  0.219 0.222 0.217 0.218 0.219 0.219 0.218  0.21886
+#     eight at a time    0.218 0.219 0.217 0.218 0.220 0.221 0.217  0.21857
+#
+#   0.024 MS A TOKEN over seven alternated rounds, a tenth of what the pass
+#   costs and inside the spread. Four at a time, seven more rounds, reads
+#   the same. REFUSED.
+#
+#   AND NOR IS THE FIRST READ COLD. The second pass reads the same row and
+#   finds it in cache, so the obvious story is a DRAM trip after the barrier
+#   that published the product before it. Tested by summing THE WEIGHT
+#   instead -- same width, read by every layer of every token, as warm as a
+#   buffer on this part gets:
+#
+#     summing the activation   0.219 0.217 0.216   0.2173
+#     summing the weight       0.220 0.221 0.218   0.2197
+#     no normalization at all  0.216 0.215 0.216   0.2157
+#
+#   A WARM ROW SUMS NO FASTER THAN A FRESH ONE.
+#
+#   WHERE THAT LEAVES IT. The normalizations cost 0.3 ms a token and that
+#   figure stands: twenty readings, a 0.0038 s difference against a spread
+#   of about 0.002. The internal split that suggested both mechanisms --
+#   fold free, second pass 0.058, first pass 0.258 -- rests on differences
+#   at the edge of what this instrument resolves and is to be read that way.
+#   Both mechanisms it suggested are now refuted by direct test.
+#
+#   The only thing left that would touch the number splits the sum across
+#   workgroups, which associates it differently and moves the answer. That
+#   is a price this repository has not paid for one and a half per cent.
+#
+# load:  through the gate before each of the thirty-two readings
+# model: TinyLlama-1.1B-Chat Q8_0 on the device, twelve generated tokens
