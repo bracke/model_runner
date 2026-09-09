@@ -39,6 +39,41 @@ Recognized is not supported. A recognized-but-unimplemented format passes
 container validation and is rejected by `Model_Runner.Tensors.Make` with
 `MR-TENSOR-0005`.
 
+### What each of them costs the predictions
+
+The column this table did not have. `tests perplexity` scores a fixed corpus
+with one model in two formats and reports the Kullback-Leibler divergence
+between what they believe, in nats -- how much of the eight-bit model's
+information the other one throws away. Lower is closer. TinyLlama-1.1B-Chat,
+1,020 scored positions, measured against the eight-bit file:
+
+| Format | Divergence from Q8_0, nats | Same top token |
+| --- | ---: | ---: |
+| Q8_0 | 0.000000 | 100.0 % |
+| Q5_K_M | 0.010226 | 93.8 % |
+| Q5_1 | 0.013021 | 91.8 % |
+| Q5_0 | 0.013543 | 93.0 % |
+| IQ4_NL | 0.035287 | 87.6 % |
+| IQ4_XS | 0.036373 | 86.7 % |
+| Q4_K_M | 0.044413 | 87.9 % |
+| Q4_0 | 0.051893 | 87.0 % |
+| Q4_1 | 0.060082 | 85.9 % |
+| Q3_K | 0.091220 | 82.3 % |
+| MXFP4 | 0.120443 | 79.6 % |
+| Q2_K | 0.289359 | 71.0 % |
+
+**MXFP4 is not where its bit width would put it.** It is a four-bit format
+and it sits between Q3_K and Q2_K rather than with the other four-bit rows,
+which spread 0.035 to 0.060. The row above says why without having known it
+was a cost: its block scale is one byte holding a power of two, where every
+other four-bit format in this table carries a half-precision scale.
+
+These are one model on one corpus against an eight-bit baseline rather than
+a half-precision one, so they rank the formats against each other and are
+not comparable with numbers measured elsewhere. `### What a format costs the
+predictions` in the README has the perplexities beside them and what bounds
+them.
+
 ## Architecture
 
 | Architecture | State |

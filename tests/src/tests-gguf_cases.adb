@@ -4,6 +4,8 @@ with AUnit.Assertions;
 
 with Interfaces;
 
+with Quantizer;
+
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
@@ -465,6 +467,119 @@ package body Tests.GGUF_Cases is
    end Refused_As_Truncated;
 
    --  An array the file claims but does not hold is refused, not allocated.
+   --  The block formats encode by their own rule, and the rule for Q4_0 is
+   --  not the rule for Q4_1.
+   --
+   --  This repository's fixture encoders scale a block from its minimum and
+   --  maximum and serve both formats from that. It is right for Q4_1 and
+   --  wrong for Q4_0, whose reference tracks the largest magnitude and keeps
+   --  its sign -- so a block of nothing but positive numbers gets a NEGATIVE
+   --  scale, which a minimum-and-maximum scheme cannot produce. That is the
+   --  assertion below, and it is the one a fixture encoder fails.
+   --
+   --  Nothing noticed for as long as there have been encoders here, because
+   --  the fixture check decodes what the encoder wrote: what it holds is the
+   --  decoder, and an encoder only has to be self-consistent to pass it.
+   procedure The_Block_Formats_Encode_By_Their_Own_Rule
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Q renames Model_Runner.Quantization;
+
+      use type Quantizer.Target;
+
+      --  Thirty-two positive numbers, largest last so that the sign of the
+      --  scale is decided by a value the minimum-and-maximum rule would also
+      --  have found -- the two rules see the same block and disagree about
+      --  what to do with it.
+      Rising : Model_Runner.Numerics.Real_Array (0 .. 31);
+   begin
+      for Index in Rising'Range loop
+         Rising (Index) :=
+           Model_Runner.Numerics.Real (Index + 1) / 32.0;
+      end loop;
+
+      declare
+         As_Four : constant Model_Runner.Bytes.Byte_Array :=
+           Quantizer.Encode (Rising, Quantizer.Q4_0);
+         As_Four_One : constant Model_Runner.Bytes.Byte_Array :=
+           Quantizer.Encode (Rising, Quantizer.Q4_1);
+      begin
+         Assert (As_Four'Length = 18,
+                 "a Q4_0 block is not eighteen bytes");
+         Assert (As_Four_One'Length = 20,
+                 "a Q4_1 block is not twenty bytes");
+
+         --  The scale is two bytes, least significant first, so the sign is
+         --  the top bit of the second.
+         Assert ((As_Four (1) and 16#80#) /= 0,
+                 "a block of positive numbers got a positive Q4_0 scale, so "
+                 & "the scale was not taken as the reference takes it");
+         Assert ((As_Four_One (1) and 16#80#) = 0,
+                 "a block of positive numbers got a negative Q4_1 scale");
+      end;
+
+      --  And every format decodes back to what it was given, within the
+      --  step it quantizes by. A rule that is transcribed wrongly answers
+      --  this too, so it is the weaker half of the check and is here for
+      --  the formats the assertion above cannot separate.
+      for Into in Quantizer.Target loop
+         declare
+            Bytes : constant Model_Runner.Bytes.Byte_Array :=
+              Quantizer.Encode (Rising, Into);
+
+            Room : Q.Block_Buffer;
+            Ok   : Boolean;
+
+            Apart : Model_Runner.Numerics.Real := 0.0;
+
+            --  What one level is worth, from the block's own span. Half of
+            --  it is what a rounding can be out by; the reference truncates
+            --  after adding a half rather than rounding, so a whole level
+            --  is what this can be out by, and that is what it is held to.
+            Levels : constant Model_Runner.Numerics.Real :=
+              (case Into is
+                  when Quantizer.Q8_0 => 255.0,
+                  when Quantizer.Q4_0 | Quantizer.Q4_1 => 15.0,
+                  when Quantizer.Q5_0 | Quantizer.Q5_1 => 31.0);
+
+            Step : constant Model_Runner.Numerics.Real :=
+              (Rising (Rising'Last) - Rising (Rising'First)) / Levels;
+         begin
+            Q.Decode_Block (Quantizer.Type_Of (Into), Bytes, 0, Room, Ok);
+            Assert (Ok,
+                    "the decoder refused what the encoder wrote for "
+                    & Quantizer.Name_Of (Into));
+
+            for Index in Rising'Range loop
+               Apart := Model_Runner.Numerics.Real'Max
+                 (Apart, abs (Room (Index) - Rising (Index)));
+            end loop;
+
+            Assert (Apart <= Step * 1.5,
+                    "what " & Quantizer.Name_Of (Into) & " wrote decoded "
+                    & Model_Runner.Numerics.Real'Image (Apart)
+                    & " away from what it was given, where one level is "
+                    & Model_Runner.Numerics.Real'Image (Step));
+         end;
+      end loop;
+
+      --  A name the caller mistyped is a refusal and not a default.
+      declare
+         Which : Quantizer.Target;
+         Known : Boolean;
+      begin
+         Quantizer.Named ("Q4_0", Which, Known);
+         Assert (Known and then Which = Quantizer.Q4_0,
+                 "a format named in capitals was not recognized");
+
+         Quantizer.Named ("q4_k_m", Which, Known);
+         Assert (not Known,
+                 "a format this cannot write was accepted by name");
+      end;
+   end The_Block_Formats_Encode_By_Their_Own_Rule;
+
    procedure Claimed_Array_Is_Refused
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6392,6 +6507,10 @@ package body Tests.GGUF_Cases is
         (T, Accessors_Refuse_Every_Way'Access,
          "every accessor refuses a key it cannot read, whichever way it is "
          & "wrong");
+      Register_Routine
+        (T, The_Block_Formats_Encode_By_Their_Own_Rule'Access,
+         "the block formats encode by their own rule, and Q4_0's "
+         & "is not Q4_1's");
       Register_Routine
         (T, Claimed_Array_Is_Refused'Access,
          "an array the file claims but does not hold is refused, not "

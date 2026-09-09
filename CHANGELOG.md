@@ -71,6 +71,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests quantize`: the engine writes a format at last.** It read twelve
+  and wrote none. This writes five -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 -- which
+  is llama.cpp's `llama-quantize` for the formats whose encoding is a rule
+  rather than a search. The k-quants pick their scales by an iterative
+  search and are not here.
+
+  **The check is exact and it is the other implementation.** Both pointed at
+  the same eight-bit file, compared tensor by tensor: **201 tensors the
+  same, 0 differing, for all five formats** -- byte for byte, including the
+  parts of the rule that look like mistakes and are not, the truncation
+  toward zero after adding a half and the clamp on the high side only.
+  `--against` compares tensors rather than whole files, because headers
+  differ for reasons that are not the encoding.
+
+  **And the rule was not what this repository had.** `Fixtures.Encode_Four_Bit`
+  scales a block from its minimum and maximum and serves both Q4_0 and
+  Q4_1 from that. It is right for Q4_1 and wrong for Q4_0, whose reference
+  keeps the sign of the largest magnitude, so a block of positive weights
+  takes a negative scale. Nothing noticed, because the fixture check decodes
+  what an encoder wrote: it holds the decoder, and an encoder only has to be
+  self-consistent to pass it.
+
 - **`tests perplexity`: what a quantization costs the model's predictions.**
   Every format here had a measured cost to run and an asserted cost to be
   right. This measures the second: perplexity over a corpus, and against an

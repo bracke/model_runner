@@ -288,6 +288,17 @@ package body Perplexity_Run is
          return;
       end if;
 
+      --  A chunk is one pass, and a pass is bounded. Said here rather than
+      --  left to the refusal a batch gives, which names a shape mismatch
+      --  and not the option that caused it -- a chunk above the bound read
+      --  "nothing was scored", which is true and is no help at all.
+      if Chunk > L.Max_Batch then
+         Result.Missing := True;
+         Note ("a chunk is one pass and a pass holds at most"
+               & Natural'Image (L.Max_Batch) & " tokens");
+         return;
+      end if;
+
       --  The same gate every published figure comes through. A perplexity is
       --  not a timing, but the seconds it reports are, and a reader
       --  comparing two formats wants to know both were taken on the same

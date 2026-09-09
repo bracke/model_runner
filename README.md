@@ -393,7 +393,7 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the eight others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests perplexity`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests perplexity`, `tests quantize`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests render`, `tests docs`, `tests shader`, `tests schema`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. `tests <command>` with no command lists them with what each takes. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -17620,6 +17620,78 @@ batch now. With that and the worker pool the new tool was missing, the same
 measurement went from **281 seconds to 9.9**. Drafting asks for those logits
 too, and pays less for them: `### Drafting out of the context` re-measured
 below.
+
+### Writing a format, and the check that it is the format
+
+This engine read twelve formats and wrote none. `tests quantize` writes five
+of them -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 -- which is llama.cpp's
+`llama-quantize` for the formats whose encoding is a rule rather than a
+search.
+
+**The encoders were here and the rule was not.** The fixture builder has had
+encoders since it had fixtures, and `Fixtures.Encode_Four_Bit` serves both
+Q4_0 and Q4_1 by scaling a block from its minimum and maximum. That is the
+reference rule for Q4_1. It is not the rule for Q4_0, which tracks the
+largest magnitude and keeps its sign:
+
+```c
+if (amax < fabsf(v)) { amax = fabsf(v); max = v; }
+const float d = max / -8;
+```
+
+so a block of nothing but positive weights takes a **negative** scale, which
+a minimum-and-maximum scheme can never produce. Nothing noticed for as long
+as there have been encoders here, because the fixture check decodes what the
+encoder wrote: what it holds is the decoder, and an encoder only has to be
+self-consistent to pass it. *Produces bytes a Q4_0 reader accepts* is a
+weaker claim than *quantizes as Q4_0 is defined*, and only the first one was
+ever made.
+
+**The check is the other implementation, and it is exact.** These five rules
+are rules, so two encoders that read them the same way write the same bytes.
+`llama-quantize` is built on the machine these figures are taken on, so both
+were pointed at the same eight-bit file and the results compared tensor by
+tensor:
+
+```
+tests quantize --model MODEL-Q8_0 --format q4_0 \
+  --out ours.gguf --against theirs.gguf
+```
+
+| format | tensors the same | differing | absent |
+| --- | ---: | ---: | ---: |
+| q8_0 | 201 | 0 | 0 |
+| q4_0 | 201 | 0 | 0 |
+| q4_1 | 201 | 0 | 0 |
+| q5_0 | 201 | 0 | 0 |
+| q5_1 | 201 | 0 | 0 |
+
+**Every tensor of every format, byte for byte**, including the parts of the
+rule that look like mistakes and are not: the truncation toward zero after
+adding a half, which makes the rounding asymmetric about zero, and the clamp
+that is on the high side only. A quantizer that rounded correctly would write
+better blocks and different files, and the point of this one is to write the
+same files.
+
+The comparison is of tensors and not of whole files: the headers differ for
+reasons that are not the encoding -- key order, what a writer puts in its
+`general.file_type` -- and `--against` is written to ask the question that
+matters rather than the one that is easy. The two q4_0 files come to the same
+620,803,456 bytes even so, and the one this wrote answers a prompt the way
+the one llama.cpp wrote does.
+
+**What it converts and what it copies**, which is a rule of this tool and not
+llama.cpp's policy: a tensor is re-encoded when it has more than one
+dimension and its elements fill whole blocks, and copied otherwise, which is
+the norms and the biases. 156 converted and 45 copied for this model.
+llama.cpp by default also holds the output projection and the token embedding
+at a higher precision than the name on the file, which is why the comparison
+above passes `--pure` to turn that off: a file this writes is the format it
+says all the way through.
+
+**The k-quants are not here and are not a longer version of this.** Their
+scales come out of an iterative search over candidates rather than a closed
+form, and matching that is its own piece of work.
 
 ## License
 

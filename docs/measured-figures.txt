@@ -6389,6 +6389,29 @@
 
 kernels 91346C4CAF21123B src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
+# covers: the divergence and perplexity table under "What a format costs the
+# predictions" in the README, and the divergence column of
+# docs/support-matrix.md. Re-measure with `tests perplexity --model PATH
+# --against MODEL-Q8_0 --text tests/fixtures/perplexity-corpus.txt --chunk
+# 512 --chunks 4`, once for each format, which is about three minutes each
+# on this host.
+#
+# THE CORPUS IS PART OF THE MEASUREMENT and is in the list below for that
+# reason. It was cut once from this repository's own README -- code fences,
+# tables and headings dropped, runs of blank lines collapsed, the first
+# 60,000 bytes taken and trimmed back to a paragraph boundary -- and it must
+# not be cut again: every number above is a number about that text, and a
+# corpus regenerated from a later README would move all of them silently.
+# What this line makes impossible is exactly that.
+#
+# The decoders are in the list because a format's divergence is what its
+# decoder produces; the engine because the distributions come out of it; and
+# perplexity_run.adb because the arithmetic that turns logits into a
+# divergence lives there.
+# load:  through the gate before every reading; the part warm
+# model: TinyLlama-1.1B-Chat in twelve formats
+quality B16C6E5D520202C5 tests/fixtures/perplexity-corpus.txt tests/src/perplexity_run.adb tests/src/perplexity_run.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-quantization.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb model_runner.gpr
+
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
 # at loads of 0.83 to 2.6.
@@ -19283,3 +19306,60 @@ panels F2E5A0240ED35949 src/library/model_runner-quantization-interleave.ads src
 #        the twelve-format sweep ran warm throughout, which the entry of
 #        2026-09-09 on the thermometer says is where this part sits
 # model: TinyLlama-1.1B-Chat in twelve formats
+
+# 2026-09-09, writing a format, and the check that it is the format.
+#
+#   WHAT WAS BUILT. tests quantize: a model read and written out again in
+#   another format. llama.cpp's llama-quantize, for the five whose encoding
+#   is a rule rather than a search -- Q8_0, Q4_0, Q4_1, Q5_0, Q5_1.
+#
+#   THE ENCODERS WERE HERE AND THE RULE WAS NOT. Fixtures.Encode_Four_Bit
+#   serves both Q4_0 and Q4_1 by scaling a block from its minimum and its
+#   maximum, which is the reference rule for Q4_1 and is not the rule for
+#   Q4_0: that one tracks the largest magnitude and keeps its sign, so a
+#   block of positive weights takes a NEGATIVE scale. Nothing noticed for as
+#   long as there have been encoders here, because the fixture check decodes
+#   what an encoder wrote and holds the decoder.
+#
+#   THE CHECK IS EXACT AND IS THE OTHER IMPLEMENTATION. Both pointed at the
+#   same eight-bit file, compared tensor by tensor:
+#
+#     format   same   differing   absent
+#      q8_0     201       0         0
+#      q4_0     201       0         0
+#      q4_1     201       0         0
+#      q5_0     201       0         0
+#      q5_1     201       0         0
+#
+#   Every tensor of every format, byte for byte, including the parts of the
+#   rule that look like mistakes and are not -- the truncation toward zero
+#   after adding a half, and the clamp on the high side only. The two q4_0
+#   files come to the same 620,803,456 bytes, and the one this wrote answers
+#   a prompt the way the one llama.cpp wrote does.
+#
+#   llama-quantize was given --allow-requantize, because it refuses an
+#   eight-bit source otherwise, and --pure, because by default it holds the
+#   output projection and the token embedding above the name on the file
+#   where this tool converts everything that fills whole blocks.
+#
+#   AND THE QUALITY GROUP RESTAMPED, NOT RE-MEASURED. perplexity_run.adb is
+#   in its source list and gained one guard: a chunk above the batch bound
+#   is refused by name rather than reported as "nothing was scored". The
+#   published table was taken at a chunk of 512, which the guard admits.
+#
+#   THE TABLE ITSELF WAS CHECKED FOR STABILITY, at twice the corpus:
+#
+#     format    1,020 positions   2,040 positions
+#     q4_k_m       0.044413          0.041877
+#     q4_0         0.051893          0.050035
+#     q4_1         0.060082          0.057414
+#     q3_k         0.091220          0.093752
+#     mxfp4        0.120443          0.125466
+#
+#   Three to six per cent either way and every ordering kept, including the
+#   two the README makes a point of: q4_k_m below q4_0 below q4_1, and mxfp4
+#   above q3_k.
+#
+# load:  the quantizing is not a timing and was not gated; the stability
+#        readings went through the gate as the table did
+# model: TinyLlama-1.1B-Chat Q8_0, written out five ways

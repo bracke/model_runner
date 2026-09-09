@@ -50,6 +50,7 @@ with Packaging;
 with Pristine;
 with Host_Load;
 with Perplexity_Run;
+with Quantize_Run;
 with Speed_Run;
 with Tool_Commands;
 with Fuzzing;
@@ -1092,6 +1093,46 @@ begin
             Model_Runner.Tokenizer.Close (Words);
             Model_Runner.GGUF.Containers.Close (Item);
             Model_Runner.Byte_Sources.Files.Close (Source);
+         end if;
+      end;
+
+   elsif Command = "quantize" then
+      --  Write a model out again in another format, and say whether the
+      --  bytes are the ones another implementation writes.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Result : Quantize_Run.Report;
+      begin
+         if Option ("--model", "") = "" or else Option ("--format", "") = ""
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "quantize: --model and --format are required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         Quantize_Run.Run
+           (Path    => Option ("--model", ""),
+            Format  => Option ("--format", ""),
+            Into    => Option ("--out", ""),
+            Against => Option ("--against", ""),
+            Result  => Result);
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Quantize_Run.Summary (Result));
+
+         if not Result.Ran then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
 
