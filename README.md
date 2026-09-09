@@ -2044,7 +2044,8 @@ the second, 154 read where they lie for the third.
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
 1.70 rising to 2.37 for the figures below -- and **refuses to measure at all
-above a load of 1.5**, because a ratio of a device against a processor is not
+above a twentieth of the machine's processors**, which is 0.80 here and was
+the constant 1.5 until a spinner was measured through it, because a ratio of a device against a processor is not
 equally exposed to whatever else is running: the processor side competes with
 it and the device side mostly waits on a fence, so other work moves the ratio
 and a ratio that moves with the machine is a figure about the machine.
@@ -10547,7 +10548,8 @@ starved.
 
 **Which is a rule about this file rather than about the shader.** Its own
 rule is that a figure is taken on a quiet host or it is not taken, and the
-load gate is set at 1.50. That is loose for a device figure: at 2.23 the
+load gate was set at 1.50 when this was written. That is loose for a device
+figure: at 2.23 the
 error is sixteen per cent and at 1.35 it is five, and every device figure
 taken in an alternated comparison here had builds running between its
 readings. A device row wants a quieter machine than a processor row, because
@@ -17180,6 +17182,72 @@ Anything smaller than that needs the comparison run several times.
 This is still a scalar-source implementation compiled for a portable baseline,
 and it is slower than a runtime built around hand-written vector code. It is
 not trying to compete with one; it is trying to be a correct and readable one.
+
+### The thermometer the gate reads and does not refuse on
+
+A batch of published figures was thrown away in the sitting before this one.
+Two things were true of it -- the part was at 89.4 C and a stray `tests
+check` was on the machine -- and the note written at the time blamed the
+first: *the gate does not read a thermometer, and on a fifteen-watt part it
+should*. It now reads one. **The measurement says the thermometer was the
+wrong suspect.**
+
+The same 1419-token prompt, eighteen times back to back, the part climbing
+as it went:
+
+| reading | processor | device | load | prompt |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 50.1 C | 47.0 C | 0.36 | **4.167 s** |
+| 3 | 81.0 | 59.0 | 1.69 | 4.485 |
+| 7 | 84.0 | 63.0 | 3.68 | 4.512 |
+| 12 | 86.0 | 66.0 | 5.31 | 4.526 |
+| 18 | 87.0 | 68.0 | 6.25 | 4.540 |
+
+**Flat over nine degrees.** Every reading from 78 C up is 4.50 to 4.61, and
+87 C is where this part sits after a minute of work -- which is to say where
+nearly every figure in this file was taken. There is no temperature here at
+which a figure stops being worth publishing, so a bound would have been a
+number invented to fit one bad batch, and it would have refused readings that
+were fine. What the curve does say is that the first reading, on a cold part,
+is **eight per cent fast**: a cold part flatters, once. That is an argument
+for taking a batch warm or dropping its first reading, and it is why the
+temperature is now carried beside the load on every line `tests speed` and
+`tests benchmark` print. A reading at 50 degrees and one at 85 are not the
+same reading, and only one of them can be compared with the sitting before
+it. It is a fact a figure carries, not a gate.
+
+**The busy core was the whole of it.** One spinner, alternated against
+nothing, three rounds:
+
+| round | alone | one core busy |
+| ---: | ---: | ---: |
+| 1 | **4.130 s** | 5.078 s |
+| 2 | **4.484** | 5.330 |
+| 3 | **4.527** | 5.362 |
+
+Nineteen per cent -- and the gate's own instrument read **1.05 busy
+processors** while that spinner ran, against a bound of 1.50. Idle reads 0.07
+and two spinners read 2.08, so the instrument was right and the bound was
+wrong. 1.50 admits a busy processor, which on eight cores is an eighth of the
+machine, and admitting it is exactly what happened.
+
+So the bound is **a twentieth of the machine** -- the processors the host
+lists, 16 here, so 0.80 -- and never below a quarter of a processor, because a
+host with one or two of them would otherwise be unmeasurable. It is the error
+one is willing to publish rather than a round number. The gate refuses a
+spinner now: *the machine has 1.00 processors busy, above the 0.80 a figure
+worth publishing needs*.
+
+Two checks hold it, and each fails on the mistake it is for: a bound at or
+above one busy processor on a host of twenty processors or fewer, and a
+thermometer answering something no working part is at -- which is what a
+reader that forgets `/sys` counts thousandths of a degree would answer, and
+did, reading 80000.
+
+Eight figure groups were restamped rather than re-measured. What changed in
+the measuring tools is two calls to `Warmth` and a clause in each summary
+line, both outside every clock -- the first before the model is opened, the
+second after everything is closed -- so nothing between the clocks moved.
 
 ## License
 

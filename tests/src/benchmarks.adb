@@ -1986,6 +1986,9 @@ package body Benchmarks is
       IO.Put_Line
         ("load " & Model_Runner.Text.Image (Started_At, 2) & " to "
          & Model_Runner.Text.Image (Host_Load.Now, 2)
+         & (if Host_Load.Warmth < 0.0 then ""
+            else "; " & Model_Runner.Text.Image (Host_Load.Warmth, 1)
+                 & " degrees")
          & " -- most of the rise is this run");
    end Run;
 

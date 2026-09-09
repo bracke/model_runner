@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Model_Runner.Text;
@@ -13,6 +14,32 @@ package body Host_Load is
    Ticks_At : constant String := "/proc/stat";
    Window   : constant Duration := 0.2;
 
+   --  Where the host says how warm its parts are, and which of them are
+   --  parts a figure waits on.
+   --
+   --  A list of drivers rather than every sensor the host has, because a
+   --  host has sensors for things a timing does not wait on: this one
+   --  reports a disk at 60 degrees and two memory modules beside the
+   --  processor, and a gate that took the highest of everything would be
+   --  refusing figures because a disk was warm. A host whose processor is
+   --  behind a name that is not on this list has no thermometer as far as
+   --  this is concerned, which is the same answer it gave before there was
+   --  one.
+   Sensors_At : constant String := "/sys/class/hwmon";
+
+   subtype Driver_Name is String (1 .. 12);
+   type Name_List is array (Positive range <>) of Driver_Name;
+
+   Watched : constant Name_List :=
+     ["k10temp     ",   --  AMD processors
+      "zenpower    ",   --  and the other driver for them
+      "coretemp    ",   --  Intel processors
+      "cpu_thermal ",   --  the usual name on ARM
+      "amdgpu      ",   --  AMD devices, integrated and not
+      "i915        ",   --  Intel devices
+      "xe          ",   --  and their newer driver
+      "nouveau     "];  --  NVIDIA, where the free driver runs it
+
    --  How many processors were busy over the window, and how many there
    --  are. Busy is everything that is not idle and not waiting on a disk.
    --
@@ -20,6 +47,34 @@ package body Host_Load is
    --  same as zero: zero is a quiet machine and negative is one that did
    --  not say.
    function Busy_Processors return Long_Float;
+
+   --  What one file holds, with nothing in it read as nothing said.
+   function First_Line (Named : String) return String;
+
+   function First_Line (Named : String) return String is
+      Handle : Ada.Text_IO.File_Type;
+   begin
+      if not Ada.Directories.Exists (Named) then
+         return "";
+      end if;
+
+      Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Named);
+
+      declare
+         Line : constant String :=
+           (if Ada.Text_IO.End_Of_File (Handle) then ""
+            else Ada.Text_IO.Get_Line (Handle));
+      begin
+         Ada.Text_IO.Close (Handle);
+         return Line;
+      end;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (Handle) then
+            Ada.Text_IO.Close (Handle);
+         end if;
+         return "";
+   end First_Line;
 
    -------------------
    -- Quiet_Enough --
@@ -33,6 +88,111 @@ package body Host_Load is
       Look (Quiet, Reading, Processors);
       return Quiet;
    end Quiet_Enough;
+
+   ------------------
+   -- Processors --
+   ------------------
+
+   function Processors return Natural is
+      Handle : Ada.Text_IO.File_Type;
+      Seen   : Natural := 0;
+   begin
+      if not Ada.Directories.Exists (Ticks_At) then
+         return 0;
+      end if;
+
+      Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Ticks_At);
+
+      while not Ada.Text_IO.End_Of_File (Handle) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (Handle);
+         begin
+            exit when Line'Length < 4
+              or else Line (Line'First .. Line'First + 2) /= "cpu";
+
+            --  "cpu" alone is the total; "cpu0" and its fellows are the
+            --  processors, and only those are counted.
+            if Line (Line'First + 3) /= ' ' then
+               Seen := Seen + 1;
+            end if;
+         end;
+      end loop;
+
+      Ada.Text_IO.Close (Handle);
+      return Seen;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (Handle) then
+            Ada.Text_IO.Close (Handle);
+         end if;
+         return 0;
+   end Processors;
+
+   ----------------
+   -- Too_Busy --
+   ----------------
+
+   function Too_Busy return Long_Float is
+   begin
+      return Long_Float'Max (0.25, Long_Float (Processors) / 20.0);
+   end Too_Busy;
+
+   -------------
+   -- Warmth --
+   -------------
+
+   function Warmth return Long_Float is
+      Search : Ada.Directories.Search_Type;
+      Found  : Ada.Directories.Directory_Entry_Type;
+      Hottest : Long_Float := -1.0;
+   begin
+      if not Ada.Directories.Exists (Sensors_At) then
+         return -1.0;
+      end if;
+
+      Ada.Directories.Start_Search
+        (Search, Sensors_At, "", [Ada.Directories.Directory => True,
+                                  others => False]);
+
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Found);
+
+         declare
+            Here : constant String := Ada.Directories.Full_Name (Found);
+            Name : constant String := First_Line (Here & "/name");
+            Wanted : Boolean := False;
+         begin
+            for Which of Watched loop
+               Wanted := Wanted
+                 or else Name
+                         = Ada.Strings.Fixed.Trim
+                             (Which, Ada.Strings.Right);
+            end loop;
+
+            if Wanted then
+               declare
+                  --  The first sensor of the part rather than the hottest
+                  --  of its sensors: on this driver that is Tctl for the
+                  --  processor and the edge for the device, which are the
+                  --  two a datasheet quotes and the two a person reads.
+                  Text : constant String := First_Line (Here & "/temp1_input");
+               begin
+                  if Text /= "" then
+                     Hottest :=
+                       Long_Float'Max
+                         (Hottest, Long_Float'Value (Text) / 1000.0);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Ada.Directories.End_Search (Search);
+      return Hottest;
+   exception
+      when others =>
+         return -1.0;
+   end Warmth;
 
    ----------
    -- Look --
@@ -338,7 +498,7 @@ package body Host_Load is
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "waiting for the machine to fall below "
-               & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+               & Model_Runner.Text.Image (Too_Busy, 2)
                & "; it is at " & Model_Runner.Text.Image (Load, 2));
          end if;
          Told := Told + 1;
@@ -356,7 +516,7 @@ package body Host_Load is
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
             "the machine did not fall below "
-            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & Model_Runner.Text.Image (Too_Busy, 2)
             & " within" & Natural'Image (Minutes)
             & " minutes; nothing measured");
          return False;
@@ -383,7 +543,7 @@ package body Host_Load is
                & " processors busy, above the "
              else "the machine is at a load of "
                & Model_Runner.Text.Image (Reading, 2) & ", above the ")
-            & Model_Runner.Text.Image (Long_Float (Too_Busy), 2)
+            & Model_Runner.Text.Image (Too_Busy, 2)
             & " a figure worth publishing needs; wait, or pass "
             & "--anyway for the shape of the answer");
          return False;

@@ -138,6 +138,14 @@ package Speed_Run is
       Load_Before : Long_Float := 0.0;
       Load_After  : Long_Float := 0.0;
 
+      --  How warm the parts that did the work were, before and after.
+      --  Negative where the host exposes no such sensor. Carried for the
+      --  reason the load is: a reading on a cold part flatters by about
+      --  eight per cent for one reading, and a figure that says how warm
+      --  it was can be compared with the sitting before it.
+      Warm_Before : Long_Float := -1.0;
+      Warm_After  : Long_Float := -1.0;
+
       --  And what the device was clocked at while it ran, where the run was
       --  on one and the host says. The other half of the moment: a figure
       --  taken while the part held two thirds of its top state is not the

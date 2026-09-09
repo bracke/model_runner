@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A thermometer beside every published figure, and a load bound a
+  spinner cannot pass.** `tests speed` and `tests benchmark` now carry the
+  temperature of the parts that did the work -- the highest of the processor
+  and device sensors -- beside the load each figure was taken under. **It is
+  carried and not refused on, and that is a measurement rather than an
+  oversight**: the same 1419-token prompt was taken eighteen times as the
+  part climbed from 50 to 87 C, and every reading from 78 C up was 4.50 to
+  4.61 seconds. Flat over nine degrees. What the curve does say is that a
+  cold part flatters by about eight per cent for one reading, which is an
+  argument for taking a batch warm, not for a gate.
+
+  **The bound the gate does refuse on came down from 1.50 to a twentieth of
+  the machine** -- 0.80 on this sixteen-processor host, never below a quarter
+  of a processor. One spinner costs the same prompt nineteen per cent (5.08,
+  5.33 and 5.36 seconds against 4.13, 4.48 and 4.53 alongside it) and the
+  gate's own instrument reads 1.05 busy processors while it runs, which is
+  under 1.50: the old bound admitted a busy processor, and a whole batch of
+  published readings was taken that way and thrown away. Idle reads 0.07, so
+  the new bound refuses the spinner and not the machine.
+
 - **A cache that holds only the window.** Three architectures here slide one
   -- gemma2 on every other layer, gemma3 on five in six, gpt-oss on every
   other -- and until now that narrowed what a position could read and nothing

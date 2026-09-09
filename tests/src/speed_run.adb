@@ -188,6 +188,7 @@ package body Speed_Run is
    begin
       Result := (others => <>);
       Result.Load_Before := Host_Load.Now;
+      Result.Warm_Before := Host_Load.Warmth;
 
       if Path = "" or else not Ada.Directories.Exists (Path) then
          Result.Missing := True;
@@ -573,6 +574,7 @@ package body Speed_Run is
       end;
 
       Result.Load_After := Host_Load.Now;
+      Result.Warm_After := Host_Load.Warmth;
 
       if Result.Runs = Repeats then
          Result.Ran := True;
@@ -613,6 +615,9 @@ package body Speed_Run is
         & " s of processor time"
         & "; load " & T.Image (Item.Load_Before, 2)
         & " to " & T.Image (Item.Load_After, 2)
+        & (if Item.Warm_Before < 0.0 then ""
+           else "; " & T.Image (Item.Warm_Before, 1)
+                & " to " & T.Image (Item.Warm_After, 1) & " degrees")
         & Device_Clock.Shown (Item.Clock);
    end Summary;
 

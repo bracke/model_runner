@@ -41,17 +41,66 @@ package Host_Load is
    --  @return Processor seconds used by this process and its tasks, or zero.
    function Processor_Seconds return Long_Float;
 
+   --  How warm the parts that do the work are, in degrees.
+   --
+   --  The processor and, where the host has one, the device: the highest of
+   --  them, because a figure is as slow as whichever part was holding it
+   --  up. Negative where the host exposes no such sensor, which is not the
+   --  same as cold.
+   --
+   --  IT IS CARRIED AND NOT REFUSED ON, and that is a measurement rather
+   --  than an oversight. The same 1419-token prompt was taken eighteen
+   --  times as this part climbed from 50 to 87 degrees: the first reading,
+   --  on a cold part, was 4.167 s, and every reading from 78 degrees upward
+   --  was 4.50 to 4.61 -- flat, over nine degrees. So there is no
+   --  temperature here at which a figure stops being worth publishing, and
+   --  inventing one would be a bound with nothing behind it.
+   --
+   --  What the curve does say is that A COLD PART FLATTERS BY ABOUT EIGHT
+   --  PER CENT for one reading. That is an argument for taking a batch warm
+   --  or discarding its first reading, not for a gate, and it is why this
+   --  is published beside every figure: a reading at 50 degrees and one at
+   --  85 are not the same reading, and only one of them can be compared
+   --  with the sitting before it.
+   --
+   --  @return The highest temperature of the parts that matter, in degrees,
+   --    or a negative number where the host does not say.
+   function Warmth return Long_Float;
+
+   --  How many processors the host has, or zero where it does not say.
+   --
+   --  @return The processor count.
+   function Processors return Natural;
+
    --  The load above which a figure is not worth publishing.
    --
-   --  One and a half rather than one: a machine with nothing on it still
-   --  shows the last minute of whatever ran before, and refusing the first
-   --  run after a build would refuse most first runs.
+   --  A TWENTIETH OF THE MACHINE, and it was one and a half until a
+   --  measurement said what one and a half admits. A busy processor costs a
+   --  parallel figure about its share of the machine: with one spinner on
+   --  this eight-core part the 1419-token prompt read 5.08, 5.33 and 5.36
+   --  seconds against 4.13, 4.48 and 4.53 alongside it -- NINETEEN PER
+   --  CENT -- and the gate's own instrument read 1.05 busy processors,
+   --  which is under one and a half. So the old bound let a fifth of a
+   --  figure through, and it did: a whole batch of published readings was
+   --  taken with a stray `tests check` on the machine and had to be thrown
+   --  away.
+   --
+   --  A twentieth is the error one is willing to publish rather than a
+   --  round number. The instrument counts the processors the host lists,
+   --  which here is sixteen of eight cores, so a twentieth is 0.80 -- under
+   --  the 1.05 one spinner reads, which is the point, and above the 0.07
+   --  this machine idles at, which is the other point: a bound that refused
+   --  an idle machine would refuse everything. Never less than a quarter of
+   --  a processor, because a host with one or two of them would otherwise
+   --  be unmeasurable.
    --
    --  Here rather than in one tool, because the rule is about figures and
    --  not about any one measurement: `tests benchmark` refused above this
    --  and `tests speed` did not, so the same machine was too busy for one
    --  set of published numbers and fine for another.
-   Too_Busy : constant := 1.5;
+   --
+   --  @return The bound, as a share of the machine's processors.
+   function Too_Busy return Long_Float;
 
    --  Whether a figure taken at this load is worth publishing.
    --

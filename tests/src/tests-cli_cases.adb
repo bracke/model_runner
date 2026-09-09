@@ -9694,6 +9694,71 @@ package body Tests.CLI_Cases is
               & "figure");
    end A_Busy_Machine_Cannot_Publish_A_Figure;
 
+   -------------------------------------------
+   -- The_Bound_Is_Below_One_Busy_Processor --
+   -------------------------------------------
+
+   --  The bound was 1.5 for as long as this gate existed, and 1.5 admits a
+   --  busy processor: the gate's own instrument reads 1.05 with one spinner
+   --  on this host, and a published batch was taken that way and thrown
+   --  away, the prompt in it nineteen per cent slow. So the property is not
+   --  that the bound is any particular number but that ONE BUSY PROCESSOR
+   --  IS ABOVE IT -- which is what a twentieth of the machine buys on every
+   --  host with twenty processors or fewer, and this is where that stays
+   --  true.
+   procedure The_Bound_Is_Below_One_Busy_Processor
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Have  : constant Natural := Host_Load.Processors;
+      Bound : constant Long_Float := Host_Load.Too_Busy;
+   begin
+      Assert (Bound >= 0.25,
+              "the bound fell below a quarter of a processor, which leaves "
+              & "a host with one or two of them unmeasurable");
+
+      if Have <= 20 then
+         Assert (Bound < 1.0,
+                 "one busy processor is at or below the bound, so the gate "
+                 & "would publish a figure with something else on the "
+                 & "machine");
+      end if;
+
+      if Have = 0 then
+         Assert (Bound = 0.25,
+                 "a host that does not say how many processors it has got "
+                 & "something other than the floor for a bound");
+      else
+         Assert (Bound = Long_Float'Max (0.25, Long_Float (Have) / 20.0),
+                 "the bound is not a twentieth of the machine");
+      end if;
+   end The_Bound_Is_Below_One_Busy_Processor;
+
+   ----------------------------------
+   -- The_Thermometer_Reads_Or_Not --
+   ----------------------------------
+
+   --  A thermometer is only useful if its number is in degrees, and the
+   --  reading behind it is in thousandths of one: a reader that forgets to
+   --  divide says 87000 and every figure carries it. Negative is the honest
+   --  answer where the host exposes no sensor, and zero is not -- a part
+   --  doing work is never at freezing, so a zero here would be a reader
+   --  that found the file and read nothing out of it.
+   procedure The_Thermometer_Reads_Or_Not
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Heat : constant Long_Float := Host_Load.Warmth;
+   begin
+      if Heat >= 0.0 then
+         Assert (Heat > 5.0 and then Heat < 125.0,
+                 "the thermometer read" & Long_Float'Image (Heat)
+                 & " degrees, which is not a temperature a working part is "
+                 & "at -- a reading in thousandths, or a file found and not "
+                 & "read");
+      end if;
+   end The_Thermometer_Reads_Or_Not;
+
    -----------------------------------------
    -- The_Speed_Tool_Reads_The_Machine --
    -----------------------------------------
@@ -11120,6 +11185,12 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, A_Busy_Machine_Cannot_Publish_A_Figure'Access,
          "a busy machine cannot publish a figure");
+      Register_Routine
+        (T, The_Bound_Is_Below_One_Busy_Processor'Access,
+         "the load a figure is gated on is below one busy processor");
+      Register_Routine
+        (T, The_Thermometer_Reads_Or_Not'Access,
+         "the thermometer reads degrees, or says it has none");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Device_Memory_Reaches_The_Device'Access,
          "--device-memory decides where the weights are, and says so");
