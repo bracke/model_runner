@@ -93,6 +93,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The 0.55 milliseconds a token that was unaccounted is the
+  normalizations.** Ablation at the shader, pooled over ten rounds: taking
+  the two normalizations a layer away is worth **0.317 ms a token** -- 7.2
+  microseconds each, forty-four of them -- and taking every element-wise step
+  away is worth 0.425, of which attending is 0.12 and **rotating and
+  combining are nothing**.
+
+  Inside a normalization the eight-step fold is **free** and the first read
+  of the row is three quarters of the cost: both passes read the same 2,048
+  floats, the second finds them in cache, and the first is one workgroup of
+  256 lanes issuing eight dependent loads a lane with nothing else on the
+  part to hide them behind. Since a dispatch inside a recorded sequence
+  costs under a microsecond, a normalization split across twelve workgroups
+  is one more dispatch for twelve times the lanes on the part that costs.
+  Not built.
+
+  A token now reads: products 17.33 ms, normalizations 0.32, attending 0.12,
+  the cache copied back 0.14, the one call waited on 0.06, and **0.25 still
+  unlocated**.
+
 - **A generated token on the device, decomposed by ablation** -- the first
   decomposition of one that does not come from the budget, which the entry
   below shows was reporting a whole layer as attending. Each part taken out

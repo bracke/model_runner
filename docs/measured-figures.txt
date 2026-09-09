@@ -18980,3 +18980,59 @@ panels 4D5F01C6F9DF4A57 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  device-bench times a product against its own clock, not the host's
 # model: no model; matrices allocated for the shapes named
+
+# 2026-09-09, the 0.55 ms found: it is the normalizations, and inside one
+# it is the first read of the row.
+#
+#   The entry above leaves 0.55 ms of an 18.2 ms token unaccounted. Ablation
+#   at the shader, twelve generated tokens, readings pooled over ten rounds:
+#
+#     as it is                              0.2187 s   18.22 ms a token
+#     the two norms a layer taken away      0.2149     -0.317 ms a token
+#     every element-wise step taken away    0.2136     -0.425
+#
+#   THE TWO NORMALIZATIONS A LAYER ARE 0.317 MS A TOKEN, 7.2 us each, forty-
+#   four of them. Attending is 0.12 of the 0.425 and ROTATING AND COMBINING
+#   ARE NOTHING -- each moves the reading by less than the spread. The
+#   layer's non-product work is the normalizations and almost nothing else.
+#
+#   AND INSIDE ONE IT IS THE FIRST PASS. A norm reads the row to sum its
+#   squares, folds across 256 lanes in eight barriered steps, and reads the
+#   row again to scale and store.
+#
+#     the eight-step fold                    0.000 ms a token
+#     the second pass, scaling and storing    0.058
+#     the first pass, by difference           0.258
+#
+#   THE FOLD IS FREE AND THE FIRST READ IS THREE QUARTERS OF THE COST. Both
+#   passes read the same 2,048 floats; the second finds them in cache and
+#   the first does not, and it is ONE WORKGROUP of 256 lanes issuing eight
+#   dependent loads a lane with nothing else on the part to hide them
+#   behind. norm.comp argues its fold down from three earlier shapes and is
+#   right to; what it does not say is that the fold was never the cost.
+#
+#   WHICH POINTS SOMEWHERE, BECAUSE A DISPATCH IS FREE. A call costs 64 us
+#   and a dispatch inside a sequence already recorded costs under one. A
+#   normalization split across twelve workgroups -- partial sums, the fold,
+#   then a scaling pass with no ordering in it at all -- is one more
+#   dispatch for twelve times the lanes on the part that costs. NOT BUILT.
+#
+#   THE TOKEN AS FAR AS IT HAS BEEN TAKEN APART:
+#
+#     the products, at the rate one reaches alone   17.33 ms   95.1 %
+#     the two normalizations a layer                 0.32       1.7
+#     attending                                      0.12       0.7
+#     the cache copied back to the host              0.14       0.8
+#     the one call a token waits on                  0.06       0.3
+#     rotating, combining, joining                   0.00       --
+#     still unlocated                                0.25       1.4
+#
+#   THE SAME CAUTION AS BEFORE: every line but the first is a marginal cost
+#   and marginal costs need not sum to a total. With every element-wise step
+#   removed the products still read 1,099 MB in 17.80 ms, 61.7 GB/s against
+#   the 63.4 a single product reaches alone -- so 0.47 ms of the token is
+#   the difference between a product in a fifteen-step sequence and a
+#   product by itself, and the cache copy and the call wait are 0.20 of it.
+#
+# load:  through the gate before each of the thirty-three readings
+# model: TinyLlama-1.1B-Chat Q8_0 on the device, twelve generated tokens

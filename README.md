@@ -18189,6 +18189,74 @@ as long -- 8,000 by 8,192 reads 8.9 per cent slow. Neither is explained here.
 The first looks like residency and the second like row length, and no model
 this program runs has a matrix in either range.
 
+### The 0.55, found
+
+The section above leaves 0.55 milliseconds of an 18.2 millisecond token
+unaccounted, and says that is the next thing. **It is the normalizations**,
+and finding it needed the ablation instrument turned on the parts of a layer
+that are not products. Each part taken out at the shader, twelve generated
+tokens, readings pooled across ten rounds:
+
+| | twelve tokens | a token |
+| --- | ---: | ---: |
+| as it is | 0.2187 s | 18.22 ms |
+| the two normalizations a layer taken away | 0.2149 | **−0.317 ms** |
+| every element-wise step taken away | 0.2136 | **−0.425 ms** |
+
+**The two normalizations a layer are 0.317 milliseconds a token**, which is
+7.2 microseconds each, forty-four of them. Attending is 0.12 of the 0.425,
+and **rotating and combining are nothing at all** -- taking the rotation out
+and taking the gate's combination out each move the reading by less than the
+spread. So the layer's non-product work is the normalizations and almost
+nothing else.
+
+**And inside a normalization it is the first pass.** A norm reads the row
+once to sum its squares, folds that across two hundred and fifty-six lanes in
+eight barriered steps, and reads the row again to scale and store it. Taking
+each away in turn:
+
+| | a token |
+| --- | ---: |
+| the eight-step fold | **0.000 ms** |
+| the second pass, which scales and stores | **0.058 ms** |
+| the first pass, by difference | **0.258 ms** |
+
+**The fold is free and the first read of the row is three quarters of the
+cost.** Both passes read the same 2,048 floats; the second one finds them in
+cache and the first one does not, and it is one workgroup of 256 lanes
+issuing eight dependent loads a lane with nothing else on the part to hide
+them behind. `norm.comp`'s own comment argues the fold down from three
+earlier shapes and is right to; what it does not say is that the fold was
+never what this costs.
+
+**Which points somewhere, because a dispatch is free.** `### One call costs
+64 microseconds` measures a *call* at 64 microseconds, and the entry above it
+measures a *dispatch inside a sequence already recorded* at under one. A
+normalization split across twelve workgroups -- a pass of partial sums, then
+the fold, then a scaling pass that has no ordering in it at all -- is one
+more dispatch and twelve times the lanes on the part of it that costs.
+Nothing here has built that.
+
+**What a generated token is, as far as it has been taken apart:**
+
+| | ms | of 18.22 |
+| --- | ---: | ---: |
+| the products, at the rate one of them reaches alone | 17.33 | 95.1 % |
+| the two normalizations a layer | 0.32 | 1.7 % |
+| attending | 0.12 | 0.7 % |
+| the cache copied back to the host | 0.14 | 0.8 % |
+| the one call a token waits on | 0.06 | 0.3 % |
+| rotating, combining, joining | 0.00 | -- |
+| **still unlocated** | **0.25** | **1.4 %** |
+
+**The 0.55 is now 0.25**, and the same caution applies to it as to the rest:
+every line but the first is a marginal cost, and marginal costs do not have
+to sum to a total. With every element-wise step removed the products still
+read 1,099 MB in 17.80 ms, which is 61.7 GB/s against the 63.4 a single
+product reaches alone -- so 0.47 ms of the token is the difference between a
+product in a fifteen-step sequence and a product by itself, and the cache
+copy and the call wait are 0.20 of that. The rest of the 0.25 is there.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
