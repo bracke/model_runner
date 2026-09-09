@@ -36,6 +36,7 @@ package body Model_Runner.Serving is
       Context : Natural := 0;
       Gather  : Positive := Default_Gather;
       Budget  : Boolean := False;
+      Reuse   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info)
    is
       Settings : constant L.Configuration := L.Config (Source);
@@ -51,6 +52,7 @@ package body Model_Runner.Serving is
       Item.Context := Context;
       Item.Gather := Positive'Min (Gather, Item.Capacity);
       Item.Budget := Budget;
+      Item.Reuse := Reuse;
       Item.Width := N.Element_Count (Settings.Vocabulary);
 
       --  One round's logits, a row a member, taken once. A server that
@@ -143,6 +145,43 @@ package body Model_Runner.Serving is
    -- Admit --
    ------------
 
+   --  How much of this prompt the seat is already holding.
+   --
+   --  A prefix comparison against the tokens the session still has, capped
+   --  one short of the prompt: a member whose whole prompt was kept would
+   --  have nothing to read and so no distribution to sample its first token
+   --  from. Zero where a sliding window has dropped what a shorter prefix
+   --  would need, which Reusable_From decides.
+   function Agreeing (At_Seat : Seat; Prompt : Token_Array) return Natural;
+
+   function Agreeing (At_Seat : Seat; Prompt : Token_Array) return Natural is
+      Held  : constant Natural := L.Position (At_Seat.Session);
+      Most  : constant Natural :=
+        Natural'Min (Held, Prompt'Length - 1);
+      Same  : Natural := 0;
+   begin
+      if not At_Seat.Seated or else Most = 0 then
+         return 0;
+      end if;
+
+      while Same < Most
+        and then L.Committed_Token (At_Seat.Session, Same)
+                 = Prompt (Prompt'First + Same)
+      loop
+         Same := Same + 1;
+      end loop;
+
+      --  A window that has slid holds the newest positions and no others,
+      --  so a prefix shorter than its floor is a context the layer cannot
+      --  attend over. Reading the prompt from nothing is correct and slow;
+      --  keeping it would be fast and wrong.
+      if Same < L.Reusable_From (At_Seat.Session) then
+         return 0;
+      end if;
+
+      return Same;
+   end Agreeing;
+
    procedure Admit
      (Item       : in out Server;
       Prompt     : Token_Array;
@@ -173,12 +212,30 @@ package body Model_Runner.Serving is
          return;
       end if;
 
-      for Which in Item.Seats'Range loop
-         if Item.Seats (Which).State = Free then
-            Free_Seat := Which;
-            exit;
-         end if;
-      end loop;
+      --  The free seat whose context this prompt agrees with furthest, and
+      --  the first free one where none of them agrees at all. Choosing by
+      --  agreement is what makes reuse worth having with more than one
+      --  seat: taking the lowest free seat every time gives a caller a
+      --  context belonging to whoever sat there last rather than the one
+      --  most like its own.
+      declare
+         Best : Natural := 0;
+      begin
+         for Which in Item.Seats'Range loop
+            if Item.Seats (Which).State = Free then
+               declare
+                  Shared : constant Natural :=
+                    (if Item.Reuse then Agreeing (Item.Seats (Which), Prompt)
+                     else 0);
+               begin
+                  if Free_Seat = 0 or else Shared > Best then
+                     Free_Seat := Which;
+                     Best := Shared;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end;
 
       --  A full server is not a failure of the caller's request, and saying
       --  so by name is what lets one wait rather than guess.
@@ -198,7 +255,22 @@ package body Model_Runner.Serving is
          --  rewind invalidates the cache and the history and releases
          --  nothing, so the second caller in a seat pays none of what the
          --  first one paid.
-         if Seat_Here.Seated then
+         Seat_Here.Kept :=
+           (if Item.Reuse and then Seat_Here.Seated
+            then Agreeing (Seat_Here, Prompt) else 0);
+
+         if Seat_Here.Seated and then Seat_Here.Kept > 0 then
+            --  What both callers sent stays where it is; everything above
+            --  it becomes uncommitted and is written over by this one.
+            L.Rewind (Seat_Here.Session, Seat_Here.Kept, Status);
+
+            if E.Is_Error (Status) then
+               Seat_Here.Kept := 0;
+               L.Reset (Seat_Here.Session);
+               Status := E.Success;
+            end if;
+
+         elsif Seat_Here.Seated then
             L.Reset (Seat_Here.Session);
          else
             L.Open
@@ -241,7 +313,8 @@ package body Model_Runner.Serving is
          --  meant to cost.
          Seat_Here.Prompt (1 .. Prompt'Length) := Prompt;
          Seat_Here.Length := Prompt'Length;
-         Seat_Here.Read := 0;
+         Seat_Here.Read := Seat_Here.Kept;
+         Item.Tokens_Kept := Item.Tokens_Kept + Seat_Here.Kept;
 
          Seat_Here.State := Running;
          Seat_Here.Why := Still_Going;
@@ -544,5 +617,7 @@ package body Model_Runner.Serving is
    function Rounds (Item : Server) return Natural is (Item.Rounds_Made);
    function Gathered (Item : Server) return Natural is (Item.Last_Round);
    function Produced (Item : Server) return Natural is (Item.Tokens_Made);
+
+   function Kept (Item : Server) return Natural is (Item.Tokens_Kept);
 
 end Model_Runner.Serving;

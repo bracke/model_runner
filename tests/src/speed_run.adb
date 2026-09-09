@@ -638,7 +638,8 @@ package body Speed_Run is
       Arrivals    : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Budget      : Boolean := False)
+      Budget      : Boolean := False;
+      Reuse       : Boolean := True)
    is
       use type Model_Runner.Backend.Backend_Kind;
       use type Serving.Member_Id;
@@ -800,7 +801,7 @@ package body Speed_Run is
 
          Serving.Open
            (Serve, Engine, Workers => Where, Gather => Members,
-            Budget => Budget, Status => Status);
+            Budget => Budget, Reuse => Reuse, Status => Status);
 
          if E.Is_Error (Status) then
             Say ("the server would not open: "
@@ -882,7 +883,11 @@ package body Speed_Run is
                  & T.Image
                      (Long_Float (Joining)
                       / Long_Float (Natural'Max (Joined, 1)) * 1000.0, 1)
-                 & " ms each; mark " & Shown (Mark)
+                 & " ms each"
+                 & (if Serving.Kept (Serve) = 0 then ""
+                    else "; kept" & Natural'Image (Serving.Kept (Serve))
+                         & " prompt tokens")
+                 & "; mark " & Shown (Mark)
                  & Device_Clock.Shown (Clock));
 
             --  And where it went. Summed across the seats, because a round

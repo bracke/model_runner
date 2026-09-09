@@ -6412,6 +6412,292 @@ package body Tests.Inference_Cases is
    --  dropped tokens at all must agree TO THE BIT, and an origin off by
    --  Drop makes the shifted one read the wrong three neighbours and
    --  answer differently.
+   --  Rewinding and reading the same token again answers what it answered
+   --  the first time, to the bit.
+   --
+   --  This is the whole of what a served caller keeping its predecessor's
+   --  prompt rests on: the positions it keeps were not touched, so reading
+   --  the one position it does not have has to give what reading it the
+   --  first time gave. Nothing here is about a window or a shift -- it is
+   --  the plain claim that a rewind leaves the cache alone.
+   --  A caller keeps what its prompt has in common with the one its seat
+   --  last held, and keeps exactly that much.
+   --
+   --  What a fault here looks like is a caller answering out of somebody
+   --  else's context, which reads as a plausible wrong answer and not as an
+   --  error, so what is checked is the count itself: how many tokens were
+   --  kept, against what the two prompts actually share. Four cases, and
+   --  each of them is a way to get that wrong -- nothing in common, some of
+   --  it in common, all of it in common, and the reuse switched off.
+   --
+   --  THE CAP AT ONE SHORT OF THE PROMPT is the one worth naming. A caller
+   --  whose whole prompt was kept would have nothing left to read and so no
+   --  distribution to sample its first token from; it has to read its last
+   --  token whatever else it keeps.
+   procedure A_Seat_Keeps_What_Two_Prompts_Share
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package Serve_It renames Model_Runner.Serving;
+
+      use type Serve_It.Member_Id;
+
+      Steps : constant := 3;
+
+      Image : B.Byte_Array_Access;
+
+      First  : constant Vocab.Token_Array := [4, 5, 6, 7, 8];
+      Same   : constant Vocab.Token_Array := [4, 5, 6, 7, 8];
+      Partly : constant Vocab.Token_Array := [4, 5, 6, 9, 10];
+      Apart  : constant Vocab.Token_Array := [11, 12, 13, 14, 15];
+
+      --  What each of them should keep of the one before it. The first has
+      --  nothing to keep; the second shares its whole prompt and is capped
+      --  one short of it; the third shares three; the fourth shares none.
+      procedure Runs (Reuse : Boolean; Wanted : Natural);
+
+      procedure Runs (Reuse : Boolean; Wanted : Natural) is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+
+         Server : Serve_It.Server (Capacity => 1);
+         Terms  : Serve_It.Terms;
+
+         procedure Caller (Prompt : Vocab.Token_Array);
+
+         procedure Caller (Prompt : Vocab.Token_Array) is
+            Who : Serve_It.Member_Id;
+            Got : Vocab.Token_Array (1 .. Steps);
+            Last : Natural;
+            Done : Boolean;
+         begin
+            Serve_It.Admit (Server, Prompt, Terms, Who, Status);
+            Assert (E.Is_Ok (Status) and then Who /= 0,
+                    "a caller was not admitted: "
+                    & E.Error_Code'Image (Status.Code));
+
+            while Serve_It.Serving (Server) > 0 loop
+               Serve_It.Step (Server, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a round refused: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            Serve_It.Take (Server, Who, Got, Last, Done);
+            Assert (Last = Steps,
+                    "a caller handed back" & Natural'Image (Last)
+                    & " tokens rather than" & Natural'Image (Steps));
+            Serve_It.Retire (Server, Who);
+         end Caller;
+      begin
+         Terms.Sampling.Temperature := 0.0;
+         Terms.Sampling.Repeat_Penalty := 1.0;
+         Terms.Limit := Steps;
+
+         Start (Under);
+
+         Serve_It.Open
+           (Server, Under.Ready, Reuse => Reuse, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the server did not open: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Caller (First);
+         Assert (Serve_It.Kept (Server) = 0,
+                 "the first caller kept"
+                 & Natural'Image (Serve_It.Kept (Server))
+                 & " tokens of a seat that had held nobody");
+
+         Caller (Same);
+         Caller (Partly);
+         Caller (Apart);
+
+         Assert (Serve_It.Kept (Server) = Wanted,
+                 "four callers kept"
+                 & Natural'Image (Serve_It.Kept (Server))
+                 & " prompt tokens between them where"
+                 & Natural'Image (Wanted) & " is what they share");
+
+         Serve_It.Close (Server);
+      end Runs;
+   begin
+      Tiny_Model.Build (Image);
+
+      --  Four in a row through one seat. The second shares all five and is
+      --  capped at four; the third shares three of the second's five, which
+      --  are 4, 5 and 6; the fourth shares none. Four and three is seven.
+      Runs (Reuse => True, Wanted => 7);
+
+      --  And none of it when the reuse is off, which is what a caller who
+      --  would rather a seat forgot the last one asks for.
+      Runs (Reuse => False, Wanted => 0);
+
+      B.Free (Image);
+
+      --  AND THE FLOOR A SLIDING WINDOW PUTS UNDER IT. A layer that has
+      --  slid holds the newest positions and no others, so a caller sharing
+      --  only the first few tokens of a long one cannot keep them: they are
+      --  what the slide dropped. Keeping them would ask the layer to attend
+      --  over keys that are gone, which is the fault Reusable_From exists
+      --  to refuse -- and refusing it is a slower answer and not a wrong
+      --  one.
+      declare
+         package Serve_It renames Model_Runner.Serving;
+
+         Room   : constant := 600;
+         Length : constant := 518;
+
+         Long_One : Vocab.Token_Array (1 .. Length);
+         Short_One : Vocab.Token_Array (1 .. 8);
+
+         Windowed : B.Byte_Array_Access;
+      begin
+         for Index in Long_One'Range loop
+            Long_One (Index) :=
+              Vocab.Token_Id (4 + ((Index - 1) * 7 + Index / 13) mod 5);
+         end loop;
+
+         --  Sharing its first few tokens and nothing else.
+         Short_One := Long_One (1 .. Short_One'Length);
+
+         Tiny_Model.Build (Windowed, Window => 3, Room => Room);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Windowed.all;
+            Under  : Harness (Held'Access);
+            Status : E.Error_Info;
+
+            Server : Serve_It.Server (Capacity => 1);
+            Terms  : Serve_It.Terms;
+
+            Who  : Serve_It.Member_Id;
+            Got  : Vocab.Token_Array (1 .. 2);
+            Last : Natural;
+            Done : Boolean;
+         begin
+            Terms.Sampling.Temperature := 0.0;
+            Terms.Sampling.Repeat_Penalty := 1.0;
+            Terms.Limit := 2;
+
+            Start (Under);
+
+            Serve_It.Open
+              (Server, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the windowed server did not open: "
+                    & E.Error_Code'Image (Status.Code));
+
+            for Round in 1 .. 2 loop
+               declare
+                  Prompt : constant Vocab.Token_Array :=
+                    (if Round = 1 then Long_One
+                     else Vocab.Token_Array (Short_One));
+               begin
+                  Serve_It.Admit (Server, Prompt, Terms, Who, Status);
+                  Assert (E.Is_Ok (Status) and then Who /= 0,
+                          "a caller was not admitted to the windowed seat: "
+                          & E.Error_Code'Image (Status.Code));
+
+                  while Serve_It.Serving (Server) > 0 loop
+                     Serve_It.Step (Server, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "a windowed round refused: "
+                             & E.Error_Code'Image (Status.Code));
+                  end loop;
+
+                  Serve_It.Take (Server, Who, Got, Last, Done);
+                  Serve_It.Retire (Server, Who);
+               end;
+            end loop;
+
+            Assert (Serve_It.Kept (Server) = 0,
+                    "a caller sharing eight tokens with a five-hundred-token "
+                    & "one kept" & Natural'Image (Serve_It.Kept (Server))
+                    & " of them, which a slid window no longer holds");
+
+            Serve_It.Close (Server);
+         end;
+
+         B.Free (Windowed);
+      end;
+   end A_Seat_Keeps_What_Two_Prompts_Share;
+
+   procedure Reading_Again_After_A_Rewind_Answers_The_Same
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Room   : constant := 64;
+      Length : constant := 12;
+
+      Prompt : Vocab.Token_Array (1 .. Length);
+      Image  : B.Byte_Array_Access;
+
+      First, Again : Logit_Vector := [others => 0.0];
+      Apart : Long_Float := 0.0;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) := Vocab.Token_Id (4 + (Index * 3) mod 5);
+      end loop;
+
+      Tiny_Model.Build (Image, Room => Room);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         L.Open (Live, Under.Ready, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, First, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation failed");
+         end loop;
+
+         L.Rewind (Live, Length - 1, Status);
+         Assert (E.Is_Ok (Status),
+                 "the rewind was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Position (Live) = Length - 1,
+                 "the rewind left" & Natural'Image (L.Position (Live))
+                 & " positions, not" & Natural'Image (Length - 1));
+
+         --  And what it kept is what it had: every position below the one
+         --  rewound past still reads as the token that was written there.
+         for Index in 0 .. Length - 2 loop
+            Assert (L.Committed_Token (Live, Index)
+                      = Prompt (Prompt'First + Index),
+                    "the rewind changed the token at position"
+                    & Natural'Image (Index));
+         end loop;
+
+         L.Evaluate
+           (Live, Under.Ready, Prompt (Prompt'Last), Again,
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the second reading failed");
+
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+
+      for Index in First'Range loop
+         Apart := Long_Float'Max
+           (Apart, abs (Long_Float (First (Index) - Again (Index))));
+      end loop;
+
+      Assert (Apart = 0.0,
+              "reading a token again after a rewind answered differently, "
+              & "by" & Long_Float'Image (Apart)
+              & " -- what a rewind kept is not what it had");
+   end Reading_Again_After_A_Rewind_Answers_The_Same;
+
    procedure A_Shift_On_A_Window_Renumbers_What_It_Holds
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7489,6 +7775,14 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Sliding_Window_Narrows_Attention'Access,
          "a sliding window narrows what a position may attend to");
+      Register_Routine
+        (T, A_Seat_Keeps_What_Two_Prompts_Share'Access,
+         "a served caller keeps what its prompt shares with the one "
+         & "its seat last held, and exactly that much");
+      Register_Routine
+        (T, Reading_Again_After_A_Rewind_Answers_The_Same'Access,
+         "rewinding and reading the same token again answers what it "
+         & "answered the first time");
       Register_Routine
         (T, A_Shift_On_A_Window_Renumbers_What_It_Holds'Access,
          "a shift on a cache that has slid renumbers what the layer "

@@ -57,6 +57,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A served caller keeps what its prompt shares with the one its seat last
+  held.** Until now a seat was reset between callers and the next one read
+  its whole prompt from nothing, which on eight seats and the 208-token
+  quoting prompt was three quarters of the wall. The agreement is a prefix
+  comparison against the tokens the seat still holds; the session is rewound
+  to it and the caller reads only the rest, and a free seat is chosen by how
+  far it agrees rather than by its number. It is llama.cpp's
+  `--cache-prompt` and `--slot-prompt-similarity`.
+
+  Alternated against `--no-reuse`, eight seats, thirty-two tokens a caller:
+  16 callers **11.801 s against 7.410 (1.59x)**, 32 callers **23.488 against
+  10.047 (2.34x)**, and 8 callers inside the spread either way because a
+  seat a caller has nothing to keep from. The prompt is read once a seat
+  instead of once a caller, so the saving is the ratio of the two.
+
+  What it keeps is only what both callers sent: everything above the
+  agreement is uncommitted and written over. What it means is that a seat no
+  longer wipes between callers, which `Reset` does deliberately and which
+  `Serving.Open (Reuse => False)` restores. A sliding window puts a floor
+  under it -- `Llama.Reusable_From` -- because a layer that has slid no
+  longer holds the early positions a short agreement would keep.
+
 - **Drafting out of the context, with no second model.** `--draft-lookup`
   proposes what followed the last two tokens the last time they occurred,
   and hands the proposals to the machinery `--draft-model` already used --

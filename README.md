@@ -16412,6 +16412,67 @@ tolerance is what bounds it.
 
 See [docs/serving-several-sequences.md](docs/serving-several-sequences.md).
 
+### A caller keeps what its prompt shares with the one before it
+
+A seat's session outlives the member in it, and until now the only thing that
+bought was the allocation: the seat was reset and the next caller read its
+whole prompt from nothing. **On the traffic a server actually sees that is
+most of the wall.** Eight seats, the 208-token quoting prompt, thirty-two
+tokens a caller:
+
+| callers | rounds | wall |
+| ---: | ---: | ---: |
+| 8 | 35 | 5.844 s |
+| 16 | 61 | 11.562 s |
+| 32 | 122 | 23.380 s |
+
+Dead linear at 0.73 s a caller, of which 0.53 is 208 tokens at the
+processor's own 390 a second -- a prompt the seat had just finished reading.
+The same benchmark with a five-token prompt runs in 2.742 s, so three
+quarters of that wall is prompt read again.
+
+So an arriving caller keeps it. The agreement is a prefix comparison against
+the tokens the seat still holds; the session is rewound to it and the caller
+reads only the rest. It is llama.cpp's `--cache-prompt`, and choosing the
+free seat whose context agrees furthest rather than the lowest-numbered one
+is its `--slot-prompt-similarity`. Alternated against `--no-reuse`:
+
+| callers | plain | keeping | | kept |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 5.818, 6.139, 6.250 s | 5.996, 6.151, 6.222 s | -- | 0 |
+| 16 | 11.801 s | **7.410 s** | 1.59x | 1656 |
+| 32 | 23.488 s | **10.047 s** | 2.34x | 4968 |
+
+The prompt is read once a seat instead of once a caller, so what it saves is
+the ratio of the two: nothing at all when they are equal -- three alternated
+rounds there are inside each other's spread -- and growing from there.
+
+**What it keeps is only what both callers sent.** Everything above the
+agreement is left uncommitted and written over by what this caller says, so
+no caller reads another's text through the cache. What it does mean is that a
+seat no longer wipes between callers, which `Reset` does deliberately and
+which `Reuse => False` restores.
+
+**A sliding window puts a floor under it.** A layer that has slid holds the
+newest positions and no others, so a caller sharing only the first few tokens
+of a long one cannot keep them: they are what the slide dropped, and asking
+the layer to attend over them raises. `Llama.Reusable_From` says where that
+floor is and a seat below it reads its prompt from nothing, which is slower
+and right. Held by a test that serves a 518-token prompt and then one sharing
+eight tokens of it: without the floor the second round refuses with
+`INTERNAL_INVARIANT_VIOLATED`.
+
+**And the mark moves, which is not the reuse being wrong.** A caller that
+kept two hundred and seven positions reads its last one alone where a caller
+that kept nothing read it in a stretch, and `### The difference left over was
+not drafting` above measures what that costs: batched and single evaluation
+are not bit-for-bit the same arithmetic, and a flat distribution turns on the
+difference. The server already had this property -- the stretch a prompt is
+read in is divided among the members still reading, so how much of a prompt
+goes into one pass already depends on who else arrived. What is exact, and is
+what the reuse rests on, is that rewinding and reading a token again answers
+what it answered the first time to the bit; that has a test of its own.
+
 
 ### What a second sequence is actually worth
 

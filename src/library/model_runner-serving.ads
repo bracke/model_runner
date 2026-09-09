@@ -28,6 +28,30 @@ with Model_Runner.Tokenizer;
 --  per member, and so are the stop tokens and the token limit. Nothing here
 --  is shared between members but the model and the pass.
 --
+--  WHAT AN ARRIVING CALLER KEEPS. A seat's session outlives the member in
+--  it, and a second caller whose prompt begins the way the first one's did
+--  keeps that much of the context instead of reading it again. Sixteen
+--  callers through eight seats, all sending the same 208-token prompt and
+--  each generating thirty-two tokens, cost 11.562 seconds on this host
+--  where eight cost 5.844 and thirty-two cost 23.380 -- dead linear at 0.73
+--  seconds a caller, of which 0.53 is reading a prompt the seat had just
+--  finished reading. What the reuse leaves is the prompt read once a seat
+--  rather than once a caller, so what it saves grows with the ratio of the
+--  two and is nothing when they are equal.
+--
+--  WHAT IT KEEPS IS ONLY WHAT BOTH CALLERS SENT. The agreement is a prefix
+--  comparison against the tokens the seat still holds, and everything above
+--  it is left uncommitted and written over by what this caller says. So no
+--  caller reads another's text through the cache. What it does mean is that
+--  a seat no longer wipes between callers, which Reset does deliberately
+--  and which Reuse => False restores.
+--
+--  A SLIDING WINDOW BOUNDS IT. A layer that has slid holds the newest
+--  positions and no others, so keeping a prefix shorter than what it holds
+--  would leave it attending to keys that are gone.
+--  Model_Runner.Llama.Reusable_From says where that floor is and a seat
+--  below it reads its prompt from nothing, which is correct and slower.
+--
 --  Joining costs one pass, not one a caller. A member arriving has a prompt
 --  to read, and reading it on its own was the largest thing a server spent
 --  its time on: seventy per cent of a run at a hundred and ten tokens a
@@ -118,6 +142,9 @@ package Model_Runner.Serving is
    --    Time_Spent can say where a server's time went. Off by default,
    --    because it reads the clock at every phase boundary of every pass
    --    and a server is not a measurement.
+   --  @param Reuse True to let an arriving caller keep whatever its prompt
+   --    has in common with the one the seat last held, instead of reading
+   --    its prompt from nothing. See the note below.
    --  @param Status Success or the first refusal.
    procedure Open
      (Item    : in out Server;
@@ -126,7 +153,18 @@ package Model_Runner.Serving is
       Context : Natural := 0;
       Gather  : Positive := Default_Gather;
       Budget  : Boolean := False;
+      Reuse   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info);
+
+   --  How many prompt tokens arriving callers have not had to read.
+   --
+   --  The measure of what Reuse is worth on the traffic a server actually
+   --  saw, which is the only place that can be known: it is a property of
+   --  how alike the prompts are and of nothing else.
+   --
+   --  @param Item The server.
+   --  @return Prompt tokens kept rather than read, since it opened.
+   function Kept (Item : Server) return Natural;
 
    --  Where the server's time went, phase by phase.
    --
@@ -270,6 +308,10 @@ private
    type Seat is limited record
       State   : Member_State := Free;
 
+      --  How much of this member's prompt was already in the seat when it
+      --  arrived, which is what it did not have to read.
+      Kept    : Natural := 0;
+
       --  Whether that session has been opened at all. A seat that has never
       --  held a member has nothing to rewind.
       Seated  : Boolean := False;
@@ -304,6 +346,7 @@ private
       Context   : Natural := 0;
       Gather    : Positive := Default_Gather;
       Budget    : Boolean := False;
+      Reuse     : Boolean := True;
       Open_Now  : Boolean := False;
 
       --  Room for one round's logits, a row a member, allocated once.
@@ -313,6 +356,7 @@ private
       Rounds_Made : Natural := 0;
       Last_Round  : Natural := 0;
       Tokens_Made : Natural := 0;
+      Tokens_Kept : Natural := 0;
 
       Seats : Seat_Room (1 .. Capacity);
    end record;

@@ -102,6 +102,9 @@ package Speed_Run is
    --  @param Backend Which backend the model runs on.
    --  @param Budget True to report where the server's time went, phase by
    --    phase, summed across the seats.
+   --  @param Reuse True to let a caller keep whatever its prompt has in
+   --    common with the one its seat last held. On, as the server has it;
+   --    --no-reuse takes the other side of the comparison.
    procedure Serve
      (Path        : String;
       Prompt_Path : String;
@@ -111,7 +114,8 @@ package Speed_Run is
       Arrivals    : Positive;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Budget      : Boolean := False);
+      Budget      : Boolean := False;
+      Reuse       : Boolean := True);
 
    --  What one set of repetitions measured. Times are seconds.
    type Report is record

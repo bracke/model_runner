@@ -6301,6 +6301,44 @@ package body Model_Runner.Llama is
    -- Committed_Token --
    ----------------------
 
+   -------------------
+   -- Reusable_From --
+   -------------------
+
+   function Reusable_From (Item : Session) return Natural is
+      Lowest : Natural := 0;
+   begin
+      if Item.Origin = null or else Item.Owner = null then
+         return 0;
+      end if;
+
+      declare
+         Width : constant Natural := Item.Owner.Settings.Window;
+      begin
+         if Width = 0 then
+            return 0;
+         end if;
+
+         for Layer in Item.Origin.all'Range loop
+            declare
+               Origin : constant Element_Count := Item.Origin.all (Layer);
+            begin
+               --  A layer still holding position zero holds everything, so
+               --  any rewind is safe there. One that has slid holds from
+               --  Origin, and the position rewound to has to leave a whole
+               --  window above it.
+               if Origin > 0 then
+                  Lowest :=
+                    Natural'Max
+                      (Lowest, Natural (Origin) + Width - 1);
+               end if;
+            end;
+         end loop;
+      end;
+
+      return Lowest;
+   end Reusable_From;
+
    function Committed_Token (Item : Session; Index : Natural) return Token_Id is
    begin
       if Item.History = null or else Index >= Item.Committed then

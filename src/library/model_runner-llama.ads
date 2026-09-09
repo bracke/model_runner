@@ -941,6 +941,25 @@ package Model_Runner.Llama is
    --  @return Capacity in tokens.
    function Capacity (Item : Session) return Natural;
 
+   --  The lowest position this session may be rewound to and still answer.
+   --
+   --  Zero for a session whose layers hold everything, which is every model
+   --  that does not slide a window and every windowed one that has not
+   --  filled a layer yet. A layer that has slid holds the newest positions
+   --  and no others, so a rewind past what it holds leaves it unable to
+   --  attend: the keys the window wants are the ones the slide dropped.
+   --
+   --  What a caller does with this is decide, and the two answers are both
+   --  reasonable: rewind no further than this, or clear the context and
+   --  read the whole thing again. This exists because the alternative is
+   --  discovering the bound by getting a wrong answer -- llama.cpp met the
+   --  same wall from the other side and answered it with `--swa-full`,
+   --  which gives the memory back to keep the rewinding.
+   --
+   --  @param Item Session to inspect.
+   --  @return The lowest safe position, or zero when any is safe.
+   function Reusable_From (Item : Session) return Natural;
+
    --  Token committed at a position.
    --
    --  Used by interactive mode to check that a re-rendered conversation is an

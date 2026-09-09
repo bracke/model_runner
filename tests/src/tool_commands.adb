@@ -33,7 +33,8 @@ package body Tool_Commands is
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup"
-     & " --kv-cache --repeats --round --serve --callers --anyway --wait"
+     & " --kv-cache --repeats --round --serve --callers --no-reuse"
+     & " --anyway --wait"
      & " --budget ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
    --  The bare "--" is in this list because the command really does
@@ -59,7 +60,7 @@ package body Tool_Commands is
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup]"
      & " [--kv-cache MODE] [--repeats N] [--round N] [--serve N]"
-     & " [--callers N] [--anyway] [--wait MINUTES]"
+     & " [--callers N] [--no-reuse] [--anyway] [--wait MINUTES]"
      & " [--budget]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
    Takes_Outside   : aliased constant String :=

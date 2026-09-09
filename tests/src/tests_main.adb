@@ -1695,7 +1695,8 @@ begin
                Members     => Number ("--serve", 1),
                Arrivals    => Number ("--callers", Number ("--serve", 1)),
                Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Budget      => Given ("--budget"));
+               Budget      => Given ("--budget"),
+               Reuse       => not Given ("--no-reuse"));
             return;
          end if;
 
