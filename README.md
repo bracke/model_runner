@@ -11531,6 +11531,82 @@ keeping it needs an acceptance test written against the sampler's own
 distribution, which this does not have; a grammar constrains what may be
 produced in a way the proposals know nothing about.
 
+### Drafting out of the context, with no second model
+
+`--draft-lookup` proposes the same way and finds the proposals somewhere
+else: in the text this run has already read. Take the last two tokens, find
+where they last occurred, and propose what followed them then. It is
+llama.cpp's `--spec-ngram-*` family, and what recommends it here is that the
+expensive half of drafting was already built -- the batch, the acceptance
+rule, the rewind, the counting -- and the only model-specific part was the
+loop that filled the proposals.
+
+**It costs no second model, no memory and no passes.** A draft model's
+proposals cost one pass of that model each, which is why the section above
+concludes that this pair cannot pay at any acceptance rate. A search over an
+array costs nothing measurable, so what a proposal costs is one row of a
+batch that was going to happen anyway.
+
+The 206-token prompt asks the model to repeat a passage it was just given.
+128 tokens, alternated against no drafting, three rounds each, both through
+the load gate, same digest every time:
+
+| | plain | `--draft-lookup` | |
+| --- | ---: | ---: | ---: |
+| processor, generating | 3.249, 3.269, 3.277 s | **2.131, 2.175, 2.179 s** | 1.51x |
+| device, generating | 2.409, 2.414, 2.421 s | **1.469, 1.483, 1.480 s** | 1.63x |
+
+116 proposed and 69 accepted, on both backends and in every round -- the
+proposals are a function of the text and not of the machine, so the two
+backends propose and accept exactly the same things and only the timing
+differs.
+
+**Four is the count, and it is a measurement.** The same run at three
+depths:
+
+| tokens proposed a round | processor | device | proposed / accepted |
+| ---: | ---: | ---: | --- |
+| 4 | **2.184 s** | **1.528 s** | 116 / 69 |
+| 8 | 2.276 | 1.547 | 176 / 75 |
+| 16 | 2.633 | 1.549 | 284 / 87 |
+
+Deeper drafts are righter in total and cost more than they are worth on the
+processor, where a batch row is real arithmetic; on the device the curve is
+flat, because a row there is nearly free and the extra acceptance pays for
+itself. Four is best on one and free on the other, so `--draft-tokens` keeps
+the default it had.
+
+**And what it costs when there is nothing to look up**, which is the figure
+that decides whether to leave the flag on. A sixteen-token answer to a
+seventeen-token prompt, where the lookup proposes nothing at all: 0.396 s
+plain against 0.420 with the flag, **six per cent**. That is not the search
+-- with the search replaced by "propose nothing" the run still read 0.422 --
+it is the drafting round itself, which the draft-model path has always paid
+too. A round that proposes nothing now evaluates its one token the ordinary
+way rather than as a batch of one, which took that cost from fifteen per
+cent to six; the rest is the round's own bookkeeping and is the next thing to
+look at here.
+
+**A repetition penalty made every drafted run wrong, and had since drafting
+was written.** A penalty is computed from the tokens said so far, and a round
+samples several positions before it emits any of them -- so every row of a
+batch was scored against the history as it stood when the round began, where
+a run of single tokens would have scored each against the tokens before it.
+The drafted text therefore diverged from the undrafted text whenever a
+penalty was on, which the command turns on by default at 1.1. The guarantee
+this pair of sections opens with held only at `--repeat-penalty 1.0`.
+
+It was found by a lookup drafting for a model quoting itself, and it is fixed
+where it belongs: a round records what it verifies as it verifies it, and the
+emitting stops recording when a round is doing it. Both paths now answer
+identically at 1.1 -- checked through the command, at one proposal a round
+and at four.
+
+`--draft-lookup` and `--draft-model` together are refused rather than
+resolved. They are two sources of proposals and a round takes one; choosing
+would mean silently ignoring either a model somebody loaded or a flag they
+set.
+
 ### Repacking
 
 `--repack MODE` writes every weight matrix out again once at load and

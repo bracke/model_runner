@@ -32,6 +32,7 @@ package body Tool_Commands is
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
+     & " --draft-lookup"
      & " --kv-cache --repeats --round --serve --callers --anyway --wait"
      & " --budget ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
@@ -56,6 +57,7 @@ package body Tool_Commands is
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
      & " [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
+     & " [--draft-lookup]"
      & " [--kv-cache MODE] [--repeats N] [--round N] [--serve N]"
      & " [--callers N] [--anyway] [--wait MINUTES]"
      & " [--budget]";

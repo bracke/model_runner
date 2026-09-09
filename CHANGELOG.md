@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A repetition penalty made every drafted run produce different text, and
+  had since drafting was written.** A penalty is computed from the tokens
+  said so far; a round samples several positions before it emits any of
+  them, so every row of a batch was scored against the history as it stood
+  when the round began. The guarantee drafting exists to keep -- exactly the
+  text of the same run without a draft -- therefore held only at
+  `--repeat-penalty 1.0`, and the command turns the penalty on by default at
+  1.1. A round now records what it verifies as it verifies it, and the
+  emitting stops recording when a round is doing it. Found by a lookup
+  drafting for a model quoting itself.
+
 - **The device was never given the narrow cache, and the rolling context
   raised on one.** Three faults from the two commits that windowed the
   key/value cache, found together because each hid the next.
@@ -37,6 +48,24 @@ Keep a Changelog and the project uses semantic versioning.
   drop. Rows move only where a layer straddles the hole.
 
 ### Added
+
+- **Drafting out of the context, with no second model.** `--draft-lookup`
+  proposes what followed the last two tokens the last time they occurred,
+  and hands the proposals to the machinery `--draft-model` already used --
+  the batch, the acceptance rule, the rewind. It is llama.cpp's
+  `--spec-ngram-*` family. On a 206-token prompt asking the model to repeat
+  a passage, 128 tokens, alternated three rounds each through the load gate
+  and with the same digest every time: **3.249/3.269/3.277 s generating
+  against 2.131/2.175/2.179 on the processor (1.51x), and 2.409/2.414/2.421
+  against 1.469/1.483/1.480 on the device (1.63x)**, 116 proposed and 69
+  accepted on both.
+
+  It costs no model, no memory and no passes -- a proposal is a search over
+  an array, so what it costs is one row of a batch that was happening
+  anyway. Where there is nothing to look up it costs six per cent, and that
+  six is the drafting round rather than the search. Four proposals a round
+  is best on the processor and flat on the device, so `--draft-tokens` keeps
+  its default.
 
 - **A thermometer beside every published figure, and a load bound a
   spinner cannot pass.** `tests speed` and `tests benchmark` now carry the

@@ -339,6 +339,10 @@ package Model_Runner.CLI.Options is
       Draft_Path   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Draft_Tokens : Natural := 4;
 
+      --  Or propose them out of the context, with no model at all: what
+      --  followed the last two tokens the last time they occurred.
+      Draft_Lookup : Boolean := False;
+
       --  Whether the caller named the count. A count without a draft model
       --  is an option that cannot do anything, and saying so beats leaving
       --  it to be discovered.

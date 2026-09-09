@@ -2,6 +2,7 @@ with Ada.Text_IO;
 
 with AUnit.Assertions;
 
+with Model_Runner.Lookup;
 with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
@@ -2379,6 +2380,203 @@ package body Tests.Inference_Cases is
    --  and the rewind on both sessions -- while the answer stays checkable
    --  against the run beside it. A draft that agreed with nothing would
    --  exercise the rewind and little else.
+   --  The lookup proposes what followed this phrase the last time it was
+   --  said, and proposes nothing where nothing did.
+   --
+   --  A search over an array, which is why it is a package of its own and
+   --  checked here rather than only through a run: what a run can show is
+   --  that the text came out the same, and the text comes out the same when
+   --  the lookup proposes nothing at all.
+   procedure The_Lookup_Proposes_What_Followed
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Look renames Model_Runner.Lookup;
+
+      Into  : Vocab.Token_Array (1 .. 4);
+      Count : Natural;
+   begin
+      --  "a b c d a b" -- the last two are "a b", which occurred at the
+      --  front and was followed by "c d a b". All four, and running back
+      --  into the phrase itself is the point rather than an oversight: a
+      --  passage that has begun to repeat is a passage that will go on
+      --  repeating, and clamping the proposal at the match would give up
+      --  exactly the case this is for.
+      Look.Propose ([1, 2, 3, 4, 1, 2], Into, Count);
+      Assert (Count = 4,
+              "the lookup proposed" & Natural'Image (Count)
+              & " tokens where four followed the phrase");
+      Assert (Into (1) = 3 and then Into (2) = 4
+              and then Into (3) = 1 and then Into (4) = 2,
+              "the lookup proposed tokens that did not follow the phrase");
+
+      --  The most recent occurrence, not the first. "a b x, a b y, a b" has
+      --  to propose y: a phrase said twice is likelier to go on the way it
+      --  went last time, and that is the rule the figures were measured
+      --  under.
+      Look.Propose ([1, 2, 8, 1, 2, 9, 1, 2], Into, Count);
+      Assert (Count > 0 and then Into (1) = 9,
+              "the lookup proposed what followed the phrase the first time "
+              & "rather than the last");
+
+      --  Nothing to match against.
+      Look.Propose ([1, 2, 3], Into, Count);
+      Assert (Count = 0,
+              "the lookup proposed" & Natural'Image (Count)
+              & " tokens where the phrase had never been said before");
+
+      --  Shorter than a key and a match.
+      Look.Propose ([1, 2], Into, Count);
+      Assert (Count = 0, "the lookup proposed from a history of two");
+      Look.Propose ([1 .. 0 => 1], Into, Count);
+      Assert (Count = 0, "the lookup proposed from an empty history");
+
+      --  Bounded by the room it is given, not by what it found.
+      declare
+         Narrow : Vocab.Token_Array (1 .. 2);
+      begin
+         Look.Propose ([1, 2, 3, 4, 5, 6, 7, 1, 2], Narrow, Count);
+         Assert (Count = 2 and then Narrow (1) = 3 and then Narrow (2) = 4,
+                 "the lookup overran the room it was given");
+      end;
+
+      --  A longer key is a narrower question, and this history answers the
+      --  short one and not the long one: "b c" occurred before, "a b c"
+      --  did not.
+      Look.Propose ([9, 2, 3, 7, 1, 2, 3], Into, Count, Key => 2);
+      Assert (Count > 0 and then Into (1) = 7,
+              "a key of two did not find the pair that had occurred");
+      Look.Propose ([9, 2, 3, 7, 1, 2, 3], Into, Count, Key => 3);
+      Assert (Count = 0,
+              "a key of three found a triple that had not occurred");
+   end The_Lookup_Proposes_What_Followed;
+
+   --  A run drafting from its own context says exactly what it says
+   --  without drafting.
+   --
+   --  The same claim the draft-model path makes and for the same reason:
+   --  at temperature zero a proposal is either what the target would have
+   --  chosen or it is not, and only the ones that match are kept. What is
+   --  different is that there is no second model to be wrong -- the
+   --  proposals come out of the text, so a fault here shows up as the
+   --  target being asked to check a phrase that was never said.
+   --
+   --  The prompt repeats on purpose. A lookup over a context with nothing
+   --  said twice proposes nothing, and a run that proposes nothing is the
+   --  run without drafting compared against itself.
+   procedure Lookup_Drafting_Produces_The_Same_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      --  Room for the prompt, the tokens asked for and a batch of
+      --  proposals, which the fixture's own sixteen is not.
+      Room : constant := 64;
+
+      Image : B.Byte_Array_Access;
+
+      Prompt : constant String := "abababab";
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         procedure Turn
+           (With_Lookup : Boolean;
+            Text        : out Model_Runner.Bytes.Byte_Array_Access;
+            Length      : out Natural;
+            Proposed    : out Natural;
+            Accepted    : out Natural)
+         is
+            Live    : L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 12;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 7;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Lookup then 4 else 0);
+            Request.Draft_From_Context := With_Lookup;
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null, Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+            Accepted := Outcome.Accepted;
+
+            Model_Runner.Stops.Close (Stop);
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Look_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Look_Last : Natural;
+         Ignored_A, Ignored_B  : Natural;
+         Proposed, Accepted    : Natural;
+      begin
+         Start (Under);
+
+         Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
+         Turn (True, Look_Text, Look_Last, Proposed, Accepted);
+
+         Assert (Plain_Last > 0, "the plain run produced nothing");
+         Assert (Look_Last = Plain_Last,
+                 "the drafted run produced" & Natural'Image (Look_Last)
+                 & " bytes against" & Natural'Image (Plain_Last));
+
+         Assert (B."/=" (Plain_Text, null)
+                   and then B."/=" (Look_Text, null),
+                 "a run retained no text");
+         Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                        Look_Text.all (1 .. B.Byte_Index (Look_Last))),
+                 "drafting from the context produced different text");
+
+         --  And the path was taken, rather than the run quietly falling
+         --  back to one token at a time.
+         Assert (Proposed > 0,
+                 "the run proposed nothing from a context that repeats, so "
+                 & "this compares two runs of the same path");
+         --  And most of them were right, which is the part the same text
+         --  cannot show. A proposal is checked either way, so a lookup that
+         --  proposes nonsense produces the same text and costs passes to do
+         --  it: the fault this holds is the key not ending at the token the
+         --  round is already certain of, which proposes what follows the
+         --  phrase before this one. On a prompt repeating with period two
+         --  every proposal is right; with the key one short, one in five
+         --  is.
+         Assert (Accepted * 2 >= Proposed,
+                 "only" & Natural'Image (Accepted) & " of"
+                 & Natural'Image (Proposed) & " proposals were accepted on "
+                 & "a context that repeats, so the proposals are for the "
+                 & "wrong position");
+
+         B.Free (Plain_Text);
+         B.Free (Look_Text);
+      end;
+
+      B.Free (Image);
+   end Lookup_Drafting_Produces_The_Same_Text;
+
    procedure Drafting_Produces_The_Same_Text
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7443,6 +7641,14 @@ package body Tests.Inference_Cases is
         (T, Rewind_Gives_Back_Positions'Access,
          "a session put back to an earlier position evaluates from there "
          & "and gets what it would have got had it never gone further");
+      Register_Routine
+        (T, The_Lookup_Proposes_What_Followed'Access,
+         "the lookup proposes what followed the phrase the last time "
+         & "it was said");
+      Register_Routine
+        (T, Lookup_Drafting_Produces_The_Same_Text'Access,
+         "a run drafting from its own context says what it says "
+         & "without drafting");
       Register_Routine
         (T, Drafting_Produces_The_Same_Text'Access,
          "a run with a draft model produces exactly the text of the same "

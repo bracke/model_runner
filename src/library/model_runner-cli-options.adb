@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 77) of Registry_Row :=
+   Registry : constant array (1 .. 78) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -130,6 +130,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--draft-tokens"),
        [Command_Run => True, others => False], Text ("draft_tokens")),
+      (Text ("--draft-lookup"),
+       [Command_Run => True, others => False], Text ("draft_lookup")),
       (Text ("--memory-limit"),
        [Command_Run | Command_Embed => True, others => False], Text ("memory_limit")),
       (Text ("--device-memory"),
@@ -1752,6 +1754,14 @@ package body Model_Runner.CLI.Options is
                      Result.Draft_Path := T.To_Bounded (Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--draft-lookup" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Draft_Lookup := True;
+
                   elsif Name = "--draft-tokens" then
                      Natural_Value (Flag_Draft_Tokens, 1, 32,
                                     Result.Draft_Tokens, Good);
@@ -2323,6 +2333,16 @@ package body Model_Runner.CLI.Options is
             (if Result.Turn_Kinds (1) = Turn_Tool
              then "--tool-result" else "--assistant"),
             E.Param_Identifier);
+         return;
+      end if;
+
+      --  Two sources of proposals, and a round takes one. Choosing for the
+      --  caller would mean silently ignoring a model they loaded or a flag
+      --  they set, and either is worse than saying so.
+      if Result.Draft_Lookup and then not T.Is_Empty (Result.Draft_Path) then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--draft-lookup", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--draft-model", E.Param_Identifier);
          return;
       end if;
 

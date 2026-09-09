@@ -1,6 +1,7 @@
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Lookup;
 with Model_Runner.Shares;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Tensors;
@@ -152,12 +153,21 @@ package body Model_Runner.Generation is
       --  a count of tokens to propose, greedy sampling and no grammar --
       --  the last two because they are what makes "the same text as without
       --  a draft" a statement anybody can check.
+      --  A model to draft with, where the caller gave one.
+      By_Model : constant Boolean :=
+        Draft /= null and then Draft_Session /= null;
+
       Drafting : constant Boolean :=
-        Draft /= null
-        and then Draft_Session /= null
+        (By_Model or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
         and then S.Is_Greedy (Item.Sampling)
         and then Rules = null;
+
+      --  Drafting with nothing to draft from but the text. Everything below
+      --  that reaches for the draft session is skipped: there is no second
+      --  context to keep alongside this one, nothing to prefill, nothing to
+      --  shift and nothing to rewind.
+      By_Context : constant Boolean := Drafting and then not By_Model;
 
       Largest_Draft : constant Natural :=
         (if Drafting
@@ -171,6 +181,13 @@ package body Model_Runner.Generation is
       Verified : Token_Buffer := null;
       Verified_Count : Natural := 0;
       Verified_At    : Natural := 0;
+
+      --  What this run has committed, for a proposal to be searched out of.
+      --  The target's own tokens rather than a list kept alongside them: a
+      --  proposal checked against a context the target has not read would
+      --  be a guess about a different text.
+      Said       : Token_Buffer := null;
+      Said_Count : Natural := 0;
 
       --  One vocabulary-sized row per position of a verification batch, and
       --  a copy of the distribution the round started from.
@@ -218,6 +235,35 @@ package body Model_Runner.Generation is
          end if;
          S.Close (Sampler);
       end Cleanup;
+
+      --  Bring Said up to what the session holds.
+      --
+      --  Read out of the session rather than appended to as tokens are
+      --  produced, because the session is the thing that knows: a prompt
+      --  arrives in batches, a rolling context renumbers what it keeps, and
+      --  a rejected proposal takes its positions back. Refilled whole when
+      --  it has shrunk -- which is a shift or a rejection -- and topped up
+      --  otherwise, so a round costs the tokens it added.
+      procedure Recall_Said;
+
+      procedure Recall_Said is
+      begin
+         if Said = null then
+            return;
+         end if;
+
+         if Said_Count > L.Position (Session) then
+            Said_Count := 0;
+         end if;
+
+         while Said_Count < L.Position (Session)
+           and then Said_Count < Said.all'Length
+         loop
+            Said_Count := Said_Count + 1;
+            Said.all (Said_Count) :=
+              L.Committed_Token (Session, Said_Count - 1);
+         end loop;
+      end Recall_Said;
 
       --  Record the outcome of the run. The first call wins, so a stop
       --  condition detected while unwinding cannot overwrite the real reason.
@@ -375,6 +421,11 @@ package body Model_Runner.Generation is
       if Drafting then
          Proposed := new Vocab.Token_Array (1 .. Largest_Draft + 1);
          Verified := new Vocab.Token_Array (1 .. Largest_Draft + 1);
+
+         if By_Context then
+            Said := new Vocab.Token_Array (1 .. L.Capacity (Session) + 1);
+         end if;
+
          T.Allocate
            (N.Element_Count (Settings.Vocabulary)
             * N.Element_Count (Largest_Draft + 1), Every);
@@ -581,7 +632,7 @@ package body Model_Runner.Generation is
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
-               if Drafting then
+               if Drafting and then not By_Context then
                   declare
                      Local : E.Error_Info;
                   begin
@@ -674,11 +725,13 @@ package body Model_Runner.Generation is
                   return;
                end if;
 
-               L.Shift
-                 (Draft_Session.all, Draft.all, Item.Context_Keep,
-                  Item.Context_Shift, Moved);
-               if E.Is_Error (Moved) then
-                  return;
+               if not By_Context then
+                  L.Shift
+                    (Draft_Session.all, Draft.all, Item.Context_Keep,
+                     Item.Context_Shift, Moved);
+                  if E.Is_Error (Moved) then
+                     return;
+                  end if;
                end if;
 
                Outcome.Shifted := Outcome.Shifted + 1;
@@ -707,37 +760,65 @@ package body Model_Runner.Generation is
             Count := 1;
             Proposed.all (1) := Guess;
 
-            --  And what the draft would say after it, and after that, and so
-            --  on. Each proposal costs the draft a pass; a draft as large as
-            --  the target would cost exactly what it saves.
-            for Step in 1 .. Largest_Draft loop
-               L.Evaluate
-                 (Draft_Session.all, Draft.all, Proposed.all (Count),
-                  Aside.all, Cancel, Local);
+            if By_Context then
+               --  What followed this phrase the last time it was said. One
+               --  search rather than a pass a proposal, over the tokens
+               --  this run has committed -- the target's own, so a proposal
+               --  is never checked against a context the target has not
+               --  read.
+               Recall_Said;
 
-               --  A draft that has run out of room stops proposing rather
-               --  than stopping the run: what it has proposed so far is
-               --  still worth checking, and the target's own room is dealt
-               --  with below.
-               exit when E.Is_Error (Local)
-                 and then Local.Code = E.Generation_Context_Exhausted;
-
-               if E.Is_Error (Local) then
-                  Conclude (Runtime_Error, Local);
-                  Failed := True;
-                  return;
+               --  The token this round is already certain of, which the
+               --  session has not committed yet and which the proposal has
+               --  to follow: what is being asked is what comes after this
+               --  phrase ending in Guess, not what came after the phrase
+               --  before it.
+               if Said_Count < Said.all'Length then
+                  Said_Count := Said_Count + 1;
+                  Said.all (Said_Count) := Guess;
                end if;
 
-               S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
-               if E.Is_Error (Local) then
-                  Conclude (Runtime_Error, Local);
-                  Failed := True;
-                  return;
-               end if;
+               declare
+                  Given : Natural;
+               begin
+                  Lookup.Propose
+                    (Said.all (1 .. Said_Count),
+                     Proposed.all (2 .. Largest_Draft + 1), Given);
+                  Count := Count + Given;
+               end;
+            else
+               --  And what the draft would say after it, and after that, and
+               --  so on. Each proposal costs the draft a pass; a draft as
+               --  large as the target would cost exactly what it saves.
+               for Step in 1 .. Largest_Draft loop
+                  L.Evaluate
+                    (Draft_Session.all, Draft.all, Proposed.all (Count),
+                     Aside.all, Cancel, Local);
 
-               Count := Count + 1;
-               Proposed.all (Count) := Guess;
-            end loop;
+                  --  A draft that has run out of room stops proposing rather
+                  --  than stopping the run: what it has proposed so far is
+                  --  still worth checking, and the target's own room is
+                  --  dealt with below.
+                  exit when E.Is_Error (Local)
+                    and then Local.Code = E.Generation_Context_Exhausted;
+
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+
+                  S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+
+                  Count := Count + 1;
+                  Proposed.all (Count) := Guess;
+               end loop;
+            end if;
 
             --  The first is the target's own; the rest are the draft's, and
             --  those are what the count below is about.
@@ -745,9 +826,25 @@ package body Model_Runner.Generation is
 
             --  The target reads the lot in one pass, and says what it would
             --  have said at each position.
-            L.Evaluate_Batch
-              (Session, Source, Proposed.all (1 .. Count), Logits.all,
-               Every => Every, Cancel => Cancel, Status => Local);
+            --
+            --  UNLESS THERE IS ONLY THE ONE, which a lookup produces
+            --  whenever the phrase it is holding has not been said before.
+            --  A batch of one is not a token evaluated: it goes down the
+            --  batched path, writes a row of every position's logits and
+            --  costs about fifteen per cent more wall and half again the
+            --  processor time. A draft model always proposes something, so
+            --  this case did not exist until proposals came out of a
+            --  search, and paying it on prose with nothing to look up would
+            --  have made this a loss where it should be a wash.
+            if Count = 1 then
+               L.Evaluate
+                 (Session, Source, Proposed.all (1), Logits.all,
+                  Cancel, Local);
+            else
+               L.Evaluate_Batch
+                 (Session, Source, Proposed.all (1 .. Count), Logits.all,
+                  Every => Every, Cancel => Cancel, Status => Local);
+            end if;
 
             --  Out of room: drop the oldest and read them again. Once, as
             --  on the single-token path -- a batch that still will not fit
@@ -759,7 +856,11 @@ package body Model_Runner.Generation is
                   Room : Boolean;
                begin
                   Make_Room (Room);
-                  if Room then
+                  if Room and then Count = 1 then
+                     L.Evaluate
+                       (Session, Source, Proposed.all (1), Logits.all,
+                        Cancel, Local);
+                  elsif Room then
                      L.Evaluate_Batch
                        (Session, Source, Proposed.all (1 .. Count),
                         Logits.all, Every => Every, Cancel => Cancel,
@@ -786,6 +887,26 @@ package body Model_Runner.Generation is
             Verified.all (1) := Proposed.all (1);
             Verified_Count := 1;
 
+            --  AND THE PENALTY'S HISTORY MOVES WITH THE VERIFICATION, which
+            --  it did not. A repetition penalty is computed from the tokens
+            --  said so far, and a round samples several positions before it
+            --  emits any of them: every row was scored against the history
+            --  as it stood when the round began, where a run of single
+            --  tokens would have scored each against the tokens before it.
+            --
+            --  So a drafted run answered differently from an undrafted one
+            --  whenever a penalty was on -- which the command turns on by
+            --  default, at 1.1 -- and the guarantee this path exists to
+            --  keep was kept only at --repeat-penalty 1.0. Caught by a
+            --  lookup drafting for a model that repeats itself, and true of
+            --  --draft-model since it was written.
+            --
+            --  Recorded here rather than where a token is emitted, which is
+            --  why the emitting below records only when nothing is
+            --  drafting: a token recorded in both places is a token the
+            --  penalty counts twice.
+            S.Record_Token (Sampler, Proposed.all (1));
+
             for Step in 2 .. Count loop
                declare
                   Row : constant N.Element_Count :=
@@ -811,6 +932,7 @@ package body Model_Runner.Generation is
 
                   Verified_Count := Verified_Count + 1;
                   Verified.all (Verified_Count) := Proposed.all (Step);
+                  S.Record_Token (Sampler, Proposed.all (Step));
                end;
             end loop;
 
@@ -824,15 +946,17 @@ package body Model_Runner.Generation is
                return;
             end if;
 
-            L.Rewind
-              (Draft_Session.all,
-               Natural'Min (L.Position (Draft_Session.all),
-                            Before + Verified_Count),
-               Local);
-            if E.Is_Error (Local) then
-               Conclude (Runtime_Error, Local);
-               Failed := True;
-               return;
+            if not By_Context then
+               L.Rewind
+                 (Draft_Session.all,
+                  Natural'Min (L.Position (Draft_Session.all),
+                               Before + Verified_Count),
+                  Local);
+               if E.Is_Error (Local) then
+                  Conclude (Runtime_Error, Local);
+                  Failed := True;
+                  return;
+               end if;
             end if;
 
             --  And forward, where the draft is behind. It proposed further
@@ -847,7 +971,9 @@ package body Model_Runner.Generation is
             --  drafting for itself and agreeing with only four of six
             --  proposals, which is four more than a disagreement and two
             --  fewer than the truth.
-            while L.Position (Draft_Session.all) < Before + Verified_Count
+            while not By_Context
+              and then L.Position (Draft_Session.all)
+                       < Before + Verified_Count
             loop
                declare
                   Step : constant Natural :=
@@ -865,17 +991,21 @@ package body Model_Runner.Generation is
             end loop;
 
             --  And what follows the last accepted token, for the next round
-            --  or the next single step to sample from.
-            declare
-               Row : constant N.Element_Count :=
-                 N.Element_Count (Verified_Count - 1)
-                 * N.Element_Count (Settings.Vocabulary);
-            begin
-               Logits.all :=
-                 Every.all (Every.all'First + Row
-                            .. Every.all'First + Row
-                               + N.Element_Count (Settings.Vocabulary) - 1);
-            end;
+            --  or the next single step to sample from. A round of one never
+            --  filled Every: what it wants is already in Logits, which is
+            --  where a token evaluated on its own leaves it.
+            if Count > 1 then
+               declare
+                  Row : constant N.Element_Count :=
+                    N.Element_Count (Verified_Count - 1)
+                    * N.Element_Count (Settings.Vocabulary);
+               begin
+                  Logits.all :=
+                    Every.all (Every.all'First + Row
+                               .. Every.all'First + Row
+                                  + N.Element_Count (Settings.Vocabulary) - 1);
+               end;
+            end if;
 
             Outcome.Accepted := Outcome.Accepted + Verified_Count - 1;
 
@@ -1053,8 +1183,11 @@ package body Model_Runner.Generation is
                   --  Commit the token to the session, unless a round already
                   --  did: a verified token is in the target's context by the
                   --  time it reaches here, and evaluating it again would put it
-                  --  there twice.
-                  S.Record_Token (Sampler, Token);
+                  --  there twice. The penalty's history is the same story --
+                  --  a round records what it verifies, as it verifies it.
+                  if not Drafting then
+                     S.Record_Token (Sampler, Token);
+                  end if;
 
                   if Drafting then
                      Status := E.Success;

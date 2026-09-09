@@ -1755,6 +1755,7 @@ begin
             Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
             Draft       => Option ("--draft-model", ""),
             Draft_Tokens => Number ("--draft-tokens", 4),
+            Draft_Lookup => Given ("--draft-lookup"),
             Repeats     => Number ("--repeats", 3),
             Budget      => Given ("--budget"),
             Result      => Result);

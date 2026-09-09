@@ -150,6 +150,7 @@ package body Speed_Run is
       Penalty     : Model_Runner.Numerics.Real := 1.1;
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
+      Draft_Lookup : Boolean := False;
       Repeats     : Positive;
       Budget      : Boolean := False;
       Result      : out Report)
@@ -416,7 +417,10 @@ package body Speed_Run is
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
                   Request.Draft_Tokens :=
-                    (if Drafting then Draft_Tokens else 0);
+                    (if Drafting or else Draft_Lookup
+                     then Draft_Tokens else 0);
+                  Request.Draft_From_Context :=
+                    Draft_Lookup and then not Drafting;
 
                   --  Before the clock is read, because turning it on is
                   --  the only thing here that could cost the region it is

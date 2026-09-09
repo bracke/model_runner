@@ -2018,7 +2018,10 @@ package body Model_Runner.CLI.Execute is
                   Request.Context_Shift := Item.Context_Shift;
                   Request.Context_Keep := Item.Context_Keep;
                   Request.Draft_Tokens :=
-                    (if Draft_Ready then Item.Draft_Tokens else 0);
+                    (if Draft_Ready or else Item.Draft_Lookup
+                     then Item.Draft_Tokens else 0);
+                  Request.Draft_From_Context :=
+                    Item.Draft_Lookup and then not Draft_Ready;
 
                   Request.Sampling := Item.Sampling;
                   Request.Seed := Item.Seed;
@@ -2239,7 +2242,10 @@ package body Model_Runner.CLI.Execute is
       --  arrive without the flag that selects it quietly doing nothing.
       --  Options that cannot do anything here say so rather than being
       --  accepted and forgotten.
-      if Item.Draft_Tokens_Set and then T.Is_Empty (Item.Draft_Path) then
+      if Item.Draft_Tokens_Set
+        and then T.Is_Empty (Item.Draft_Path)
+        and then not Item.Draft_Lookup
+      then
          Pres.Put_Note (Screen, "cli.note.draft_tokens_unused");
       end if;
 

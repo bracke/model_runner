@@ -130,6 +130,19 @@ package Model_Runner.Generation is
       --  sampler's own distribution, which this does not have.
       Draft_Tokens : Natural := 0;
 
+      --  Propose those tokens from the context rather than from a model.
+      --
+      --  What followed the last two tokens the last time they occurred, for
+      --  as many tokens as Draft_Tokens asks for. It costs no second model,
+      --  no memory and no pass of anything: the proposal is a search over
+      --  the tokens this run has already read. See Model_Runner.Lookup for
+      --  what it is worth and what it is not.
+      --
+      --  A draft model, where one is given, is the better guesser and wins
+      --  this. Both at once is a caller asking for two things and getting
+      --  one, so the command refuses that pair rather than choosing for it.
+      Draft_From_Context : Boolean := False;
+
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
       Seed     : Seed_Value := 0;
