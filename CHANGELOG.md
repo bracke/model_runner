@@ -93,6 +93,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A model split across several files is read as the model it was split
+  from.** Above a few tens of gigabytes a published GGUF is not one file, and
+  this engine could not read one: pointed at the first of three shards it
+  reported 50 tensors where the model has 201, and refused for a tensor that
+  was simply in another file -- a diagnostic that sends the reader after
+  their model instead of after their command.
+
+  `Model_Runner.GGUF.Shards` is a byte source over the files; the parser is
+  given the first shard and then the rest, each validated on its own against
+  its own size, and the merge moves each shard's tensor offsets on by the
+  bytes before them. Nothing under the parser learns there was more than one
+  file. Three files and one file produce the same digest on both backends --
+  `33f48397f89839f6` on the processor and `5abff916f9d83ca6` on the device --
+  and a model in one file is read exactly as it was, mapping included.
+
+  Five refusals come with it, each reached by a test: a shard given without
+  its siblings, one that says it is a different shard than its name does, one
+  that disagrees about how many there are, a set larger than this build will
+  hold open, and a first shard whose name does not follow the convention that
+  is the only way to find the others.
+
+  What a set of several gives up is the mapping -- several files are several
+  address ranges and a model wants one -- so a sharded model is read into an
+  arena as `--no-mmap` already does.
+
 - **The 0.55 milliseconds a token that was unaccounted is the
   normalizations.** Ablation at the shader, pooled over ten rounds: taking
   the two normalizations a layer away is worth **0.317 ms a token** -- 7.2
@@ -13255,7 +13280,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 174 diagnostic
+- Localization through `messages`, with a catalog entry for all 179 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

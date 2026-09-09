@@ -12,6 +12,7 @@ with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.GGUF.Shards;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
@@ -6600,6 +6601,268 @@ package body Tests.GGUF_Cases is
       Compare (Model_Runner.GGUF.Type_Q3_K, 110);
    end Newer_Formats_Match_An_Element_Wise_Reading;
 
+   -------------------------------------------
+   -- A_Model_In_Several_Files_Reads_As_One --
+   -------------------------------------------
+
+   --  A model cut into shards is read as the model it was cut from.
+   --
+   --  Above a few tens of gigabytes a published model is not one file: the
+   --  converter writes `<stem>-00001-of-00003.gguf` and puts `split.no`,
+   --  `split.count` and `split.tensors.count` in each of them. Read as one
+   --  file the first shard is a perfectly well-formed container holding a
+   --  third of a model, which is why this was worth building: what came out
+   --  before was a refusal naming a tensor that is simply in another file.
+   --
+   --  Built here rather than measured on a published model because the
+   --  claim is about the merge and not about any one model: two shards, the
+   --  tensors named once between them, and every byte of every tensor
+   --  compared against what it was written from.
+   procedure A_Model_In_Several_Files_Reads_As_One
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Shards renames Model_Runner.GGUF.Shards;
+      package Sources renames Model_Runner.Byte_Sources;
+
+      Stem : constant String := "obj/split-fixture";
+      One  : constant String := Stem & "-00001-of-00002.gguf";
+      Two  : constant String := Stem & "-00002-of-00002.gguf";
+
+      Front : constant N.Real_Array := Fixtures.Sequence (12, 1);
+      Back  : constant N.Real_Array := Fixtures.Sequence (8, 2);
+
+      --  Write one shard: which it is, how many there are, how many tensors
+      --  they hold between them, and its own share of them.
+      procedure Put_Shard
+        (Path : String; Index, Count, Across : Natural; Leading : Boolean)
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Output  : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Fixtures.Reset (Builder);
+
+         if Leading then
+            --  Only the first shard carries the model's own metadata, which
+            --  is what makes the others unreadable alone and this one
+            --  readable and wrong.
+            Fixtures.Add_String (Builder, "general.architecture", "llama");
+            Fixtures.Add_String (Builder, "general.name", "split fixture");
+         end if;
+
+         Fixtures.Add_U32
+           (Builder, Model_Runner.GGUF.Split_Index_Key,
+            Interfaces.Unsigned_32 (Index));
+         Fixtures.Add_U32
+           (Builder, Model_Runner.GGUF.Split_Count_Key,
+            Interfaces.Unsigned_32 (Count));
+         Fixtures.Add_U32
+           (Builder, Model_Runner.GGUF.Split_Tensors_Key,
+            Interfaces.Unsigned_32 (Across));
+
+         if Leading then
+            Fixtures.Add_Tensor
+              (Builder, "token_embd.weight", [4, 3], G.Type_F32,
+               Fixtures.Encode_F32 (Front));
+         else
+            Fixtures.Add_Tensor
+              (Builder, "output_norm.weight", [8], G.Type_F32,
+               Fixtures.Encode_F32 (Back));
+         end if;
+
+         Fixtures.Build (Builder, Image);
+
+         Ada.Streams.Stream_IO.Create
+           (Output, Ada.Streams.Stream_IO.Out_File, Path);
+         B.Byte_Array'Write
+           (Ada.Streams.Stream_IO.Stream (Output), Image.all);
+         Ada.Streams.Stream_IO.Close (Output);
+         B.Free (Image);
+      end Put_Shard;
+
+      --  Read a tensor's bytes back through the set that holds it and
+      --  compare them with the values it was written from.
+      procedure Same_Bytes
+        (Held   : Model_Runner.GGUF.Containers.Container;
+         From   : in out Shards.Shard_Set;
+         Name   : String;
+         Values : N.Real_Array)
+      is
+         Where  : constant Natural :=
+           Model_Runner.GGUF.Containers.Find_Tensor (Held, Name);
+         Wanted : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+         Status : E.Error_Info;
+      begin
+         Assert (Where /= 0, "the merged model has no tensor " & Name);
+
+         declare
+            Got : B.Byte_Array (1 .. Wanted'Length);
+         begin
+            Shards.Read
+              (From,
+               B.Byte_Count
+                 (Model_Runner.GGUF.Containers.Tensor_Offset (Held, Where)),
+               Got, Status);
+            Assert (E.Is_Ok (Status),
+                    "the bytes of " & Name & " would not read back: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Got = Wanted,
+                    "the bytes of " & Name
+                    & " are not the bytes it was written from, so its "
+                    & "offset was rebased to the wrong place");
+         end;
+      end Same_Bytes;
+
+      Status : E.Error_Info;
+   begin
+      Put_Shard (One, 0, 2, 2, True);
+      Put_Shard (Two, 1, 2, 2, False);
+
+      --  The convention, asserted rather than trusted: everything else here
+      --  rests on the second shard being found from the first one's name.
+      Assert (Shards.Is_Shard_Name (One),
+              "the convention did not recognize its own name: " & One);
+      Assert (not Shards.Is_Shard_Name ("obj/plain-model.gguf"),
+              "a plain path was taken for a shard's name");
+      Assert (Shards.Shard_Path (One, 2, 2) = Two,
+              "the second shard's path was derived as "
+              & Shards.Shard_Path (One, 2, 2) & " and not " & Two);
+
+      --  Both files, read as the one model they are.
+      declare
+         Set  : Shards.Shard_Set;
+         Held : Model_Runner.GGUF.Containers.Container;
+      begin
+         Shards.Open_Model (Set, Held, One, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a model in two files would not open: "
+                 & E.Error_Code'Image (Status.Code));
+
+         Assert (Shards.Parts (Set) = 2,
+                 "the set opened" & Natural'Image (Shards.Parts (Set))
+                 & " files where the first says there are two");
+         Assert (Model_Runner.GGUF.Containers.Tensor_Count (Held) = 2,
+                 "the merged model holds"
+                 & Natural'Image
+                     (Model_Runner.GGUF.Containers.Tensor_Count (Held))
+                 & " tensors where the two files hold two between them");
+
+         --  The first shard's tensor is where it always was and the
+         --  second's is rebased past the whole of the first file, which is
+         --  the whole of what the merge does and the one thing that can go
+         --  wrong without anything saying so.
+         Same_Bytes (Held, Set, "token_embd.weight", Front);
+         Same_Bytes (Held, Set, "output_norm.weight", Back);
+
+         Shards.Close (Set);
+      end;
+
+      --  And the first shard alone, which is a container the parser is
+      --  right to accept and the model layer has to refuse.
+      declare
+         Alone : Sources.Files.File_Source;
+         Held  : Model_Runner.GGUF.Containers.Container;
+         Ready : Model_Runner.Llama.Model;
+      begin
+         Sources.Files.Open (Alone, One, Status => Status);
+         Assert (E.Is_Ok (Status), "the first shard would not open");
+
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Held, Alone, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a shard is a well-formed container and the parser refused "
+                 & "it: " & E.Error_Code'Image (Status.Code));
+
+         Model_Runner.Llama.Prepare (Ready, Held, Alone, Status => Status);
+         Assert (Status.Code = E.GGUF_Shards_Missing,
+                 "a model given one of its two files was refused with "
+                 & E.Error_Code'Image (Status.Code)
+                 & " instead of saying that files were missing");
+
+         Sources.Files.Close (Alone);
+      end;
+
+      --  A shard that says it is a different one than its name does. The
+      --  order is what every offset in the merged model rests on, so a set
+      --  assembled in the wrong order would read tensors out of the wrong
+      --  files and say nothing about it.
+      Put_Shard (Two, 5, 2, 2, False);
+
+      declare
+         Set  : Shards.Shard_Set;
+         Held : Model_Runner.GGUF.Containers.Container;
+      begin
+         Shards.Open_Model (Set, Held, One, Status => Status);
+         Assert (Status.Code = E.GGUF_Shard_Out_Of_Order,
+                 "a shard numbered five in a set of two was taken with "
+                 & E.Error_Code'Image (Status.Code));
+         Shards.Close (Set);
+      end;
+
+      --  And one that disagrees with the first about how many there are,
+      --  which is the same mistake the other way round: a file from one
+      --  set beside a file from another.
+      Put_Shard (Two, 1, 3, 2, False);
+
+      declare
+         Set  : Shards.Shard_Set;
+         Held : Model_Runner.GGUF.Containers.Container;
+      begin
+         Shards.Open_Model (Set, Held, One, Status => Status);
+         Assert (Status.Code = E.GGUF_Shard_Count_Disagrees,
+                 "a shard from a set of three beside one from a set of two "
+                 & "was taken with " & E.Error_Code'Image (Status.Code));
+         Shards.Close (Set);
+      end;
+
+      --  And a set whose second file is not there says so rather than
+      --  reporting whatever the first tensor it cannot find is called.
+      Ada.Directories.Delete_File (Two);
+
+      declare
+         Set  : Shards.Shard_Set;
+         Held : Model_Runner.GGUF.Containers.Container;
+      begin
+         Shards.Open_Model (Set, Held, One, Status => Status);
+         Assert (E.Is_Error (Status),
+                 "a model missing one of its two files opened anyway");
+         Shards.Close (Set);
+      end;
+
+      Ada.Directories.Delete_File (One);
+
+      --  More files than this build will hold open, and a first shard whose
+      --  name does not say which one it is. Both are asked of Open_Rest
+      --  directly, because both are refusals about the set of files rather
+      --  than about anything inside them -- and the second cannot be
+      --  reached through a name the convention accepts, which is the whole
+      --  of what it is about.
+      declare
+         Plain : constant String := "obj/split-fixture-plain.gguf";
+         Set   : Shards.Shard_Set;
+      begin
+         Put_Shard (Plain, 0, 2, 2, True);
+
+         Shards.Open (Set, Plain, Status => Status);
+         Assert (E.Is_Ok (Status), "the plainly named shard would not open");
+
+         Shards.Open_Rest (Set, Shards.Max_Shards + 1, Status);
+         Assert (Status.Code = E.GGUF_Shard_Count_Too_Large,
+                 "a model claiming more files than this build opens was "
+                 & "taken with " & E.Error_Code'Image (Status.Code));
+
+         Shards.Open_Rest (Set, 2, Status);
+         Assert (Status.Code = E.GGUF_Shard_Name_Unusable,
+                 "a first shard whose name does not say which it is was "
+                 & "taken with " & E.Error_Code'Image (Status.Code));
+
+         Shards.Close (Set);
+         Ada.Directories.Delete_File (Plain);
+      end;
+   end A_Model_In_Several_Files_Reads_As_One;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -6784,6 +7047,10 @@ package body Tests.GGUF_Cases is
         (T, Newer_Formats_Match_An_Element_Wise_Reading'Access,
          "the formats added most recently place every element where reading "
          & "the layout element by element says it goes");
+      Register_Routine
+        (T, A_Model_In_Several_Files_Reads_As_One'Access,
+         "a model split across files is read as the model it was split "
+         & "from, and one of its files alone says that files are missing");
    end Register_Tests;
 
 end Tests.GGUF_Cases;

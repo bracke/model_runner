@@ -92,4 +92,14 @@ package Model_Runner.Byte_Sources is
 
    type Source_Reference is access all Source'Class;
 
+   --  Several sources named together, in the order they are to be read.
+   --
+   --  A model whose tensors are split across files is the reason this
+   --  exists: the parser is given the first file and then the rest, and
+   --  nothing below the parser learns that there was more than one.
+   type Source_Array is array (Positive range <>) of Source_Reference;
+
+   --  No further sources, which is what a model in one file has.
+   No_Sources : constant Source_Array (1 .. 0) := [];
+
 end Model_Runner.Byte_Sources;

@@ -132,6 +132,11 @@ package Model_Runner.Errors is
       GGUF_Metadata_Type_Mismatch,
       GGUF_Metadata_Out_Of_Range,
       GGUF_File_Changed,
+      GGUF_Shards_Missing,
+      GGUF_Shard_Count_Too_Large,
+      GGUF_Shard_Name_Unusable,
+      GGUF_Shard_Out_Of_Order,
+      GGUF_Shard_Count_Disagrees,
 
       --  Tokenizer.
       Tokenizer_Missing_Model,

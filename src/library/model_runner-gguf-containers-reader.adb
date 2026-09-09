@@ -1101,6 +1101,198 @@ package body Model_Runner.GGUF.Containers.Reader is
    -- Parse --
    -----------
 
+   -----------------------------------------------------------------------
+   --  Shards
+   -----------------------------------------------------------------------
+
+   --  Fold the model's other shards into a container holding the first.
+   --
+   --  Each is parsed on its own, which is what makes this short: every
+   --  structural check this package makes of a file has already been made
+   --  of it, against its own size, before a single tensor of it is looked
+   --  at here. What is left is the three things only the set can be asked.
+   --
+   --  THE OFFSETS ARE REBASED AND NOTHING ELSE IS. A shard's tensors are at
+   --  absolute offsets in that shard; read end to end, shard k begins after
+   --  the bytes of every shard before it, so adding that running total to
+   --  each offset is the whole of the merge. Every layer under this one
+   --  goes on seeing one span of bytes with tensors at absolute offsets in
+   --  it, and none of them learns there was more than one file.
+   procedure Merge_Shards
+     (Item     : in out Container;
+      First    : String;
+      More     : Model_Runner.Byte_Sources.Source_Array;
+      Bounds   : Model_Runner.Limits.Model_Limits;
+      Cancel   : C.Token_Reference;
+      Observer : P.Observer_Reference;
+      Status   : out E.Error_Info)
+   is
+      --  Where the next shard begins, which is where the last one ended.
+      Start : Interfaces.Unsigned_64 := Item.Total_Size;
+
+      Wanted : constant Natural := Shard_Count (Item);
+   begin
+      Status := E.Success;
+
+      --  A first shard that does not say it is one, given others to merge,
+      --  is a caller mistake rather than a file's: refuse before reading
+      --  any of them.
+      if Wanted /= More'Length + 1 then
+         Status := E.Make (E.GGUF_Shard_Count_Disagrees);
+         E.Add_Text (Status, "path", First, E.Param_Path);
+         E.Add_Integer (Status, "actual", Long_Long_Integer (More'Length + 1));
+         E.Add_Integer (Status, "expected", Long_Long_Integer (Wanted));
+         return;
+      end if;
+
+      if Shard_Index (Item) /= 0 then
+         Status := E.Make (E.GGUF_Shard_Out_Of_Order);
+         E.Add_Text (Status, "path", First, E.Param_Path);
+         E.Add_Integer
+           (Status, "actual", Long_Long_Integer (Shard_Index (Item)));
+         E.Add_Integer (Status, "expected", 0);
+         return;
+      end if;
+
+      for Which in More'Range loop
+         if C.Is_Cancelled (Cancel) then
+            Status := E.Make (E.Generation_Cancelled);
+            return;
+         end if;
+
+         declare
+            Ordinal : constant Natural := Which - More'First + 1;
+            Beside  : Container;
+         begin
+            P.Publish (Observer, P.Load_Progress (P.Reading_Header));
+
+            --  On its own, whole, against its own size: this is the same
+            --  parse the first shard had, and it refuses the same files.
+            Parse (Beside, More (Which).all, Bounds, Cancel, null, Status);
+            if E.Is_Error (Status) then
+               E.Add_Text
+                 (Status, "shard", More (Which).all.Name, E.Param_Path);
+               E.Add_Integer
+                 (Status, "index", Long_Long_Integer (Ordinal));
+               return;
+            end if;
+
+            if Shard_Index (Beside) /= Ordinal then
+               Status := E.Make (E.GGUF_Shard_Out_Of_Order);
+               E.Add_Text
+                 (Status, "path", More (Which).all.Name, E.Param_Path);
+               E.Add_Integer
+                 (Status, "actual", Long_Long_Integer (Shard_Index (Beside)));
+               E.Add_Integer
+                 (Status, "expected", Long_Long_Integer (Ordinal));
+               return;
+            end if;
+
+            if Shard_Count (Beside) /= Wanted then
+               Status := E.Make (E.GGUF_Shard_Count_Disagrees);
+               E.Add_Text
+                 (Status, "path", More (Which).all.Name, E.Param_Path);
+               E.Add_Integer
+                 (Status, "actual", Long_Long_Integer (Shard_Count (Beside)));
+               E.Add_Integer (Status, "expected", Long_Long_Integer (Wanted));
+               return;
+            end if;
+
+            for Index in 1 .. Tensor_Count (Beside) loop
+               declare
+                  Name  : constant String := Tensor_Name (Beside, Index);
+                  Moved : Tensor_Entry := Beside.Tensors (Index);
+                  Where : Slice;
+
+                  Placed : constant A.Checked :=
+                    A.To_Checked (Start) + A.To_Checked (Moved.Absolute);
+               begin
+                  if Item.Tensor_Map.Contains (Name) then
+                     Status := E.Make (E.GGUF_Duplicate_Tensor_Name);
+                     E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+                     E.Add_Text
+                       (Status, "shard", More (Which).all.Name, E.Param_Path);
+                     return;
+                  end if;
+
+                  if not A.Is_Valid (Placed) then
+                     Status := E.Make (E.GGUF_Arithmetic_Overflow);
+                     E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+                     return;
+                  end if;
+
+                  if Natural (Item.Tensors.Length) >= Bounds.Max_Tensors then
+                     Status := E.Make (E.GGUF_Tensor_Count_Too_Large);
+                     E.Add_Integer
+                       (Status, "limit",
+                        Long_Long_Integer (Bounds.Max_Tensors));
+                     return;
+                  end if;
+
+                  Append_Pool (Item, B.To_Bytes (Name), Where, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Moved.Name := Where;
+                  Moved.Absolute := A.Value (Placed);
+
+                  Item.Tensors.Append (Moved);
+                  Item.Tensor_Map.Insert
+                    (Name, Natural (Item.Tensors.Length));
+               end;
+            end loop;
+
+            Start := Start + Beside.Total_Size;
+         end;
+      end loop;
+
+      Item.Total_Size := Start;
+
+      --  The data section is a SPAN, not a sum: it runs from where the
+      --  first shard's tensors begin to where the last shard's end, and the
+      --  headers of the shards in between lie inside it. The model reads
+      --  that span into one arena and takes every tensor as a slice of it,
+      --  so a sum of tensor sizes here would size the arena to less than
+      --  the offsets it then indexes with -- which is a tensor access
+      --  outside its storage, reported against the model rather than the
+      --  file, and it is what the first merge that worked did.
+      declare
+         Highest : Interfaces.Unsigned_64 := Item.Data_Start;
+      begin
+         for Index in 1 .. Natural (Item.Tensors.Length) loop
+            declare
+               Ends : constant Interfaces.Unsigned_64 :=
+                 Item.Tensors (Index).Absolute + Item.Tensors (Index).Size;
+            begin
+               if Ends > Highest then
+                  Highest := Ends;
+               end if;
+            end;
+         end loop;
+
+         Item.Data_Bytes :=
+           (if Highest >= Item.Data_Start then Highest - Item.Data_Start
+            else 0);
+      end;
+
+      --  And the count the first shard published, which is the one claim
+      --  the set makes that no single file can be held to.
+      declare
+         Told : constant Natural := Shard_Tensor_Count (Item);
+      begin
+         if Told /= 0 and then Told /= Tensor_Count (Item) then
+            Status := E.Make (E.GGUF_Shards_Missing);
+            E.Add_Integer (Status, "index", 0);
+            E.Add_Integer (Status, "count", Long_Long_Integer (Wanted));
+            E.Add_Integer (Status, "actual", Long_Long_Integer
+                             (Tensor_Count (Item)));
+            E.Add_Integer (Status, "expected", Long_Long_Integer (Told));
+            return;
+         end if;
+      end;
+   end Merge_Shards;
+
    procedure Parse
      (Item     : in out Container;
       Source   : in out Model_Runner.Byte_Sources.Source'Class;
@@ -1108,7 +1300,9 @@ package body Model_Runner.GGUF.Containers.Reader is
         Model_Runner.Limits.Default_Model_Limits;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Observer : Model_Runner.Progress.Observer_Reference := null;
-      Status   : out E.Error_Info)
+      Status   : out E.Error_Info;
+      More     : Model_Runner.Byte_Sources.Source_Array :=
+        Model_Runner.Byte_Sources.No_Sources)
    is
       Cursor         : State;
       Magic_Value    : Interfaces.Unsigned_32;
@@ -1308,6 +1502,15 @@ package body Model_Runner.GGUF.Containers.Reader is
       if E.Is_Error (Status) then
          Fail (Status);
          return;
+      end if;
+
+      if More'Length > 0 then
+         Merge_Shards
+           (Item, Source.Name, More, Bounds, Cancel, Observer, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
       end if;
 
       Item.Valid := True;

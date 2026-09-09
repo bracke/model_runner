@@ -39,6 +39,15 @@ package Model_Runner.GGUF.Containers.Reader is
    --  @param Cancel Cancellation token, or null.
    --  @param Observer Progress observer, or null.
    --  @param Status Success, or the first structural diagnostic found.
+   --  @param More The model's other shards, in order, for a model split
+   --    across files. Each is parsed and validated on its own first, so
+   --    every check this package makes of one file is made of each of them;
+   --    what the merge adds is that their tensors are named once between
+   --    them, that each says which shard it is and agrees with the first
+   --    about how many there are, and that they hold between them as many
+   --    tensors as the first says. Every offset in the merged container is
+   --    absolute in the shards read end to end, in the order given -- which
+   --    is what Model_Runner.GGUF.Shards presents.
    procedure Parse
      (Item     : in out Container;
       Source   : in out Model_Runner.Byte_Sources.Source'Class;
@@ -46,6 +55,8 @@ package Model_Runner.GGUF.Containers.Reader is
         Model_Runner.Limits.Default_Model_Limits;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Observer : Model_Runner.Progress.Observer_Reference := null;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      More     : Model_Runner.Byte_Sources.Source_Array :=
+        Model_Runner.Byte_Sources.No_Sources);
 
 end Model_Runner.GGUF.Containers.Reader;

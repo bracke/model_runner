@@ -1745,6 +1745,33 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A shard of a model rather than a model.
+      --
+      --  A file split off a larger one is a perfectly well-formed container
+      --  holding a third of the tensors, so nothing before this point has
+      --  any reason to object -- and what used to happen next was a refusal
+      --  naming the first tensor the architecture wanted and did not find,
+      --  which sends a reader after their model instead of after their
+      --  command. The count of tensors the shards hold between them is
+      --  written in every one of them, so the question can simply be asked.
+      declare
+         Across : constant Natural := Containers.Shard_Tensor_Count (Source);
+      begin
+         if Containers.Shard_Count (Source) > 1
+           and then Across /= 0
+           and then Containers.Tensor_Count (Source) /= Across
+         then
+            Fail (E.Make (E.GGUF_Shards_Missing));
+            E.Add_Integer
+              (Status, "index",
+               Long_Long_Integer (Containers.Shard_Index (Source) + 1));
+            E.Add_Integer
+              (Status, "count",
+               Long_Long_Integer (Containers.Shard_Count (Source)));
+            return;
+         end if;
+      end;
+
       Mem.Initialize (Item.Accounting, Bounds, Bounds.Max_Model_Bytes);
 
       --  Room for what every matrix will be called. One entry a tensor the

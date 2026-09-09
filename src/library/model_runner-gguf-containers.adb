@@ -725,6 +725,41 @@ package body Model_Runner.GGUF.Containers is
       Status := E.Success;
    end Get_Float_Element;
 
+   --------------------
+   -- Split counting --
+   --------------------
+
+   --  A key read for its own sake rather than through Get_Integer, which
+   --  reports a diagnostic these three have no use for: a container without
+   --  them is a model in one file, which is not a condition.
+   function Small_Key (Item : Container; Key : String) return Natural is
+      Where : constant Natural := Find (Item, Key);
+      Value : Long_Long_Integer;
+      Ignored : Model_Runner.Errors.Error_Info;
+   begin
+      if Where = 0 then
+         return 0;
+      end if;
+
+      Get_Integer (Item, Key, 0, Long_Long_Integer (Natural'Last),
+                   Value, Ignored);
+
+      if Model_Runner.Errors.Is_Error (Ignored) then
+         return 0;
+      end if;
+
+      return Natural (Value);
+   end Small_Key;
+
+   function Shard_Count (Item : Container) return Natural
+   is (Natural'Max (Small_Key (Item, Model_Runner.GGUF.Split_Count_Key), 1));
+
+   function Shard_Index (Item : Container) return Natural
+   is (Small_Key (Item, Model_Runner.GGUF.Split_Index_Key));
+
+   function Shard_Tensor_Count (Item : Container) return Natural
+   is (Small_Key (Item, Model_Runner.GGUF.Split_Tensors_Key));
+
    -------------------
    -- Tensor_Count --
    -------------------

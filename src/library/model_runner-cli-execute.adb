@@ -7,6 +7,7 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Byte_Sources.Files;
+with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
@@ -55,6 +56,7 @@ package body Model_Runner.CLI.Execute is
    package Conv renames Model_Runner.Conversation;
    package E renames Model_Runner.Errors;
    package Files renames Model_Runner.Byte_Sources.Files;
+   package Shards renames Model_Runner.GGUF.Shards;
    package G renames Model_Runner.GGUF;
    package Gen renames Model_Runner.Generation;
    package Containers renames Model_Runner.GGUF.Containers;
@@ -437,7 +439,7 @@ package body Model_Runner.CLI.Execute is
    procedure Load
      (Item      : Opt.Command;
       Screen    : in out Pres.Console;
-      Source    : in out Files.File_Source;
+      Source    : in out Shards.Shard_Set;
       Container : in out Containers.Container;
       Prepared  : in out L.Model;
       Full      : Boolean;
@@ -459,24 +461,28 @@ package body Model_Runner.CLI.Execute is
          Model_Runner.Progress.Load_Progress
            (Model_Runner.Progress.Opening_Model));
 
-      Files.Open
-        (Source, Path, Item.Mapping,
-         Model_Runner.Bytes.Byte_Count (Bounds.Max_File_Bytes), Status);
+      Shards.Open_Model
+        (Source, Container, Path, Item.Mapping, Bounds, Cancel, Observer,
+         Status);
       if E.Is_Error (Status) then
          return;
       end if;
 
       if Item.Mapping = Files.Mapping_Automatic
-        and then not Files.Is_Mapped (Source)
+        and then not Shards.Is_Mapped (Source)
         and then Item.Level = Opt.Verbose
       then
          Pres.Warn (Screen, "warning.mapping_unavailable");
       end if;
 
-      Containers.Reader.Parse
-        (Container, Source, Bounds, Cancel, Observer, Status);
-      if E.Is_Error (Status) then
-         return;
+      --  A model in several files, said once where a caller asked to be
+      --  told things. Nothing after this point knows the difference.
+      if Shards.Parts (Source) > 1 and then Item.Level = Opt.Verbose then
+         Pres.Put_Note
+           (Screen, "cli.note.model_in_shards",
+            [Loc.Named
+               ("count",
+                T.Image (Long_Long_Integer (Shards.Parts (Source))))]);
       end if;
 
       if Full then
@@ -815,7 +821,7 @@ package body Model_Runner.CLI.Execute is
       Screen  : in out Pres.Console;
       Status  : out Natural)
    is
-      Source    : Files.File_Source;
+      Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Prepared  : L.Model;
       Condition : E.Error_Info;
@@ -831,7 +837,7 @@ package body Model_Runner.CLI.Execute is
 
       if E.Is_Error (Condition) then
          Pres.Report (Screen, Condition);
-         Files.Close (Source);
+         Shards.Close (Source);
          Status := E.Exit_Status (Condition);
          return;
       end if;
@@ -859,7 +865,7 @@ package body Model_Runner.CLI.Execute is
          end;
 
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
          return;
       end if;
 
@@ -921,7 +927,7 @@ package body Model_Runner.CLI.Execute is
          Pres.Put_Field
            (Screen, "cli.inspect.label.mapped",
             Screen.Message_Value
-              (if Files.Is_Mapped (Source)
+              (if Shards.Is_Mapped (Source)
                then "cli.inspect.value.yes"
                else "cli.inspect.value.no"), Pres.Answer);
       end;
@@ -1319,7 +1325,7 @@ package body Model_Runner.CLI.Execute is
 
       L.Close (Prepared, Ignored);
       Containers.Close (Container);
-      Files.Close (Source);
+      Shards.Close (Source);
       Status :=
         (if E.Is_Error (Refused) then E.Exit_Status (Refused)
          else E.Exit_Success);
@@ -1337,7 +1343,7 @@ package body Model_Runner.CLI.Execute is
    is
       pragma Unreferenced (Catalog);
 
-      Source    : Files.File_Source;
+      Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Prepared  : L.Model;
       Session   : L.Session;
@@ -1348,7 +1354,7 @@ package body Model_Runner.CLI.Execute is
 
       --  A second, smaller model proposing tokens for the first to check,
       --  when one was named. Held here so it outlives the generation.
-      Draft_Source    : Files.File_Source;
+      Draft_Source    : Shards.Shard_Set;
       Draft_Container : Containers.Container;
       Draft_Model     : aliased L.Model;
       Draft_Session   : aliased L.Session;
@@ -1398,7 +1404,7 @@ package body Model_Runner.CLI.Execute is
          L.Close (Session);
          L.Close (Prepared, Ignored);
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
          Gen.Release (Outcome);
          Free_Text (Prompt);
       end Cleanup;
@@ -2390,7 +2396,7 @@ package body Model_Runner.CLI.Execute is
       Screen : in out Pres.Console;
       Status : out Natural)
    is
-      Source    : Files.File_Source;
+      Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Prepared  : L.Model;
       Session   : L.Session;
@@ -2403,7 +2409,7 @@ package body Model_Runner.CLI.Execute is
          L.Close (Session);
          L.Close (Prepared, Ignored);
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
          Free_Text (Prompt);
       end Cleanup;
 

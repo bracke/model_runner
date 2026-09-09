@@ -321,6 +321,35 @@ package Model_Runner.GGUF.Containers is
    --  @return Descriptor count.
    function Tensor_Count (Item : Container) return Natural;
 
+   --  How many files this model is split across.
+   --
+   --  One for a model in one file, which carries no such key.
+   --
+   --  @param Item Container to inspect.
+   --  @return The count, which is at least one.
+   function Shard_Count (Item : Container) return Natural;
+
+   --  Which of them this container is, counting from zero as the format
+   --  writes it.
+   --
+   --  Zero for the first shard, and zero for a whole model too; the count
+   --  above is what distinguishes them.
+   --
+   --  @param Item Container to inspect.
+   --  @return The index, counting from zero.
+   function Shard_Index (Item : Container) return Natural;
+
+   --  How many tensors the shards hold between them, or zero when the
+   --  container does not say.
+   --
+   --  A merged container's Tensor_Count equals this; a lone shard's does
+   --  not, and that difference is how a model missing its other files is
+   --  told apart from one that is whole.
+   --
+   --  @param Item Container to inspect.
+   --  @return The count across every shard, or zero.
+   function Shard_Tensor_Count (Item : Container) return Natural;
+
    --  Position of a tensor by name.
    --
    --  @param Item Container to inspect.

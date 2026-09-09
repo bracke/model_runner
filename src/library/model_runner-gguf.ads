@@ -24,6 +24,16 @@ package Model_Runner.GGUF is
    --  The four magic bytes "GGUF" read as a little-endian 32-bit value.
    Magic : constant U32 := 16#4655_4747#;
 
+   --  The keys a split model carries, which are written into every shard
+   --  and read out of the first.
+   --
+   --  A model too large for one file is cut into shards named
+   --  `<stem>-00001-of-00003.gguf`. Only the first carries the model's
+   --  metadata; every one of them carries these three.
+   Split_Index_Key   : constant String := "split.no";
+   Split_Count_Key   : constant String := "split.count";
+   Split_Tensors_Key : constant String := "split.tensors.count";
+
    --  Container versions this crate parses. Version 1 used 32-bit counts and a
    --  different tensor-descriptor layout and is deliberately not accepted.
    Minimum_Version : constant U32 := 2;

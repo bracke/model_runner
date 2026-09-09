@@ -389,7 +389,7 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation. `--tools` offers the model tools and the calls it writes back are read out of the reply and reported; `--assistant` and `--tool-result` put the earlier turns back, in the order they are written, which is how one run closes the loop another opened |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]` `/tools` `/tool TEXT`, `/system` removing the system message when no text follows it and `/tool` handing back what a tool answered as a turn of its own, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 174 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 179 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the eight others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
@@ -18282,6 +18282,77 @@ read 1,099 MB in 17.80 ms, which is 61.7 GB/s against the 63.4 a single
 product reaches alone -- so 0.47 ms of the token is the difference between a
 product in a fifteen-step sequence and a product by itself, and the cache
 copy and the call wait are 0.20 of that. The rest of the 0.25 is there.
+
+### A model in several files
+
+Above a few tens of gigabytes a published model is not one file. The
+converter cuts it into `<stem>-00001-of-00003.gguf` and writes three keys
+into each -- `split.no`, `split.count`, `split.tensors.count` -- with the
+model's metadata in the first only. **This engine could not read one**, and
+the way it could not was the worst kind:
+
+```
+this engine:  MR-ARCH-0010: the model has no tensor named output_norm.weight
+llama.cpp:    41.10 tokens per second
+```
+
+`inspect` said why: pointed at the first of three shards it reported **50
+tensors and 374 million parameters** where the model has 201 and 1,100
+million. A shard is a perfectly well-formed container holding a third of a
+model, so nothing in the parser had any reason to object, and the refusal
+that eventually came named a tensor that was simply in another file. **That
+sends a reader after their model instead of after their command.**
+
+**Built.** `Model_Runner.GGUF.Shards` is a byte source over the files, and
+the parser is given the first shard and then the rest: each is parsed and
+validated on its own, against its own size, and the merge adds each shard's
+tensors with their offsets moved on by the bytes of the shards before them.
+**Nothing under the parser learns there was more than one file** -- the model
+sees one span of bytes with tensors at absolute offsets in it, as it always
+did.
+
+The same three files now read as the model they were cut from, on both
+backends, byte for byte:
+
+| | prompt | generating | output |
+| --- | ---: | ---: | --- |
+| one file, processor | 0.042 s | 0.298 s | `33f48397f89839f6` |
+| **three files, processor** | 0.042 s | 0.297 s | **`33f48397f89839f6`** |
+| one file, device | 0.028 s | 0.222 s | `5abff916f9d83ca6` |
+| **three files, device** | 0.026 s | 0.221 s | **`5abff916f9d83ca6`** |
+
+**A model in one file costs nothing for this.** A set of one part delegates
+every operation to that part -- the mapping and its base address included --
+so the common case is read exactly as it was: `--verbose` still says the
+weights are "the file's own pages, read as they are touched", and twelve
+generated tokens still read 0.219 s.
+
+**What a set of several gives up is the mapping**, and it says so rather than
+pretending otherwise. Several files are several address ranges and a model
+wants one, so a sharded model is read into an arena as `--no-mmap` already
+does. Reserving one span and mapping each file into it at a fixed address is
+possible on this host and is not done here.
+
+**And the refusals say which file.** A shard given alone is refused before
+anything is loaded, because the count of tensors the set holds is written in
+every shard and can simply be compared with the count in hand:
+
+```
+the model is shard 1 of 2 and the other shards were not given
+```
+
+with four more for the ways a set can be wrong rather than absent -- a shard
+that says it is a different one than its name does, one that disagrees with
+the first about how many there are, a set larger than this build will hold
+open, and a first shard whose name does not follow the convention, which is
+the only way there is to find the others. Every one of the five is reached by
+a test rather than argued for: **the order is what every offset in the merged
+model rests on, so a set assembled in the wrong order would read tensors out
+of the wrong files and say nothing at all about it.**
+
+One thing this does not do is write them. `llama-gguf-split --merge` and
+`--split` are a tool of llama.cpp's; the quantizer here writes one file, and
+a model too large for one file is not a model this host quantizes.
 
 ## License
 

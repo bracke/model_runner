@@ -7,10 +7,10 @@ with Ada.Real_Time;
 
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
-with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.GGUF.Shards;
 with Model_Runner.Generation;
 with Model_Runner.Output;
 with Model_Runner.Serving;
@@ -27,7 +27,7 @@ package body Speed_Run is
    package IO renames Ada.Text_IO;
    package Containers renames Model_Runner.GGUF.Containers;
    package E renames Model_Runner.Errors;
-   package Files renames Model_Runner.Byte_Sources.Files;
+   package Shards renames Model_Runner.GGUF.Shards;
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
    package Serving renames Model_Runner.Serving;
@@ -171,13 +171,13 @@ package body Speed_Run is
          Result.Detail_Up := Room;
       end Say;
 
-      Source    : Files.File_Source;
+      Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : L.Model;
       Status    : E.Error_Info;
 
       --  The draft, when one was named. Loaded exactly as the model is.
-      Draft_Source    : Files.File_Source;
+      Draft_Source    : Shards.Shard_Set;
       Draft_Container : Containers.Container;
       Draft_Engine    : aliased L.Model;
       Drafting        : Boolean := False;
@@ -237,17 +237,11 @@ package body Speed_Run is
          --  README says of it: one figure is the model and the other is the
          --  disk.
          Started := Ada.Real_Time.Clock;
-         Files.Open (Source, Path, Status => Status);
+         Shards.Open_Model
+           (Source, Container, Path, Status => Status);
          if E.Is_Error (Status) then
+            Shards.Close (Source);
             Say ("the model would not open: "
-                 & E.Error_Code'Image (Status.Code));
-            return;
-         end if;
-
-         Containers.Reader.Parse (Container, Source, Status => Status);
-         if E.Is_Error (Status) then
-            Files.Close (Source);
-            Say ("the model would not parse: "
                  & E.Error_Code'Image (Status.Code));
             return;
          end if;
@@ -262,7 +256,7 @@ package body Speed_Run is
                Model_Runner.Backend.Device.Open (Ready);
                if not Ready then
                   Containers.Close (Container);
-                  Files.Close (Source);
+                  Shards.Close (Source);
                   Say ("no device answered");
                   return;
                end if;
@@ -274,7 +268,7 @@ package body Speed_Run is
             Threads => Threads, Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Container);
-            Files.Close (Source);
+            Shards.Close (Source);
             Say ("the model would not prepare: "
                  & E.Error_Code'Image (Status.Code));
             return;
@@ -290,17 +284,17 @@ package body Speed_Run is
                Say ("no draft model at that path; nothing measured");
                L.Close (Engine, Status);
                Containers.Close (Container);
-               Files.Close (Source);
+               Shards.Close (Source);
                return;
             end if;
 
-            Files.Open (Draft_Source, Draft, Status => Status);
+            Shards.Open (Draft_Source, Draft, Status => Status);
             if E.Is_Error (Status) then
                Say ("the draft would not open: "
                     & E.Error_Code'Image (Status.Code));
                L.Close (Engine, Status);
                Containers.Close (Container);
-               Files.Close (Source);
+               Shards.Close (Source);
                return;
             end if;
 
@@ -568,12 +562,12 @@ package body Speed_Run is
 
          L.Close (Engine, Status);
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
 
          if Drafting then
             L.Close (Draft_Engine, Status);
             Containers.Close (Draft_Container);
-            Files.Close (Draft_Source);
+            Shards.Close (Draft_Source);
          end if;
       end;
 
@@ -644,7 +638,7 @@ package body Speed_Run is
       use type Model_Runner.Backend.Backend_Kind;
       use type Serving.Member_Id;
 
-      Source    : aliased Files.File_Source;
+      Source    : aliased Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : aliased L.Model;
       Status    : E.Error_Info;
@@ -669,15 +663,9 @@ package body Speed_Run is
          return;
       end if;
 
-      Files.Open (Source, Path, Status => Status);
+      Shards.Open_Model (Source, Container, Path, Status => Status);
       if E.Is_Error (Status) then
-         Say ("the model would not open");
-         return;
-      end if;
-
-      Containers.Reader.Parse (Container, Source, Status => Status);
-      if E.Is_Error (Status) then
-         Files.Close (Source);
+         Shards.Close (Source);
          Say ("the model would not parse");
          return;
       end if;
@@ -689,7 +677,7 @@ package body Speed_Run is
             Model_Runner.Backend.Device.Open (Ready);
             if not Ready then
                Containers.Close (Container);
-               Files.Close (Source);
+               Shards.Close (Source);
                Say ("no device answered");
                return;
             end if;
@@ -701,7 +689,7 @@ package body Speed_Run is
          Threads => Threads, Status => Status);
       if E.Is_Error (Status) then
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
          Say ("the model would not prepare");
          return;
       end if;
@@ -790,7 +778,7 @@ package body Speed_Run is
             Say ("the prompt would not encode");
             L.Close (Engine, Status);
             Containers.Close (Container);
-            Files.Close (Source);
+            Shards.Close (Source);
             return;
          end if;
 
@@ -808,7 +796,7 @@ package body Speed_Run is
                  & E.Error_Code'Image (Status.Code));
             L.Close (Engine, Status);
             Containers.Close (Container);
-            Files.Close (Source);
+            Shards.Close (Source);
             return;
          end if;
 
@@ -932,7 +920,7 @@ package body Speed_Run is
 
       L.Close (Engine, Status);
       Containers.Close (Container);
-      Files.Close (Source);
+      Shards.Close (Source);
    end Serve;
 
    procedure Round
@@ -946,7 +934,7 @@ package body Speed_Run is
       Budget      : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
-      Source    : aliased Files.File_Source;
+      Source    : aliased Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : aliased L.Model;
       Status    : E.Error_Info;
@@ -971,15 +959,9 @@ package body Speed_Run is
          return;
       end if;
 
-      Files.Open (Source, Path, Status => Status);
+      Shards.Open_Model (Source, Container, Path, Status => Status);
       if E.Is_Error (Status) then
-         Say ("the model would not open");
-         return;
-      end if;
-
-      Containers.Reader.Parse (Container, Source, Status => Status);
-      if E.Is_Error (Status) then
-         Files.Close (Source);
+         Shards.Close (Source);
          Say ("the model would not parse");
          return;
       end if;
@@ -991,7 +973,7 @@ package body Speed_Run is
             Model_Runner.Backend.Device.Open (Ready);
             if not Ready then
                Containers.Close (Container);
-               Files.Close (Source);
+               Shards.Close (Source);
                Say ("no device answered");
                return;
             end if;
@@ -1003,7 +985,7 @@ package body Speed_Run is
          Threads => Threads, Status => Status);
       if E.Is_Error (Status) then
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
          Say ("the model would not prepare");
          return;
       end if;
@@ -1069,7 +1051,7 @@ package body Speed_Run is
             Say ("the prompt would not encode");
             L.Close (Engine, Status);
             Containers.Close (Container);
-            Files.Close (Source);
+            Shards.Close (Source);
             return;
          end if;
 
@@ -1284,7 +1266,7 @@ package body Speed_Run is
 
       L.Close (Engine, Status);
       Containers.Close (Container);
-      Files.Close (Source);
+      Shards.Close (Source);
    end Round;
 
 end Speed_Run;

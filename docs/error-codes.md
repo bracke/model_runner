@@ -87,6 +87,11 @@ ordinal is never reused, not because they might appear.
 | `MR-GGUF-0027` | `error.gguf.metadata_type_mismatch` | recovery_none | 3 | raised |
 | `MR-GGUF-0028` | `error.gguf.metadata_out_of_range` | recovery_none | 3 | raised |
 | `MR-GGUF-0029` | `error.gguf.file_changed` | recovery_none | 3 | raised |
+| `MR-GGUF-0030` | `error.gguf.shards_missing` | recovery_none | 3 | raised |
+| `MR-GGUF-0031` | `error.gguf.shard_count_too_large` | recovery_none | 3 | raised |
+| `MR-GGUF-0032` | `error.gguf.shard_name_unusable` | recovery_none | 3 | raised |
+| `MR-GGUF-0033` | `error.gguf.shard_out_of_order` | recovery_none | 3 | raised |
+| `MR-GGUF-0034` | `error.gguf.shard_count_disagrees` | recovery_none | 3 | raised |
 
 ## TOK
 
