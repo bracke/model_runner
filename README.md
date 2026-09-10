@@ -18733,6 +18733,45 @@ holding of what it will hold, how many bytes, and how many were given back --
 which is the difference between a device that is computing and one that is
 being fed.
 
+### Mapped once instead of four hundred times a token
+
+The upload was `vkMapMemory`, a copy, `vkUnmapMemory` -- once for every
+matrix. On a model that does not fit that is about four hundred times a
+generated token, and since `### A buffer given back is not given up` it was
+the same memory objects being mapped again and again. The cache has been
+mapped once and held since it was written; the weights were the one thing
+still asking the driver every time.
+
+Mapped when the memory is made and kept for as long as it lives:
+
+| | mapping each time | mapped once | |
+| --- | ---: | ---: | ---: |
+| generating, 4 GB of budget | 6.77, 6.70, 6.68 t/s | 8.15, 8.13, 8.18 | **1.21 times** |
+| generating, 6 GB | 8.46, 8.54, 8.56 | 8.88, 9.40, 9.31 | **1.08 times** |
+| the prompt, 4 GB | 19.27, 19.05, 18.91 | 20.85, 20.43, 20.71 | 1.08 |
+| the prompt, 6 GB | 18.40, 18.36, 18.15 | 19.18, 18.88, 19.12 | 1.04 |
+
+**And nothing at the budget this part actually offers**: at 8.47 GB the same
+model reads 17.92 and 10.84 against 18.04 and 11.49, which is the spread. The
+tighter the budget the more matrices miss, and a matrix that does not miss is
+never mapped again.
+
+**The estimate that led here was too high and is worth saying so.** It put
+the mapping at about 26 milliseconds of an 87 millisecond token, on the
+reasoning that a map and an unmap cost about what the half-megabyte copy
+between them costs. They cost much less: at six gigabytes the whole change is
+worth 0.7 tokens a second, which is about 7 milliseconds. **The copy
+dominates, and the driver call around it did not.** The number that was
+right about this was the one measured for the allocator -- a third of the
+token -- and the difference between the two is that `vkAllocateMemory` really
+is expensive and `vkMapMemory` really is not.
+
+Kept anyway: it is a clear gain where the budget binds, it costs nothing
+where it does not, and it takes a driver call out of a loop that runs four
+hundred times a token, which is the right shape whatever it measures. The
+dense path is untouched at 0.218, 0.220 and 0.219 s and the same digest,
+because a model that fits never evicts and never uploads twice.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

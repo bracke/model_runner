@@ -7436,7 +7436,7 @@ reference F7D97F8B8E65F88C src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device 7909009C9CEE5AFF src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 7F2CED0723474BC7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -10360,7 +10360,7 @@ tokenizer 001FF68B5629F08A src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside 7909009C9CEE5AFF src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 7F2CED0723474BC7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -17800,3 +17800,43 @@ panels 1BD1C66028C05927 src/library/model_runner-quantization-interleave.ads src
 # load:  the TinyLlama rows went through the gate; the mixture rows are
 #        ungated CLI runs, warm
 # model: TinyLlama-1.1B-Chat Q8_0, and Qwen3-30B-A3B Q3_K 11.26 GB
+
+# 2026-09-10, mapped once instead of four hundred times a token.
+#
+#   The upload was vkMapMemory, a copy, vkUnmapMemory -- once for every
+#   matrix, about four hundred times a generated token on a model that does
+#   not fit, and since the spare buffers it was the same memory objects
+#   mapped again and again. The cache has been mapped once and held since it
+#   was written; the weights were the one thing still asking every time.
+#
+#   Mapped when the memory is made and kept as long as it lives. Three
+#   alternated rounds, Qwen3-30B-A3B, 110-token prompt, eight generated:
+#
+#                          mapping each time     mapped once
+#     generating, 4 GB     6.77 6.70 6.68 t/s    8.15 8.13 8.18   1.21x
+#     generating, 6 GB     8.46 8.54 8.56        8.88 9.40 9.31   1.08x
+#     the prompt,  4 GB   19.27 19.05 18.91     20.85 20.43 20.71 1.08x
+#     the prompt,  6 GB   18.40 18.36 18.15     19.18 18.88 19.12 1.04x
+#
+#   AND NOTHING AT THE BUDGET THIS PART OFFERS: at 8.47 GB the same model
+#   reads 17.92 and 10.84 against 18.04 and 11.49, which is the spread. The
+#   tighter the budget the more matrices miss, and a matrix that does not
+#   miss is never mapped again.
+#
+#   THE ESTIMATE THAT LED HERE WAS TOO HIGH. It put the mapping at about 26
+#   ms of an 87 ms token, reasoning that a map and an unmap cost about what
+#   the half-megabyte copy between them costs. They cost much less: at six
+#   gigabytes the whole change is worth 0.7 tokens a second, about 7 ms. THE
+#   COPY DOMINATES AND THE DRIVER CALL AROUND IT DID NOT. The same reasoning
+#   was right about vkAllocateMemory, which measured a third of the token,
+#   and the difference is that allocating really is expensive and mapping
+#   really is not.
+#
+#   Kept anyway: a clear gain where the budget binds, nothing where it does
+#   not, and a driver call out of a loop that runs four hundred times a
+#   token. The dense path is untouched at 0.218, 0.220, 0.219 s, digest
+#   5abff916f9d83ca6.
+#
+# load:  the mixture rows are ungated CLI runs, warm, three alternated
+#        rounds; the TinyLlama rows went through the gate
+# model: Qwen3-30B-A3B Q3_K 11.26 GB, and TinyLlama-1.1B-Chat Q8_0

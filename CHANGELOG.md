@@ -154,6 +154,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A matrix's memory is mapped once and kept, not mapped and unmapped for
+  every upload.** On a model that does not fit that was about four hundred
+  `vkMapMemory`/`vkUnmapMemory` pairs a generated token, on the same memory
+  objects over and over now that a buffer given back is kept. Worth **1.21
+  times** generating at a four-gigabyte budget and 1.08 at six, and nothing
+  at the 8.47 GB this part offers, where few matrices miss.
+
+  The estimate that led here put the mapping at about a third of the token,
+  on the reasoning that a map and an unmap cost about what the half-megabyte
+  copy between them costs. They cost much less -- the whole change is worth
+  about 7 ms of an 87 ms token at six gigabytes. The copy dominates and the
+  driver call around it did not, which is the opposite of the allocator,
+  where the same reasoning was right.
+
 - **A buffer given back to make room is kept rather than given up.** On a
   model larger than the device's budget every matrix taken means one given
   back, and a mixture does that four hundred times a generated token: taking

@@ -1079,6 +1079,19 @@ private
       --  of the two this is rather than the number.
       Base    : Interfaces.Unsigned_64 := 0;
       Own     : Boolean := False;
+
+      --  Where the host may write it, kept rather than asked for.
+      --
+      --  The upload mapped the memory, copied and unmapped it, once for
+      --  every matrix: three hundred and ninety times a generated token on
+      --  a model that does not fit, on the same memory objects over and
+      --  over now that a buffer given back is kept. The cache has been
+      --  mapped once and held since it was written; this is the same, for
+      --  the one thing that still asked the driver every time.
+      --
+      --  Null for an imported matrix, which is the host's own memory and
+      --  was never mapped.
+      Mapped  : System.Address := System.Null_Address;
    end record;
 
    type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
@@ -1095,6 +1108,7 @@ private
       Buffer : System.Address := System.Null_Address;
       Memory : System.Address := System.Null_Address;
       Bytes  : Interfaces.Unsigned_64 := 0;
+      Mapped : System.Address := System.Null_Address;
    end record;
 
    type Spare_Array is array (1 .. Max_Spare) of Spare_Buffer;

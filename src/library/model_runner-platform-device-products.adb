@@ -1247,25 +1247,69 @@ package body Model_Runner.Platform.Device.Products is
    --  The same for storage this does not interpret. A packed matrix is bytes
    --  until the shader reads it, and copying it as anything else would be
    --  claiming to know what it holds.
-   procedure Write_Bytes
+   --  Map a matrix's memory and keep the pointer.
+   --
+   --  The upload used to map, copy and unmap for every matrix. With a
+   --  buffer given back now kept rather than given up, that was the same
+   --  memory object being mapped again and again -- three hundred and
+   --  ninety times a generated token on a model that does not fit. The
+   --  cache has been mapped once and held since it was written; this is
+   --  the same for the weights.
+   procedure Map_Memory
      (Item   : in out Engine;
       Memory : Address;
       Bytes  : Interfaces.Unsigned_64;
-      Values : Model_Runner.Bytes.Byte_Array;
+      Where  : out Address;
       Ok     : out Boolean)
    is
-      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
-      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      Map : constant Map_Call := To_Map (Point ("vkMapMemory"));
 
-      Where : aliased Address := Null_Handle;
+      Got : aliased Address := Null_Handle;
    begin
+      Where := Null_Handle;
       Ok := False;
 
-      if Map = null or else Unmap = null then
+      if Map = null or else Memory = Null_Handle then
          return;
       end if;
 
-      if Map (Item.Logical, Memory, 0, Bytes, 0, Where'Access) /= 0 then
+      if Map (Item.Logical, Memory, 0, Bytes, 0, Got'Access) /= 0 then
+         return;
+      end if;
+
+      Where := Got;
+      Ok := True;
+   end Map_Memory;
+
+   --  Give a matrix's storage up, mapping and all.
+   procedure Release_Weight
+     (Item   : in out Engine;
+      Buffer : in out Address;
+      Memory : in out Address;
+      Mapped : in out Address)
+   is
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+   begin
+      if Mapped /= Null_Handle
+        and then Memory /= Null_Handle
+        and then Unmap /= null
+        and then Item.Logical /= Null_Handle
+      then
+         Unmap (Item.Logical, Memory);
+      end if;
+
+      Mapped := Null_Handle;
+      Give_Back_Buffer (Item, Buffer, Memory);
+   end Release_Weight;
+
+   procedure Write_Bytes
+     (Where  : Address;
+      Values : Model_Runner.Bytes.Byte_Array;
+      Ok     : out Boolean) is
+   begin
+      Ok := False;
+
+      if Where = Null_Handle then
          return;
       end if;
 
@@ -1276,7 +1320,6 @@ package body Model_Runner.Platform.Device.Products is
          Room := Values;
       end;
 
-      Unmap (Item.Logical, Memory);
       Ok := True;
    end Write_Bytes;
 
@@ -2264,8 +2307,9 @@ package body Model_Runner.Platform.Device.Products is
       Ignored : constant Boolean := Set_Asking (Item);
    begin
       for Index in 1 .. Item.Used loop
-         Give_Back_Buffer
-           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory);
+         Release_Weight
+           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
+            Item.Kept (Index).Mapped);
          Item.Kept (Index).Key := Null_Handle;
          Item.Kept (Index).Bytes := 0;
          Item.Kept (Index).Rows := 0;
@@ -2275,8 +2319,9 @@ package body Model_Runner.Platform.Device.Products is
       --  And the ones kept back for reuse, which are the device's memory
       --  as much as the matrices are.
       for Index in 1 .. Item.Spare_Used loop
-         Give_Back_Buffer
-           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory);
+         Release_Weight
+           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory,
+            Item.Spare (Index).Mapped);
       end loop;
 
       Item.Spare := [others => <>];
@@ -2322,14 +2367,16 @@ package body Model_Runner.Platform.Device.Products is
       --  Everything the device was holding for a model, then the two that
       --  change every call.
       for Index in 1 .. Item.Used loop
-         Give_Back_Buffer
-           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory);
+         Release_Weight
+           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
+            Item.Kept (Index).Mapped);
          Item.Kept (Index).Key := Null_Handle;
          Item.Kept (Index).Bytes := 0;
       end loop;
       for Index in 1 .. Item.Spare_Used loop
-         Give_Back_Buffer
-           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory);
+         Release_Weight
+           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory,
+            Item.Spare (Index).Mapped);
       end loop;
 
       Item.Spare := [others => <>];
@@ -2523,16 +2570,19 @@ package body Model_Runner.Platform.Device.Products is
       Bytes  : Interfaces.Unsigned_64;
       Buffer : out Address;
       Memory : out Address;
+      Mapped : out Address;
       Found  : out Boolean) is
    begin
       Buffer := Null_Handle;
       Memory := Null_Handle;
+      Mapped := Null_Handle;
       Found := False;
 
       for Index in reverse 1 .. Item.Spare_Used loop
          if Item.Spare (Index).Bytes = Bytes then
             Buffer := Item.Spare (Index).Buffer;
             Memory := Item.Spare (Index).Memory;
+            Mapped := Item.Spare (Index).Mapped;
             Found := True;
 
             Item.Spare (Index) := Item.Spare (Item.Spare_Used);
@@ -2550,6 +2600,7 @@ package body Model_Runner.Platform.Device.Products is
      (Item   : in out Engine;
       Buffer : Address;
       Memory : Address;
+      Mapped : Address;
       Bytes  : Interfaces.Unsigned_64;
       Kept   : out Boolean) is
    begin
@@ -2563,7 +2614,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       Item.Spare_Used := Item.Spare_Used + 1;
-      Item.Spare (Item.Spare_Used) := (Buffer, Memory, Bytes);
+      Item.Spare (Item.Spare_Used) := (Buffer, Memory, Bytes, Mapped);
       Item.Spare_Bytes := Item.Spare_Bytes + Bytes;
       Kept := True;
    end Keep_Spare;
@@ -2581,13 +2632,14 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Buffer : Address := Item.Spare (Item.Spare_Used).Buffer;
          Memory : Address := Item.Spare (Item.Spare_Used).Memory;
+         Mapped : Address := Item.Spare (Item.Spare_Used).Mapped;
       begin
          Item.Spare_Bytes :=
            Item.Spare_Bytes - Item.Spare (Item.Spare_Used).Bytes;
          Item.Spare (Item.Spare_Used) := (others => <>);
          Item.Spare_Used := Item.Spare_Used - 1;
 
-         Give_Back_Buffer (Item, Buffer, Memory);
+         Release_Weight (Item, Buffer, Memory, Mapped);
       end;
 
       Gone := True;
@@ -2652,12 +2704,13 @@ package body Model_Runner.Platform.Device.Products is
          if not Item.Kept (Oldest).Own then
             Keep_Spare
               (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory,
-               Item.Kept (Oldest).Bytes, Spared);
+               Item.Kept (Oldest).Mapped, Item.Kept (Oldest).Bytes, Spared);
          end if;
 
          if not Spared then
-            Give_Back_Buffer
-              (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory);
+            Release_Weight
+              (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory,
+               Item.Kept (Oldest).Mapped);
          end if;
       end;
 
@@ -2678,7 +2731,8 @@ package body Model_Runner.Platform.Device.Products is
       Item.Kept (Item.Used) :=
         (Key => Null_Handle, Buffer => Null_Handle, Memory => Null_Handle,
          Bytes => 0, Used_At => 0, Packing => Values_F32,
-         Rows => 0, Columns => 0, Base => 0, Own => False);
+         Rows => 0, Columns => 0, Base => 0, Own => False,
+         Mapped => Null_Handle);
       Item.Used := Item.Used - 1;
 
       Gone := True;
@@ -2820,6 +2874,7 @@ package body Model_Runner.Platform.Device.Products is
       Weight_Memory : Address renames Memory;
       Weight_Base   : Interfaces.Unsigned_64 renames Base;
       Weight_Own    : Boolean := False;
+      Weight_Mapped : Address := Null_Handle;
       Good          : Boolean;
    begin
       Weight_Buffer := Null_Handle;
@@ -2848,6 +2903,7 @@ package body Model_Runner.Platform.Device.Products is
                Weight_Memory := Item.Kept (Index).Memory;
                Weight_Base := Item.Kept (Index).Base;
                Weight_Own := Item.Kept (Index).Own;
+               Weight_Mapped := Item.Kept (Index).Mapped;
                Item.Kept (Index).Used_At := Item.Clock;
                exit;
             end if;
@@ -2901,7 +2957,8 @@ package body Model_Runner.Platform.Device.Products is
                Found : Boolean;
             begin
                Take_Spare
-                 (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Found);
+                 (Item, Weight_Bytes, Weight_Buffer, Weight_Memory,
+                  Weight_Mapped, Found);
                Good := Found;
             end;
 
@@ -2935,21 +2992,32 @@ package body Model_Runner.Platform.Device.Products is
 
             if Weight_Buffer = Null_Handle then
                Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+
+               --  Mapped once, here, and kept for as long as the memory
+               --  is: the copy below and every copy into this buffer after
+               --  it writes through the pointer rather than asking again.
+               if Good then
+                  Map_Memory
+                    (Item, Weight_Memory, Weight_Bytes, Weight_Mapped, Good);
+               end if;
             end if;
+
             if not Good then
-               Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               Release_Weight
+                 (Item, Weight_Buffer, Weight_Memory, Weight_Mapped);
                Ok := False;
                return;
             end if;
 
             Write_Bytes
-              (Item, Weight_Memory, Weight_Bytes,
+              (Weight_Mapped,
                Weights (Weights'First + At_Byte
                         .. Weights'First + At_Byte
                            + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
                Good);
             if not Good then
-               Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
+               Release_Weight
+                 (Item, Weight_Buffer, Weight_Memory, Weight_Mapped);
                Ok := False;
                return;
             end if;
@@ -2972,7 +3040,8 @@ package body Model_Runner.Platform.Device.Products is
               (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
                Bytes => Weight_Bytes, Used_At => Item.Clock,
                Packing => Packing, Rows => Rows, Columns => Columns,
-               Base => Weight_Base, Own => Weight_Own);
+               Base => Weight_Base, Own => Weight_Own,
+               Mapped => Weight_Mapped);
 
             if Weight_Own then
                Item.Taken := Item.Taken + 1;
