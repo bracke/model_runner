@@ -154,6 +154,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The residency table is found by a probe and evicted from a chain**,
+  where both were walks of the whole table -- one per matrix taken and one
+  per matrix given back, about eighteen thousand of each over twelve
+  thousand entries on a mixture. Worth **1.21 times generating** at the
+  budget this part offers and 1.24 at six gigabytes; the prompt gains 2 to 3
+  per cent.
+
+  The measurement that led here was that the prompt got faster as the budget
+  shrank, which only a list walked from one end explains. Taking the walks
+  out moved generation by a fifth and the prompt by two per cent, and the
+  prompt is still faster at a smaller budget -- so that curve was not these
+  loops, and remains unexplained.
+
 - **A matrix's memory is mapped once and kept, not mapped and unmapped for
   every upload.** On a model that does not fit that was about four hundred
   `vkMapMemory`/`vkUnmapMemory` pairs a generated token, on the same memory

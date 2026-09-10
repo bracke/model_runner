@@ -1092,6 +1092,27 @@ private
       --  Null for an imported matrix, which is the host's own memory and
       --  was never mapped.
       Mapped  : System.Address := System.Null_Address;
+
+      --  Where this entry sits in the order of last use, and in the chain
+      --  of slots nothing is in.
+      --
+      --  Both were a walk of the whole table: the lookup asked every entry
+      --  whether it was the one wanted, and the eviction asked every entry
+      --  whether it was the oldest. A mixture's prompt does eighteen
+      --  thousand of each over a table twelve thousand long, and the
+      --  measurement that found it is that THE PROMPT GOT FASTER AS THE
+      --  BUDGET SHRANK -- 23.57 tokens a second at two gigabytes against
+      --  18.25 at eight, with more of the model resident. Nothing about
+      --  memory does that; a list walked from one end does.
+      --
+      --  Newer and Older put the entries in one order of use, so the
+      --  oldest is where the chain ends rather than where a walk finds it.
+      --  Next_Free chains the slots nothing is in, so an entry keeps its
+      --  slot for as long as it lives and the index below never has to be
+      --  told that something moved.
+      Newer     : Natural := 0;
+      Older     : Natural := 0;
+      Next_Free : Natural := 0;
    end record;
 
    type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
@@ -1112,6 +1133,15 @@ private
    end record;
 
    type Spare_Array is array (1 .. Max_Spare) of Spare_Buffer;
+
+   --  Where a matrix is held, found by what identifies it.
+   --
+   --  Open addressing over the key's own address, twice the table so it is
+   --  never more than half full and a probe is short. Zero is an empty
+   --  slot; anything else is a place in Kept.
+   Index_Slots : constant := 2 * Max_Resident;
+
+   type Index_Array is array (0 .. Index_Slots - 1) of Natural;
 
    type Engine is limited record
       --  The instance every entry point this engine uses is found through.
@@ -1344,6 +1374,18 @@ private
       --  count, the driver is asked once and the loop reuses what it has.
       --  The bytes stay spent -- the device has not had them back -- so
       --  they count against the budget beside the matrices themselves.
+      --  The order of last use, newest first, and the slots nothing is in.
+      Newest      : Natural := 0;
+      Oldest      : Natural := 0;
+      Free_Head   : Natural := 0;
+
+      --  How many slots have ever been given out, so that the ones past it
+      --  need no chaining to be known free.
+      Slots_Given : Natural := 0;
+
+      --  Key to slot, so a lookup is a probe rather than a walk.
+      Index_Of  : Index_Array := [others => 0];
+
       Spare       : Spare_Array := [others => <>];
       Spare_Used  : Natural := 0;
       Spare_Bytes : Interfaces.Unsigned_64 := 0;

@@ -7436,7 +7436,7 @@ reference F7D97F8B8E65F88C src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device 7F2CED0723474BC7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 48D4330214CA3C0F src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -10360,7 +10360,7 @@ tokenizer 001FF68B5629F08A src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside 7F2CED0723474BC7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 48D4330214CA3C0F src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -17836,6 +17836,63 @@ panels 1BD1C66028C05927 src/library/model_runner-quantization-interleave.ads src
 #   not, and a driver call out of a loop that runs four hundred times a
 #   token. The dense path is untouched at 0.218, 0.220, 0.219 s, digest
 #   5abff916f9d83ca6.
+#
+# load:  the mixture rows are ungated CLI runs, warm, three alternated
+#        rounds; the TinyLlama rows went through the gate
+# model: Qwen3-30B-A3B Q3_K 11.26 GB, and TinyLlama-1.1B-Chat Q8_0
+
+# 2026-09-10, a probe instead of a walk, and a chain instead of a scan.
+#
+#   TWO LOOPS over the residency table ran once for every matrix taken and
+#   once for every matrix given back: the lookup asked every entry whether
+#   it was the one wanted, the eviction asked every entry whether it was the
+#   oldest. A mixture does about eighteen thousand of each over a table
+#   twelve thousand long.
+#
+#   WHAT FOUND THEM was that the prompt got faster as the budget shrank --
+#   23.57 t/s at two gigabytes against 18.25 at eight, with more of the
+#   model resident. Nothing about memory does that; a list walked from one
+#   end does.
+#
+#   Three alternated rounds, Qwen3-30B-A3B, 110-token prompt, eight
+#   generated tokens:
+#
+#                        walking                 indexed
+#     generating, 8 GB   11.04 10.93 11.02 t/s   13.33 13.15 13.27  1.21x
+#     generating, 6 GB    9.39  9.25  9.24       11.60 11.48 11.48  1.24x
+#     the prompt,  8 GB  17.89 18.17 18.44       18.71 18.62 18.38  1.02x
+#     the prompt,  6 GB  18.68 18.73 18.69       18.98 19.31 19.43  1.03x
+#
+#   THE GENERATION GAINED AND THE PROMPT DID NOT, which is not what the
+#   measurement that led here predicted. The budget curve was a prompt
+#   curve, and the prompt is STILL faster at a smaller budget -- so whatever
+#   that curve is, it was not these loops, and it is unexplained. Third time
+#   today a number reasoned out ahead of the work came back different: the
+#   dispatch price, the mapping, and this.
+#
+#   TWO FAULTS ON THE WAY, both worth writing down.
+#
+#   The index returns one entry for a key and the walk it replaced kept
+#   looking. Two matrices can share an address -- a tied output holds one
+#   under two names -- so stopping at the first key meant missing and then
+#   keeping a second entry beside the first. The index compares the whole
+#   identity, as the walk did.
+#
+#   And putting a FRESHLY TAKEN slot at the front of the chain by unlinking
+#   it first reads its links as zero, concludes it is both the newest and
+#   the oldest, and sets both ends of the chain to nothing. Every other
+#   entry is orphaned and the eviction walks a chain of one:
+#
+#     right    2,550 held, 6,886 given back, 7.56 t/s
+#     broken   3,376 held, 1,570 given back, 3.27 t/s
+#
+#   The residency counters are what caught it -- fewer given back and more
+#   held, at a third of the speed. Linking and touching are two operations
+#   now, and the one that unlinks says the entry must already be in a chain.
+#
+#   THE DENSE PATH IS UNTOUCHED: 0.221, 0.217, 0.220 s over twelve generated
+#   tokens, digest 5abff916f9d83ca6. A model that fits is never evicted and
+#   its table is two hundred entries long.
 #
 # load:  the mixture rows are ungated CLI runs, warm, three alternated
 #        rounds; the TinyLlama rows went through the gate

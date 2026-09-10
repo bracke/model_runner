@@ -18772,6 +18772,62 @@ hundred times a token, which is the right shape whatever it measures. The
 dense path is untouched at 0.218, 0.220 and 0.219 s and the same digest,
 because a model that fits never evicts and never uploads twice.
 
+### A probe instead of a walk, and a chain instead of a scan
+
+Two loops over the residency table ran once for every matrix taken and once
+for every matrix given back: the lookup asked every entry whether it was the
+one wanted, and the eviction asked every entry whether it was the oldest. A
+mixture does about eighteen thousand of each over a table twelve thousand
+long.
+
+**What found them is that the prompt got faster as the budget shrank** --
+23.57 tokens a second at two gigabytes against 18.25 at eight, with more of
+the model resident. Nothing about memory does that; a list walked from one
+end does, and the list is as long as the resident count.
+
+An open-addressed index from a matrix's identity to its slot makes the lookup
+a probe. One chain in order of last use makes the eviction a step from the
+end. Slots are stable and go on a free chain rather than being filled from
+the end, because an index cannot have entries moved under it.
+
+| | walking | indexed | |
+| --- | ---: | ---: | ---: |
+| generating, 8 GB | 11.04, 10.93, 11.02 t/s | 13.33, 13.15, 13.27 | **1.21 times** |
+| generating, 6 GB | 9.39, 9.25, 9.24 | 11.60, 11.48, 11.48 | **1.24 times** |
+| the prompt, 8 GB | 17.89, 18.17, 18.44 | 18.71, 18.62, 18.38 | 1.02 |
+| the prompt, 6 GB | 18.68, 18.73, 18.69 | 18.98, 19.31, 19.43 | 1.03 |
+
+**The generation gained and the prompt did not, which is not what the
+measurement that led here predicted.** The budget curve was a prompt curve,
+and taking the walks out moved generation by a fifth and the prompt by two
+per cent -- and **the prompt is still faster at a smaller budget**, so
+whatever that curve is, it was not these loops. It is the third time today
+that a number reasoned out ahead of the work has come back different: the
+dispatch price, the mapping, and now this.
+
+What the walks did cost is real and is generation's, where 1.21 times at the
+budget this part actually offers takes the mixture from 11.0 tokens a second
+to 13.3.
+
+**Two things this cost on the way, both worth writing down.**
+
+The index returns one entry for a key and the walk it replaced kept looking:
+two matrices can share an address, and stopping at the first meant missing
+and then keeping a second entry beside the first. The index compares the
+whole identity -- what it is, what shape, what format -- as the walk did.
+
+And **putting a freshly taken slot at the front of the chain by unlinking it
+first** reads its links as zero, concludes from that that it is both the
+newest and the oldest, and sets both ends of the chain to nothing. Every
+other entry is orphaned, the eviction walks a chain of one, and the residency
+fills with whatever it happened to keep: 3,376 matrices held and 1,570 given
+back where the right answer is 2,550 and 6,886, and a third of the speed.
+Linking and touching are two operations now, and the one that unlinks says
+that the entry must already be in the chain.
+
+The dense path is untouched at 0.221, 0.217 and 0.220 s and the same digest:
+a model that fits is never evicted and its table is two hundred entries long.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -2306,14 +2306,13 @@ package body Model_Runner.Platform.Device.Products is
       --  have to be the ones this engine was opened with.
       Ignored : constant Boolean := Set_Asking (Item);
    begin
-      for Index in 1 .. Item.Used loop
+      --  Every slot ever given out, because a live entry keeps its slot
+      --  and the ones between are the chain of free ones.
+      for Index in 1 .. Item.Slots_Given loop
          Release_Weight
            (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
             Item.Kept (Index).Mapped);
-         Item.Kept (Index).Key := Null_Handle;
-         Item.Kept (Index).Bytes := 0;
-         Item.Kept (Index).Rows := 0;
-         Item.Kept (Index).Columns := 0;
+         Item.Kept (Index) := (others => <>);
       end loop;
 
       --  And the ones kept back for reuse, which are the device's memory
@@ -2329,6 +2328,11 @@ package body Model_Runner.Platform.Device.Products is
       Item.Spare_Bytes := 0;
 
       Item.Used := 0;
+      Item.Slots_Given := 0;
+      Item.Free_Head := 0;
+      Item.Newest := 0;
+      Item.Oldest := 0;
+      Item.Index_Of := [others => 0];
       Item.Kept_Bytes := 0;
    end Forget_Matrices;
 
@@ -2366,12 +2370,11 @@ package body Model_Runner.Platform.Device.Products is
 
       --  Everything the device was holding for a model, then the two that
       --  change every call.
-      for Index in 1 .. Item.Used loop
+      for Index in 1 .. Item.Slots_Given loop
          Release_Weight
            (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
             Item.Kept (Index).Mapped);
-         Item.Kept (Index).Key := Null_Handle;
-         Item.Kept (Index).Bytes := 0;
+         Item.Kept (Index) := (others => <>);
       end loop;
       for Index in 1 .. Item.Spare_Used loop
          Release_Weight
@@ -2384,6 +2387,11 @@ package body Model_Runner.Platform.Device.Products is
       Item.Spare_Bytes := 0;
 
       Item.Used := 0;
+      Item.Slots_Given := 0;
+      Item.Free_Head := 0;
+      Item.Newest := 0;
+      Item.Oldest := 0;
+      Item.Index_Of := [others => 0];
       Item.Kept_Bytes := 0;
       Item.Clock := 0;
       Item.Released := 0;
@@ -2554,6 +2562,229 @@ package body Model_Runner.Platform.Device.Products is
    -- Give_Back_Least --
    ---------------------
 
+   -----------------------------
+   -- The order and the index --
+   -----------------------------
+
+   --  Where a key starts probing.
+   --
+   --  A key is the address a matrix's weights begin at, which is aligned
+   --  and therefore has zeros where a table would want variety. The shift
+   --  and the multiply spread them; nothing here depends on the constant
+   --  being any particular one, only on it being odd.
+   function Start_At (Key : Address) return Natural is
+      use type System.Storage_Elements.Integer_Address;
+
+      Value : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64
+          (System.Storage_Elements.To_Integer (Key) / 16);
+   begin
+      return Natural
+        ((Value * 11_400_714_819_323_198_485) mod Index_Slots);
+   end Start_At;
+
+   --  The slot a matrix is held in, or zero.
+   --
+   --  A matrix is what it is, what shape it is and where it is, and all of
+   --  that is compared -- which is what the walk this replaces did, and the
+   --  reason it kept walking past an entry whose key matched and whose
+   --  shape did not. Two matrices can share an address: a model with a tied
+   --  output holds one under two names, and a caller that reuses storage
+   --  can put another where one was. Stopping at the first key that matches
+   --  found the wrong entry, missed, and kept the found one AND a second
+   --  beside it -- which measured as a third of the speed at a budget that
+   --  evicts, because the large matrices read every token stopped being
+   --  found and the small ones read rarely stayed.
+   function Index_Find
+     (Item    : Engine;
+      Key     : Address;
+      Bytes   : Interfaces.Unsigned_64;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural) return Natural
+   is
+      Probe : Natural := Start_At (Key);
+   begin
+      for Step in 1 .. Index_Slots loop
+         if Item.Index_Of (Probe) = 0 then
+            return 0;
+         end if;
+
+         declare
+            Held : Held_Matrix renames Item.Kept (Item.Index_Of (Probe));
+         begin
+            if Held.Key = Key
+              and then Held.Bytes = Bytes
+              and then Held.Packing = Packing
+              and then Held.Rows = Rows
+              and then Held.Columns = Columns
+            then
+               return Item.Index_Of (Probe);
+            end if;
+         end;
+
+         Probe := (Probe + 1) mod Index_Slots;
+      end loop;
+
+      return 0;
+   end Index_Find;
+
+   --  Say that a key is held in a slot.
+   procedure Index_Put (Item : in out Engine; Key : Address; Where : Natural)
+   is
+      Probe : Natural := Start_At (Key);
+   begin
+      for Step in 1 .. Index_Slots loop
+         if Item.Index_Of (Probe) = 0 then
+            Item.Index_Of (Probe) := Where;
+            return;
+         end if;
+
+         Probe := (Probe + 1) mod Index_Slots;
+      end loop;
+   end Index_Put;
+
+   --  Take a key out, and close the gap behind it.
+   --
+   --  Open addressing cannot leave a hole: a key that probed past this
+   --  place would stop at the hole and be called absent. Every entry after
+   --  it whose own start is at or before the hole moves back into it, which
+   --  is the standard deletion and the reason this is not three lines.
+   procedure Index_Drop (Item : in out Engine; Key : Address) is
+      Hole  : Natural := Start_At (Key);
+      Steps : Natural := 0;
+   begin
+      while Item.Index_Of (Hole) /= 0
+        and then Item.Kept (Item.Index_Of (Hole)).Key /= Key
+      loop
+         Hole := (Hole + 1) mod Index_Slots;
+         Steps := Steps + 1;
+         exit when Steps > Index_Slots;
+      end loop;
+
+      if Item.Index_Of (Hole) = 0
+        or else Item.Kept (Item.Index_Of (Hole)).Key /= Key
+      then
+         return;
+      end if;
+
+      Item.Index_Of (Hole) := 0;
+
+      declare
+         Probe : Natural := (Hole + 1) mod Index_Slots;
+      begin
+         while Item.Index_Of (Probe) /= 0 loop
+            declare
+               Ideal : constant Natural :=
+                 Start_At (Item.Kept (Item.Index_Of (Probe)).Key);
+
+               --  Whether the entry at Probe would still be found if it
+               --  moved back into the hole: it would, unless its own start
+               --  lies in the stretch between them.
+               Moves : constant Boolean :=
+                 (if Probe > Hole
+                  then Ideal <= Hole or else Ideal > Probe
+                  else Ideal <= Hole and then Ideal > Probe);
+            begin
+               if Moves then
+                  Item.Index_Of (Hole) := Item.Index_Of (Probe);
+                  Item.Index_Of (Probe) := 0;
+                  Hole := Probe;
+               end if;
+            end;
+
+            Probe := (Probe + 1) mod Index_Slots;
+         end loop;
+      end;
+   end Index_Drop;
+
+   --  Take an entry out of the order of use.
+   procedure Unlink (Item : in out Engine; Where : Natural) is
+      Newer : constant Natural := Item.Kept (Where).Newer;
+      Older : constant Natural := Item.Kept (Where).Older;
+   begin
+      if Newer /= 0 then
+         Item.Kept (Newer).Older := Older;
+      else
+         Item.Newest := Older;
+      end if;
+
+      if Older /= 0 then
+         Item.Kept (Older).Newer := Newer;
+      else
+         Item.Oldest := Newer;
+      end if;
+
+      Item.Kept (Where).Newer := 0;
+      Item.Kept (Where).Older := 0;
+   end Unlink;
+
+   --  Put an entry that is in no chain at the newest end.
+   procedure Link_Front (Item : in out Engine; Where : Natural) is
+   begin
+      Item.Kept (Where).Older := Item.Newest;
+      Item.Kept (Where).Newer := 0;
+
+      if Item.Newest /= 0 then
+         Item.Kept (Item.Newest).Newer := Where;
+      end if;
+
+      Item.Newest := Where;
+
+      if Item.Oldest = 0 then
+         Item.Oldest := Where;
+      end if;
+   end Link_Front;
+
+   --  Put an entry already in the chain at the newest end, which is what
+   --  using it means.
+   --
+   --  IT MUST BE IN THE CHAIN. Unlinking one that is not reads its links as
+   --  zero, concludes from that that it is both the newest and the oldest,
+   --  and sets both ends of the chain to nothing -- which orphans every
+   --  other entry and leaves the eviction walking a chain of one. That is
+   --  what a freshly taken slot looks like, and calling this on one measured
+   --  as a third of the speed at a budget that evicts.
+   procedure Touch (Item : in out Engine; Where : Natural) is
+   begin
+      if Item.Newest = Where then
+         return;
+      end if;
+
+      Unlink (Item, Where);
+      Link_Front (Item, Where);
+   end Touch;
+
+   --  A slot nothing is in, or zero when the table is full.
+   procedure Take_Slot (Item : in out Engine; Where : out Natural) is
+   begin
+      if Item.Free_Head = 0 then
+         --  Slots past the high-water mark have never been given out and
+         --  are free by construction, which saves chaining every one of
+         --  thirty-two thousand at the start.
+         if Item.Slots_Given < Max_Resident then
+            Item.Slots_Given := Item.Slots_Given + 1;
+            Where := Item.Slots_Given;
+            return;
+         end if;
+
+         Where := 0;
+         return;
+      end if;
+
+      Where := Item.Free_Head;
+      Item.Free_Head := Item.Kept (Where).Next_Free;
+      Item.Kept (Where).Next_Free := 0;
+   end Take_Slot;
+
+   --  And back again.
+   procedure Free_Slot (Item : in out Engine; Where : Natural) is
+   begin
+      Item.Kept (Where) := (others => <>);
+      Item.Kept (Where).Next_Free := Item.Free_Head;
+      Item.Free_Head := Where;
+   end Free_Slot;
+
    --------------------
    -- Spare buffers --
    --------------------
@@ -2680,16 +2911,28 @@ package body Model_Runner.Platform.Device.Products is
       --  Among the ones that took budget, because those are the only ones
       --  releasing which makes room. An imported matrix is the host's own
       --  memory and giving it back frees none of the device's.
-      for Index in 1 .. Item.Used loop
-         if not Item.Kept (Index).Own
-           and then Item.Kept (Index).Used_At <= Pinned
-           and then (Oldest = 0
-                     or else Item.Kept (Index).Used_At
-                             < Item.Kept (Oldest).Used_At)
-         then
-            Oldest := Index;
-         end if;
-      end loop;
+      --  From the oldest end of the order of use, which is where the
+      --  answer is: this walked the whole table to find the smallest count
+      --  and now takes the first entry the chain offers that may go.
+      --
+      --  An entry may not go while the sequence in flight is reading it,
+      --  and those are the ones most recently used -- at the other end --
+      --  so the walk stops almost at once. An imported matrix is the
+      --  host's own memory and releasing it frees none of the device's.
+      declare
+         Look : Natural := Item.Oldest;
+      begin
+         while Look /= 0 loop
+            if not Item.Kept (Look).Own
+              and then Item.Kept (Look).Used_At <= Pinned
+            then
+               Oldest := Look;
+               exit;
+            end if;
+
+            Look := Item.Kept (Look).Newer;
+         end loop;
+      end;
 
       if Oldest = 0 then
          return;
@@ -2725,14 +2968,14 @@ package body Model_Runner.Platform.Device.Products is
          Item.Kept_Bytes := Item.Kept_Bytes - Item.Kept (Oldest).Bytes;
       end if;
 
-      --  The last one moves into the gap, because the order of this list is
-      --  nothing: what says which is oldest is the count each carries.
-      Item.Kept (Oldest) := Item.Kept (Item.Used);
-      Item.Kept (Item.Used) :=
-        (Key => Null_Handle, Buffer => Null_Handle, Memory => Null_Handle,
-         Bytes => 0, Used_At => 0, Packing => Values_F32,
-         Rows => 0, Columns => 0, Base => 0, Own => False,
-         Mapped => Null_Handle);
+      --  Out of the order, out of the index, and the slot goes back on the
+      --  chain of slots nothing is in. It used to move the last entry into
+      --  the gap, which is fine for a table nothing points into and wrong
+      --  for one that is indexed: the index would name a slot holding
+      --  somebody else.
+      Unlink (Item, Oldest);
+      Index_Drop (Item, Item.Kept (Oldest).Key);
+      Free_Slot (Item, Oldest);
       Item.Used := Item.Used - 1;
 
       Gone := True;
@@ -2892,22 +3135,20 @@ package body Model_Runner.Platform.Device.Products is
       Item.Clock := Item.Clock + 1;
 
       if Key /= System.Null_Address then
-         for Index in 1 .. Item.Used loop
-            if Item.Kept (Index).Key = Key
-              and then Item.Kept (Index).Bytes = Weight_Bytes
-              and then Item.Kept (Index).Packing = Packing
-              and then Item.Kept (Index).Rows = Rows
-              and then Item.Kept (Index).Columns = Columns
-            then
+         declare
+            Index : constant Natural :=
+              Index_Find (Item, Key, Weight_Bytes, Packing, Rows, Columns);
+         begin
+            if Index /= 0 then
                Weight_Buffer := Item.Kept (Index).Buffer;
                Weight_Memory := Item.Kept (Index).Memory;
                Weight_Base := Item.Kept (Index).Base;
                Weight_Own := Item.Kept (Index).Own;
                Weight_Mapped := Item.Kept (Index).Mapped;
                Item.Kept (Index).Used_At := Item.Clock;
-               exit;
+               Touch (Item, Index);
             end if;
-         end loop;
+         end;
       end if;
 
       if Weight_Buffer = Null_Handle then
@@ -3035,13 +3276,24 @@ package body Model_Runner.Platform.Device.Products is
                      or else Item.Budget = 0
                      or else Item.Kept_Bytes + Weight_Bytes <= Item.Budget)
          then
-            Item.Used := Item.Used + 1;
-            Item.Kept (Item.Used) :=
-              (Key => Key, Buffer => Weight_Buffer, Memory => Weight_Memory,
-               Bytes => Weight_Bytes, Used_At => Item.Clock,
-               Packing => Packing, Rows => Rows, Columns => Columns,
-               Base => Weight_Base, Own => Weight_Own,
-               Mapped => Weight_Mapped);
+            declare
+               Where : Natural;
+            begin
+               Take_Slot (Item, Where);
+
+               Item.Used := Item.Used + 1;
+               Item.Kept (Where) :=
+                 (Key => Key, Buffer => Weight_Buffer,
+                  Memory => Weight_Memory,
+                  Bytes => Weight_Bytes, Used_At => Item.Clock,
+                  Packing => Packing, Rows => Rows, Columns => Columns,
+                  Base => Weight_Base, Own => Weight_Own,
+                  Mapped => Weight_Mapped,
+                  Newer => 0, Older => 0, Next_Free => 0);
+
+               Index_Put (Item, Key, Where);
+               Link_Front (Item, Where);
+            end;
 
             if Weight_Own then
                Item.Taken := Item.Taken + 1;
