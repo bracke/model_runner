@@ -252,6 +252,10 @@ package Model_Runner.Presentation is
    --    given, because they are answers to a question a run on the processor
    --    is not asked.
    --  @param Resident How many of the model's matrices the device holds.
+   --  @param Resident_Limit The most it will hold, as a count. Printed
+   --    beside the count because a count printed alone sat at exactly its
+   --    bound on a mixture of experts, with half the byte budget unspent,
+   --    and nothing said that was what it was.
    --  @param Imported How many of those it is reading where they already
    --    are, rather than from a copy. On a device that shares the host's
    --    memory this is the difference between holding the model once and
@@ -271,6 +275,7 @@ package Model_Runner.Presentation is
       Outcome        : Model_Runner.Generation.Result;
       Device         : String := "";
       Resident       : Natural := 0;
+      Resident_Limit : Natural := 0;
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;

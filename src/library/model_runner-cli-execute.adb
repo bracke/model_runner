@@ -2244,6 +2244,8 @@ package body Model_Runner.CLI.Execute is
                     (Screen, Outcome,
                      Device         => Model_Runner.Backend.Device.Name,
                      Resident       => Model_Runner.Backend.Device.Resident,
+                     Resident_Limit =>
+                       Model_Runner.Backend.Device.Resident_Limit,
                      Imported       => Model_Runner.Backend.Device.Imported,
                      Resident_Bytes =>
                        Model_Runner.Backend.Device.Resident_Bytes,

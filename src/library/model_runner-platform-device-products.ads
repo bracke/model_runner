@@ -991,6 +991,25 @@ package Model_Runner.Platform.Device.Products is
    --  @return Bytes of key and value cache resident, or zero for none.
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  How many matrices one engine will keep, as a count.
+   --
+   --  Two bounds decide residency and the tighter one wins: this count, and
+   --  the byte budget. IT WAS 4,096, AND THE COMMENT HERE SAID THAT WAS
+   --  HIGH ENOUGH FOR THE BYTE BUDGET TO BE WHAT ACTUALLY DECIDES. It was
+   --  not. A dense model of a few dozen layers has some hundreds of
+   --  matrices; a mixture of experts has three a layer FOR EVERY EXPERT,
+   --  and the engine takes each expert as its own matrix because that is
+   --  what reading eight of a hundred and twenty-eight means. Forty-eight
+   --  layers of a hundred and twenty-eight experts is eighteen thousand
+   --  four hundred and thirty-two, and at four thousand the count bound
+   --  first with two and a half gigabytes of a six-gigabyte budget unspent.
+   --  See the README's `### A mixture of experts and a bound on a count`.
+   --
+   --  It is reported beside the count held, so that a run the count stops
+   --  says so rather than printing a number that happens to be its own
+   --  bound.
+   Max_Resident : constant := 32_768;
+
 private
 
    --  One descriptor set for every product a sequence may hold.
@@ -1004,13 +1023,6 @@ private
    --  because allocating from a pool is the kind of work this exists to
    --  keep out of a layer.
    type Set_Array is array (1 .. Sequence_Limit) of System.Address;
-
-   --  How many matrices one engine will keep, as a count. A dense model of a
-   --  few dozen layers has some hundreds of them and a mixture of experts has
-   --  three a layer for every expert, so this is high enough that the byte
-   --  budget is what actually decides. Both bounds are enforced and the
-   --  tighter one wins.
-   Max_Resident : constant := 4096;
 
    --  What fraction of the device's largest heap the resident matrices may
    --  take, as a numerator over a denominator. Three quarters: the rest is

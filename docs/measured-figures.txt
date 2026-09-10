@@ -9182,7 +9182,7 @@ reference DEB1DBF16EA1AFA2 src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device 732DC19431A5E662 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 6A1FFFDFF42F0800 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the three-row table under "Drafting", the per-token costs derived
 # from it and the 382 ms a check of five positions takes, which is derived
@@ -12106,7 +12106,7 @@ tokenizer 001FF68B5629F08A src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside 732DC19431A5E662 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 6A1FFFDFF42F0800 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -19243,3 +19243,68 @@ panels DB4EC78E05A0BBA4 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  through the gate before each reading
 # model: TinyLlama-1.1B-Chat Q8_0 on the device, corpus of 15,440 tokens
+
+# 2026-09-10, a mixture of experts and a bound on a count.
+#
+#   WHAT WAS BEING LOOKED FOR was llama.cpp's --cpu-moe: a way to say which
+#   tensors keep the device when the model is larger than the device holds.
+#   Qwen3-30B-A3B is 11.26 GB and this host offers 8.47:
+#
+#     model_runner run qwen3moe.gguf --backend device
+#     MR-MEM-0001: backend_memory needs 11251795968 bytes, above the limit
+#                  of 8472029184
+#
+#   Forced through with --device-memory it ran, and the statistics said
+#   something better than the flag would have:
+#
+#     matrices on the device  4096
+#     bytes on the device     2551635968
+#     matrices given back     0
+#
+#   FOUR THOUSAND AND NINETY-SIX IS THE BOUND, EXACTLY, and three and a half
+#   gigabytes of a six-gigabyte budget was unspent. Two bounds decide
+#   residency and the tighter wins: the byte budget, and the size of the
+#   table the kept matrices sit in. The comment on that constant said it was
+#   "high enough that the byte budget is what actually decides".
+#
+#   WHY A MIXTURE. The engine takes each expert as its own matrix, because
+#   that is what reading eight of a hundred and twenty-eight means: the file
+#   stores them fused and the loader cuts them into per-expert views.
+#   Forty-eight layers of a hundred and twenty-eight experts, three matrices
+#   each, is 18,432 where a dense model of the same depth has a few hundred.
+#
+#   RAISED TO 32,768. Three alternated rounds, sixteen generated tokens, a
+#   six-gigabyte budget, a 4,096-token context:
+#
+#     table    tokens a second      matrices   bytes
+#      4,096   2.72 2.74 2.72        4,096     2.54 GB
+#     32,768   4.64 4.66 4.66        8,443     5.33 GB
+#
+#   1.71 TIMES, and against the processor's 1.55 tokens a second the device
+#   goes from 1.76 times to 3.0. The byte budget is now what binds.
+#
+#   AND IT COSTS THE DENSE CASE NOTHING, which was the thing to check: the
+#   table is only as long as what is in it. Twelve generated tokens on
+#   TinyLlama read 0.219, 0.218, 0.218 s against a mean of 0.2187 over ten
+#   readings before, digest unchanged at 5abff916f9d83ca6.
+#
+#   THE EARLIER READINGS OF THIS MODEL WERE NOISE AND ARE NOT KEPT: 0.84 to
+#   2.53 tokens a second at the same setting across sittings, which was the
+#   page cache filling on an eleven-gigabyte file. Warm, the same setting
+#   reads within a hundredth three times running.
+#
+#   THE REPORT NOW NAMES THE BOUND BESIDE THE COUNT -- "199 of 32768" -- so
+#   a run the table stops says so. No static check can bound a table against
+#   arbitrary files; what went wrong was not the number but that nothing
+#   distinguished it from a measurement.
+#
+#   AND --CPU-MOE WAS NOT BUILT. It decides which matrices keep the device,
+#   and the policy already does that correctly: what is read every token
+#   stays and what is read one token in sixteen goes, which is what least
+#   recently used means and is exactly right for a mixture. There was
+#   nothing for the flag to improve once the table was large enough to hold
+#   the answer.
+#
+# load:  the mixture rows are ungated CLI runs, warm, three alternated
+#        rounds; the TinyLlama rows went through the gate
+# model: Qwen3-30B-A3B Q4_K 11.26 GB, and TinyLlama-1.1B-Chat Q8_0

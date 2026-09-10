@@ -269,6 +269,9 @@ package body Model_Runner.Backend.Device is
 
    function Resident return Natural is (Products.Resident (Engine));
 
+   function Resident_Limit return Natural
+   is (Products.Max_Resident);
+
    ---------------------
    -- Resident_Bytes --
    ---------------------

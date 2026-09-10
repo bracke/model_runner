@@ -421,6 +421,7 @@ package body Model_Runner.Presentation is
       Outcome        : Gen.Result;
       Device         : String := "";
       Resident       : Natural := 0;
+      Resident_Limit : Natural := 0;
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
@@ -495,9 +496,17 @@ package body Model_Runner.Presentation is
       --  not helping.
       if Device /= "" then
          Put_Field (Item, "statistics.device", Device, Diagnostic);
+         --  The count beside the bound it is held under.
+         --
+         --  It printed the count alone, and the count sat at exactly 4,096
+         --  on a mixture of experts while three and a half gigabytes of the
+         --  budget went unspent, and nothing said that the number next to
+         --  the label WAS the bound. A reader who sees "4096 of 4096" asks
+         --  the question; a reader who sees "4096" does not.
          Put_Field
            (Item, "statistics.resident",
-            T.Image (Long_Long_Integer (Resident)), Diagnostic);
+            T.Image (Long_Long_Integer (Resident)) & " of "
+            & T.Image (Long_Long_Integer (Resident_Limit)), Diagnostic);
          Put_Field
            (Item, "statistics.imported",
             T.Image (Long_Long_Integer (Imported)), Diagnostic);

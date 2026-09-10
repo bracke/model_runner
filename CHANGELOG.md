@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The device kept at most 4,096 matrices, and a mixture of experts
+  presents 18,432.** Two bounds decide residency and the tighter wins: a
+  byte budget and the size of the table the kept matrices sit in. The
+  comment on that table said the count was "high enough that the byte budget
+  is what actually decides"; on Qwen3-30B-A3B the count bound at exactly
+  4,096 with 3.5 GB of a 6 GB budget unspent, because the engine takes each
+  expert as its own matrix -- which is what reading eight of a hundred and
+  twenty-eight means.
+
+  Raised to 32,768. Three alternated rounds: **2.73 tokens a second becomes
+  4.65**, 1.71 times, and against the processor's 1.55 the device goes from
+  1.76 times to 3.0. The dense case is untouched -- the table is only as long
+  as what is in it -- and twelve generated tokens still read 0.219 s and the
+  same digest.
+
+  The statistics now name the bound beside the count (`199 of 32768`), so a
+  run the table stops says so rather than printing a number that happens to
+  be its own limit.
+
 - **The budget charged a whole fused layer to `Attending`**, which made
   attending the largest number it reported on the device -- 0.215 s of a
   0.511 s run, where an ablation of `attention.comp` puts attending at

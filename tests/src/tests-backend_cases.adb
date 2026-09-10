@@ -3734,6 +3734,68 @@ package body Tests.Backend_Cases is
               "a machine larger than the pool allows was not capped");
    end Default_Team_Leaves_A_Share;
 
+   ---------------------------------------------------
+   -- The_Count_Is_Not_What_Bounds_What_Stays_Resident --
+   ---------------------------------------------------
+
+   --  Residency is bounded by bytes, and the count is only a table size.
+   --
+   --  Two bounds decide what the device keeps and the tighter one wins: a
+   --  byte budget, which is the one a caller reasons about, and a count,
+   --  which is how large the table of kept matrices is. The count is meant
+   --  to be the loose one.
+   --
+   --  IT WAS NOT. It was four thousand and ninety-six, and a mixture of
+   --  experts takes each expert as its own matrix -- which is what reading
+   --  eight of a hundred and twenty-eight means -- so forty-eight layers of
+   --  a hundred and twenty-eight experts presented eighteen thousand four
+   --  hundred and thirty-two of them. The count bound first, with two and a
+   --  half gigabytes of a six-gigabyte budget unspent, and the run went at
+   --  2.73 tokens a second where it goes at 4.65 with the table large
+   --  enough. Nothing said so: the statistics printed the count and not the
+   --  bound, so the number sitting at exactly its own limit looked like a
+   --  measurement.
+   --
+   --  What this holds is the invariant the comment claimed and the constant
+   --  did not keep: after a run, the count is below the bound. It cannot
+   --  reach a mixture of that size from here -- the fixture has four
+   --  experts -- so what it catches is the constant being lowered, which is
+   --  how the four thousand got there.
+   procedure The_Count_Is_Not_What_Bounds_What_Stays_Resident
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Ready : Boolean;
+   begin
+      Device.Close;
+      Device.Open (Ready);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device held any matrices here");
+         return;
+      end if;
+
+      Assert (Device.Resident_Limit >= 32_768,
+              "the table of kept matrices holds"
+              & Natural'Image (Device.Resident_Limit)
+              & ", and a mixture of forty-eight layers and a hundred and "
+              & "twenty-eight experts presents 18,432 -- so the count is "
+              & "what would bind, with the byte budget unspent");
+
+      Assert (Device.Resident < Device.Resident_Limit,
+              "the device is holding" & Natural'Image (Device.Resident)
+              & " matrices against a bound of"
+              & Natural'Image (Device.Resident_Limit)
+              & ", so what stopped it was the table and not the budget");
+
+      Device.Close;
+   end The_Count_Is_Not_What_Bounds_What_Stays_Resident;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3842,6 +3904,10 @@ package body Tests.Backend_Cases is
         (T, Turning_Is_What_The_Table_Says_It_Is'Access,
          "the table a rotation turns by says exactly what the rotation "
          & "does, at every position and both pairings");
+      Register_Routine
+        (T, The_Count_Is_Not_What_Bounds_What_Stays_Resident'Access,
+         "what the device keeps is bounded by bytes and not by the size of "
+         & "the table it keeps them in");
    end Register_Tests;
 
 end Tests.Backend_Cases;

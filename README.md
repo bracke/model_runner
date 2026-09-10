@@ -18435,6 +18435,77 @@ one session, which is what a long context is. The baseline was re-measured to
 check that nothing moved: 35.5256, which is the published figure to the
 digit.
 
+### A mixture of experts and a bound on a count
+
+What was being looked for was llama.cpp's `--cpu-moe`: a way to say which
+tensors keep the device when the model is larger than the device will hold.
+Qwen3-30B-A3B is 11.26 GB and this host offers 8.47, so the device refuses
+it outright:
+
+```
+$ model_runner run qwen3moe.gguf --backend device
+MR-MEM-0001: backend_memory needs 11251795968 bytes, above the limit of 8472029184
+```
+
+Forced through with `--device-memory`, it ran -- and the statistics said
+something better than the flag would have:
+
+```
+matrices on the device  4096
+bytes on the device     2551635968
+matrices given back     0
+```
+
+**Four thousand and ninety-six is the bound, exactly**, and three and a half
+gigabytes of a six-gigabyte budget was unspent. There are two bounds on
+residency and the tighter wins: a byte budget, which is what a caller
+reasons about, and a count, which is the size of the table the kept matrices
+are held in. The comment on that constant said it was "high enough that the
+byte budget is what actually decides". **It was not, and the number printed
+next to the label was its own limit, which is the kind of number that reads
+as a measurement.**
+
+**Why a mixture and not a dense model.** The engine takes each expert as its
+own matrix, because that is what reading eight of a hundred and twenty-eight
+means: the file stores them fused and the loader cuts them into per-expert
+views, so a product reads one expert rather than all of them. Forty-eight
+layers of a hundred and twenty-eight experts, three matrices each, is
+**18,432 matrices** where a dense model of the same depth has a few hundred.
+The constant was chosen against the dense case and never revisited.
+
+**Raised to 32,768.** Three alternated rounds, sixteen generated tokens, a
+six-gigabyte budget and a 4,096-token context:
+
+| the table holds | tokens a second | matrices | bytes |
+| ---: | ---: | ---: | ---: |
+| 4,096 | 2.72, 2.74, 2.72 | 4,096 | 2.54 GB |
+| **32,768** | **4.64, 4.66, 4.66** | 8,443 | 5.33 GB |
+
+**1.71 times**, and against the processor's 1.55 tokens a second the device
+goes from 1.76 times to 3.0. The byte budget is now what binds, which is
+what the comment always claimed.
+
+**It costs the dense case nothing**, which was the thing to check: the table
+is only as long as what is in it, so a model with two hundred matrices scans
+two hundred. Twelve generated tokens on TinyLlama read 0.219, 0.218 and
+0.218 s against a mean of 0.2187 over ten readings before, and the digest is
+unchanged.
+
+**And the report now names the bound beside the count** -- `199 of 32768` --
+so a run the table stops says so. That is the whole guard: no static check
+can bound a table against arbitrary files, and what went wrong was not the
+number but that nothing distinguished it from a measurement. The test holds
+the invariant the comment claimed: after a run the count is below the bound.
+
+**What was not built, and why.** `--cpu-moe` decides *which* matrices keep
+the device, and the policy already does that correctly: what is read every
+token stays and what is read one token in sixteen goes, which is what least
+recently used means and which is exactly the answer for a mixture. There was
+nothing for the flag to improve once the table was large enough to hold the
+answer. The refusal at load -- a model larger than the device's memory
+refused rather than run with eviction -- is still there and is still asked
+for with `--device-memory`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

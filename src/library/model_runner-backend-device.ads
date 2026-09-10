@@ -151,6 +151,17 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices resident.
    function Resident return Natural;
 
+   --  The most matrices this engine will hold, as a count.
+   --
+   --  There are two bounds on residency and the tighter one wins: this
+   --  count, and the byte budget. The count is a table size and cannot be
+   --  unbounded; it is reported beside the count held so that a run where
+   --  the count is what stopped it says so, which one where the count sat
+   --  at exactly its bound for a mixture of experts did not.
+   --
+   --  @return The bound, as a count of matrices.
+   function Resident_Limit return Natural;
+
    --  How many bytes of the model the device is holding.
    --
    --  @return Bytes resident.
