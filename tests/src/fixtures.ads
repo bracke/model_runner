@@ -153,6 +153,28 @@ package Fixtures is
    --  @param Result Newly allocated file bytes; the caller frees them.
    procedure Build (Item : in out Builder; Result : out B.Byte_Array_Access);
 
+   --  Put an infinity into a vector, as the bits IEEE gives it.
+   --
+   --  It was made by multiplying Real'Last by sixteen, in two tests that
+   --  wanted a value the code under test must refuse. The multiply
+   --  overflows and the assignment that follows is a range check against a
+   --  type whose last value is Real'Last -- so both tests raised
+   --  CONSTRAINT_ERROR before they had tested anything -- IN THE
+   --  DEVELOPMENT BUILD ONLY. At -O3 the check is elided, the infinity
+   --  lands, and both tests test what they were written to test; the gate
+   --  runs the release build and never saw it. A test that only runs in one
+   --  profile is a test you do not have in the other.
+   --
+   --  Written as its bits there is nothing to overflow, and the store is
+   --  done here so that the check the store would otherwise fail is
+   --  suppressed once, where a reader can see why, rather than at every
+   --  place a test wants a value the code under test must refuse.
+   --
+   --  @param Into Vector to write into.
+   --  @param Where Index in that vector.
+   procedure Put_Infinity
+     (Into : in out N.Real_Array; Where : N.Element_Count);
+
    --  Encode binary32 values.
    --
    --  @param Values Values to encode.

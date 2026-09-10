@@ -1446,14 +1446,7 @@ package body Tests.GGUF_Cases is
 
       --  A block holding something that is not a number is refused by both,
       --  rather than clamped by one of them.
-      declare
-         Grow : N.Real := N.Real'Last;
-      begin
-         --  An infinity, made rather than written: the literal would not
-         --  fit the type and the compiler would say so.
-         Grow := Grow * 16.0;
-         Vectors (Vectors'First + 40) := Grow;
-      end;
+      Fixtures.Put_Infinity (Vectors, Vectors'First + 40);
 
       QI.Use_Deep_Rows (False);
       QI.Quantize_Vectors

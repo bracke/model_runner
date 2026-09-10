@@ -1,3 +1,4 @@
+with Fixtures;
 with AUnit.Assertions;
 
 with Model_Runner.Backend.CPU;
@@ -2576,15 +2577,8 @@ package body Tests.Sampling_Cases is
 
       Broken := Logits;
 
-      declare
-         Grow : N.Real := N.Real'Last;
-      begin
-         --  An infinity, made rather than written: the literal would not
-         --  fit the type and the compiler would say so.
-         Grow := Grow * 16.0;
-         Broken (2222) := Grow;
-         Broken (3333) := Grow;
-      end;
+      Fixtures.Put_Infinity (Broken, 2222);
+      Fixtures.Put_Infinity (Broken, 3333);
 
       Rules.Temperature := 0.0;
 

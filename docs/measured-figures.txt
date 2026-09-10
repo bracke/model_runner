@@ -19419,3 +19419,35 @@ panels 91E3A6E0036536E8 src/library/model_runner-quantization-interleave.ads src
 # load:  the mixture rows are ungated CLI runs, warm, three alternated
 #        rounds; the TinyLlama rows went through the gate
 # model: Qwen3-30B-A3B Q4_K, and TinyLlama-1.1B-Chat Q8_0
+
+# 2026-09-10, two tests that only ran in one build profile.
+#
+#   NOT A TIMING. Recorded here because it is about what the gate sees.
+#
+#   Two tests wanted an infinity, to check the code under test refuses one,
+#   and both made it by multiplying Real'Last by sixteen. The multiply
+#   overflows and the assignment that follows is a range check against a
+#   type whose last value is Real'Last, so both raised CONSTRAINT_ERROR
+#   before they had tested anything:
+#
+#     release build (what the gate runs)   318 successful, 0 errors
+#     development build                    317 successful, 1 error
+#
+#   At -O3 the check is elided, the infinity lands, and the tests do their
+#   work. In the development build they die on the first line of it. AUnit
+#   reports that as an ERROR rather than a failure and prints it above the
+#   summary, and the gate builds release, so nothing that anybody ran said
+#   so. A TEST THAT ONLY RUNS IN ONE PROFILE IS A TEST YOU DO NOT HAVE IN
+#   THE OTHER.
+#
+#   The gate is not blind to it: reintroducing the fault and running the
+#   development build through `tests check` gives failures 2, one of them
+#   the suite. What hid it was that the two commands are usually run against
+#   different builds.
+#
+#   Written as the bits IEEE gives it there is nothing to overflow, and the
+#   store is done by one routine where the check it would fail is suppressed
+#   once with a reason beside it. Both profiles now run 318 of 318.
+#
+# load:  not a timing
+# model: no model

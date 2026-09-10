@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Two tests raised `CONSTRAINT_ERROR` in the development build instead of
+  testing what they were written to test.** Both wanted an infinity, to
+  check that the code under test refuses one, and both made it by
+  multiplying `Real'Last` by sixteen -- which overflows, and the assignment
+  that follows is a range check against a type whose last value is
+  `Real'Last`.
+
+  At `-O3` the check is elided, the infinity lands and the tests do their
+  work; in the development build they die on the first line of it. The gate
+  builds and runs the release profile, so it never saw them, and `tests
+  test` reported them as **errors** rather than failures -- 316 successful
+  of 318, and a line saying so above the summary that nobody was reading.
+  A test that only runs in one profile is a test you do not have in the
+  other.
+
+  The infinity is now written as the bits IEEE gives it, and stored by one
+  routine where the check it would fail is suppressed once with a reason
+  beside it. Both profiles run 318 of 318.
+
 - **The activation a sequence uploads was sized by a step's rows where it
   should have been its columns.** A step reading at an offset into the
   activation was counted as reading `Rows` elements from there; for a join

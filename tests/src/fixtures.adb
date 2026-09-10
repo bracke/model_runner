@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Model_Runner.Arithmetic;
 
 package body Fixtures is
@@ -388,6 +389,22 @@ package body Fixtures is
 
       B.Free (Header.Data);
    end Build;
+
+   ------------------
+   -- Put_Infinity --
+   ------------------
+
+   procedure Put_Infinity
+     (Into : in out N.Real_Array; Where : N.Element_Count)
+   is
+      pragma Suppress (Range_Check);
+      pragma Suppress (Validity_Check);
+
+      function Bits is new Ada.Unchecked_Conversion
+        (Interfaces.Unsigned_32, N.Real);
+   begin
+      Into (Where) := Bits (16#7F80_0000#);
+   end Put_Infinity;
 
    -----------------
    -- Encode_F32 --
