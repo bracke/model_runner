@@ -1458,6 +1458,54 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Measured
 
+- **Suballocation, built and refused.** Every matrix on the device has memory
+  of its own: one `vkAllocateMemory` to take it, one `vkMapMemory` to write
+  it. That is the one piece of standard Vulkan practice this engine does not
+  do -- llama.cpp takes memory in large blocks and cuts buffers out of them
+  at offsets -- and the two entries below it, the spare buffers worth 1.35x
+  and the persistent mapping worth 1.21x, are both working around calls that
+  blocks would have removed outright rather than made cheaper.
+
+  Built: runs of memory of **one slot size**, one allocation and one mapping
+  each, cut into fixed slots and handed out a matrix at a time, with a buffer
+  per matrix bound into its slot at an offset. No shader change -- a buffer
+  bound at an offset begins where the matrix does. The eviction had to become
+  per size class, a slot given back being a slot of one size, which on a
+  mixture is the same answer and stops a run of experts evicting the
+  attention every token reads. It is correct: Qwen3-30B-A3B answers
+  **byte-identically** at eight gigabytes and the suite passes at 320.
+
+  **And it costs half the generation rate.** Three alternated rounds,
+  Qwen3-30B-A3B, 110-token prompt, eight generated, 64 MB runs:
+
+  | | memory per matrix | memory in runs | |
+  | --- | --- | --- | ---: |
+  | generating, 2 GB | 8.09 8.13 8.08 t/s | 5.16 5.18 5.12 | 0.64x |
+  | generating, 8 GB | 12.99 13.40 13.30 | 7.90 7.19 6.83 | 0.55x |
+  | the prompt, 2 GB | 23.09 16.46 17.77 | 24.74 24.88 24.73 | 1.28x |
+  | the prompt, 8 GB | 18.50 18.63 18.51 | 11.53 4.07 4.04 | 0.36x |
+
+  The prompt gains and generation loses, and the loss is the larger and the
+  steadier. A run of any size does it: sweeping the run size at eight
+  gigabytes, generation reads 6.02 t/s at four megabytes, 6.41 at sixteen,
+  6.8-10.8 at sixty-four, 6.4 at two hundred and fifty-six, and 2.7-4.1 at a
+  gigabyte where the run stops fitting the host-visible heap.
+
+  It is not the bookkeeping: the same build with the runs turned off reads
+  12.95 and 12.75 generating, the figure without any of this, and the
+  residency is 12,211 matrices with none given back either way. And a model
+  that fits does not care -- TinyLlama-1.1B Q8_0 reads 94.76/53.49 with runs
+  against 94.50/53.97 without.
+
+  **The driver places memory at the granularity it was allocated at.** Twelve
+  thousand small allocations let it keep what a token reads where it is fast;
+  a hundred and twenty-eight runs of sixty-four megabytes make that
+  all-or-nothing per run. A prompt reads everything and has nothing to place,
+  which is why it gains instead. Refused and reverted. llama.cpp
+  suballocates because its allocator serves a graph of tensors with known
+  lifetimes; this one serves an LRU cache of weights against a byte budget,
+  and the two want opposite granularities.
+
 - **The split-k attention kernel, built and refused.** llama.cpp has
   `flash_attn_split_k_reduce.comp` and this had no counterpart: one query
   against a long cache, cut into slices with a workgroup each and a reduce to

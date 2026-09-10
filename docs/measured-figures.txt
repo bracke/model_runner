@@ -17897,3 +17897,69 @@ panels 1BD1C66028C05927 src/library/model_runner-quantization-interleave.ads src
 # load:  the mixture rows are ungated CLI runs, warm, three alternated
 #        rounds; the TinyLlama rows went through the gate
 # model: Qwen3-30B-A3B Q3_K 11.26 GB, and TinyLlama-1.1B-Chat Q8_0
+
+# 2026-09-10, suballocation, built and refused.
+#
+#   THE ONE PIECE OF STANDARD VULKAN PRACTICE THIS ENGINE DOES NOT DO. Every
+#   matrix on the device has memory of its own: one vkAllocateMemory to take
+#   it and one vkMapMemory to write it. llama.cpp does not do that; it takes
+#   memory in large blocks and cuts buffers out of them at offsets, and the
+#   two measurements before this one -- the spare buffers worth 1.35x, the
+#   persistent mapping worth 1.21x -- were both working around what blocks
+#   would have removed outright.
+#
+#   Built: runs of memory of ONE SLOT SIZE, one allocation and one mapping
+#   each, cut into slots and handed out a matrix at a time, with a buffer per
+#   matrix bound into its slot at an offset. It needed no shader change -- a
+#   buffer bound at an offset begins where the matrix does -- and it needed
+#   the eviction to become per size class, because a slot given back is a
+#   slot of one size. It is correct: Qwen3-30B-A3B answers BYTE-IDENTICALLY
+#   at eight gigabytes, and the suite passes at 320.
+#
+#   AND IT COSTS HALF THE GENERATION RATE. Three alternated rounds,
+#   Qwen3-30B-A3B, 110-token prompt, eight generated, 64 MB runs:
+#
+#                       memory per matrix    memory in runs
+#     generating, 2 GB   8.09 8.13 8.08      5.16 5.18 5.12    0.64x
+#     generating, 8 GB  12.99 13.40 13.30    7.90 7.19 6.83    0.55x
+#     the prompt,  2 GB 23.09 16.46 17.77   24.74 24.88 24.73   1.28x
+#     the prompt,  8 GB 18.50 18.63 18.51   11.53  4.07  4.04   0.36x
+#
+#   THE PROMPT GAINS AND GENERATION LOSES, and the loss is the larger and
+#   the steadier of the two. A run of any size does it. Sweeping the run
+#   size at eight gigabytes, generation reads 6.02 at four megabytes, 6.41 at
+#   sixteen, 10.76 and then 7.9/7.2/6.8 at sixty-four, 6.39/6.44 at two
+#   hundred and fifty-six, and 4.06/2.71 at a gigabyte -- where the run no
+#   longer fits the host-visible heap and the whole thing collapses. There is
+#   no size at which it comes back.
+#
+#   IT IS NOT THE BOOKKEEPING. The same build with the runs turned off by
+#   raising the fewest-slots-worth-making threshold reads 12.95 and 12.75
+#   generating, which is the figure without any of this. The residency is
+#   also the same either way -- 12211 matrices, none given back -- so nothing
+#   is thrashing and nothing is being uploaded twice. What changed is where
+#   the memory is.
+#
+#   AND A MODEL THAT FITS DOES NOT CARE: TinyLlama-1.1B Q8_0, which holds
+#   1.1 GB against the 8.47 this part offers, reads 94.76 and 53.49 with runs
+#   against 94.50 and 53.97 without. The loss appears only when the resident
+#   set is most of the part.
+#
+#   WHICH IS THE READING: the driver places memory at the granularity it was
+#   allocated at. Twelve thousand small allocations let it keep the ones a
+#   token actually reads where they are fast; a hundred and twenty-eight
+#   runs of sixty-four megabytes make that all-or-nothing per run, and a
+#   generated token -- which reads a few matrices per layer out of a resident
+#   set the size of the part -- pays for it. A prompt reads everything and
+#   has nothing to place, which is why it gains instead.
+#
+#   Refused. Reverted to memory per matrix. llama.cpp suballocates because
+#   its allocator serves a graph of tensors with known lifetimes; this one
+#   serves an LRU cache of weights against a byte budget, and the two want
+#   opposite granularities. THE SPARE BUFFERS AND THE PERSISTENT MAPPING ARE
+#   NOT WORKAROUNDS FOR A MISSING SUBALLOCATOR -- they are what taking memory
+#   per matrix costs, paid down, and paying it is worth what it buys.
+#
+# load:  the mixture rows are ungated CLI runs, warm, three alternated
+#        rounds; the sweep and the no-runs probe are single ungated runs
+# model: Qwen3-30B-A3B Q3_K 11.26 GB, and TinyLlama-1.1B-Chat Q8_0
