@@ -18681,6 +18681,58 @@ is not an arrangement to be improved but a model too large for the part, and
 the lever is a smaller quantization -- which this repository can already
 write, and measure the cost of.
 
+### What a token reads is what decides whether it fits
+
+A model larger than the device's share was refused while loading, and the
+refusal said why: such a model runs -- what does not fit is given back and
+uploaded again as it is wanted -- but it runs slower than the processor
+would, and quietly. **That is still true, and it is true of one kind of
+model.**
+
+| TinyLlama-1.1B Q8_0, 1.17 GB of weights | tokens a second |
+| --- | ---: |
+| the processor | 39.41 |
+| the device, 900 MB of budget | 5.22 |
+| the device, 600 MB | 5.27 |
+| the device, 300 MB | 5.66 |
+
+Seven and a half times slower, which is what the refusal exists for: a dense
+model reads **every** weight for every token, so a budget holding a fraction
+of it uploads the rest every token, and no amount of arrangement changes
+that.
+
+**A mixture reads eight experts of a hundred and twenty-eight.** Its token
+touches its dense half and a sixteenth of its experts, so a shortfall is
+uploaded a fraction as often. Qwen3-30B-A3B is 11.26 GB against the 8.47
+this part offers, and it was refused:
+
+```
+MR-MEM-0001: backend_memory needs 11251795968 bytes, above the limit of 8472029184
+```
+
+With the residency work of the entries above -- the count that was binding at
+4,096, the two groups a layer, the batch gathered by expert, the buffer given
+back and not given up -- that same model on that same device reads **18.04
+tokens a second on a prompt and 11.49 generating**, against the processor's
+3.80 and 2.89. **The refusal was throwing away four times the speed on
+reasoning that belongs to the other kind of model.**
+
+So the test is on what a token reads rather than on what the model holds:
+every matrix, less the experts, plus the share of the experts a token
+chooses. For a dense model that is the same number it always was and the
+refusal is unchanged. For a mixture it is about a fifth, and the model loads
+and runs.
+
+**Held by a test that takes both halves against half of their own weights**,
+so that neither passes by being smaller than the other: the mixture is taken
+and the dense model is refused. Judging the mixture on its whole weights
+fails it, and so does counting every expert as read.
+
+**It is not quiet.** `--show-stats` says how many matrices the device is
+holding of what it will hold, how many bytes, and how many were given back --
+which is the difference between a device that is computing and one that is
+being fed.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

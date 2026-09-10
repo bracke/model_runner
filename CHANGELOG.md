@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A model is refused for not fitting the device on what a token reads, not
+  on what it holds.** The refusal exists because a model larger than the
+  device's share uploads what does not fit as it is wanted, and that is
+  slower than the processor: TinyLlama-1.1B at 300 to 900 MB of budget reads
+  5.2 to 5.7 tokens a second against the processor's 39.4, seven and a half
+  times slower. A dense model reads every weight every token and no
+  arrangement changes that.
+
+  A mixture reads eight experts of a hundred and twenty-eight. With the
+  residency work of the entries above, Qwen3-30B-A3B -- 11.26 GB against the
+  8.47 this part offers, and refused outright until now -- reads **18.04
+  tokens a second on a prompt and 11.49 generating** against the processor's
+  3.80 and 2.89. The refusal was throwing away four times the speed on
+  reasoning that belongs to the other kind of model.
+
 - **Two tests raised `CONSTRAINT_ERROR` in the development build instead of
   testing what they were written to test.** Both wanted an infinity, to
   check that the code under test refuses one, and both made it by

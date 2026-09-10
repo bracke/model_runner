@@ -3138,6 +3138,67 @@ package body Model_Runner.Llama is
                end if;
             end loop;
 
+            --  What a TOKEN reads, which is what decides whether a model
+            --  larger than the device's share runs well or badly.
+            --
+            --  A dense model reads every weight for every token, so a
+            --  budget holding a fraction of it uploads the rest every
+            --  token: TinyLlama-1.1B on this part reads 5.3 tokens a second
+            --  that way against the processor's 39.4, which is the seven
+            --  and a half times slower this refusal was written for and
+            --  still is.
+            --
+            --  A MIXTURE READS EIGHT EXPERTS OF A HUNDRED AND TWENTY-EIGHT.
+            --  Its token touches its dense half and a sixteenth of its
+            --  experts, so a shortfall is uploaded a fraction as often, and
+            --  Qwen3-30B-A3B -- 11.26 GB against the 8.47 this part offers
+            --  -- reads 11.1 tokens a second on the device against 2.9 on
+            --  the processor. Refusing that is refusing four times the
+            --  speed, on the reasoning that applies to the other kind of
+            --  model.
+            declare
+               Share : Interfaces.Unsigned_64 := Total;
+            begin
+               if Item.Settings.Experts > 0
+                 and then Item.Settings.Experts_Used > 0
+                 and then Item.Layers /= null
+               then
+                  declare
+                     Expert_Bytes : Interfaces.Unsigned_64 := 0;
+                  begin
+                     for Index in Item.Layers.all'Range loop
+                        if Item.Layers.all (Index).Experts /= null then
+                           for Which of Item.Layers.all (Index).Experts.all
+                           loop
+                              Expert_Bytes := Expert_Bytes
+                                + Interfaces.Unsigned_64 (Which.Gate.Rows)
+                                  * Interfaces.Unsigned_64
+                                      (T.Row_Bytes (Which.Gate))
+                                + Interfaces.Unsigned_64 (Which.Up.Rows)
+                                  * Interfaces.Unsigned_64
+                                      (T.Row_Bytes (Which.Up))
+                                + Interfaces.Unsigned_64 (Which.Down.Rows)
+                                  * Interfaces.Unsigned_64
+                                      (T.Row_Bytes (Which.Down));
+                           end loop;
+                        end if;
+                     end loop;
+
+                     if Expert_Bytes <= Share then
+                        Share := Share - Expert_Bytes
+                          + Expert_Bytes
+                            * Interfaces.Unsigned_64
+                                (Item.Settings.Experts_Used)
+                            / Interfaces.Unsigned_64 (Item.Settings.Experts);
+                     end if;
+                  end;
+               end if;
+
+               if Share <= Item.Able.Memory_Bytes then
+                  Total := Share;
+               end if;
+            end;
+
             if Total > Item.Able.Memory_Bytes then
                Status := E.Make (E.Memory_Limit_Exceeded);
 

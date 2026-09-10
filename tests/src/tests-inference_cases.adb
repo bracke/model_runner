@@ -8510,6 +8510,155 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Budget_Too_Small_Answers_What_A_Large_One_Does;
 
+   ------------------------------------------------
+   -- What_A_Token_Reads_Decides_Whether_It_Fits --
+   ------------------------------------------------
+
+   --  A model is refused for not fitting on what a token reads, not on what
+   --  the model holds.
+   --
+   --  The refusal exists because a model larger than the device's share
+   --  runs by giving a matrix back for every matrix it takes, and that used
+   --  to be slower than the processor -- TinyLlama-1.1B at a fraction of
+   --  its weights reads 5.3 tokens a second on this part against 39.4 on
+   --  the processor, which is the seven and a half times the refusal was
+   --  written for and still is.
+   --
+   --  A MIXTURE IS THE OTHER CASE. Its token reads its dense half and one
+   --  expert of eight, so a shortfall is uploaded a fraction as often, and
+   --  Qwen3-30B-A3B -- 11.26 GB against the 8.47 this part offers -- reads
+   --  11.5 tokens a second on the device against 2.9 on the processor.
+   --  Refused, that is four times the speed thrown away on reasoning that
+   --  belongs to the other kind of model.
+   --
+   --  Both halves are held here, each against half of its own weights, so
+   --  that neither passes by being smaller than the other.
+   procedure What_A_Token_Reads_Decides_Whether_It_Fits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Device renames Model_Runner.Backend.Device;
+      package Mem renames Model_Runner.Memory;
+
+      use type Interfaces.Unsigned_64;
+
+      --  Prepare a fixture at a device budget, and say what happened and
+      --  what its weights came to.
+      procedure Try
+        (Image  : B.Byte_Array_Access;
+         Budget : Interfaces.Unsigned_64;
+         Weighs : out Interfaces.Unsigned_64;
+         Took   : out Boolean;
+         Absent : out Boolean)
+      is
+         Ready : Boolean;
+         Status : E.Error_Info;
+      begin
+         Weighs := 0;
+         Took := False;
+         Absent := False;
+
+         Device.Close;
+         Device.Open (Ready, Budget => Budget);
+
+         if not Ready then
+            Absent := True;
+            return;
+         end if;
+
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ignored : E.Error_Info;
+         begin
+            Containers.Reader.Parse
+              (Under.Parsed, Under.Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            L.Prepare
+              (Under.Ready, Under.Parsed, Under.Source,
+               Backend => Model_Runner.Backend.Backend_Device,
+               Status => Status);
+
+            Took := E.Is_Ok (Status);
+
+            if Took then
+               Weighs :=
+                 L.Accounting (Under.Ready).By_Category (Mem.Model_Weights);
+            else
+               Assert (Status.Code = E.Memory_Limit_Exceeded,
+                       "a model that does not fit was refused with "
+                       & E.Error_Code'Image (Status.Code));
+            end if;
+
+            L.Close (Under.Ready, Ignored);
+         end;
+
+         Device.Close;
+      end Try;
+
+      Mixed, Dense : B.Byte_Array_Access;
+   begin
+      --  Eight experts of which one runs, so a token reads about a fifth of
+      --  what the model holds and the two cases are far apart.
+      Tiny_Model.Build (Mixed, Kind => Tiny_Model.Qwen3_MoE,
+                        Experts => 8, Experts_Used => 1);
+      Tiny_Model.Build (Dense, Kind => Tiny_Model.Qwen3);
+
+      declare
+         Weighs : Interfaces.Unsigned_64;
+         Took, Absent : Boolean;
+      begin
+         --  What each holds, taken at a budget nothing could exceed.
+         Try (Mixed, 0, Weighs, Took, Absent);
+
+         if Absent then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device weighed a model here");
+            B.Free (Mixed);
+            B.Free (Dense);
+            return;
+         end if;
+
+         Assert (Took, "the mixture would not prepare at all");
+         Assert (Weighs > 0, "a prepared model weighs nothing");
+
+         --  Half of its own weights: a token reads about a fifth, so it
+         --  fits and is taken.
+         declare
+            Whole : constant Interfaces.Unsigned_64 := Weighs;
+            Again : Interfaces.Unsigned_64;
+         begin
+            Try (Mixed, Whole / 2, Again, Took, Absent);
+            Assert (Took,
+                    "a mixture whose token reads a fifth of it was refused "
+                    & "at half its weights, which is the rule for a model "
+                    & "that reads all of itself every token");
+         end;
+
+         --  And the dense model against half of its own, which its token
+         --  reads all of.
+         Try (Dense, 0, Weighs, Took, Absent);
+         Assert (Took, "the dense fixture would not prepare at all");
+
+         declare
+            Whole : constant Interfaces.Unsigned_64 := Weighs;
+            Again : Interfaces.Unsigned_64;
+         begin
+            Try (Dense, Whole / 2, Again, Took, Absent);
+            Assert (not Took,
+                    "a model that reads all of itself every token was taken "
+                    & "at half its weights, where it runs seven times "
+                    & "slower than the processor");
+         end;
+      end;
+
+      B.Free (Mixed);
+      B.Free (Dense);
+   end What_A_Token_Reads_Decides_Whether_It_Fits;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -8769,6 +8918,11 @@ package body Tests.Inference_Cases is
         (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
          "a layer that went over to the device as one sequence is charged "
          & "to fusing and not to attending");
+      Register_Routine
+        (T, What_A_Token_Reads_Decides_Whether_It_Fits'Access,
+         "a model is refused for not fitting on what a token reads and not "
+         & "on what it holds, so a mixture is taken where a dense model is "
+         & "refused");
       Register_Routine
         (T, A_Budget_Too_Small_Answers_What_A_Large_One_Does'Access,
          "a model larger than the device's budget answers what it answers "
