@@ -18618,6 +18618,69 @@ outside tolerance. There is a test now, and it holds the answers equal **to
 the bit** rather than within a tolerance, because a tolerance would let the
 gathering associate the sum differently and say nothing.
 
+### A buffer given back is not given up
+
+With the batch gathered by expert, a mixture's **generated** token became the
+slow side: 17.0 tokens a second reading a prompt and 6.3 writing one. A
+budget sweep says what it is bound by:
+
+| device memory | prompt | generating | resident |
+| --- | ---: | ---: | ---: |
+| 4 GB | 17.17 t/s | 4.93 t/s | 4.00 GB |
+| 6 GB | 17.43 | 6.37 | 6.00 GB |
+| 8 GB | 17.90 | **11.13** | 7.47 GB |
+
+**Generation scales almost linearly with resident bytes and the prompt barely
+moves.** That asymmetry is the gathering doing its job: a prompt reads each
+expert once for the whole batch, so a miss is shared out over the positions
+that chose it, and a generated token touches 1,152 expert matrices alone --
+forty-eight layers, eight experts, three each -- and pays every miss by
+itself.
+
+At six gigabytes of an 11.26 GB model about half of those miss. **And a miss
+was not only an upload.** Taking a matrix was `vkCreateBuffer`,
+`vkAllocateMemory` and `vkBindBufferMemory`; making room for it was
+`vkDestroyBuffer` and `vkFreeMemory`. Four hundred of each a token, of the
+call every guide to this interface says not to put in a loop.
+
+**A mixture's expert matrices are all one size**, so the buffer given back is
+the right shape for the one being taken. Kept rather than given up -- by byte
+count, at most sixty-four of them, counted against the budget because the
+device has not had them back -- the driver is asked once and the loop reuses
+what it has. Three alternated rounds:
+
+| | freeing | keeping | |
+| --- | ---: | ---: | ---: |
+| generating, 4 GB | 5.40, 5.45, 5.16 | 6.76, 6.80, 6.71 | **1.27 times** |
+| generating, 6 GB | 6.29, 6.25, 6.26 | 8.42, 8.52, 8.46 | **1.35 times** |
+| the prompt, 6 GB | 17.53, 17.29, 17.59 | 18.27, 18.32, 18.03 | 1.04 |
+
+**So the allocator was a third of a generated token** on a model that does not
+fit -- 157 milliseconds a token becomes 118 -- and the uploads it was hiding
+behind are the other part. The prompt gains almost nothing, because it was
+not missing much to begin with.
+
+**A model that fits pays nothing either way.** The list is only fed by
+evictions, and a model whose matrices are all resident never evicts: twelve
+generated tokens of TinyLlama read 0.218, 0.220 and 0.219 s against 0.2187
+before, and the same digest.
+
+**And what it must not change is the answer.** A reused buffer is a buffer
+something else has written to, so a matrix uploaded into one and read short
+would read the last matrix's weights -- the same failure the shape checks
+beside the residency key were added for, arriving by another route. The test
+runs the fixture twice, once at whatever the device offers and once at a
+budget of sixteen kilobytes, and holds the two answers equal **to the bit**.
+Taking a reused buffer as though it already held the weights fails it by
+7.13.
+
+**What is left.** The sweep says the rest of this is residency: at eight
+gigabytes the same model generates at 11.1 tokens a second and at four it
+generates at 6.8, and the device offers 8.47 against the model's 11.26. That
+is not an arrangement to be improved but a model too large for the part, and
+the lever is a smaller quantization -- which this repository can already
+write, and measure the cost of.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

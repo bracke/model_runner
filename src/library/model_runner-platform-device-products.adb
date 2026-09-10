@@ -2272,6 +2272,17 @@ package body Model_Runner.Platform.Device.Products is
          Item.Kept (Index).Columns := 0;
       end loop;
 
+      --  And the ones kept back for reuse, which are the device's memory
+      --  as much as the matrices are.
+      for Index in 1 .. Item.Spare_Used loop
+         Give_Back_Buffer
+           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory);
+      end loop;
+
+      Item.Spare := [others => <>];
+      Item.Spare_Used := 0;
+      Item.Spare_Bytes := 0;
+
       Item.Used := 0;
       Item.Kept_Bytes := 0;
    end Forget_Matrices;
@@ -2316,6 +2327,15 @@ package body Model_Runner.Platform.Device.Products is
          Item.Kept (Index).Key := Null_Handle;
          Item.Kept (Index).Bytes := 0;
       end loop;
+      for Index in 1 .. Item.Spare_Used loop
+         Give_Back_Buffer
+           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory);
+      end loop;
+
+      Item.Spare := [others => <>];
+      Item.Spare_Used := 0;
+      Item.Spare_Bytes := 0;
+
       Item.Used := 0;
       Item.Kept_Bytes := 0;
       Item.Clock := 0;
@@ -2487,6 +2507,92 @@ package body Model_Runner.Platform.Device.Products is
    -- Give_Back_Least --
    ---------------------
 
+   --------------------
+   -- Spare buffers --
+   --------------------
+
+   --  Take a buffer of exactly this size back, if one was kept.
+   --
+   --  Exactly, because a buffer is bound to its memory at a size and the
+   --  device was told that size when it was made. A larger one would serve
+   --  and would leave the difference unusable by anything else, which on a
+   --  model that gives a matrix back for every matrix it takes is a leak
+   --  spread over a run.
+   procedure Take_Spare
+     (Item   : in out Engine;
+      Bytes  : Interfaces.Unsigned_64;
+      Buffer : out Address;
+      Memory : out Address;
+      Found  : out Boolean) is
+   begin
+      Buffer := Null_Handle;
+      Memory := Null_Handle;
+      Found := False;
+
+      for Index in reverse 1 .. Item.Spare_Used loop
+         if Item.Spare (Index).Bytes = Bytes then
+            Buffer := Item.Spare (Index).Buffer;
+            Memory := Item.Spare (Index).Memory;
+            Found := True;
+
+            Item.Spare (Index) := Item.Spare (Item.Spare_Used);
+            Item.Spare (Item.Spare_Used) := (others => <>);
+            Item.Spare_Used := Item.Spare_Used - 1;
+            Item.Spare_Bytes := Item.Spare_Bytes - Bytes;
+            return;
+         end if;
+      end loop;
+   end Take_Spare;
+
+   --  Keep a buffer rather than give it up. False where there is no room
+   --  for it, and the caller gives it up as it always did.
+   procedure Keep_Spare
+     (Item   : in out Engine;
+      Buffer : Address;
+      Memory : Address;
+      Bytes  : Interfaces.Unsigned_64;
+      Kept   : out Boolean) is
+   begin
+      Kept := False;
+
+      if Item.Spare_Used >= Max_Spare
+        or else Buffer = Null_Handle
+        or else Memory = Null_Handle
+      then
+         return;
+      end if;
+
+      Item.Spare_Used := Item.Spare_Used + 1;
+      Item.Spare (Item.Spare_Used) := (Buffer, Memory, Bytes);
+      Item.Spare_Bytes := Item.Spare_Bytes + Bytes;
+      Kept := True;
+   end Keep_Spare;
+
+   --  Give one kept buffer up for real, which is what makes room when the
+   --  budget is what binds rather than the driver.
+   procedure Drop_Spare (Item : in out Engine; Gone : out Boolean) is
+   begin
+      Gone := False;
+
+      if Item.Spare_Used = 0 then
+         return;
+      end if;
+
+      declare
+         Buffer : Address := Item.Spare (Item.Spare_Used).Buffer;
+         Memory : Address := Item.Spare (Item.Spare_Used).Memory;
+      begin
+         Item.Spare_Bytes :=
+           Item.Spare_Bytes - Item.Spare (Item.Spare_Used).Bytes;
+         Item.Spare (Item.Spare_Used) := (others => <>);
+         Item.Spare_Used := Item.Spare_Used - 1;
+
+         Give_Back_Buffer (Item, Buffer, Memory);
+      end;
+
+      Gone := True;
+   end Drop_Spare;
+
    --  Release the matrix least recently multiplied by, so that another can
    --  take its place.
    --
@@ -2537,8 +2643,24 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      Give_Back_Buffer
-        (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory);
+      --  Kept rather than given up, where there is room to keep it: the
+      --  next matrix taken is very often the same size, and asking the
+      --  driver for memory is what this loop cost.
+      declare
+         Spared : Boolean := False;
+      begin
+         if not Item.Kept (Oldest).Own then
+            Keep_Spare
+              (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory,
+               Item.Kept (Oldest).Bytes, Spared);
+         end if;
+
+         if not Spared then
+            Give_Back_Buffer
+              (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory);
+         end if;
+      end;
+
       Item.Released := Item.Released + 1;
 
       --  An imported matrix took none of the budget, so releasing it gives
@@ -2772,20 +2894,48 @@ package body Model_Runner.Platform.Device.Products is
             --  model used to take matrices until an allocation failed and
             --  then fail the product; now the matrix wanted longest ago
             --  goes back and this one takes its place.
-            if Key /= System.Null_Address and then Item.Budget > 0 then
+            --  One that was given back and not given up, if it is the
+            --  right size. A mixture's expert matrices are all one size, so
+            --  on the model this was built for it always is.
+            declare
+               Found : Boolean;
+            begin
+               Take_Spare
+                 (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Found);
+               Good := Found;
+            end;
+
+            if Weight_Buffer = Null_Handle
+              and then Key /= System.Null_Address and then Item.Budget > 0
+            then
                declare
                   Gone : Boolean := True;
                begin
+                  --  The kept buffers first, because giving one of those up
+                  --  costs nothing but the driver call, and a matrix given
+                  --  back has to be uploaded again.
+                  while Gone
+                    and then Item.Kept_Bytes + Item.Spare_Bytes + Weight_Bytes
+                             > Item.Budget
+                  loop
+                     Drop_Spare (Item, Gone);
+                  end loop;
+
+                  Gone := True;
+
                   while Gone
                     and then Item.Used > 0
-                    and then Item.Kept_Bytes + Weight_Bytes > Item.Budget
+                    and then Item.Kept_Bytes + Item.Spare_Bytes + Weight_Bytes
+                             > Item.Budget
                   loop
                      Give_Back_Least (Item, Gone, Pinned);
                   end loop;
                end;
             end if;
 
-            Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+            if Weight_Buffer = Null_Handle then
+               Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+            end if;
             if not Good then
                Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
                Ok := False;

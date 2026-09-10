@@ -1083,6 +1083,22 @@ private
 
    type Held_Array is array (1 .. Max_Resident) of Held_Matrix;
 
+   --  How many buffers may be held back for reuse.
+   --
+   --  Small on purpose: the loop this exists for gives one back and takes
+   --  one, so what it needs is a handful and what a larger number would buy
+   --  is device memory sitting idle. A model whose matrices are all
+   --  different sizes finds nothing to reuse and pays what it always paid.
+   Max_Spare : constant := 64;
+
+   type Spare_Buffer is record
+      Buffer : System.Address := System.Null_Address;
+      Memory : System.Address := System.Null_Address;
+      Bytes  : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   type Spare_Array is array (1 .. Max_Spare) of Spare_Buffer;
+
    type Engine is limited record
       --  The instance every entry point this engine uses is found through.
       --  An engine outlives no instance and each names its own.
@@ -1299,6 +1315,24 @@ private
       Kept       : Held_Array;
       Used       : Natural := 0;
       Kept_Bytes : Interfaces.Unsigned_64 := 0;
+
+      --  Buffers given back but not given up.
+      --
+      --  A model larger than the device's budget gives a matrix back for
+      --  every matrix it takes, and a mixture of experts does that four
+      --  hundred times a generated token: each one was a vkDestroyBuffer
+      --  and a vkFreeMemory followed by a vkCreateBuffer, a
+      --  vkAllocateMemory and a vkBindBufferMemory, which is the call every
+      --  guide to this interface says not to put in a loop.
+      --
+      --  A mixture's expert matrices are all one size, so a buffer given
+      --  back is the right shape for the next one taken. Kept here by byte
+      --  count, the driver is asked once and the loop reuses what it has.
+      --  The bytes stay spent -- the device has not had them back -- so
+      --  they count against the budget beside the matrices themselves.
+      Spare       : Spare_Array := [others => <>];
+      Spare_Used  : Natural := 0;
+      Spare_Bytes : Interfaces.Unsigned_64 := 0;
 
       --  Products so far, which is the clock the eviction reads, and how
       --  many matrices have been given back to make room.

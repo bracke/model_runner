@@ -8364,6 +8364,152 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Batched_Mixture_Agrees_With_One_At_A_Time;
 
+   -----------------------------------------------
+   -- A_Budget_Too_Small_Answers_What_A_Large_One_Does --
+   -----------------------------------------------
+
+   --  A model larger than the device's budget answers what it answers when
+   --  the whole of it fits.
+   --
+   --  Above the budget, every matrix taken means one given back, and a
+   --  buffer given back is now kept rather than given up: a mixture's
+   --  expert matrices are all one size, so the next matrix taken is the
+   --  right shape for it and the driver is asked once instead of four
+   --  hundred times a generated token. That is worth 1.35 times on a
+   --  mixture that does not fit.
+   --
+   --  What it must not change is the answer. A reused buffer is a buffer
+   --  something else has written to, so a matrix uploaded into one and read
+   --  short would read the last matrix's weights -- which is the same
+   --  failure the shape checks beside the key were added for, arriving by a
+   --  different route.
+   --
+   --  The fixture fits any real budget, so the budget is made small enough
+   --  that it does not: what is being exercised is the giving back and the
+   --  taking again, not the size of anything.
+   procedure A_Budget_Too_Small_Answers_What_A_Large_One_Does
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Image : B.Byte_Array_Access;
+
+      Tokens : constant Vocab.Token_Array := [3, 4, 5, 6];
+
+      --  What the model says with the device opened at a given budget.
+      procedure Said
+        (Budget : Interfaces.Unsigned_64;
+         Into   : out N.Real_Array;
+         Ran    : out Boolean)
+      is
+         Ready  : Boolean;
+         Status : E.Error_Info;
+         Able   : Boolean;
+      begin
+         Ran := False;
+         Into := [others => 0.0];
+
+         Device.Close;
+         Device.Open (Ready, Budget => Budget);
+
+         if not Ready then
+            return;
+         end if;
+
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Live  : L.Session;
+            Ignored : E.Error_Info;
+         begin
+            Containers.Reader.Parse
+              (Under.Parsed, Under.Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            --  Prepared knowing it does not fit, which is the whole point:
+            --  a model larger than the budget runs by giving a matrix back
+            --  for every matrix it takes, and refusing it would leave that
+            --  loop untested.
+            L.Prepare
+              (Under.Ready, Under.Parsed, Under.Source,
+               Backend => Model_Runner.Backend.Backend_Device,
+               Fit_Required => False, Status => Status);
+
+            Able := E.Is_Ok (Status);
+
+            if not Able then
+               Device.Close;
+               return;
+            end if;
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session would not open");
+
+            for Index in Tokens'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Tokens (Index), Into, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a position failed at a budget of"
+                       & Interfaces.Unsigned_64'Image (Budget) & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+            L.Close (Under.Ready, Ignored);
+         end;
+
+         Device.Close;
+         Ran := True;
+      end Said;
+
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Wide : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Vocabulary);
+
+         Plenty, Pinched : N.Real_Array (0 .. Wide - 1);
+
+         Ran_One, Ran_Two : Boolean;
+
+         Apart : N.Real := 0.0;
+      begin
+         --  Whatever the device offers, which for this fixture is room for
+         --  every matrix at once.
+         Said (0, Plenty, Ran_One);
+
+         if not Ran_One then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device held the fixture here");
+            B.Free (Image);
+            return;
+         end if;
+
+         --  And a budget too small for it, which makes every matrix taken
+         --  cost one given back.
+         Said (Interfaces.Unsigned_64 (16 * 1024), Pinched, Ran_Two);
+         Assert (Ran_Two, "the device would not open at a small budget");
+
+         for Index in Plenty'Range loop
+            Apart := N.Real'Max (Apart, abs (Plenty (Index) - Pinched (Index)));
+         end loop;
+
+         --  The same weights read the same way, so the same bits. A
+         --  tolerance would let a reused buffer hand back the last
+         --  matrix's weights in the elements a short read did not cover.
+         Assert (Apart = 0.0,
+                 "a model that does not fit answers" & N.Real'Image (Apart)
+                 & " away from the same model when it does, so a buffer "
+                 & "given back and taken again is not what it was");
+      end;
+
+      B.Free (Image);
+   end A_Budget_Too_Small_Answers_What_A_Large_One_Does;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -8623,6 +8769,10 @@ package body Tests.Inference_Cases is
         (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
          "a layer that went over to the device as one sequence is charged "
          & "to fusing and not to attending");
+      Register_Routine
+        (T, A_Budget_Too_Small_Answers_What_A_Large_One_Does'Access,
+         "a model larger than the device's budget answers what it answers "
+         & "when the whole of it fits");
       Register_Routine
         (T, A_Batched_Mixture_Agrees_With_One_At_A_Time'Access,
          "a batch's mixture gathered by expert answers what the same "

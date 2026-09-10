@@ -139,6 +139,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A buffer given back to make room is kept rather than given up.** On a
+  model larger than the device's budget every matrix taken means one given
+  back, and a mixture does that four hundred times a generated token: taking
+  was `vkCreateBuffer`, `vkAllocateMemory` and `vkBindBufferMemory`, and
+  making room was `vkDestroyBuffer` and `vkFreeMemory`.
+
+  A mixture's expert matrices are all one size, so the buffer given back is
+  the right shape for the one being taken. Kept by byte count, at most
+  sixty-four of them and counted against the budget because the device has
+  not had them back, the driver is asked once and the loop reuses what it
+  has. Three alternated rounds on Qwen3-30B-A3B: generation **6.27 to 8.47
+  tokens a second** at a six-gigabyte budget and 5.34 to 6.76 at four, 1.35
+  and 1.27 times; the prompt gains 1.04 because it was not missing much.
+  **The allocator was a third of a generated token.**
+
+  A model that fits pays nothing: the list is only fed by evictions and a
+  model whose matrices are all resident never evicts. Twelve tokens of
+  TinyLlama read 0.218, 0.220, 0.219 s and the same digest.
+
 - **A batch's mixture is gathered by expert rather than run by position.**
   Each position routes to its own eight experts of a hundred and
   twenty-eight, so the mixture ran a position at a time however many were
