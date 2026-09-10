@@ -120,6 +120,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A batch's mixture is gathered by expert rather than run by position.**
+  Each position routes to its own eight experts of a hundred and
+  twenty-eight, so the mixture ran a position at a time however many were
+  handed in -- and an expert chosen by seven positions of a hundred and ten
+  had its three matrices read seven times. Grouped the other way round, each
+  is read once and multiplied by every position that chose it; llama.cpp
+  calls the same idea `mul_mat_id`, and nothing new was needed on the device
+  because one matrix against several vectors is what the batched product
+  already is.
+
+  Three alternated rounds on Qwen3-30B-A3B: the prompt goes **10.59 to 16.99
+  tokens a second**, 1.60 times, with generation untouched because a
+  generated token is one position. Across the two mixture entries the prompt
+  has gone 6.01 to 17.0, and against the processor the device is 4.5 times
+  rather than 1.6.
+
+  The sum is in the order it was: each expert's answer is written to the
+  place its position and its rank name, and the sums are done afterwards
+  best-expert-first, so the same prompt gives the same text to the bit.
+
+  And nothing held that. The fixture comparison runs a mixture on the
+  processor and against the reference, and it runs the device, but never a
+  mixture batched on the device -- dropping the share from the sum was
+  caught by no test and by none of 41,780 conformance sequences. There is a
+  test now, equal to the bit rather than within a tolerance.
+
 - **A mixture's experts go over as two groups a layer, where they were
   twenty-four submissions.** The fused layer is chosen on `Experts = 0`, so
   the mixture kept doing what the dense path stopped doing in `### A layer,

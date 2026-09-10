@@ -1621,6 +1621,14 @@ private
    type Token_History is array (Natural range <>) of Token_Id;
    type Token_History_Access is access Token_History;
 
+   --  Which expert a position chose, and which positions chose an expert.
+   --
+   --  A plain count either way: the arrays are indexed by position times
+   --  the picks a position makes, or by the positions gathered for one
+   --  expert, and both are as long as a batch is wide.
+   type Choice_List is array (Natural range <>) of Natural;
+   type Choice_Access is access Choice_List;
+
    type Session is limited new Ada.Finalization.Limited_Controlled with record
       --  The token for the call in progress, or null between calls.
       --
@@ -1761,6 +1769,31 @@ private
       --  stride on a group is for. Eight submissions a layer become one.
       Expert_Feeds : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Outs  : Model_Runner.Tensors.Group_Room_Access := null;
+
+      --  What a batch's mixture needs, to read every expert's matrices once
+      --  a layer instead of once for every position that chose them.
+      --
+      --  A batch has no one matrix to multiply the whole of it by, which is
+      --  why the mixture ran a position at a time however many were handed
+      --  in -- and an expert chosen by seven positions of a hundred and ten
+      --  had its three matrices read seven times. Gathered the other way
+      --  round, by expert rather than by position, each is read once and
+      --  multiplied by every position that chose it at once.
+      --
+      --  Taken at the first batch that needs them and grown if a later one
+      --  is wider, because their size is the batch's and a session does not
+      --  know what batches it will see. Null for a dense model and for a
+      --  mixture on the processor, which pays nothing for a submission and
+      --  reads its weights out of the same memory either way.
+      Route_Rows : Model_Runner.Tensors.Real_Array_Access := null;
+      Pick_Which : Choice_Access := null;
+      Pick_Share : Model_Runner.Tensors.Real_Array_Access := null;
+      Gather_In  : Model_Runner.Tensors.Real_Array_Access := null;
+      Gather_A   : Model_Runner.Tensors.Real_Array_Access := null;
+      Gather_B   : Model_Runner.Tensors.Real_Array_Access := null;
+      Gather_Out : Model_Runner.Tensors.Real_Array_Access := null;
+      Ranked     : Model_Runner.Tensors.Real_Array_Access := null;
+      Gathered   : Choice_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;

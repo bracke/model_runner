@@ -4849,6 +4849,369 @@ package body Model_Runner.Llama is
       end if;
    end Mixture;
 
+   -------------------
+   -- Mixture_Batch --
+   -------------------
+
+   --  A batch's mixture, gathered by expert rather than run by position.
+   --
+   --  A batch has no one matrix to multiply the whole of it by: each
+   --  position routes to its own few experts, which is why this block ran a
+   --  position at a time however many were handed in. What that costs is
+   --  not the arithmetic -- an expert chosen by seven positions of a
+   --  hundred and ten had its three matrices READ SEVEN TIMES, and on a
+   --  model larger than the device will hold, read means uploaded.
+   --
+   --  Turned round, the batch is grouped by expert: every position that
+   --  chose one is gathered into a run of vectors, the expert's matrices
+   --  are read once and multiplied by all of them, and the answers are
+   --  scattered back. llama.cpp calls the same idea `mul_mat_id`.
+   --
+   --  THE SUM IS IN THE ORDER IT WAS. A position adds its experts' answers
+   --  best first, and grouping by expert would add them in expert order
+   --  instead -- a different sum of the same numbers, and a different
+   --  answer in the last bits. Each answer is written to its own place in
+   --  Ranked, by position and by rank, and the sums are done afterwards in
+   --  the order they were always done in. That is what the largest of these
+   --  buffers is for.
+   --
+   --  @param Item Session, for its buffers and its backend.
+   --  @param Current The layer.
+   --  @param Rows Count positions of Width, normalized, read and written.
+   --  @param Count How many positions.
+   --  @param Ok False where the batch could not be gathered, which leaves
+   --    the caller to run the positions one at a time as it did before.
+   --  @param Status Success, or the first refusal.
+   procedure Mixture_Batch
+     (Item    : in out Session;
+      Current : Layer;
+      Rows    : T.Real_Array_Access;
+      Count   : Element_Count;
+      Ok      : out Boolean;
+      Status  : out E.Error_Info)
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+
+      Used   : constant Natural := Settings.Experts_Used;
+      Many   : constant Natural := Settings.Experts;
+      Width  : constant Element_Count := Element_Count (Settings.Embedding);
+      Feed   : constant Element_Count :=
+        Element_Count (Settings.Expert_Feed);
+
+      Wide   : constant Element_Count := Count * Width;
+
+      --  Take a buffer if there is not one, or a wider one if what there is
+      --  is too narrow. A session does not know how wide a batch it will be
+      --  handed, and every one of these is sized by that.
+      procedure Ensure
+        (Room : in out T.Real_Array_Access; Length : Element_Count) is
+      begin
+         if Room = null or else Room.all'Length < Length then
+            T.Free (Room);
+            T.Allocate (Length, Room);
+         end if;
+      end Ensure;
+
+      procedure Ensure_Choices
+        (Room : in out Choice_Access; Length : Natural)
+      is
+         procedure Release is
+           new Ada.Unchecked_Deallocation (Choice_List, Choice_Access);
+      begin
+         if Room = null or else Room.all'Length < Length then
+            if Room /= null then
+               Release (Room);
+            end if;
+
+            Room := new Choice_List (0 .. Length - 1);
+         end if;
+      end Ensure_Choices;
+
+      Usable : Boolean;
+   begin
+      Ok := False;
+      Status := E.Success;
+
+      Ensure (Item.Route_Rows, Count * Element_Count (Many));
+      Ensure (Item.Pick_Share, Count * Element_Count (Used));
+      Ensure (Item.Gather_In, Wide);
+      Ensure (Item.Gather_A, Count * Feed);
+      Ensure (Item.Gather_B, Count * Feed);
+      Ensure (Item.Gather_Out, Wide);
+      Ensure (Item.Ranked, Count * Element_Count (Used) * Width);
+      Ensure_Choices (Item.Pick_Which, Natural (Count) * Used);
+      Ensure_Choices (Item.Gathered, Natural (Count));
+
+      if Item.Route_Rows = null or else Item.Pick_Share = null
+        or else Item.Gather_In = null or else Item.Gather_A = null
+        or else Item.Gather_B = null or else Item.Gather_Out = null
+        or else Item.Ranked = null
+        or else Item.Pick_Which = null or else Item.Gathered = null
+      then
+         --  Not an error: the caller runs the positions one at a time,
+         --  which is what it did before any of this existed.
+         return;
+      end if;
+
+      --  Every position's router scores at once, which is one product where
+      --  it was one a position.
+      Product_Batch
+        (Item, Current.Router, Rows, Count, Item.Route_Rows, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  And the choosing, position by position, exactly as one position's
+      --  mixture chooses: the bias before the softmax because it changes
+      --  which experts are picked, the largest few in order, and the shares
+      --  put back on a scale where their sum is one.
+      for Where in 0 .. Count - 1 loop
+         declare
+            At_Row : constant Element_Count :=
+              Item.Route_Rows.all'First + Where * Element_Count (Many);
+
+            Scores : T.Real_Array renames
+              Item.Route_Rows.all (At_Row .. At_Row + Element_Count (Many) - 1);
+
+            Taken : array (0 .. Many - 1) of Boolean := [others => False];
+            Total : Real := 0.0;
+         begin
+            if Current.Router_Bias /= null then
+               K.Add (Scores, Current.Router_Bias.all);
+            end if;
+
+            K.Softmax (Scores, Usable);
+            if not Usable then
+               Status := E.Make (E.Tensor_Non_Finite_Value);
+               return;
+            end if;
+
+            for Slot in 0 .. Used - 1 loop
+               declare
+                  Best : Integer := -1;
+               begin
+                  for Which in Taken'Range loop
+                     if not Taken (Which)
+                       and then
+                         (Best < 0
+                          or else Scores (Scores'First + Element_Count (Which))
+                                  > Scores
+                                      (Scores'First + Element_Count (Best)))
+                     then
+                        Best := Which;
+                     end if;
+                  end loop;
+
+                  Taken (Best) := True;
+                  Item.Pick_Which.all (Natural (Where) * Used + Slot) := Best;
+                  Item.Pick_Share.all
+                    (Item.Pick_Share.all'First
+                     + Where * Element_Count (Used) + Element_Count (Slot)) :=
+                    Scores (Scores'First + Element_Count (Best));
+                  Total := Total
+                    + Scores (Scores'First + Element_Count (Best));
+               end;
+            end loop;
+
+            if not (Total > 0.0) then
+               Status := E.Make (E.Tensor_Non_Finite_Value);
+               return;
+            end if;
+
+            for Slot in 0 .. Used - 1 loop
+               declare
+                  At_Share : constant Element_Count :=
+                    Item.Pick_Share.all'First
+                    + Where * Element_Count (Used) + Element_Count (Slot);
+               begin
+                  Item.Pick_Share.all (At_Share) :=
+                    Item.Pick_Share.all (At_Share) / Total;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  And every expert once, with all the positions that chose it.
+      for Which in 0 .. Many - 1 loop
+         declare
+            Members : Natural := 0;
+         begin
+            for Where in 0 .. Natural (Count) - 1 loop
+               for Slot in 0 .. Used - 1 loop
+                  if Item.Pick_Which.all (Where * Used + Slot) = Which then
+                     Item.Gathered.all (Members) := Where * Used + Slot;
+                     Members := Members + 1;
+                  end if;
+               end loop;
+            end loop;
+
+            if Members = 0 then
+               goto Next_Expert;
+            end if;
+
+            declare
+               Expert_At : Expert renames Current.Experts.all (Which);
+
+               Held : constant Element_Count := Element_Count (Members);
+            begin
+               --  Gathered: the chosen positions' vectors, end to end.
+               for Index in 0 .. Members - 1 loop
+                  declare
+                     Where : constant Element_Count :=
+                       Element_Count (Item.Gathered.all (Index) / Used);
+
+                     From : constant Element_Count :=
+                       Rows.all'First + Where * Width;
+
+                     Into : constant Element_Count :=
+                       Item.Gather_In.all'First
+                       + Element_Count (Index) * Width;
+                  begin
+                     Item.Gather_In.all (Into .. Into + Width - 1) :=
+                       Rows.all (From .. From + Width - 1);
+                  end;
+               end loop;
+
+               Product_Batch
+                 (Item, Expert_At.Gate, Item.Gather_In, Held,
+                  Item.Gather_A, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Product_Batch
+                 (Item, Expert_At.Up, Item.Gather_In, Held,
+                  Item.Gather_B, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  The biases and the gate, a member at a time on its own
+               --  stretch, which is what one position's mixture does to one.
+               for Index in 0 .. Members - 1 loop
+                  declare
+                     At_Arm : constant Element_Count :=
+                       Element_Count (Index) * Feed;
+
+                     Gate_Part : T.Real_Array renames
+                       Item.Gather_A.all
+                         (Item.Gather_A.all'First + At_Arm
+                          .. Item.Gather_A.all'First + At_Arm + Feed - 1);
+
+                     Up_Part : T.Real_Array renames
+                       Item.Gather_B.all
+                         (Item.Gather_B.all'First + At_Arm
+                          .. Item.Gather_B.all'First + At_Arm + Feed - 1);
+
+                     At_Feed : constant Element_Count :=
+                       Element_Count (Which) * Feed;
+                  begin
+                     if Current.Expert_Gate_Bias /= null then
+                        K.Add
+                          (Gate_Part,
+                           Current.Expert_Gate_Bias.all
+                             (Current.Expert_Gate_Bias.all'First + At_Feed
+                              .. Current.Expert_Gate_Bias.all'First + At_Feed
+                                 + Feed - 1));
+                        K.Add
+                          (Up_Part,
+                           Current.Expert_Up_Bias.all
+                             (Current.Expert_Up_Bias.all'First + At_Feed
+                              .. Current.Expert_Up_Bias.all'First + At_Feed
+                                 + Feed - 1));
+                     end if;
+
+                     if Settings.Gate_Alpha > 0.0 then
+                        K.Clamped_Gate
+                          (Gate_Part, Up_Part,
+                           Settings.Gate_Alpha, Settings.Gate_Limit);
+                     else
+                        Gate_Activation (Item.Owner.all, Gate_Part);
+                        K.Multiply (Gate_Part, Up_Part);
+                     end if;
+                  end;
+               end loop;
+
+               Product_Batch
+                 (Item, Expert_At.Down, Item.Gather_A, Held,
+                  Item.Gather_Out, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  Scattered back, each to the place its position and its
+               --  rank name, so the sums below are in the order they were.
+               for Index in 0 .. Members - 1 loop
+                  declare
+                     Pick : constant Natural := Item.Gathered.all (Index);
+
+                     From : constant Element_Count :=
+                       Item.Gather_Out.all'First
+                       + Element_Count (Index) * Width;
+
+                     Into : constant Element_Count :=
+                       Item.Ranked.all'First + Element_Count (Pick) * Width;
+
+                     Mine : T.Real_Array renames
+                       Item.Ranked.all (Into .. Into + Width - 1);
+
+                     At_Wide : constant Element_Count :=
+                       Element_Count (Which) * Width;
+                  begin
+                     Mine := Item.Gather_Out.all (From .. From + Width - 1);
+
+                     if Current.Expert_Down_Bias /= null then
+                        K.Add
+                          (Mine,
+                           Current.Expert_Down_Bias.all
+                             (Current.Expert_Down_Bias.all'First + At_Wide
+                              .. Current.Expert_Down_Bias.all'First + At_Wide
+                                 + Width - 1));
+                     end if;
+                  end;
+               end loop;
+            end;
+
+            <<Next_Expert>>
+            null;
+         end;
+      end loop;
+
+      --  And the sums, a position at a time and best expert first, which is
+      --  the order one position's mixture adds them in and the reason the
+      --  answers were kept apart rather than accumulated as they came.
+      for Where in 0 .. Count - 1 loop
+         declare
+            At_Row : constant Element_Count := Rows.all'First + Where * Width;
+
+            Into : T.Real_Array renames
+              Rows.all (At_Row .. At_Row + Width - 1);
+         begin
+            Into := [others => 0.0];
+
+            for Slot in 0 .. Used - 1 loop
+               declare
+                  Pick : constant Element_Count :=
+                    Where * Element_Count (Used) + Element_Count (Slot);
+
+                  From : constant Element_Count :=
+                    Item.Ranked.all'First + Pick * Width;
+
+                  Mine : T.Real_Array renames
+                    Item.Ranked.all (From .. From + Width - 1);
+               begin
+                  K.Scale
+                    (Mine,
+                     Item.Pick_Share.all (Item.Pick_Share.all'First + Pick));
+                  K.Add (Into, Mine);
+               end;
+            end loop;
+         end;
+      end loop;
+
+      Ok := True;
+   end Mixture_Batch;
+
    -----------
    -- Enter --
    -----------
@@ -6599,6 +6962,26 @@ package body Model_Runner.Llama is
       T.Free (Item.Expert_Arms);
       T.Free (Item.Expert_Feeds);
       T.Free (Item.Expert_Outs);
+      T.Free (Item.Route_Rows);
+      T.Free (Item.Pick_Share);
+      T.Free (Item.Gather_In);
+      T.Free (Item.Gather_A);
+      T.Free (Item.Gather_B);
+      T.Free (Item.Gather_Out);
+      T.Free (Item.Ranked);
+
+      declare
+         procedure Release is
+           new Ada.Unchecked_Deallocation (Choice_List, Choice_Access);
+      begin
+         if Item.Pick_Which /= null then
+            Release (Item.Pick_Which);
+         end if;
+
+         if Item.Gathered /= null then
+            Release (Item.Gathered);
+         end if;
+      end;
       T.Free (Item.Logit_Row);
 
       if Item.History /= null then
@@ -8644,6 +9027,7 @@ package body Model_Runner.Llama is
             --  Whether a device took the normalization and the three
             --  matrices that read it as one sequence, and whether it turned
             --  the queries and the keys while it had them.
+            Grouped   : Boolean := False;
             Projected : Boolean := False;
             Rotated   : Boolean := False;
 
@@ -9582,19 +9966,40 @@ package body Model_Runner.Llama is
                --  in. Everything before it -- the projections, the attention,
                --  the output -- still goes through the batch.
                if Settings.Experts > 0 then
-                  for Which in 0 .. Count - 1 loop
-                     declare
-                        Origin : constant Element_Count := Slot (Which, Width);
-                     begin
-                        Item.Normalized.all :=
-                          Norm.all (Origin .. Origin + Width - 1);
-                        Mixture
-                          (Item, Current, Item.Normalized, Item.Mixture, Status);
-                        exit when E.Is_Error (Status);
-                        Norm.all (Origin .. Origin + Width - 1) :=
-                          Item.Mixture.all;
-                     end;
-                  end loop;
+                  --  Gathered by expert where the backend pays for a read,
+                  --  which is what makes an expert's matrices cross once a
+                  --  layer instead of once for every position that chose
+                  --  them. The processor reads the same memory either way
+                  --  and keeps the simpler loop.
+                  Grouped := False;
+
+                  if Model_Runner.Backend."="
+                       (Item.Owner.Able.Kind,
+                        Model_Runner.Backend.Backend_Device)
+                    and then Count > 1
+                  then
+                     Mixture_Batch
+                       (Item, Current, Norm, Count, Grouped, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
+
+                  if not Grouped then
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Origin : constant Element_Count :=
+                             Slot (Which, Width);
+                        begin
+                           Item.Normalized.all :=
+                             Norm.all (Origin .. Origin + Width - 1);
+                           Mixture
+                             (Item, Current, Item.Normalized, Item.Mixture,
+                              Status);
+                           exit when E.Is_Error (Status);
+                           Norm.all (Origin .. Origin + Width - 1) :=
+                             Item.Mixture.all;
+                        end;
+                     end loop;
+                  end if;
                   exit when E.Is_Error (Status);
                else
                   --  As in the single-token path: the two arrangements differ

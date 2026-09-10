@@ -18565,6 +18565,59 @@ answer is `mul_mat_id`, which groups a batch's tokens by the expert they
 chose so each expert matrix is read once for all of them. That is the next
 one and it needs a kernel rather than an arrangement.
 
+### A batch's mixture, gathered by expert
+
+The section above left one thing: a mixture's prompt cost about what its
+generation cost a token -- 10.6 against 6.3 -- where a dense prompt on this
+device is thirty-seven times its generation. A batch has no one matrix to
+multiply the whole of it by, because each position routes to its own eight
+experts of a hundred and twenty-eight, so the mixture ran a position at a
+time however many were handed in.
+
+**What that costs is the reads.** An expert chosen by seven positions of a
+hundred and ten had its three matrices read seven times, and on a model
+larger than the device will hold, read means uploaded. A hundred and ten
+positions choosing eight experts is eight hundred and eighty reads a layer
+where there are a hundred and twenty-eight matrices to read.
+
+**Turned round, the batch is grouped by expert.** Every position that chose
+one is gathered into a run of vectors, the expert's matrices are read once
+and multiplied by all of them at once, and the answers are scattered back.
+llama.cpp calls the same idea `mul_mat_id`. Nothing new was needed on the
+device: one matrix against several vectors is what the batched product
+already is.
+
+| | prompt | generating |
+| --- | ---: | ---: |
+| a position at a time | 10.63, 10.58, 10.57 t/s | 6.43, 6.38, 6.29 t/s |
+| **gathered by expert** | **16.70, 17.32, 16.96** | 6.17, 6.30, 6.43 |
+
+**1.60 times the prompt**, and generation is untouched because a generated
+token is one position and there is nothing to gather. The processor keeps the
+simpler loop and reads 3.80 and 2.89 either way: it reads its weights out of
+the same memory whichever order it asks for them in.
+
+Across the two mixture entries the prompt has gone **6.01 to 17.0 tokens a
+second**, and against the processor's 3.80 the device is now 4.5 times rather
+than 1.6.
+
+**The sum is in the order it was.** A position adds its experts' answers best
+first; grouping by expert would add them in expert order, which is a
+different sum of the same numbers and a different answer in the last bits.
+Each answer is written to the place its position and its rank name, and the
+sums are done afterwards in the order they were always done in -- which is
+what the largest of these buffers is for, and why the same prompt gives the
+same text to the bit.
+
+**And nothing held that.** The fixture comparison runs a mixture on the
+processor and against the reference, batched and a token at a time, and it
+runs the device -- but never a mixture batched on the device, which is the
+one arrangement the gathering changes. Dropping the share from the sum was
+caught by nothing: no failing test, 41,780 conformance sequences, none
+outside tolerance. There is a test now, and it holds the answers equal **to
+the bit** rather than within a tolerance, because a tolerance would let the
+gathering associate the sum differently and say nothing.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

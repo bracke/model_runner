@@ -8219,6 +8219,151 @@ package body Tests.Inference_Cases is
       end;
    end A_Rotation_Stretches_When_A_Caller_Asks_It;
 
+   ---------------------------------------------------
+   -- A_Batched_Mixture_Agrees_With_One_At_A_Time --
+   ---------------------------------------------------
+
+   --  A batch's mixture, gathered by expert, answers what the positions
+   --  answer one at a time.
+   --
+   --  A batch has no one matrix to multiply the whole of it by, so the
+   --  mixture ran a position at a time however many were handed in, and an
+   --  expert chosen by seven positions of a hundred and ten had its
+   --  matrices read seven times. Gathered the other way round -- by expert,
+   --  with every position that chose one multiplied at once -- each is read
+   --  once, which is worth 1.6 times on a prompt.
+   --
+   --  What it must not change is the answer, and it does not have to: the
+   --  products are the same products, and each expert's answer is kept in
+   --  the place its position and its rank name so that the sums are added
+   --  best-expert-first as they always were.
+   --
+   --  THIS IS HERE BECAUSE NOTHING ELSE HOLDS IT. The fixture comparison
+   --  runs a mixture on the processor and against the reference, batched
+   --  and a token at a time, and it runs the device -- but not a mixture
+   --  batched on the device, which is the one arrangement the gathering
+   --  changes. Dropping the share from the sum was caught by nothing: 0
+   --  failures, 41,780 conformance sequences, 0 outside tolerance.
+   procedure A_Batched_Mixture_Agrees_With_One_At_A_Time
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      Tokens : constant Vocab.Token_Array := [3, 4, 5, 6, 7, 8];
+   begin
+      Device.Close;
+      Device.Open (Ready);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device gathered a mixture here");
+         return;
+      end if;
+
+      --  A mixture wide enough that its experts are chosen apart: with four
+      --  experts and two used, six positions spread over them is what makes
+      --  the gathering do something rather than hand every expert the whole
+      --  batch.
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen3_MoE,
+         Experts => 4, Experts_Used => 2);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Able  : Boolean;
+
+         Status : E.Error_Info;
+         Ignored : E.Error_Info;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_Device, Able);
+
+         if not Able then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device took the mixture fixture");
+            Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+
+            One_By_One, All_At_Once : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+
+            Apart : N.Real := 0.0;
+         begin
+            Assert (Settings.Experts > 0,
+                    "the fixture asked for a mixture and has none");
+
+            --  A token at a time, which is the arrangement every other
+            --  comparison in this suite already holds.
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the stepped session would not open");
+
+               for Index in Tokens'Range loop
+                  L.Evaluate
+                    (Live, Under.Ready, Tokens (Index), One_By_One,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "a stepped position failed: "
+                          & E.Error_Code'Image (Status.Code));
+               end loop;
+
+               L.Close (Live);
+            end;
+
+            --  And the same positions as one batch, which on a device takes
+            --  the gathered path.
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the batched session would not open");
+
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Tokens, All_At_Once, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the batch failed: "
+                       & E.Error_Code'Image (Status.Code));
+
+               L.Close (Live);
+            end;
+
+            for Index in One_By_One'Range loop
+               Apart := N.Real'Max
+                 (Apart, abs (One_By_One (Index) - All_At_Once (Index)));
+            end loop;
+
+            --  The same products in the same order, so the same bits. A
+            --  tolerance here would let the gathering associate the sum
+            --  differently and say nothing, which is the whole of what
+            --  keeping each expert's answer by rank is for.
+            Assert (Apart = 0.0,
+                    "a batch gathered by expert answers"
+                    & N.Real'Image (Apart)
+                    & " away from the same positions one at a time, where "
+                    & "the products are the same products in the same order");
+         end;
+
+         L.Close (Under.Ready, Ignored);
+      end;
+
+      Device.Close;
+      B.Free (Image);
+   end A_Batched_Mixture_Agrees_With_One_At_A_Time;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -8478,6 +8623,10 @@ package body Tests.Inference_Cases is
         (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
          "a layer that went over to the device as one sequence is charged "
          & "to fusing and not to attending");
+      Register_Routine
+        (T, A_Batched_Mixture_Agrees_With_One_At_A_Time'Access,
+         "a batch's mixture gathered by expert answers what the same "
+         & "positions answer one at a time, to the bit");
       Register_Routine
         (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
          "a caller may stretch the rotation the file did not, and only a "

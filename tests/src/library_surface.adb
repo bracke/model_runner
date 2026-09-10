@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 31) of Text_Access :=
+   Held : constant array (1 .. 30) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -60,7 +60,6 @@ package body Library_Surface is
       --  --serve N` is what exercises them here.
       new String'("Admit"),
       new String'("Retire"),
-      new String'("Gathered"),
 
       --  And where a server's time went. Where a run's own phases --
       --  Llama.Time_Spent -- were on this list until the server started
