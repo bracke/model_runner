@@ -362,6 +362,15 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
+   --  @param At_Vector Where in the caller's activation this product's
+   --    vector begins, in elements. Zero is the front of it, which is what
+   --    every product reading one whole activation means.
+   --
+   --    It is here for a mixture. Its chosen experts each project a vector
+   --    of their own down, so the products differ in their input as well as
+   --    their matrix, and a sequence has one activation. Laid end to end in
+   --    that one activation each product reads its own stretch, and the
+   --    eight go over as one submission.
    procedure Add_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -372,7 +381,8 @@ package Model_Runner.Platform.Device.Products is
       Columns : Natural;
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True);
+      Kept    : Boolean := True;
+      At_Vector : Natural := 0);
 
    --  Name one product that reads what the product before it produced.
    --

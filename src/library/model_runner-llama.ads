@@ -1737,6 +1737,30 @@ private
       --  on. Allocated only for an architecture that normalizes that way.
       Post_Room  : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Room for every chosen expert's two arms at once.
+      --
+      --  A mixture multiplies its input by the gate and the up matrix of
+      --  each expert it chose, and those all read THE SAME INPUT -- so they
+      --  are a group, and a group is one submission. They were sixteen: two
+      --  a expert, eight experts, forty-eight layers, which is one thousand
+      --  five hundred and thirty-six submissions a token where the dense
+      --  path takes one a layer. Each arm wants its own array because that
+      --  is what a group's targets are, so they are held here rather than
+      --  allocated a layer.
+      --
+      --  Null for a model with no experts, which allocates none of it.
+      Expert_Arms : Model_Runner.Tensors.Group_Room_Access := null;
+
+      --  The gated results of every chosen expert, end to end, and the room
+      --  their down projections write into.
+      --
+      --  The down projections differ in their input as well as their
+      --  matrix, so they are not a group of one activation -- but laid end
+      --  to end in one they are still one submission, which is what the
+      --  stride on a group is for. Eight submissions a layer become one.
+      Expert_Feeds : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Outs  : Model_Runner.Tensors.Group_Room_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;

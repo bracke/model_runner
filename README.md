@@ -18506,6 +18506,65 @@ answer. The refusal at load -- a model larger than the device's memory
 refused rather than run with eviction -- is still there and is still asked
 for with `--device-memory`.
 
+### A mixture, in one submission a layer
+
+`### A layer, in one submission` took a dense layer from three submissions to
+one, and left the mixture behind: the condition that chooses the fused layer
+reads `Settings.Experts = 0`. So a mixture went on doing what the dense path
+had stopped doing, and it does more of it -- each expert is its own matrix,
+because that is what reading eight of a hundred and twenty-eight means.
+
+A generated token of Qwen3-30B-A3B, forty-eight layers of eight chosen
+experts, was **three products a expert**: the gate, the up projection and the
+down. Twenty-four submissions a layer, eleven hundred and fifty-two a token,
+each paying the call `### One call costs 64 microseconds` measured.
+
+**They are two groups.**
+
+The gate and the up projection of every chosen expert **read the same
+input** -- the layer's normalized activation -- so all sixteen are a group,
+and a group is one submission. That machinery was already here: it is what a
+layer's queries, keys and values have used since they were three products.
+
+The down projections do not read the same input; each reads its own expert's
+gated result. **Laid end to end in one activation they are still a group**,
+if a product may say where in that activation its vector begins. A step
+could already say that -- a folded join reads the residual at an offset --
+and nothing but a join ever had. Eight products, eight offsets, one
+submission.
+
+Twenty-four submissions a layer become **two**. Two alternated rounds, a
+110-token prompt and eight generated tokens, six-gigabyte budget:
+
+| | prompt | generating |
+| --- | ---: | ---: |
+| three products a expert | 6.01, 6.00 t/s | 4.46, 4.42 t/s |
+| **two groups a layer** | **10.59, 10.63** | **6.26, 6.34** |
+
+**1.77 times the prompt and 1.42 the generation**, and the same text out of
+both -- the products are the same products in the same order, batched. The
+processor is untouched at 3.80 and 2.92: what a group saves there is a wake,
+and the pool is already awake.
+
+**And it moves the device from 1.6 times the processor to 2.8.**
+
+**One thing the offsets found on the way.** The activation a sequence uploads
+is sized by walking its steps, and a step that reads at an offset was counted
+as reading `Rows` elements from there. For a join that is right and cannot be
+wrong: a join's rows and its columns are the same number. For a product they
+are the answer's width and the vector's, and a down projection's are 2,048
+and 768 -- so the upload ran off the end of the array and the run reported an
+invariant violation. It reads `Columns` now, which is right for both and was
+always what the sentence meant.
+
+**What is left in the mixture.** A prompt still costs about what generation
+costs per token -- 10.6 against 6.3 -- where a dense prompt on this device is
+thirty-seven times its generation. Each position of a batch routes to its own
+experts, so the feed-forward is still done a position at a time; llama.cpp's
+answer is `mul_mat_id`, which groups a batch's tokens by the expert they
+chose so each expert matrix is read once for all of them. That is the next
+one and it needs a kernel rather than an arrangement.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

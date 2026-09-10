@@ -1011,7 +1011,8 @@ package body Model_Runner.Backend.Device is
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Apart   : Model_Runner.Numerics.Element_Count := 0)
    is
       Steps  : Products.Sequence;
       Wanted : Model_Runner.Numerics.Element_Count := 0;
@@ -1022,6 +1023,9 @@ package body Model_Runner.Backend.Device is
       --  The largest of the matrices, which is the one a refusal is about:
       --  they reach the device one buffer each.
       Asked  : Interfaces.Unsigned_64 := 0;
+
+      --  Where the matrix being added reads from.
+      Skip   : Model_Runner.Numerics.Element_Count := 0;
    begin
       Status := E.Success;
 
@@ -1059,10 +1063,16 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            --  Where this matrix's vector begins, which is the front for
+            --  a group of one activation and its own stretch for a group
+            --  laid end to end.
+            Skip := Model_Runner.Numerics.Element_Count
+                      (Index - Weights'First) * Apart;
+
             if This.Base = System.Null_Address
               or else Vector = null
               or else Into (Into'First + (Index - Weights'First)) = null
-              or else Vector.all'Length < This.Columns
+              or else Vector.all'Length < Skip + This.Columns
               or else Into (Into'First + (Index - Weights'First)).all'Length
                         < This.Rows
             then
@@ -1073,7 +1083,8 @@ package body Model_Runner.Backend.Device is
             Products.Add_Product
               (Steps, This.Base, This.Span, This.Offset, Packing,
                Natural (This.Rows), Natural (This.Columns), Added,
-               Key => At_Offset (This.Base, This.Offset));
+               Key => At_Offset (This.Base, This.Offset),
+               At_Vector => Natural (Skip));
             if not Added then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;

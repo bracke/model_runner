@@ -92,6 +92,21 @@ package body Model_Runner.Tensors is
       Item := null;
    end Free;
 
+   procedure Free (Item : in out Group_Room_Access) is
+      procedure Release is
+        new Ada.Unchecked_Deallocation (Group_Room, Group_Room_Access);
+   begin
+      if Item = null then
+         return;
+      end if;
+
+      for Index in Item.all'Range loop
+         Free (Item.all (Index));
+      end loop;
+
+      Release (Item);
+   end Free;
+
    ----------------
    -- Is_Present --
    ----------------

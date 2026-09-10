@@ -498,12 +498,22 @@ package Model_Runner.Backend.Device is
    --    same order.
    --  @param Status Success, or why not.
    --  @param Cancel Token a caller may set to ask for a stop.
+   --  @param Apart Where each matrix's vector begins, in elements, as a
+   --    stride: the first reads from the front, the second from Apart, and
+   --    so on. Zero is every matrix reading the same activation whole,
+   --    which is what a layer's queries, keys and values are.
+   --
+   --    It is here for a mixture, whose chosen experts each project a
+   --    vector of their own down -- so the products differ in their input
+   --    as well as their matrix. Laid end to end in one activation they are
+   --    still one submission, which is the whole point of a group.
    procedure Dispatch_Group
      (Weights : Model_Runner.Tensors.View_Group;
       Vector  : Model_Runner.Tensors.Real_Array_Access;
       Into    : Model_Runner.Tensors.Target_Group;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Apart   : Model_Runner.Numerics.Element_Count := 0);
 
    --  An empty table, for a caller that rotates nothing.
    No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The activation a sequence uploads was sized by a step's rows where it
+  should have been its columns.** A step reading at an offset into the
+  activation was counted as reading `Rows` elements from there; for a join
+  that is right and cannot be wrong, because a join's rows and columns are
+  the same number, and only a join had ever read at an offset. A group of
+  down projections reads 768 columns and writes 2,048 rows, and the upload
+  ran off the end of the array and reported an invariant violation.
+
 - **The device kept at most 4,096 matrices, and a mixture of experts
   presents 18,432.** Two bounds decide residency and the tighter wins: a
   byte budget and the size of the table the kept matrices sit in. The
@@ -111,6 +119,26 @@ Keep a Changelog and the project uses semantic versioning.
   drop. Rows move only where a layer straddles the hole.
 
 ### Added
+
+- **A mixture's experts go over as two groups a layer, where they were
+  twenty-four submissions.** The fused layer is chosen on `Experts = 0`, so
+  the mixture kept doing what the dense path stopped doing in `### A layer,
+  in one submission` -- and it does more of it, because each expert is its
+  own matrix.
+
+  The gate and up projections of every chosen expert read the same input, so
+  they are a group, which is machinery a layer's queries, keys and values
+  have used for as long as they have been three products. The down
+  projections each read their own expert's gated result, and laid end to end
+  in one activation they are a group too, if a product may say where in that
+  activation its vector begins -- which a step could already say, and only a
+  folded join had ever used.
+
+  Two alternated rounds on Qwen3-30B-A3B: the prompt goes **6.01 to 10.61
+  tokens a second** and generation **4.44 to 6.30**, 1.77 and 1.42 times,
+  with the same text out of both. The processor is untouched -- what a group
+  saves there is a wake, and the pool is already awake -- and the device goes
+  from 1.6 times the processor to 2.8.
 
 - **A model may be run past the context it was trained on.** The engine has
   stretched rotations since it first read a file asking for one -- the type,

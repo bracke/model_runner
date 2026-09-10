@@ -3257,7 +3257,8 @@ package body Model_Runner.Llama is
       Weights : T.View_Group;
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Apart   : Element_Count := 0)
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
@@ -3280,15 +3281,30 @@ package body Model_Runner.Llama is
 
       if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device then
          Model_Runner.Backend.Device.Dispatch_Group
-           (Weights, Vector, Into, Status, Item.Stopping);
+           (Weights, Vector, Into, Status, Item.Stopping, Apart);
          return;
       end if;
 
       --  And the pool has a group of its own: the wake and the settle of
       --  each product after the first are what it saves, which a generated
-      --  token was paying five times a layer.
-      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU then
+      --  token was paying five times a layer. It takes one activation, so
+      --  a group laid end to end goes the long way below -- which costs the
+      --  processor nothing, because what a group saves there is a wake and
+      --  the pool is already awake.
+      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU
+        and then Apart = 0
+      then
          Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status);
+         return;
+      end if;
+
+      --  One at a time, which every backend can do. A group laid end to
+      --  end cannot come here, because a product takes a whole vector and
+      --  there is no handing it a stretch of one; the caller asks for that
+      --  only where a backend takes it.
+      if Apart /= 0 then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "grouped_apart", E.Param_Identifier);
          return;
       end if;
 
@@ -4636,9 +4652,49 @@ package body Model_Runner.Llama is
 
       Result.all := [others => 0.0];
 
+      --  Every chosen expert's two arms at once.
+      --
+      --  They all read the same input, so they are a group and a group is
+      --  one submission. Two a expert over eight experts and forty-eight
+      --  layers is one thousand five hundred and thirty-six submissions a
+      --  token, each paying a call this file measured at 64.3 microseconds
+      --  before it computes anything -- against one a layer for the dense
+      --  path, which was fused for exactly this reason and left the mixture
+      --  behind. See the README's `### A mixture, in one submission a
+      --  layer`.
+      if T."/=" (Item.Expert_Arms, null) then
+         declare
+            Pairs : T.View_Group (1 .. 2 * Used);
+            Rooms : T.Target_Group (1 .. 2 * Used);
+         begin
+            for Slot in Chosen'Range loop
+               Pairs (2 * Slot + 1) :=
+                 Current.Experts.all (Chosen (Slot)).Gate;
+               Pairs (2 * Slot + 2) :=
+                 Current.Experts.all (Chosen (Slot)).Up;
+               Rooms (2 * Slot + 1) := Item.Expert_Arms.all (2 * Slot + 1);
+               Rooms (2 * Slot + 2) := Item.Expert_Arms.all (2 * Slot + 2);
+            end loop;
+
+            Product_Group (Item, Pairs, Input, Rooms, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
+      end if;
+
       for Slot in Chosen'Range loop
          declare
             Which : Expert renames Current.Experts.all (Chosen (Slot));
+
+            --  This expert's two arms, out of what the group wrote, or the
+            --  session's single pair where there is no group.
+            Gate_Room : constant T.Real_Array_Access :=
+              (if T."/=" (Item.Expert_Arms, null)
+               then Item.Expert_Arms.all (2 * Slot + 1) else Item.Gate);
+            Up_Room   : constant T.Real_Array_Access :=
+              (if T."/=" (Item.Expert_Arms, null)
+               then Item.Expert_Arms.all (2 * Slot + 2) else Item.Up);
 
             Expert_Feed : constant Element_Count :=
               Element_Count (Item.Owner.all.Settings.Expert_Feed);
@@ -4650,14 +4706,16 @@ package body Model_Runner.Llama is
               Element_Count (Chosen (Slot))
               * Element_Count (Item.Owner.all.Settings.Embedding);
          begin
-            Product (Item, Which.Gate, Input, Item.Gate, Status);
-            if E.Is_Error (Status) then
-               return;
-            end if;
+            if T."=" (Item.Expert_Arms, null) then
+               Product (Item, Which.Gate, Input, Gate_Room, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
 
-            Product (Item, Which.Up, Input, Item.Up, Status);
-            if E.Is_Error (Status) then
-               return;
+               Product (Item, Which.Up, Input, Up_Room, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
 
             --  The biases, where the architecture carries them. One
@@ -4666,15 +4724,15 @@ package body Model_Runner.Llama is
             --  rather than a whole.
             if Current.Expert_Gate_Bias /= null then
                K.Add
-                 (Item.Gate.all (Item.Gate.all'First
-                                 .. Item.Gate.all'First + Expert_Feed - 1),
+                 (Gate_Room.all (Gate_Room.all'First
+                                 .. Gate_Room.all'First + Expert_Feed - 1),
                   Current.Expert_Gate_Bias.all
                     (Current.Expert_Gate_Bias.all'First + At_Feed
                      .. Current.Expert_Gate_Bias.all'First + At_Feed
                         + Expert_Feed - 1));
                K.Add
-                 (Item.Up.all (Item.Up.all'First
-                               .. Item.Up.all'First + Expert_Feed - 1),
+                 (Up_Room.all (Up_Room.all'First
+                               .. Up_Room.all'First + Expert_Feed - 1),
                   Current.Expert_Up_Bias.all
                     (Current.Expert_Up_Bias.all'First + At_Feed
                      .. Current.Expert_Up_Bias.all'First + At_Feed
@@ -4687,15 +4745,30 @@ package body Model_Runner.Llama is
             --  gate, so it cannot be an activation followed by a multiply.
             if Item.Owner.all.Settings.Gate_Alpha > 0.0 then
                K.Clamped_Gate
-                 (Item.Gate.all, Item.Up.all,
+                 (Gate_Room.all, Up_Room.all,
                   Item.Owner.all.Settings.Gate_Alpha,
                   Item.Owner.all.Settings.Gate_Limit);
             else
-               Gate_Activation (Item.Owner.all, Item.Gate.all);
-               K.Multiply (Item.Gate.all, Item.Up.all);
+               Gate_Activation (Item.Owner.all, Gate_Room.all);
+               K.Multiply (Gate_Room.all, Up_Room.all);
             end if;
 
-            Product (Item, Which.Down, Item.Gate, Item.Expert_Row, Status);
+            --  Grouped, the gated vector is laid into the one activation
+            --  the group reads and the products follow together below.
+            if T."/=" (Item.Expert_Outs, null) then
+               Item.Expert_Feeds.all
+                 (Item.Expert_Feeds.all'First
+                    + Element_Count (Slot) * Expert_Feed
+                  .. Item.Expert_Feeds.all'First
+                     + Element_Count (Slot) * Expert_Feed + Expert_Feed - 1)
+                 := Gate_Room.all
+                      (Gate_Room.all'First
+                       .. Gate_Room.all'First + Expert_Feed - 1);
+
+               goto Next_Expert;
+            end if;
+
+            Product (Item, Which.Down, Gate_Room, Item.Expert_Row, Status);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -4718,8 +4791,62 @@ package body Model_Runner.Llama is
 
             K.Scale (Item.Expert_Row.all, Share (Slot));
             K.Add (Result.all, Item.Expert_Row.all);
+
+            <<Next_Expert>>
+            null;
          end;
       end loop;
+
+      --  And every chosen expert's down projection at once. Each reads its
+      --  own stretch of the one activation, which is what the stride on a
+      --  group is for, so eight submissions a layer become one.
+      --
+      --  The bias, the share and the sum stay where they were and in the
+      --  order they were in: the products are the same products, batched.
+      if T."/=" (Item.Expert_Outs, null) then
+         declare
+            Downs : T.View_Group (1 .. Used);
+            Rooms : T.Target_Group (1 .. Used);
+
+            Wide : constant Element_Count :=
+              Element_Count (Settings.Embedding);
+         begin
+            for Slot in Chosen'Range loop
+               Downs (Slot + 1) := Current.Experts.all (Chosen (Slot)).Down;
+               Rooms (Slot + 1) := Item.Expert_Outs.all (Slot + 1);
+            end loop;
+
+            Product_Group
+              (Item, Downs, Item.Expert_Feeds, Rooms, Status,
+               Apart => Element_Count (Settings.Expert_Feed));
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            for Slot in Chosen'Range loop
+               declare
+                  Mine : T.Real_Array_Access renames
+                    Item.Expert_Outs.all (Slot + 1);
+
+                  At_Wide : constant Element_Count :=
+                    Element_Count (Chosen (Slot)) * Wide;
+               begin
+                  if Current.Expert_Down_Bias /= null then
+                     K.Add
+                       (Mine.all (Mine.all'First
+                                  .. Mine.all'First + Wide - 1),
+                        Current.Expert_Down_Bias.all
+                          (Current.Expert_Down_Bias.all'First + At_Wide
+                           .. Current.Expert_Down_Bias.all'First + At_Wide
+                              + Wide - 1));
+                  end if;
+
+                  K.Scale (Mine.all, Share (Slot));
+                  K.Add (Result.all, Mine.all);
+               end;
+            end loop;
+         end;
+      end if;
    end Mixture;
 
    -----------
@@ -6312,6 +6439,42 @@ package body Model_Runner.Llama is
             * Item.Score_Room, Item.Scores);
          T.Allocate (Feed, Item.Gate);
          T.Allocate (Feed, Item.Up);
+
+         --  A mixture's chosen experts all read the same input, so their
+         --  gate and up matrices go over as one group. A group's targets
+         --  are separate arrays, and they are the same shape every layer,
+         --  so they are taken once here rather than a layer.
+         if Settings.Experts > 0 and then Settings.Experts_Used > 0 then
+            Item.Expert_Arms :=
+              new T.Group_Room (1 .. 2 * Settings.Experts_Used);
+
+            for Index in Item.Expert_Arms.all'Range loop
+               T.Allocate
+                 (Element_Count (Settings.Expert_Feed),
+                  Item.Expert_Arms.all (Index));
+            end loop;
+
+            --  And the down projections as one group, which only the
+            --  device takes: a group laid end to end wants a backend that
+            --  can give each matrix its own stretch of one activation, and
+            --  what it saves is a submission, which the processor does not
+            --  pay.
+            if Model_Runner.Backend."="
+                 (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+            then
+               T.Allocate
+                 (Element_Count (Settings.Experts_Used)
+                  * Element_Count (Settings.Expert_Feed),
+                  Item.Expert_Feeds);
+
+               Item.Expert_Outs :=
+                 new T.Group_Room (1 .. Settings.Experts_Used);
+
+               for Index in Item.Expert_Outs.all'Range loop
+                  T.Allocate (Width, Item.Expert_Outs.all (Index));
+               end loop;
+            end if;
+         end if;
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
          Item.History := new Token_History (0 .. Capacity - 1);
 
@@ -6433,6 +6596,9 @@ package body Model_Runner.Llama is
       T.Free (Item.Routing);
       T.Free (Item.Mixture);
       T.Free (Item.Expert_Row);
+      T.Free (Item.Expert_Arms);
+      T.Free (Item.Expert_Feeds);
+      T.Free (Item.Expert_Outs);
       T.Free (Item.Logit_Row);
 
       if Item.History /= null then

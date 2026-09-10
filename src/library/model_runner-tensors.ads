@@ -96,6 +96,14 @@ package Model_Runner.Tensors is
    type Target_Group is
      array (Positive range <>) of Real_Array_Access;
 
+   --  Somewhere to keep a group's targets between calls.
+   --
+   --  A Target_Group is an array of accesses and says nothing about who
+   --  owns them; this is the owner, for a caller whose group is the same
+   --  shape every time and would otherwise allocate it a layer.
+   type Group_Room is array (Positive range <>) of Real_Array_Access;
+   type Group_Room_Access is access Group_Room;
+
    subtype Half_Array is Model_Runner.Numerics.Half_Array;
    type Half_Array_Access is access Half_Array;
 
@@ -123,6 +131,11 @@ package Model_Runner.Tensors is
    --
    --  @param Item Reference to release.
    procedure Free (Item : in out Half_Array_Access);
+
+   --  Release a group's room and every array in it.
+   --
+   --  @param Item Room to release; null afterwards.
+   procedure Free (Item : in out Group_Room_Access);
 
    --  Build a view and validate that it fits inside its buffer.
    --

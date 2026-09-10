@@ -4325,7 +4325,8 @@ package body Model_Runner.Platform.Device.Products is
       Columns : Natural;
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True)
+      Kept    : Boolean := True;
+      At_Vector : Natural := 0)
    is
    begin
       if Steps.Held = Sequence_Limit or else Base = System.Null_Address then
@@ -4337,7 +4338,7 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
-         Kept => Kept,
+         Kept => Kept, At_Vector => At_Vector,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
       Added := True;
@@ -4746,12 +4747,20 @@ package body Model_Runner.Platform.Device.Products is
       begin
          for Index in 1 .. Steps.Held loop
             if Steps.Items (Index).At_Vector > 0 then
+               --  What a step reads from the activation is its COLUMNS,
+               --  which for a join is its width and for a product is the
+               --  vector the matrix takes. It said Rows, and a join's rows
+               --  and columns are the same number so nothing noticed --
+               --  until a group of down projections read its own stretch of
+               --  one activation, where the rows are the answer's width and
+               --  the columns are the expert's, and the upload ran off the
+               --  end of the array.
                Most := Model_Runner.Numerics.Element_Count'Max
                  (Most,
                   Model_Runner.Numerics.Element_Count
                     (Steps.Items (Index).At_Vector)
                   + Model_Runner.Numerics.Element_Count
-                      (Steps.Items (Index).Rows)
+                      (Steps.Items (Index).Columns)
                     * Model_Runner.Numerics.Element_Count (Count));
             end if;
          end loop;
