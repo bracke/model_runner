@@ -389,7 +389,7 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation. `--tools` offers the model tools and the calls it writes back are read out of the reply and reported; `--assistant` and `--tool-result` put the earlier turns back, in the order they are written, which is how one run closes the loop another opened |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]` `/tools` `/tool TEXT`, `/system` removing the system message when no text follows it and `/tool` handing back what a tool answered as a turn of its own, blank-line submission, no history written to disk. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 179 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 180 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a partial Danish translation that inherits per key, and a generated pseudo-locale; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the fifteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the eight others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
@@ -18353,6 +18353,87 @@ of the wrong files and say nothing at all about it.**
 One thing this does not do is write them. `llama-gguf-split --merge` and
 `--split` are a tool of llama.cpp's; the quantizer here writes one file, and
 a model too large for one file is not a model this host quantizes.
+
+### Past the context it was trained on
+
+A model is trained at one context length and its rotation is written for that
+length. Stretching the rotation -- turning by a smaller angle a position, so
+that more positions fit in the same span of angles -- is what lets it be run
+past that length. **This engine has stretched rotations since it first read a
+file that asked for one**: `rope.scaling.type`, the factor, the band Yarn
+mixes across, its attenuation and the context it was trained on are all read
+and all run. What it would not do was let the person running the model ask
+for the same thing:
+
+```
+$ model_runner run tinyllama-1.1b-chat-q8_0.gguf --context-size 4096
+MR-ARCH-0015: a context of 4096 tokens exceeds the model maximum of 2048
+```
+
+So a file whose author wrote the keys reached past its trained length, and a
+file whose author did not could not be made to. **That is a decision the file
+was making on the reader's behalf**, and every line of code needed to
+overrule it was already there.
+
+**Built.** `--rope-scaling {none,linear,yarn}`, `--rope-scale`,
+`--rope-freq-base`, and the four `--yarn-*` that Yarn derives its ramp from --
+the same seven numbers the file states, asked for instead. **Each is applied
+only where it was named**, so asking for a factor and nothing else takes the
+file's own band and attenuation with it. A model stretched by request may
+then be opened past its trained context; a model that was not may not, which
+is the rule as it was, and `--rope-scaling none` is how a caller asks for
+that rule back.
+
+**And then the question is which stretch, which is a measurement.**
+TinyLlama-1.1B declares 2,048. Perplexity over this repository's own corpus,
+the second half of each chunk scored:
+
+| chunk | as trained | linear | yarn |
+| ---: | ---: | ---: | ---: |
+| 512 | **35.52** | 76.69 | 36.29 |
+| 1,024 | **44.67** | 108.56 | 45.22 |
+| 2,048 | 42.68 | 116.41 | **42.26** |
+| 4,096 | *refused* | 112.80 | **35.98** |
+| 8,192 | *refused* | 476.29 | **54.27** |
+
+The rows at 512 to 2,048 stretch by two; the row at 4,096 stretches by two
+and the row at 8,192 by four, which is the factor that matches the context
+asked for.
+
+**Yarn costs almost nothing where it is not needed and everything is
+different where it is.** At 512 it reads 36.29 against 35.52 -- two per cent
+-- and at 2,048 it reads 42.26 against 42.68, which is better than the model
+unstretched. At 4,096, where the unstretched model cannot run at all, it
+reads **35.98**: the same as the model's best reading at any length. Twice
+the context, for nothing.
+
+**The linear stretch is two to three times worse everywhere**, and at
+four-fold it is 476 and unusable. It is the obvious thing to reach for, it is
+what a bare `--rope-scale` means because that is what the key meant before
+there was more than one kind of stretch, and on this model it is the wrong
+choice by a factor of three.
+
+**And the factor has to match the context.** Yarn at 8,192 with a factor of
+two -- a fourfold context asked for with a twofold stretch -- reads
+**2,542.99**. The same rotation with the factor the context wants reads
+54.27. There is no warning for this and no way to derive one from the other,
+because a caller may legitimately want a stretch larger than the context they
+are opening; what there is, is the reading.
+
+**A caveat on reading down the columns.** Each row scores the second half of
+its own chunks, so the rows are different amounts of different text -- 1,020
+positions at 512, 4,095 at 8,192 -- and are comparable across a row and not
+down a column. The claim each row makes is about the three ways of running
+the same positions.
+
+**And one thing this found in the instrument.** `tests perplexity` refused
+any chunk above 512, because it evaluated a chunk in one pass and a pass
+holds `Max_Batch` positions. The consequence was quiet: **every perplexity
+figure this repository has published was measured at a context of at most 512
+tokens.** A chunk is now evaluated in as many passes as it takes, into the
+one session, which is what a long context is. The baseline was re-measured to
+check that nothing moved: 35.5256, which is the published figure to the
+digit.
 
 ## License
 

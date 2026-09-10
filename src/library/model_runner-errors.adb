@@ -212,6 +212,7 @@ package body Model_Runner.Errors is
             | Template_Unsupported_Role
             | Arch_Unsupported
             | Arch_Unsupported_Rope_Scaling
+            | Arch_Rotation_Not_Stretchable
             | Arch_Unsupported_Feature
             | Arch_No_Output_Head
             | Arch_Text_Not_Whole

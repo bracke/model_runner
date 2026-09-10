@@ -138,6 +138,117 @@ package body Model_Runner.Llama is
    ---------------------------------------------------------------------------
 
    --  Read and validate the architecture metadata.
+   -------------------
+   -- Apply_Stretch --
+   -------------------
+
+   --  Put what the caller asked of the rotation over what the file said.
+   --
+   --  Everything here was already read out of files and already runs. A
+   --  model whose author wrote `rope.scaling.type` is stretched; a model
+   --  whose author did not could not be stretched by anyone, which is a
+   --  decision the file was making on the reader's behalf and had no
+   --  business making. This is the same set of numbers, asked for.
+   --
+   --  EACH IS APPLIED ONLY WHERE IT WAS NAMED. Asking for a factor and
+   --  nothing else takes the file's own band and attenuation with it, so a
+   --  caller who wants twice the context of a Yarn model says so in one
+   --  number and keeps everything the author tuned.
+   procedure Apply_Stretch
+     (Settings : in out Configuration;
+      Ask      : Rotary_Request;
+      Status   : out E.Error_Info)
+   is
+      --  Whether anything at all was asked for. A record of zeros is what
+      --  every caller before this passed and means the file decides.
+      Asked : constant Boolean :=
+        Ask.Kind /= Unasked
+        or else Ask.Factor /= 0.0
+        or else Ask.Base /= 0.0
+        or else Ask.Original /= 0
+        or else Ask.Beta_Fast /= 0.0
+        or else Ask.Beta_Slow /= 0.0
+        or else Ask.Attenuation /= 0.0;
+   begin
+      Status := E.Success;
+
+      if not Asked then
+         return;
+      end if;
+
+      --  A model that turns nothing cannot be stretched, and the refusal
+      --  says which model rather than which key. GPT2 and Bert learn a row
+      --  a position and hold as many rows as they were trained with: there
+      --  is no angle to turn by a different amount, and a caller asking for
+      --  one has misunderstood the model rather than mistyped a number.
+      if Settings.Rotary = 0 then
+         Status := E.Make (E.Arch_Rotation_Not_Stretchable);
+         E.Add_Text
+           (Status, "architecture", Architecture_Name (Settings.Kind),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      --  The kind. A factor named with no kind is the linear stretch, which
+      --  is what a bare factor has always meant -- the key predates there
+      --  being more than one kind of stretch, and so does the habit.
+      case Ask.Kind is
+         when Unasked =>
+            if Ask.Factor /= 0.0 then
+               Settings.Scaling.Kind := K.Linear;
+            end if;
+
+         when As_Trained =>
+            Settings.Scaling.Kind := K.Unscaled;
+
+         when Linear_Stretch =>
+            Settings.Scaling.Kind := K.Linear;
+
+         when Yarn_Stretch =>
+            Settings.Scaling.Kind := K.Yarn;
+      end case;
+
+      --  The factor, as a person states it: two is twice the context. What
+      --  the kernels hold is its reciprocal, because that is what a file
+      --  states and what the arithmetic multiplies by.
+      if Ask.Factor /= 0.0 then
+         Settings.Scaling.Frequency := 1.0 / Ask.Factor;
+      end if;
+
+      if Ask.Base /= 0.0 then
+         Settings.Rope_Base := Ask.Base;
+      end if;
+
+      if Ask.Beta_Fast /= 0.0 then
+         Settings.Scaling.Beta_Fast := Ask.Beta_Fast;
+      end if;
+
+      if Ask.Beta_Slow /= 0.0 then
+         Settings.Scaling.Beta_Slow := Ask.Beta_Slow;
+      end if;
+
+      if Ask.Attenuation /= 0.0 then
+         Settings.Scaling.Attenuation := Ask.Attenuation;
+      end if;
+
+      --  What Yarn derives its ramp from. A caller who asked for Yarn and
+      --  did not say what it was trained on means the context the file
+      --  states, which is the same rule the file path takes.
+      if Ask.Original /= 0 then
+         Settings.Scaling.Original := Ask.Original;
+      elsif K."=" (Settings.Scaling.Kind, K.Yarn)
+        and then Settings.Scaling.Original = 0
+      then
+         Settings.Scaling.Original := Settings.Context_Length;
+      end if;
+
+      --  And the one consequence: a model stretched by request may be
+      --  opened at a context longer than the one it was trained on. A model
+      --  that was not may not, which is the rule as it was, and a request
+      --  for the rotation as trained is a request to keep that rule.
+      Settings.Stretched := not K."=" (Settings.Scaling.Kind, K.Unscaled);
+   end Apply_Stretch;
+
    procedure Read_Configuration
      (Source   : Containers.Container;
       Bounds   : Model_Runner.Limits.Model_Limits;
@@ -1725,7 +1836,8 @@ package body Model_Runner.Llama is
       Repack   : Repack_Mode := No_Repack;
       Fit_Required : Boolean := True;
       Threads  : Positive := 1;
-      Status   : out E.Error_Info)
+      Status   : out E.Error_Info;
+      Stretch  : Rotary_Request := No_Rotary_Request)
    is
       Ignored : E.Error_Info;
 
@@ -1810,6 +1922,10 @@ package body Model_Runner.Llama is
 
       P.Publish (Observer, P.Load_Progress (P.Selecting_Architecture));
       Read_Configuration (Source, Bounds, Item.Settings, Status);
+      if E.Is_Ok (Status) then
+         Item.Settings.Trained_Context := Item.Settings.Context_Length;
+         Apply_Stretch (Item.Settings, Stretch, Status);
+      end if;
       if E.Is_Error (Status) then
          Fail (Status);
          return;
@@ -5998,8 +6114,18 @@ package body Model_Runner.Llama is
       Settings := Source.Settings;
       Capacity := (if Context = 0 then Settings.Context_Length else Context);
 
+      --  Past the context the model was trained on only where the rotation
+      --  was stretched for it, and never past what this session may hold.
+      --
+      --  A stretched rotation turns by a smaller angle a position, so more
+      --  positions fit in the span of angles the model was trained over.
+      --  Whether the answers past the trained length are worth having is a
+      --  measurement and not a rule -- `### Past the context it was trained
+      --  on` has the curve -- so this refuses the case where there is no
+      --  mechanism at all and permits the case where there is one.
       if Capacity = 0
-        or else Capacity > Settings.Context_Length
+        or else (Capacity > Settings.Context_Length
+                 and then not Settings.Stretched)
         or else Capacity > Session_Bounds.Max_Context
       then
          Status := E.Make (E.Arch_Context_Too_Large);

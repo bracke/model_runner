@@ -93,6 +93,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A model may be run past the context it was trained on.** The engine has
+  stretched rotations since it first read a file asking for one -- the type,
+  the factor, Yarn's band, its attenuation and its trained context are all
+  read and all run -- but only a file could ask. `--rope-scaling
+  {none,linear,yarn}`, `--rope-scale`, `--rope-freq-base` and the four
+  `--yarn-*` are the same seven numbers, asked for instead, each applied only
+  where it was named. A model stretched by request may then be opened past
+  its trained context; one that was not may not, and `--rope-scaling none`
+  asks for that rule back.
+
+  Which stretch is a measurement, and it is decisive. TinyLlama-1.1B declares
+  2,048; perplexity over this repository's corpus reads, as trained against
+  linear against yarn: 35.52 / 76.69 / 36.29 at 512, 42.68 / 116.41 / 42.26
+  at 2,048, and at 4,096 -- where the unstretched model cannot run at all --
+  refused / 112.80 / **35.98**. **Yarn buys twice the context for nothing**,
+  and the linear stretch, which is what a bare factor has always meant, is
+  two to three times worse everywhere and unusable at fourfold. The factor
+  has to match the context: yarn at 8,192 asked for with a twofold stretch
+  reads 2,542.99 where a fourfold one reads 54.27.
+
+- **`tests perplexity` evaluates a chunk in as many passes as it takes**,
+  into one session, which is what a long context is. It refused any chunk
+  above 512 before, and the consequence was quiet: every perplexity figure
+  this repository has published was measured at a context of at most 512
+  tokens. The baseline was re-measured across the change and reads 35.5256,
+  the published figure to the digit.
+
 - **A model split across several files is read as the model it was split
   from.** Above a few tens of gigabytes a published GGUF is not one file, and
   this engine could not read one: pointed at the first of three shards it
@@ -13280,7 +13307,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 179 diagnostic
+- Localization through `messages`, with a catalog entry for all 180 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

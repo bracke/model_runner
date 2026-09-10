@@ -204,6 +204,7 @@ package Model_Runner.Errors is
       Arch_Invalid_Head_Counts,
       Arch_Invalid_Rope,
       Arch_Unsupported_Rope_Scaling,
+      Arch_Rotation_Not_Stretchable,
       Arch_Unsupported_Feature,
       Arch_Missing_Tensor,
       Arch_Invalid_Tensor_Shape,

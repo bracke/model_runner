@@ -435,6 +435,30 @@ package body Model_Runner.CLI.Execute is
       end if;
    end Selected_Workers;
 
+   --  What the command asks of the rotation, over what the file states.
+   --
+   --  Empty and zero are unasked, which is what a command that names none
+   --  of these means: the file decides, as it always did.
+   function Asked_Rotation (Item : Opt.Command) return L.Rotary_Request is
+      Named : constant String := T.To_String (Item.Rope_Scaling);
+   begin
+      return
+        (Kind =>
+           (if Named = "none" then L.As_Trained
+            elsif Named = "linear" then L.Linear_Stretch
+            elsif Named = "yarn" then L.Yarn_Stretch
+            else L.Unasked),
+         Factor      => Model_Runner.Numerics.Wide_Real (Item.Rope_Scale),
+         Base        => Model_Runner.Numerics.Wide_Real (Item.Rope_Base),
+         Original    => Item.Yarn_Original,
+         Beta_Fast   =>
+           Model_Runner.Numerics.Wide_Real (Item.Yarn_Beta_Fast),
+         Beta_Slow   =>
+           Model_Runner.Numerics.Wide_Real (Item.Yarn_Beta_Slow),
+         Attenuation =>
+           Model_Runner.Numerics.Wide_Real (Item.Yarn_Attention));
+   end Asked_Rotation;
+
    --  Load and validate a container, and prepare a model when asked.
    procedure Load
      (Item      : Opt.Command;
@@ -506,7 +530,8 @@ package body Model_Runner.CLI.Execute is
             --  back, which is how many were uploaded again.
             Fit_Required => not Item.Device_Memory_Set,
             Threads      => Selected_Workers (Item),
-            Status       => Status);
+            Status       => Status,
+            Stretch      => Asked_Rotation (Item));
 
          --  A chat format named on the command line replaces the model's
          --  own. Models whose template this build will not compile are

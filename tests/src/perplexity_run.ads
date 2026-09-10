@@ -126,6 +126,13 @@ package Perplexity_Run is
    --  @param Anyway True to measure on a busy machine anyway.
    --  @param Waiting Minutes to wait for the machine to go quiet, or zero.
    --  @param Result What it measured.
+   --  @param Stretch What to ask of the rotation: none, linear, yarn, or
+   --    the empty string to leave the file to decide as it always did. A
+   --    chunk longer than the context the model was trained on cannot be
+   --    scored at all without one, because the session that would hold it
+   --    is refused.
+   --  @param Factor What to stretch it by, where two is twice the context.
+   --    Zero is unasked.
    procedure Run
      (Path    : String;
       Against : String;
@@ -137,7 +144,9 @@ package Perplexity_Run is
         Model_Runner.Backend.Backend_CPU;
       Anyway  : Boolean := False;
       Waiting : Natural := 0;
-      Result  : out Report);
+      Result  : out Report;
+      Stretch : String := "";
+      Factor  : Model_Runner.Numerics.Wide_Real := 0.0);
 
    --  One line saying what it found.
    --

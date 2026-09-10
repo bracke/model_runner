@@ -186,14 +186,27 @@ package body Perplexity_Run is
         Model_Runner.Backend.Backend_CPU;
       Anyway  : Boolean := False;
       Waiting : Natural := 0;
-      Result  : out Report)
+      Result  : out Report;
+      Stretch : String := "";
+      Factor  : Model_Runner.Numerics.Wide_Real := 0.0)
    is
       procedure Note (Item : String);
 
+      --  The FIRST note is kept, not the last.
+      --
+      --  A refusal is followed by the consequences of it, and each of those
+      --  had something to say: a session that would not open ended the
+      --  chunk loop, and the run then reported "nothing was scored", which
+      --  is true and is not the reason. What a reader needs is the first
+      --  thing that went wrong.
       procedure Note (Item : String) is
          Room : constant Natural :=
            Natural'Min (Item'Length, Result.Detail'Length);
       begin
+         if Result.Detail_Up /= 0 then
+            return;
+         end if;
+
          Result.Detail (1 .. Room) := Item (Item'First .. Item'First + Room - 1);
          Result.Detail_Up := Room;
       end Note;
@@ -236,7 +249,15 @@ package body Perplexity_Run is
 
          L.Prepare
            (Item.Engine, Item.Container, Item.Source,
-            Backend => Backend, Threads => Threads, Status => Status);
+            Backend => Backend, Threads => Threads, Status => Status,
+            Stretch =>
+              (Kind =>
+                 (if Stretch = "none" then L.As_Trained
+                  elsif Stretch = "linear" then L.Linear_Stretch
+                  elsif Stretch = "yarn" then L.Yarn_Stretch
+                  else L.Unasked),
+               Factor => Factor,
+               others => <>));
          if E.Is_Error (Status) then
             Note ("the model would not prepare: "
                   & E.Error_Code'Image (Status.Code));
@@ -292,12 +313,11 @@ package body Perplexity_Run is
       --  left to the refusal a batch gives, which names a shape mismatch
       --  and not the option that caused it -- a chunk above the bound read
       --  "nothing was scored", which is true and is no help at all.
-      if Chunk > L.Max_Batch then
-         Result.Missing := True;
-         Note ("a chunk is one pass and a pass holds at most"
-               & Natural'Image (L.Max_Batch) & " tokens");
-         return;
-      end if;
+      --  A chunk longer than one pass is evaluated in several, into the
+      --  one session, which is what a long context is. It used to be
+      --  refused, and the consequence was quiet: every perplexity this
+      --  repository has published was measured at a context of at most 512
+      --  tokens, because that is the largest chunk the tool would take.
 
       --  The same gate every published figure comes through. A perplexity is
       --  not a timing, but the seconds it reports are, and a reader
@@ -422,8 +442,61 @@ package body Perplexity_Run is
 
                Surprise : Long_Float := 0.0;
                Apart    : Long_Float := 0.0;
+
+               --  One pass's worth of rows, copied into the chunk's own
+               --  array afterwards. A pass writes from the front of what it
+               --  is given and there is no way to hand it an offset, so the
+               --  offset is done here.
+               Pass_Rows : T.Real_Array_Access;
+
+               --  Evaluate a chunk in as many passes as it takes, into one
+               --  session. A pass holds at most Max_Batch positions; a
+               --  chunk may be a whole context, and the second pass sees
+               --  the first pass's positions because the session is the
+               --  same one.
+               procedure Score_Chunk
+                 (Live   : in out L.Session;
+                  Engine : in out L.Model;
+                  From   : Natural;
+                  Upto   : Natural;
+                  Into   : T.Real_Array_Access;
+                  Room   : T.Real_Array_Access;
+                  Status : out E.Error_Info)
+               is
+                  At_Row : Element_Count := 0;
+                  Lo     : Natural := From;
+               begin
+                  Status := E.Success;
+
+                  while Lo <= Upto loop
+                     declare
+                        Hi : constant Natural :=
+                          Natural'Min (Lo + L.Max_Batch - 1, Upto);
+
+                        Wide : constant Element_Count :=
+                          Element_Count (Hi - Lo + 1) * Width;
+                     begin
+                        L.Evaluate_Batch
+                          (Live, Engine, Held (Lo .. Hi), Room.all,
+                           Every => Pass_Rows, Status => Status);
+                        exit when E.Is_Error (Status);
+
+                        Into.all (Into.all'First + At_Row
+                                  .. Into.all'First + At_Row + Wide - 1) :=
+                          Pass_Rows.all
+                            (Pass_Rows.all'First
+                             .. Pass_Rows.all'First + Wide - 1);
+
+                        At_Row := At_Row + Wide;
+                        Lo := Hi + 1;
+                     end;
+                  end loop;
+               end Score_Chunk;
             begin
                T.Allocate (Width, Logits);
+               T.Allocate
+                 (Width * Element_Count (Natural'Min (Chunk, L.Max_Batch)),
+                  Pass_Rows);
                T.Allocate (Width * Element_Count (Chunk), Every);
                if Comparing then
                   T.Allocate (Width * Element_Count (Chunk), Base_Every);
@@ -434,18 +507,22 @@ package body Perplexity_Run is
                      From : constant Natural := (Round - 1) * Chunk + 1;
                      Upto : constant Natural := From + Chunk - 1;
                   begin
+                     --  At the chunk's own length, so that a chunk longer
+                     --  than the model's trained context is scored rather
+                     --  than truncated to it. The engine refuses this
+                     --  unless the rotation was stretched for it.
                      L.Open
-                       (Live, Under.Engine, Workers => Where,
-                        Status => Status);
+                       (Live, Under.Engine, Context => Chunk,
+                        Workers => Where, Status => Status);
                      if E.Is_Error (Status) then
                         Note ("a session would not open: "
                               & E.Error_Code'Image (Status.Code));
                         exit;
                      end if;
 
-                     L.Evaluate_Batch
-                       (Live, Under.Engine, Held (From .. Upto),
-                        Logits.all, Every => Every, Status => Status);
+                     Score_Chunk
+                       (Live, Under.Engine, From, Upto, Every, Logits,
+                        Status);
 
                      if E.Is_Error (Status) then
                         Note ("a chunk would not evaluate: "
@@ -464,9 +541,9 @@ package body Perplexity_Run is
                            exit;
                         end if;
 
-                        L.Evaluate_Batch
-                          (Baseline_Live, Base.Engine, Held (From .. Upto),
-                           Logits.all, Every => Base_Every, Status => Status);
+                        Score_Chunk
+                          (Baseline_Live, Base.Engine, From, Upto,
+                           Base_Every, Logits, Status);
 
                         if E.Is_Error (Status) then
                            Note ("the baseline would not evaluate a chunk");
@@ -544,6 +621,7 @@ package body Perplexity_Run is
                end loop;
 
                T.Free (Logits);
+               T.Free (Pass_Rows);
                T.Free (Every);
                if Base_Every /= null then
                   T.Free (Base_Every);

@@ -168,15 +168,16 @@ ordinal is never reused, not because they might appear.
 | `MR-ARCH-0006` | `error.architecture.invalid_head_counts` | recovery_none | 3 | raised |
 | `MR-ARCH-0007` | `error.architecture.invalid_rope` | recovery_none | 3 | raised |
 | `MR-ARCH-0008` | `error.architecture.unsupported_rope_scaling` | recovery_unsupported | 4 | raised |
-| `MR-ARCH-0009` | `error.architecture.unsupported_feature` | recovery_unsupported | 4 | raised |
-| `MR-ARCH-0010` | `error.architecture.missing_tensor` | recovery_none | 3 | raised |
-| `MR-ARCH-0011` | `error.architecture.invalid_tensor_shape` | recovery_none | 3 | raised |
-| `MR-ARCH-0012` | `error.architecture.invalid_tensor_format` | recovery_none | 3 | raised |
-| `MR-ARCH-0013` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 | reserved |
-| `MR-ARCH-0014` | `error.architecture.context_too_large` | recovery_none | 3 | raised |
-| `MR-ARCH-0015` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | reserved |
-| `MR-ARCH-0016` | `error.architecture.no_output_head` | recovery_unsupported | 4 | raised |
-| `MR-ARCH-0017` | `error.architecture.text_not_whole` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0009` | `error.architecture.rotation_not_stretchable` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0010` | `error.architecture.unsupported_feature` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0011` | `error.architecture.missing_tensor` | recovery_none | 3 | raised |
+| `MR-ARCH-0012` | `error.architecture.invalid_tensor_shape` | recovery_none | 3 | raised |
+| `MR-ARCH-0013` | `error.architecture.invalid_tensor_format` | recovery_none | 3 | raised |
+| `MR-ARCH-0014` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 | reserved |
+| `MR-ARCH-0015` | `error.architecture.context_too_large` | recovery_none | 3 | raised |
+| `MR-ARCH-0016` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | reserved |
+| `MR-ARCH-0017` | `error.architecture.no_output_head` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0018` | `error.architecture.text_not_whole` | recovery_unsupported | 4 | raised |
 
 ## TENSOR
 

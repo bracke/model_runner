@@ -267,6 +267,19 @@ package Model_Runner.Llama is
       --  trained, which is what a model that says nothing means.
       Scaling         : Model_Runner.Kernels.Rotary_Scaling :=
         Model_Runner.Kernels.No_Scaling;
+
+      --  Whether that stretch was asked for rather than read.
+      --
+      --  It decides one thing: a model stretched by request may be opened
+      --  at a context longer than the one it was trained on, and a model
+      --  that was not may not. A file that states its own stretch has
+      --  already stated the context that stretch reaches, so the two cases
+      --  cannot be told apart by the stretch alone.
+      Stretched       : Boolean := False;
+
+      --  The context the file states, kept when a request raises the one a
+      --  session may ask for, so that a report can say both.
+      Trained_Context : Natural := 0;
       Tied_Output     : Boolean := False;
 
       --  Whether the model can turn a state into a distribution over tokens
@@ -508,6 +521,63 @@ package Model_Runner.Llama is
          when To_F32    => "f32",
          when To_BF16   => "bf16",
          when To_Rows   => "rows");
+   --  What a caller asks of the rotation, over what the file states.
+   --
+   --  A model is trained at one context length and its rotation is written
+   --  for that length. Stretching the rotation -- turning by a smaller angle
+   --  a position, so that more positions fit in the same span of angles --
+   --  is what lets it be run past that length, and it is a decision the
+   --  person running the model gets to make: a file written by an author
+   --  who did not stretch it can still be stretched by whoever runs it.
+   --
+   --  Everything the stretch needs is read from the file already. This is
+   --  the same set of numbers, asked for rather than read, and each is
+   --  applied only where the caller named it -- so asking for a factor and
+   --  nothing else takes the file's own band and attenuation with it.
+   --
+   --  Unasked means the file decides, which is what every caller before
+   --  this meant and what the default is.
+   type Rotary_Request_Kind is
+     (Unasked, As_Trained, Linear_Stretch, Yarn_Stretch);
+
+   --  @field Kind Which stretch, or Unasked to leave the file to decide.
+   --  @field Factor What the rotation is stretched by, as a person states
+   --    it: two is twice the context. Zero is unasked.
+   --  @field Base The angle the first pair turns by, which every other pair
+   --    is derived from. Zero is unasked.
+   --  @field Original The context the model was trained on, which Yarn
+   --    derives its ramp from. Zero is unasked.
+   --  @field Beta_Fast The fast end of the band Yarn mixes across. Zero is
+   --    unasked.
+   --  @field Beta_Slow The slow end of it. Zero is unasked.
+   --  @field Attenuation What Yarn attenuates the whole rotation by. Zero
+   --    is unasked.
+   type Rotary_Request is record
+      Kind : Rotary_Request_Kind := Unasked;
+
+      --  What the rotation is stretched by, as a person states it: two is
+      --  twice the context. Zero is unasked. The kernels hold its
+      --  reciprocal, which is what the file states and what the arithmetic
+      --  wants, and the conversion is done once here rather than in every
+      --  caller.
+      Factor : Model_Runner.Numerics.Wide_Real := 0.0;
+
+      --  The angle the first pair turns by, which every other pair is
+      --  derived from. Zero is unasked.
+      Base : Model_Runner.Numerics.Wide_Real := 0.0;
+
+      --  What Yarn derives its ramp from: the context the model was
+      --  trained on, the band it interpolates across, and the attenuation
+      --  it puts on the whole. Zero is unasked for each of them.
+      Original    : Natural := 0;
+      Beta_Fast   : Model_Runner.Numerics.Wide_Real := 0.0;
+      Beta_Slow   : Model_Runner.Numerics.Wide_Real := 0.0;
+      Attenuation : Model_Runner.Numerics.Wide_Real := 0.0;
+   end record;
+
+   --  Nothing asked, which is what a caller who names none of these means.
+   No_Rotary_Request : constant Rotary_Request := (others => <>);
+
 
    --  Load, validate and prepare a model from an open byte source.
    --
@@ -536,7 +606,10 @@ package Model_Runner.Llama is
    --    the one part of a load that divides; at one it is what it was, which
    --    took thirteen seconds for a gigabyte while seven cores watched.
    --  @param Status Success, or the first diagnostic that stopped preparation.
-
+   --  @param Stretch What the caller asks of the rotation, over what the
+   --    file states. A model stretched by request may then be opened at a
+   --    context longer than the one it was trained on; a model that was not
+   --    may not, which is the rule as it was.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -550,7 +623,8 @@ package Model_Runner.Llama is
       Repack   : Repack_Mode := No_Repack;
       Fit_Required : Boolean := True;
       Threads  : Positive := 1;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Stretch  : Rotary_Request := No_Rotary_Request);
 
    --  Merge a low-rank adapter into a prepared model's weights.
    --

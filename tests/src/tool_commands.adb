@@ -59,7 +59,7 @@ package body Tool_Commands is
      " --model --format --out --against --imatrix ";
    Opts_Perplex   : aliased constant String :=
      " --model --against --text --chunk --chunks --threads --backend"
-     & " --anyway --wait ";
+     & " --anyway --wait --rope-scaling --rope-scale ";
 
    Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
@@ -163,7 +163,8 @@ package body Tool_Commands is
 
    Takes_Perplexity : aliased constant String :=
      "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"
-     & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]";
+     & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
+     & " [--rope-scaling NAME] [--rope-scale N]";
 
    Held : constant array (1 .. 23) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,

@@ -8025,6 +8025,200 @@ package body Tests.Inference_Cases is
       end;
    end The_Exponential_Agrees;
 
+   ------------------------------------------------
+   -- A_Rotation_Stretches_When_A_Caller_Asks_It --
+   ------------------------------------------------
+
+   --  A model may be run past the context it was trained on, when the
+   --  caller stretches the rotation for it.
+   --
+   --  The engine has stretched rotations since it first read a file that
+   --  asked for one: `rope.scaling.type`, the factor, the band and the
+   --  attenuation are all read and all run. What it would not do is let the
+   --  person running the model ask for the same thing -- so a file whose
+   --  author wrote the keys reached past its trained length and a file
+   --  whose author did not could not be made to, which is a decision the
+   --  file was making on the reader's behalf.
+   --
+   --  What is asserted here is the rule and not the quality: that a request
+   --  reaches the configuration, that it opens a session the file's own
+   --  settings would refuse, that asking for the rotation as trained
+   --  refuses again, and that a model with no rotation to stretch says so.
+   --  Whether the answers past the trained length are worth having is a
+   --  measurement, and `### Past the context it was trained on` has it.
+   procedure A_Rotation_Stretches_When_A_Caller_Asks_It
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package K renames Model_Runner.Kernels;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+
+         --  Twice what the fixture declares, which is what a caller who
+         --  wants twice the context asks for.
+         Twice : constant Positive := 2 * Tiny_Model.Context;
+
+         Opened : E.Error_Info;
+      begin
+         Containers.Reader.Parse
+           (Under.Parsed, Under.Source, Status => Opened);
+         Assert (E.Is_Ok (Opened), "the fixture did not parse");
+
+         --  Unasked, the file decides and the rule is the one it always
+         --  was: a context past the trained length is refused.
+         declare
+            Plain  : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Ignored : E.Error_Info;
+         begin
+            L.Prepare
+              (Plain, Under.Parsed, Under.Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture would not prepare");
+            Assert (not L.Config (Plain).Stretched,
+                    "a model nobody stretched says it was stretched");
+
+            L.Open (Live, Plain, Context => Twice, Status => Status);
+            Assert (Status.Code = E.Arch_Context_Too_Large,
+                    "a context past the trained length was taken on an "
+                    & "unstretched model, with "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Close (Plain, Ignored);
+         end;
+
+         --  Asked for, the same context opens, and the configuration holds
+         --  the reciprocal of the factor -- which is what a file states and
+         --  what the arithmetic multiplies by.
+         declare
+            Wider  : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Ignored : E.Error_Info;
+         begin
+            L.Prepare
+              (Wider, Under.Parsed, Under.Source, Status => Status,
+               Stretch =>
+                 (Kind => L.Linear_Stretch, Factor => 2.0, others => <>));
+            Assert (E.Is_Ok (Status),
+                    "a stretched model would not prepare: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Assert (L.Config (Wider).Stretched,
+                    "a model stretched by request does not say so");
+            Assert (K."=" (L.Config (Wider).Scaling.Kind, K.Linear),
+                    "the linear stretch was asked for and not taken");
+            Assert (L.Config (Wider).Scaling.Frequency = 0.5,
+                    "a factor of two became a frequency of"
+                    & N.Wide_Real'Image (L.Config (Wider).Scaling.Frequency)
+                    & " where 0.5 is its reciprocal");
+            Assert (L.Config (Wider).Trained_Context = Tiny_Model.Context,
+                    "the trained context was not kept beside the stretch");
+
+            L.Open (Live, Wider, Context => Twice, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a stretched model refused a context it was stretched "
+                    & "for: " & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+            L.Close (Wider, Ignored);
+         end;
+
+         --  A caller who asks for the rotation as trained is asking for the
+         --  rule back, and gets it -- which is what distinguishes "say
+         --  nothing" from "say none".
+         declare
+            Kept   : L.Model;
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Ignored : E.Error_Info;
+         begin
+            L.Prepare
+              (Kept, Under.Parsed, Under.Source, Status => Status,
+               Stretch => (Kind => L.As_Trained, others => <>));
+            Assert (E.Is_Ok (Status), "the fixture would not prepare");
+            Assert (not L.Config (Kept).Stretched,
+                    "a rotation asked for as trained counts as stretched");
+
+            L.Open (Live, Kept, Context => Twice, Status => Status);
+            Assert (Status.Code = E.Arch_Context_Too_Large,
+                    "the rotation as trained was asked for and the trained "
+                    & "context was exceeded anyway");
+
+            L.Close (Kept, Ignored);
+         end;
+
+         --  And the numbers a caller does not name are the file's own. A
+         --  yarn stretch asked for with a factor alone keeps the band the
+         --  author tuned, and takes the trained context as what it was
+         --  trained on because the file says so.
+         declare
+            Yarned : L.Model;
+            Status : E.Error_Info;
+            Ignored : E.Error_Info;
+         begin
+            L.Prepare
+              (Yarned, Under.Parsed, Under.Source, Status => Status,
+               Stretch =>
+                 (Kind => L.Yarn_Stretch, Factor => 4.0, others => <>));
+            Assert (E.Is_Ok (Status), "a yarn stretch would not prepare");
+            Assert (K."=" (L.Config (Yarned).Scaling.Kind, K.Yarn),
+                    "yarn was asked for and not taken");
+            Assert (L.Config (Yarned).Scaling.Original = Tiny_Model.Context,
+                    "yarn asked for without a trained context took"
+                    & Natural'Image (L.Config (Yarned).Scaling.Original)
+                    & " where the file says" & Natural'Image
+                        (Tiny_Model.Context));
+            Assert (L.Config (Yarned).Scaling.Beta_Fast = 32.0,
+                    "a band nobody named was not left as it was");
+
+            L.Close (Yarned, Ignored);
+         end;
+      end;
+
+      B.Free (Image);
+
+      --  A model that turns nothing cannot be stretched, and says which
+      --  model rather than which key. Bert learns a row a position and
+      --  holds as many rows as it was trained with: there is no angle to
+      --  turn by a different amount.
+      declare
+         Learned : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Learned, Kind => Tiny_Model.Bert);
+
+         declare
+            Held  : aliased constant B.Byte_Array := Learned.all;
+            Under : Harness (Held'Access);
+            Ready : L.Model;
+            Status : E.Error_Info;
+            Ignored : E.Error_Info;
+         begin
+            Containers.Reader.Parse
+              (Under.Parsed, Under.Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the bert fixture did not parse");
+
+            L.Prepare
+              (Ready, Under.Parsed, Under.Source, Status => Status,
+               Stretch =>
+                 (Kind => L.Linear_Stretch, Factor => 2.0, others => <>));
+            Assert (Status.Code = E.Arch_Rotation_Not_Stretchable,
+                    "a model that turns nothing was stretched anyway, with "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Close (Ready, Ignored);
+         end;
+
+         B.Free (Learned);
+      end;
+   end A_Rotation_Stretches_When_A_Caller_Asks_It;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -8284,6 +8478,10 @@ package body Tests.Inference_Cases is
         (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
          "a layer that went over to the device as one sequence is charged "
          & "to fusing and not to attending");
+      Register_Routine
+        (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
+         "a caller may stretch the rotation the file did not, and only a "
+         & "model stretched for it reaches past its trained context");
    end Register_Tests;
 
 end Tests.Inference_Cases;

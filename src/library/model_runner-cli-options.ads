@@ -290,6 +290,25 @@ package Model_Runner.CLI.Options is
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
 
+      --  What the caller asks of the rotation, over what the file states.
+      --
+      --  A model is trained at one context length and its rotation is
+      --  written for that length; stretching it is what lets the model be
+      --  run past that length, and the engine has done it since it first
+      --  read a file that asked for it. These are the same numbers, asked
+      --  for here instead -- so a model whose author did not write them can
+      --  still be stretched by whoever runs it.
+      --
+      --  Empty and zero mean unasked, which is what every command that does
+      --  not name them means: the file decides, as it always did.
+      Rope_Scaling   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Rope_Scale     : Model_Runner.Numerics.Real := 0.0;
+      Rope_Base      : Model_Runner.Numerics.Real := 0.0;
+      Yarn_Original  : Natural := 0;
+      Yarn_Attention : Model_Runner.Numerics.Real := 0.0;
+      Yarn_Beta_Fast : Model_Runner.Numerics.Real := 0.0;
+      Yarn_Beta_Slow : Model_Runner.Numerics.Real := 0.0;
+
       --  The engine's cap, for the reason written above Generation's own
       --  default: it is what measured fastest on both backends, and on the
       --  device by nearly a factor of two.

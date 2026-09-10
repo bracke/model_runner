@@ -1251,7 +1251,10 @@ begin
             Backend => Backend_Of (Option ("--backend", "cpu")),
             Anyway  => Given ("--anyway"),
             Waiting => Number ("--wait", 0),
-            Result  => Result);
+            Result  => Result,
+            Stretch => Option ("--rope-scaling", ""),
+            Factor  =>
+              Model_Runner.Numerics.Wide_Real (Number ("--rope-scale", 0)));
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Perplexity_Run.Summary (Result));

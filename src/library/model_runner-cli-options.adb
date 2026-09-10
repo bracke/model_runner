@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 78) of Registry_Row :=
+   Registry : constant array (1 .. 85) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -85,6 +85,27 @@ package body Model_Runner.CLI.Options is
       (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
       (Text ("--context-size"),
        [Command_Run | Command_Embed => True, others => False], Text ("context_size")),
+      (Text ("--rope-scaling"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("rope_scaling")),
+      (Text ("--rope-scale"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("rope_scale")),
+      (Text ("--rope-freq-base"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("rope_freq_base")),
+      (Text ("--yarn-orig-context"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("yarn_orig_context")),
+      (Text ("--yarn-attn-factor"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("yarn_attn_factor")),
+      (Text ("--yarn-beta-fast"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("yarn_beta_fast")),
+      (Text ("--yarn-beta-slow"),
+       [Command_Run | Command_Embed => True, others => False],
+       Text ("yarn_beta_slow")),
       (Text ("--threads"),
        [Command_Run | Command_Embed | Command_Inspect => True,
         others => False],
@@ -780,6 +801,9 @@ package body Model_Runner.CLI.Options is
       type Option_Flag is
         (Flag_Prompt_File, Flag_System, Flag_System_File,
          Flag_Max_Tokens, Flag_Context, Flag_Batch, Flag_Temperature,
+         Flag_Rope_Scaling, Flag_Rope_Scale, Flag_Rope_Base,
+         Flag_Yarn_Original, Flag_Yarn_Attention,
+         Flag_Yarn_Beta_Fast, Flag_Yarn_Beta_Slow,
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template,
@@ -1464,6 +1488,82 @@ package body Model_Runner.CLI.Options is
                   elsif Name = "--context-size" then
                      Natural_Value (Flag_Context, 1, 1_048_576,
                                     Result.Context_Size, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--rope-scaling" then
+                     declare
+                        Chosen : Model_Runner.Text.Bounded;
+                     begin
+                        Bounded_Value (Flag_Rope_Scaling, Chosen, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        declare
+                           Named : constant String :=
+                             Model_Runner.Text.To_String (Chosen);
+                        begin
+                           if Named /= "none"
+                             and then Named /= "linear"
+                             and then Named /= "yarn"
+                           then
+                              Fail (E.CLI_Invalid_Option_Value, Name, Named);
+                              Good := False;
+                              return;
+                           end if;
+
+                           Result.Rope_Scaling := Chosen;
+                        end;
+                     end;
+
+                  elsif Name = "--rope-scale" then
+                     Real_Value (Flag_Rope_Scale, Result.Rope_Scale, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Result.Rope_Scale <= 0.0 then
+                        Fail (E.CLI_Invalid_Option_Value, Name, "");
+                        Good := False;
+                        return;
+                     end if;
+
+                  elsif Name = "--rope-freq-base" then
+                     Real_Value (Flag_Rope_Base, Result.Rope_Base, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Result.Rope_Base <= 0.0 then
+                        Fail (E.CLI_Invalid_Option_Value, Name, "");
+                        Good := False;
+                        return;
+                     end if;
+
+                  elsif Name = "--yarn-orig-context" then
+                     Natural_Value (Flag_Yarn_Original, 1, 1_048_576,
+                                    Result.Yarn_Original, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--yarn-attn-factor" then
+                     Real_Value
+                       (Flag_Yarn_Attention, Result.Yarn_Attention, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--yarn-beta-fast" then
+                     Real_Value
+                       (Flag_Yarn_Beta_Fast, Result.Yarn_Beta_Fast, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--yarn-beta-slow" then
+                     Real_Value
+                       (Flag_Yarn_Beta_Slow, Result.Yarn_Beta_Slow, Good);
                      if not Good then
                         return;
                      end if;
