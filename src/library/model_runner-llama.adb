@@ -3271,6 +3271,36 @@ package body Model_Runner.Llama is
 
             Item.Stacked := Total <= Item.Able.Memory_Bytes;
          end;
+
+         --  And the stacks put on the device now, where they fit, rather
+         --  than as tokens route to them. A mixture touches an expert
+         --  when a token chooses it, so a fresh process spent its first
+         --  hundred tokens uploading five gigabytes a few matrices at a
+         --  time and generated at half speed while it did; the same bytes
+         --  cross here, once, while the caller is still loading. A stack
+         --  the device will not hold is left for the tokens, as before.
+         --
+         --  Published as the finalizing it is part of: a stage of its own
+         --  would be one a trace of every other load could not show.
+         if Item.Stacked and then Item.Layers /= null then
+            P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));
+
+            for Index in Item.Layers.all'Range loop
+               declare
+                  Current : Layer renames Item.Layers.all (Index);
+                  Ignored : E.Error_Info;
+               begin
+                  if T.Is_Present (Current.Gate_Stack) then
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Gate_Stack, Ignored);
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Up_Stack, Ignored);
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Down_Stack, Ignored);
+                  end if;
+               end;
+            end loop;
+         end if;
       end if;
 
       P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));

@@ -3937,6 +3937,197 @@ package body Tests.Backend_Cases is
       Device.Close;
    end The_Backend_Routes_And_Gathers_As_It_Slices;
 
+   -----------------------------------------
+   -- The_Heads_Step_Says_What_Three_Steps_Say --
+   -----------------------------------------
+
+   --  The fused heads step against the three it stands for: a head
+   --  normalization (Add_Norm with Groups), a rotation, and a placement in
+   --  the cache. The same arithmetic in the same order and the same
+   --  precision, so the two roads are held to the bit -- for the queries,
+   --  which come back as a step's answer, and for the keys and values,
+   --  which are read back out of the cache.
+   procedure The_Heads_Step_Says_What_Three_Steps_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 4;
+      Head_Size : constant := 16;
+      Rotary    : constant := 16;
+      Positions : constant := 3;
+      Width     : constant := Heads * Head_Size;
+      Epsilon   : constant N.Real := 1.0E-5;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Gain     : N.Real_Array (0 .. Head_Size - 1);
+      Input    : N.Real_Array (0 .. Positions * Width - 1);
+      Angles   : N.Wide_Real_Array (0 .. Positions * Rotary - 1);
+
+      --  Room for every step of the longer road: the product, the
+      --  normalization, the rotation and the placement, each Width a
+      --  position; the fused road is the product and the heads step.
+      Long_Landing  : N.Real_Array (0 .. 4 * Positions * Width - 1) :=
+        [others => 0.0];
+      Short_Landing : N.Real_Array (0 .. 2 * Positions * Width - 1) :=
+        [others => 0.0];
+
+      Cache_Room : constant N.Element_Count := 2 * Positions * Width;
+      Long_Cache, Short_Cache : N.Real_Array (0 .. Cache_Room - 1);
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready or else not Products.Readies_Heads (Engine) then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Row in 0 .. Width - 1 loop
+         Identity (N.Element_Count (Row * Width + Row)) := 1.0;
+      end loop;
+      for Index in Gain'Range loop
+         Gain (Index) := 0.5 + N.Real (Index mod 5) / 5.0;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Angles'Range loop
+         Angles (Index) :=
+           (if Index mod 2 = 0
+            then N.Wide_Real (0.3 + N.Real (Index mod 7) / 10.0)
+            else N.Wide_Real (0.1 + N.Real (Index mod 5) / 10.0));
+      end loop;
+
+      Products.Reserve (Engine, Cache_Room, Ok);
+      Assert (Ok, "no cache could be reserved");
+
+      --  The long road: the product, each head normalized, turned, and
+      --  placed in the cache from element zero, Width apart; the same
+      --  again as a placement of the raw product at Positions * Width.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+         Products.Values_F32, Width, Width, Added, Kept => False);
+      Assert (Added, "the product was refused");
+      Products.Add_Norm
+        (Steps, Gain (Gain'First)'Address, Bytes_Of (Gain), 0, Width,
+         Epsilon, Added, From_Step => 1, Key => Gain (Gain'First)'Address,
+         Groups => Heads);
+      Assert (Added, "the head normalization was refused");
+      Products.Add_Rotation
+        (Steps, Angles (Angles'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Angles'Length) * 8, 0, Width, Heads,
+         Rotary, Products.Interleaved, Added, From_Step => 2);
+      Assert (Added, "the rotation was refused");
+      Products.Add_Place (Steps, Width, Width, 0, Added, From_Step => 3);
+      Assert (Added, "the placement was refused");
+
+      Products.Run
+        (Engine, Steps, Input, Positions, Long_Landing, Ok, Halted);
+      Assert (Ok, "the long road was refused");
+
+      Products.Get_Cache (Engine, 0, Long_Cache, Ok);
+      Assert (Ok, "the cache could not be read after the long road");
+
+      --  The short road: the product, and one heads step that normalizes,
+      --  turns and places, with the raw product placed beside it as the
+      --  values.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+         Products.Values_F32, Width, Width, Added, Kept => False);
+      Assert (Added, "the product was refused again");
+      Products.Add_Heads
+        (Steps, 1, Heads, Head_Size, Rotary, Products.Interleaved,
+         Angles (Angles'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Angles'Length) * 8, Epsilon, Added,
+         Weight => Gain (Gain'First)'Address,
+         Weight_Span => Bytes_Of (Gain),
+         Key => Gain (Gain'First)'Address,
+         Into_Cache => True, At_First => 0, Stride => Width,
+         V_Step => 1, V_At_First => Positions * Width, V_Stride => Width,
+         Kept => False);
+      Assert (Added, "the heads step was refused");
+
+      Products.Run
+        (Engine, Steps, Input, Positions, Short_Landing, Ok, Halted);
+      Assert (Ok, "the short road was refused");
+
+      Products.Get_Cache (Engine, 0, Short_Cache, Ok);
+      Assert (Ok, "the cache could not be read after the short road");
+
+      --  The keys, to the bit, and the values as the raw product.
+      for Index in 0 .. N.Element_Count (Positions * Width) - 1 loop
+         Assert (Short_Cache (Index) = Long_Cache (Index),
+                 "the heads step placed a key" & N.Real'Image (Short_Cache (Index))
+                 & " where the three steps placed"
+                 & N.Real'Image (Long_Cache (Index)) & " at"
+                 & N.Element_Count'Image (Index));
+         Assert (Short_Cache (N.Element_Count (Positions * Width) + Index)
+                   = Input (Index),
+                 "the heads step placed a value that is not the product at"
+                 & N.Element_Count'Image (Index));
+      end loop;
+
+      --  And the queries: the same step writing to its own room instead.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+         Products.Values_F32, Width, Width, Added, Kept => False);
+      Assert (Added, "the product was refused a third time");
+      Products.Add_Heads
+        (Steps, 1, Heads, Head_Size, Rotary, Products.Interleaved,
+         Angles (Angles'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Angles'Length) * 8, Epsilon, Added,
+         Weight => Gain (Gain'First)'Address,
+         Weight_Span => Bytes_Of (Gain),
+         Key => Gain (Gain'First)'Address);
+      Assert (Added, "the heads step for the queries was refused");
+
+      Products.Run
+        (Engine, Steps, Input, Positions, Short_Landing, Ok, Halted);
+      Assert (Ok, "the queries' road was refused");
+
+      for Index in 0 .. N.Element_Count (Positions * Width) - 1 loop
+         Assert (Short_Landing (N.Element_Count (Positions * Width) + Index)
+                   = Long_Cache (Index),
+                 "the heads step's queries differ from the three steps' at"
+                 & N.Element_Count'Image (Index));
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end The_Heads_Step_Says_What_Three_Steps_Say;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -4339,6 +4530,11 @@ package body Tests.Backend_Cases is
         (T, A_Gathered_Mixture_Says_What_The_Host_Says'Access,
          "a mixture's second half as one sequence -- routed, gathered out "
          & "of its stacks and summed by shares -- says what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Heads_Step_Says_What_Three_Steps_Say'Access,
+         "the fused heads step -- a head normalization, a rotation and a "
+         & "placement as one dispatch -- says what the three steps say, to "
+         & "the bit");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Backend_Routes_And_Gathers_As_It_Slices'Access,
          "the backend's routing, gathered experts and expert over a batch "

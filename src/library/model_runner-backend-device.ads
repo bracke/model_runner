@@ -937,6 +937,23 @@ package Model_Runner.Backend.Device is
       Status      : out Model_Runner.Errors.Error_Info;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  Put a matrix on the device and keep it, computing nothing.
+   --
+   --  What a product does before it dispatches, without the dispatch, so
+   --  that a load can put a model's matrices where its tokens will read
+   --  them before anyone is waiting: a mixture's experts are touched by
+   --  the tokens that route to them, and a fresh process generated its
+   --  first hundred tokens at half speed while it uploaded them a few at
+   --  a time.
+   --
+   --  @param Weight The matrix, whole.
+   --  @param Status Success, or why the device would not hold it -- which
+   --    is not a fault of the model: a product will upload it as it is
+   --    wanted, as it always did.
+   procedure Hold
+     (Weight : Model_Runner.Tensors.View;
+      Status : out Model_Runner.Errors.Error_Info);
+
 private
 
    subtype Real_Array is Model_Runner.Numerics.Real_Array;

@@ -1642,6 +1642,68 @@ package body Model_Runner.Backend.Device is
       At_Values := Wanted;
       Step_Room (Value.Rows);
 
+      --  The heads made ready in two dispatches where the device has the
+      --  kernel: the queries normalized and turned into their own room,
+      --  the keys normalized and turned into the cache with the values
+      --  placed beside them. Six steps otherwise -- and six still where
+      --  the caller wants the keys and values back (Mirror), because the
+      --  fused step leaves them only in the cache.
+      if Products.Readies_Heads (Engine)
+        and then not Mirror
+        and then Table_At = 0
+        and then Head_Size <= 256
+        and then Natural (Key.Rows) = Natural (Value.Rows)
+        and then Natural (Key.Rows) mod Head_Size = 0
+      then
+         declare
+            At_Turn : constant System.Address := Turns (Turns'First)'Address;
+
+            Span : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
+
+            Pairing : constant Products.Rotary_Pairing :=
+              (if Split then Products.Split else Products.Interleaved);
+
+            function Weight_Of (Norm : T.Real_Array_Access)
+              return System.Address
+            is (if Norm = null then System.Null_Address
+                else Norm.all (Norm.all'First)'Address);
+
+            function Span_Of (Norm : T.Real_Array_Access)
+              return Model_Runner.Bytes.Byte_Count
+            is (if Norm = null then 0
+                else Model_Runner.Bytes.Byte_Count (Norm.all'Length) * 4);
+         begin
+            Products.Add_Heads
+              (Steps, Step_Q, Natural (Query.Rows) / Head_Size, Head_Size,
+               Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+               Weight => Weight_Of (Query_Norm),
+               Weight_Span => Span_Of (Query_Norm),
+               Key => Weight_Of (Query_Norm), Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Q_Turned := Products.Length (Steps);
+            Step_Room (Query.Rows);
+
+            Products.Add_Heads
+              (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
+               Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+               Weight => Weight_Of (Key_Norm),
+               Weight_Span => Span_Of (Key_Norm),
+               Key => Weight_Of (Key_Norm),
+               Into_Cache => True, At_First => At_Key, Stride => KV_Width,
+               V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
+               Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Key.Rows);
+         end;
+
+         goto Attend;
+      end if;
+
       --  The head normalizations, where the architecture has them: each
       --  head of the queries and of the keys over its own mean square, by
       --  a weight one head wide, before the turning reads them.
@@ -1731,6 +1793,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
       Step_Room (Value.Rows);
+
+      <<Attend>>
 
       --  Attention, against the turned queries.
       Products.Add_Attention
@@ -2375,6 +2439,50 @@ package body Model_Runner.Backend.Device is
         Landing.all (Landing.all'First + 3 * Arms
                      .. Landing.all'First + 3 * Arms + Outs - 1);
    end Dispatch_Expert;
+
+   ----------
+   -- Hold --
+   ----------
+
+   procedure Hold
+     (Weight : T.View;
+      Status : out E.Error_Info)
+   is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+      Ok      : Boolean;
+   begin
+      Status := E.Success;
+
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Packing_Of (Weight.Format, Packing, Known);
+      if not Known or else Weight.Base = System.Null_Address then
+         Status := E.Make (E.Backend_Capability_Missing);
+         return;
+      end if;
+
+      declare
+         Storage : Model_Runner.Bytes.Byte_Array (1 .. Weight.Span)
+           with Import, Address => Weight.Base;
+      begin
+         Products.Hold
+           (Engine, Storage, Weight.Offset, Packing,
+            Natural (Weight.Rows), Natural (Weight.Columns),
+            Key => Storage (Storage'First + Weight.Offset)'Address,
+            Ok => Ok);
+      end;
+
+      if not Ok then
+         Declined
+           (Status,
+            Interfaces.Unsigned_64 (Weight.Rows)
+            * Interfaces.Unsigned_64 (T.Row_Bytes (Weight)));
+      end if;
+   end Hold;
 
    --------------------
    -- Dispatch_Route --

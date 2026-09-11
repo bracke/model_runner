@@ -231,6 +231,42 @@ package Model_Runner.Platform.Device.Products is
    --  @return True when it is ready to compute.
    function Is_Ready (Item : Engine) return Boolean;
 
+   --  Whether this engine may dispatch the heads step, which a device
+   --  that refused its pipeline cannot: the caller records the three steps
+   --  it stands for instead.
+   --
+   --  @param Item Engine to ask.
+   --  @return True when Add_Heads will be run rather than refused.
+   function Readies_Heads (Item : Engine) return Boolean;
+
+   --  Put one matrix on the device and keep it, computing nothing.
+   --
+   --  What a product does before it dispatches, without the dispatch: the
+   --  matrix is uploaded if it is not there and kept under its key, so a
+   --  product that names it later finds it. A mixture's experts are
+   --  touched by the tokens that route to them, so a fresh process ran
+   --  its first hundred tokens at half speed while it uploaded five
+   --  gigabytes a few matrices at a time; holding every stack at load is
+   --  the same bytes crossing once, before anyone is waiting.
+   --
+   --  @param Item Ready engine.
+   --  @param Weights The storage the matrix lives in, as for Multiply.
+   --  @param At_Byte Where the matrix begins in that storage.
+   --  @param Packing How those bytes are packed.
+   --  @param Rows Number of rows.
+   --  @param Columns Number of columns.
+   --  @param Key Where these weights live; what a product will name.
+   --  @param Ok True when the device holds it now.
+   procedure Hold
+     (Item    : in out Engine;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Key     : System.Address;
+      Ok      : out Boolean);
+
    --  One matrix against a batch of vectors.
    --
    --  Weights are read row by row, which is the layout every weight in this
@@ -668,6 +704,69 @@ package Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       From_Step : Natural := 0;
       Kept      : Boolean := True);
+
+   --  Name a heads step for a sequence to perform.
+   --
+   --  The queries or the keys of a layer, made ready between their
+   --  projection and the attention in one dispatch instead of three or
+   --  six: each head normalized over its own mean square and by a weight
+   --  one head wide where the architecture states one, turned by the
+   --  caller's table as Add_Rotation turns, and -- for the keys -- placed
+   --  in the cache as Add_Place places, the values placed beside them as
+   --  they are. A workgroup to a head of a position, and the arithmetic
+   --  is the arithmetic of the three steps it stands for, in the same
+   --  order and the same precision.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param From_Step The projection to read: the queries, or the keys.
+   --  @param Heads How many heads that projection holds.
+   --  @param Head_Size How wide a head is; at most 256.
+   --  @param Rotary How many components of a head turn.
+   --  @param Pairing Which two components make a pair.
+   --  @param Table First byte of the angle table, as Add_Rotation takes it.
+   --  @param Table_Span Bytes that table holds.
+   --  @param Epsilon The floor under the mean square, where normalized.
+   --  @param Added False when the sequence is full or the shape does not
+   --    hold together.
+   --  @param Weight First byte of the storage the head weight lies in, or
+   --    null for heads that are not normalized.
+   --  @param Weight_Span Bytes that storage holds.
+   --  @param Weight_At Where in that storage the weight begins.
+   --  @param Key Identifies the weight so the device may keep it.
+   --  @param Into_Cache Whether the answer goes into the cache rather
+   --    than the step's own room -- the keys -- at At_First, Stride
+   --    apart, in both precisions.
+   --  @param At_First Where the first position's keys go in the cache.
+   --  @param Stride How far apart positions' keys are in the cache.
+   --  @param V_Step The values' projection, placed beside the keys, or
+   --    zero for none.
+   --  @param V_At_First Where the first position's values go.
+   --  @param V_Stride How far apart positions' values are.
+   --  @param Kept False when nothing on the host reads the answer, which
+   --    for keys placed in the cache is always.
+   procedure Add_Heads
+     (Steps       : in out Sequence;
+      From_Step   : Positive;
+      Heads       : Positive;
+      Head_Size   : Positive;
+      Rotary      : Natural;
+      Pairing     : Rotary_Pairing;
+      Table       : System.Address;
+      Table_Span  : Model_Runner.Bytes.Byte_Count;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Added       : out Boolean;
+      Weight      : System.Address := System.Null_Address;
+      Weight_Span : Model_Runner.Bytes.Byte_Count := 0;
+      Weight_At   : Model_Runner.Bytes.Byte_Count := 0;
+      Key         : System.Address := System.Null_Address;
+      Into_Cache  : Boolean := False;
+      At_First    : Natural := 0;
+      Stride      : Natural := 0;
+      V_Step      : Natural := 0;
+      V_At_First  : Natural := 0;
+      V_Stride    : Natural := 0;
+      Kept        : Boolean := True);
+
 
    --  Name a write into the device's cache for a sequence to perform.
    --
@@ -1421,6 +1520,12 @@ private
       Router     : System.Address := System.Null_Address;
       Mixer      : System.Address := System.Null_Address;
 
+      --  The heads of a layer's queries or keys made ready in one step --
+      --  normalized where the architecture says, turned, and the keys and
+      --  values placed in the cache -- which is six dispatches a layer as
+      --  two.
+      Header     : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -1449,6 +1554,7 @@ private
       Place_Line  : System.Address := System.Null_Address;
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
+      Heads_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.
@@ -1823,6 +1929,20 @@ private
       --  the share the routing step it names in Reads_Two wrote, sums
       --  them best first, and adds the residual the step in Joined made.
       Mixes   : Boolean := False;
+
+      --  A heads step rather than a product, as Add_Heads describes it:
+      --  the queries or keys in Reads, Heads of Head_Size, each head
+      --  normalized by the weight the Base, Span, At_Byte and Key above
+      --  name where there is one, turned by Turns components with the
+      --  table at Turn_Table, and written to the step's own room or -- into
+      --  the cache -- at At_First, Stride apart, with the values in
+      --  Reads_Two placed beside them.
+      Readies    : Boolean := False;
+      Turn_Table : System.Address := System.Null_Address;
+      Into_Cache : Boolean := False;
+      V_Rows     : Natural := 0;
+      V_At_First : Natural := 0;
+      V_Stride   : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

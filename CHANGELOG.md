@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The heads of a layer are made ready in one step on the device.**
+  `heads.comp` normalizes each query or key head where the architecture
+  states it, turns it, and places the keys and values in the cache: six
+  dispatches a layer as two, the same bits, held to the three steps it
+  stands for by a test. Worth half a per cent, which refutes the section
+  before's price of a dispatch -- about 1.5 microseconds, not 12.5.
+
+- **A mixture's expert stacks are put on the device at load** where the
+  model fits, through `Products.Hold`, rather than as tokens route to them:
+  the first token of a fresh process generates at 22 tokens a second where
+  it generated at 8 while the experts were uploaded a few at a time.
+
 - **A mixture layer is taken whole on the device.** Where the whole model
   fits the device's budget, a mixture's expert matrices go over as the three
   stacks the file stores and are kept once; a token's chosen experts are

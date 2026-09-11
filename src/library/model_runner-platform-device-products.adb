@@ -719,6 +719,31 @@ package body Model_Runner.Platform.Device.Products is
    type Member_Words is array (0 .. Max_Gather - 1) of C.unsigned
      with Convention => C;
 
+   --  What heads.comp is told, in its order.
+   type Heads_Constants is record
+      Heads      : C.unsigned := 0;
+      Head_Size  : C.unsigned := 0;
+      Rotary     : C.unsigned := 0;
+      Pairing    : C.unsigned := 0;
+      Count      : C.unsigned := 0;
+      Normed     : C.unsigned := 0;
+      Epsilon    : C.unsigned := 0;
+      Base       : C.unsigned := 0;
+      From       : C.unsigned := 0;
+      Into       : C.unsigned := 0;
+      Stride     : C.unsigned := 0;
+      Turn_Base  : C.unsigned := 0;
+      Half_Base  : C.unsigned := 0;
+      Halves     : C.unsigned := 0;
+      V_From     : C.unsigned := 0;
+      V_Width    : C.unsigned := 0;
+      V_Into     : C.unsigned := 0;
+      V_Stride   : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   Heads_Bytes : constant := 18 * 4;
+
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
       Columns : C.unsigned := 0;
@@ -1529,6 +1554,22 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         --  And the heads step, which stands for three of the others: a
+         --  device that refuses it dispatches those three.
+         declare
+            Readied : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Heads;
+         begin
+            Request.Size := Interfaces.C.size_t (Readied'Length * 4);
+            Request.Code := Readied'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Header := Made;
+            end if;
+         end;
+
          --  And the rotation, which is the same story: a device that
          --  refuses it turns on the host, as every device did before.
          declare
@@ -1967,6 +2008,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Route_Line := Made;
+            end if;
+         end if;
+
+         if Item.Header /= Null_Handle then
+            Request.Stage.Module := Item.Header;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Heads_Line := Made;
             end if;
          end if;
 
@@ -2627,11 +2678,13 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
       Give_Back (Item.Route_Line, "vkDestroyPipeline");
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
+      Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
       Give_Back (Item.Router, "vkDestroyShaderModule");
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
+      Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
@@ -2655,6 +2708,9 @@ package body Model_Runner.Platform.Device.Products is
        and then not Item.Stalled);
 
    function Is_Stalled (Item : Engine) return Boolean is (Item.Stalled);
+
+   function Readies_Heads (Item : Engine) return Boolean
+   is (Item.Heads_Line /= Null_Handle);
 
    function Waited (Item : Engine) return Natural is (Item.Waited);
 
@@ -4928,6 +4984,60 @@ package body Model_Runner.Platform.Device.Products is
    -- Open_Sequence --
    -------------------
 
+   ----------
+   -- Hold --
+   ----------
+
+   procedure Hold
+     (Item    : in out Engine;
+      Weights : Model_Runner.Bytes.Byte_Array;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Key     : System.Address;
+      Ok      : out Boolean)
+   is
+      Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
+
+      Buffer, Memory : Address := Null_Handle;
+      Base     : Interfaces.Unsigned_64 := 0;
+      Borrowed : Boolean := False;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Rows = 0 or else Wide = 0
+        or else Key = System.Null_Address
+        or else Interfaces.Unsigned_64 (Weights'Length)
+                < Interfaces.Unsigned_64 (At_Byte)
+                  + Interfaces.Unsigned_64 (Rows) * Wide
+      then
+         return;
+      end if;
+
+      --  Nothing in flight may be reading a matrix this evicts, so the
+      --  device is settled first; a load is the only caller and nothing
+      --  is in flight then.
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      Acquire_Weights
+        (Item, Weights, At_Byte, Packing, Rows, Columns,
+         Interfaces.Unsigned_64 (Rows) * Wide,
+         Buffer, Memory, Base, Borrowed, Ok, Key);
+
+      --  A matrix the budget would not keep is not held: it was uploaded
+      --  and is given straight back, and a product will do the same when
+      --  it is asked for.
+      if Borrowed then
+         Give_Back_Buffer (Item, Buffer, Memory);
+         Ok := False;
+      end if;
+   end Hold;
+
    procedure Open_Sequence (Steps : out Sequence) is
    begin
       Steps.Held := 0;
@@ -5374,6 +5484,77 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Rotation;
 
+   ---------------
+   -- Add_Heads --
+   ---------------
+
+   procedure Add_Heads
+     (Steps       : in out Sequence;
+      From_Step   : Positive;
+      Heads       : Positive;
+      Head_Size   : Positive;
+      Rotary      : Natural;
+      Pairing     : Rotary_Pairing;
+      Table       : System.Address;
+      Table_Span  : Model_Runner.Bytes.Byte_Count;
+      Epsilon     : Model_Runner.Numerics.Real;
+      Added       : out Boolean;
+      Weight      : System.Address := System.Null_Address;
+      Weight_Span : Model_Runner.Bytes.Byte_Count := 0;
+      Weight_At   : Model_Runner.Bytes.Byte_Count := 0;
+      Key         : System.Address := System.Null_Address;
+      Into_Cache  : Boolean := False;
+      At_First    : Natural := 0;
+      Stride      : Natural := 0;
+      V_Step      : Natural := 0;
+      V_At_First  : Natural := 0;
+      V_Stride    : Natural := 0;
+      Kept        : Boolean := True)
+   is
+      Width : constant Natural := Heads * Head_Size;
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else From_Step > Steps.Held
+        or else Steps.Items (From_Step).Rows /= Width
+        or else Head_Size > 256
+        or else Rotary = 0
+        or else Rotary mod 2 /= 0
+        or else Rotary > Head_Size
+        or else Table = System.Null_Address
+        or else (Into_Cache and then Stride < Width)
+        or else (V_Step /= 0
+                 and then (not Into_Cache
+                           or else V_Step > Steps.Held
+                           or else V_Stride < Steps.Items (V_Step).Rows))
+        or else (not Into_Cache and then V_Step /= 0)
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Weight, Span => Weight_Span, At_Byte => Weight_At,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => Width, Key => Key,
+         Chained => True, Reads => From_Step, Reads_Two => V_Step,
+         Kept => Kept, Readies => True,
+         Heads => Heads, Head_Size => Head_Size,
+         Turns => Rotary, Pairs => Pairing,
+         Turn_Table => Table, Epsilon => Epsilon,
+         Into_Cache => Into_Cache, At_First => At_First, Stride => Stride,
+         V_Rows => (if V_Step = 0 then 0 else Steps.Items (V_Step).Rows),
+         V_At_First => V_At_First, V_Stride => V_Stride,
+         Attends => False, Blends => False, Norms => False,
+         Rotates => False, Places => False,
+         others => <>);
+
+      --  The table's span is what the rotation step checks too: two wide
+      --  numbers a pair a position, and the caller has said how many.
+      Added := Table_Span > 0;
+   end Add_Heads;
+
    procedure Add_Norm
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -5762,6 +5943,37 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                Places (Index).Weight := 0;
+            elsif This.Readies then
+               --  A heads step reads a projection and, placing, the
+               --  values' projection; it carries a weight one head wide or
+               --  none, kept like a normalization's; and it needs the
+               --  cache where it places, and the pipeline at all.
+               if This.Rows = 0
+                 or else This.Reads not in 1 .. Index - 1
+                 or else Steps.Items (This.Reads).Rows /= This.Rows
+                 or else (This.Reads_Two /= 0
+                          and then This.Reads_Two not in 1 .. Index - 1)
+                 or else (This.Into_Cache
+                          and then Item.Cache_Buffer = Null_Handle)
+                 or else Item.Heads_Line = Null_Handle
+                 or else This.Turn_Table = System.Null_Address
+                 or else (This.Base /= System.Null_Address
+                          and then Interfaces.Unsigned_64 (This.Span)
+                                   < Interfaces.Unsigned_64 (This.At_Byte)
+                                     + Interfaces.Unsigned_64
+                                         (This.Head_Size) * 4)
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight :=
+                 (if This.Base = System.Null_Address then 0
+                  else Interfaces.Unsigned_64 (This.Head_Size) * 4);
+
+               Turn_Room := Interfaces.Unsigned_64'Max
+                 (Turn_Room,
+                  Interfaces.Unsigned_64 (This.Turns / 2)
+                  * Interfaces.Unsigned_64 (Count) * 16);
             elsif This.Routes then
                --  A routing step reads the router's scores in the step it
                --  names and carries a bias or nothing: with a bias it is
@@ -5949,6 +6161,7 @@ package body Model_Runner.Platform.Device.Products is
             if This.Blends or else This.Attends or else This.Places
               or else This.Rotates or else This.Mixes
               or else (This.Routes and then This.Base = System.Null_Address)
+              or else (This.Readies and then This.Base = System.Null_Address)
             then
                goto Next_Step;
             end if;
@@ -5961,11 +6174,14 @@ package body Model_Runner.Platform.Device.Products is
             --  driver rather than anywhere this program can see.
             Acquire_Weights
               (Item, Held, This.At_Byte, This.Packing,
-               (if This.Norms or else This.Rotates or else This.Routes then 1
+               (if This.Norms or else This.Rotates or else This.Routes
+                  or else This.Readies
+                then 1
                 elsif This.Gathers > 0 then This.Stack
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
                 elsif This.Routes then This.Columns
+                elsif This.Readies then This.Head_Size
                 elsif This.Rotates
                 then This.Turns / 2 * Natural (Count) * 4
                 else This.Columns),
@@ -6046,7 +6262,8 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          for Index in 1 .. Steps.Held loop
-            if Steps.Items (Index).Rotates then
+            if Steps.Items (Index).Rotates or else Steps.Items (Index).Readies
+            then
                declare
                   Span : constant Model_Runner.Bytes.Byte_Count :=
                     Model_Runner.Bytes.Byte_Count
@@ -6054,7 +6271,11 @@ package body Model_Runner.Platform.Device.Products is
                        * Interfaces.Unsigned_64 (Count) * 16);
 
                   From : Model_Runner.Bytes.Byte_Array (1 .. Span)
-                    with Import, Address => Steps.Items (Index).Base;
+                    with Import,
+                         Address =>
+                           (if Steps.Items (Index).Readies
+                            then Steps.Items (Index).Turn_Table
+                            else Steps.Items (Index).Base);
 
                   Into : Model_Runner.Bytes.Byte_Array (1 .. Span)
                     with Import, Address => Item.Turn_At;
@@ -6215,6 +6436,42 @@ package body Model_Runner.Platform.Device.Products is
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Readies then
+               --  The head weight or nothing, the whole result buffer --
+               --  the projections it reads are named by offset in the
+               --  push block -- its own room or the cache out, and the
+               --  angle table where a product binds its residual.
+               Told (3) :=
+                 (if Steps.Items (Index).Into_Cache
+                  then (Buffer => Item.Cache_Buffer, Offset => 0,
+                        Extent => Item.Cache_Bytes)
+                  else (Buffer => Item.Result_Buffer,
+                        Offset => Places (Index).At_Byte,
+                        Extent => Places (Index).Bytes));
+               Told (1) :=
+                 (if Steps.Items (Index).Base = System.Null_Address
+                  then Told (3)
+                  else (Buffer => Places (Index).Buffer, Offset => 0,
+                        Extent =>
+                          Places (Index).Base + Places (Index).Weight));
+               Told (2) :=
+                 (Buffer => Item.Result_Buffer, Offset => 0,
+                  Extent => Result_Bytes);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) :=
+                 (Buffer => Item.Turn_Buffer, Offset => 0,
+                  Extent => Item.Turn_Bytes);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -6709,7 +6966,9 @@ package body Model_Runner.Platform.Device.Products is
                      Fenced := Index - 1;
                   end if;
 
-                  if This.Places then
+                  if This.Places
+                    or else (This.Readies and then This.Into_Cache)
+                  then
                      Cached := Index;
                   end if;
                end;
@@ -6883,6 +7142,67 @@ package body Model_Runner.Platform.Device.Products is
                      --  does: the pairs of one position are what its lanes
                      --  divide between them.
                      Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Readies then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Heads_Line);
+
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     Shape : aliased Heads_Constants :=
+                       (Heads     => C.unsigned (This.Heads),
+                        Head_Size => C.unsigned (This.Head_Size),
+                        Rotary    => C.unsigned (This.Turns),
+                        Pairing   => (if This.Pairs = Split then 1 else 0),
+                        Count     => C.unsigned (Count),
+                        Normed    =>
+                          (if This.Base /= System.Null_Address then 1
+                           else 0),
+                        Epsilon   => Bits (This.Epsilon),
+                        Base      => C.unsigned (Places (Index).Base / 4),
+                        From      =>
+                          C.unsigned (Places (This.Reads).At_Byte / 4),
+                        Into      =>
+                          (if This.Into_Cache then C.unsigned (This.At_First)
+                           else 0),
+                        Stride    =>
+                          (if This.Into_Cache then C.unsigned (This.Stride)
+                           else C.unsigned (This.Rows)),
+                        Turn_Base => 0,
+                        Half_Base =>
+                          (if This.Into_Cache
+                           then C.unsigned (Item.Cache_Elements * 2)
+                           else 0),
+                        Halves    => (if This.Into_Cache then 1 else 0),
+                        V_From    =>
+                          (if This.Reads_Two /= 0
+                           then C.unsigned
+                                  (Places (This.Reads_Two).At_Byte / 4)
+                           else 0),
+                        V_Width   => C.unsigned (This.V_Rows),
+                        V_Into    => C.unsigned (This.V_At_First),
+                        V_Stride  => C.unsigned (This.V_Stride));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Heads_Bytes, Shape'Address);
+
+                     --  A workgroup to a head of a position, and one more
+                     --  a position for the values placed with the keys.
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned (Count * This.Heads
+                                    + (if This.V_Rows > 0 then Count
+                                       else 0)),
+                        1, 1);
                   end;
 
                   Bind_Pipeline

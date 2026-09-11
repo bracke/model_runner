@@ -1,0 +1,183 @@
+#version 450
+
+//  The heads of a layer's queries or keys made ready in one step, and the
+//  keys and values put in the cache on the way.
+//
+//  Between the three projections and the attention a layer used to
+//  dispatch six times: a normalization of every query head and of every
+//  key head where the architecture states them, a rotation of each, the
+//  keys into the cache and the values into the cache. Each is a workgroup
+//  or a few over a few thousand values, and what each costs is the
+//  dispatch and not the work. This does the same arithmetic in two: one
+//  dispatch over the query heads, and one over the key heads that also
+//  places the keys and the values.
+//
+//  A workgroup to a head of a position. Its lanes read the head into
+//  shared memory, sum its squares and fold the sum the way norm.comp
+//  does, scale by the root of the mean and by the weight where the head is
+//  normalized, and then turn the pairs by the angles rotate.comp turns
+//  them by, in the same precision -- so a head comes out as it came out of
+//  those two kernels, one after the other. Where the answer goes is the
+//  push block's to say: a query head to the step's own room, a key head to
+//  its position in the cache, in both precisions, as place.comp writes it.
+//  The workgroups past the last key head are the values, copied to the
+//  cache as they are.
+
+#extension GL_ARB_gpu_shader_fp64 : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+const uint LANES = 256u;
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float  g[]; };
+layout(std430, binding = 1) readonly  buffer Source { float  x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float  y[]; };
+layout(std430, binding = 2) writeonly buffer Halves { float16_t yh[]; };
+layout(std430, binding = 4) readonly  buffer Table  { double turn[]; };
+
+layout(push_constant) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint rotary;
+    uint pairing;
+    uint count;
+
+    //  Whether each head is normalized before it turns, the floor under
+    //  the mean square as bits, and where the weight begins in elements.
+    uint normed;
+    uint epsilon;
+    uint base;
+
+    //  Where the stream begins in the source, in elements; a position is
+    //  heads * head_size after the one before.
+    uint from;
+
+    //  Where a position's answer begins, and how far apart positions are
+    //  put: the step's own room from nought and heads * head_size apart
+    //  for the queries, the cache at the first key's place and the cache
+    //  width apart for the keys.
+    uint into;
+    uint stride;
+
+    //  Where the angle table begins, in doubles.
+    uint turn_base;
+
+    //  Where the half-precision copy of the cache begins, in halves, and
+    //  whether one is written at all -- the queries have none.
+    uint half_base;
+    uint halves;
+
+    //  The values, placed as they are: where they begin in the source,
+    //  their width, where the first goes in the cache and how far apart.
+    //  Zero width for a dispatch over the queries, which places none.
+    uint v_from;
+    uint v_width;
+    uint v_into;
+    uint v_stride;
+} shape;
+
+shared float row[LANES];
+shared float partial[LANES];
+
+void main() {
+    uint group = gl_WorkGroupID.x;
+    uint lane  = gl_LocalInvocationID.x;
+
+    uint streams = shape.count * shape.heads;
+
+    if (group >= streams) {
+        //  A value's position, copied whole.
+        uint pos = group - streams;
+
+        if (shape.v_width == 0u || pos >= shape.count) {
+            return;
+        }
+
+        uint from = shape.v_from + pos * shape.v_width;
+        uint into = shape.v_into + pos * shape.v_stride;
+
+        for (uint c = lane; c < shape.v_width; c += LANES) {
+            float value = x[from + c];
+            y[into + c] = value;
+            yh[shape.half_base + into + c] = float16_t (value);
+        }
+        return;
+    }
+
+    uint pos  = group / shape.heads;
+    uint head = group - pos * shape.heads;
+
+    uint from = shape.from + pos * shape.heads * shape.head_size
+                + head * shape.head_size;
+    uint into = shape.into + pos * shape.stride + head * shape.head_size;
+
+    //  The head, into shared memory, and normalized there where it is.
+    if (lane < shape.head_size) {
+        row[lane] = x[from + lane];
+    }
+
+    if (shape.normed != 0u) {
+        float v = lane < shape.head_size ? row[lane] : 0.0;
+        partial[lane] = v * v;
+
+        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+            barrier();
+            if (lane < reach) {
+                partial[lane] += partial[lane + reach];
+            }
+        }
+        barrier();
+
+        float gain =
+          sqrt (partial[0] / float (shape.head_size)
+                + uintBitsToFloat (shape.epsilon));
+
+        if (gain == 0.0 || isinf (gain) || isnan (gain)) {
+            gain = 1.0;
+        } else {
+            gain = 1.0 / gain;
+        }
+
+        if (lane < shape.head_size) {
+            row[lane] = row[lane] * gain * g[shape.base + lane];
+        }
+    }
+
+    barrier();
+
+    //  The turning, a pair to a lane, in the precision rotate.comp turns
+    //  in; and the components past the turned ones as they are.
+    uint pairs = shape.rotary / 2u;
+
+    for (uint pair = lane; pair < pairs; pair += LANES) {
+        uint even = shape.pairing == 0u ? 2u * pair : pair;
+        uint odd  = shape.pairing == 0u ? even + 1u : even + pairs;
+
+        uint entry = shape.turn_base + (pos * pairs + pair) * 2u;
+        double c = turn[entry];
+        double s = turn[entry + 1u];
+
+        double first  = double (row[even]);
+        double second = double (row[odd]);
+
+        float turned_even = float (first * c - second * s);
+        float turned_odd  = float (first * s + second * c);
+
+        y[into + even] = turned_even;
+        y[into + odd]  = turned_odd;
+
+        if (shape.halves != 0u) {
+            yh[shape.half_base + into + even] = float16_t (turned_even);
+            yh[shape.half_base + into + odd]  = float16_t (turned_odd);
+        }
+    }
+
+    for (uint c = shape.rotary + lane; c < shape.head_size; c += LANES) {
+        y[into + c] = row[c];
+
+        if (shape.halves != 0u) {
+            yh[shape.half_base + into + c] = float16_t (row[c]);
+        }
+    }
+}

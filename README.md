@@ -19053,6 +19053,51 @@ the option changed; what changed is that a session that would take most of
 the machine is refused with both numbers, and the answer is a decision --
 `--context-size` or `--memory-limit` -- rather than an accident.
 
+### The heads of a layer made ready in one step, and what a dispatch costs
+
+The section above ends on a thesis: the two-bit format loses in the token
+and not in the kernel because its dispatches are short and the fixed part of
+a dispatch a larger share, so fewer, larger dispatches a layer is the lever.
+**Built, and the thesis is refuted.**
+
+`heads.comp` is one dispatch over the query heads -- each normalized over its
+own mean square where the architecture states it, and turned -- and one over
+the key heads that does the same and places the keys and the values in the
+cache in both precisions: six dispatches a layer as two on Qwen3, four as two
+on a model without head normalizations. The arithmetic is `norm.comp`,
+`rotate.comp` and `place.comp` in their order and their precision, a test
+holds the fused step to the three it stands for **to the bit**, and the
+device digests are what they were.
+
+Two binaries alternated three times, Qwen3-30B-A3B, 1302-token prompt, 48
+generated:
+
+| | |
+| --- | ---: |
+| the heads step | 18.59, 18.61, 18.67 t/s |
+| the six steps | 18.54, 18.58, 18.50 |
+
+**A hundred and ninety-two dispatches fewer a token bought 0.3 ms** -- about
+1.5 microseconds a dispatch, not the 12.5 the section above priced them at.
+That figure was a normalization *appended* to a layer, its own reads and
+writes and a barrier behind a product, and it was read as the price of any
+dispatch. A small dispatch between small dispatches costs almost nothing, and
+the twelve milliseconds charged to nine hundred and sixty of them are
+elsewhere. Kept anyway: the same bits, fewer steps to record.
+
+**And the comparison corrected.** The 18 t/s figures are at a 1302-token
+context; llama-bench's 34.4 is `tg64` from an empty one. From a six-token
+prompt the mixture generates at **22.1 t/s**, so the gap is 1.55 rather than
+1.9, and what the 1302 positions cost is attention over them, forty-eight
+layers a token.
+
+That figure was not measurable before this section: a mixture's experts were
+uploaded as tokens routed to them, and a fresh process generated its first
+hundred tokens at 7.98 t/s while five gigabytes crossed a few matrices at a
+time. `Products.Hold` is `Acquire` without the dispatch, and `Prepare` holds
+every stack where the model is `Stacked` -- the same eleven gigabytes cross
+once, during the load, and the first token is as fast as the hundredth.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
