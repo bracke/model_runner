@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 30) of Text_Access :=
+   Held : constant array (1 .. 33) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -67,7 +67,18 @@ package body Library_Surface is
       --  operation the library itself calls is not surface nobody reaches.
       --  Named apart from it because the two answer about different things
       --  and a list of names cannot tell them apart.
-      new String'("Time_Taken")];
+      new String'("Time_Taken"),
+
+      --  And where the device's time went, step by step, from its own
+      --  clock. `tests speed --device-timeline` is what asks; the command
+      --  has --budget for the host's phases and no reason to hold a run
+      --  up for the device's stamps, which is what keeping a timeline
+      --  costs. Timed is the engine's answer to whether it is stamping,
+      --  which the backend keeps for itself and a caller with its own
+      --  engine asks.
+      new String'("Keep_Timeline"),
+      new String'("Timeline_Report"),
+      new String'("Timed")];
 
    ---------------
    -- Is_Listed --

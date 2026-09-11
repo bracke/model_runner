@@ -35,6 +35,8 @@
 --  used.
 --
 --  Task safety: run from one task.
+with Interfaces;
+
 with Device_Clock;
 
 with Model_Runner.Backend;
@@ -217,6 +219,22 @@ package Speed_Run is
    --  @param Budget True to report where the time went, phase by phase, on
    --    standard error as each run ends. Off by default: the clock reads it
    --    turns on are small but a run nobody asked should not pay them.
+   --  @param Timeline True to report, on standard error after the runs,
+   --    what the device's own clock said each step of each sequence cost,
+   --    summed by the sequence's shape across every run. Device runs only;
+   --    the sequences are waited for one by one while it is kept, so the
+   --    token rate measured alongside it is a little below the published
+   --    one and the report says which steps the device spent it on.
+   --  @param Context Positions the session holds, as --context-size
+   --    selects, or zero for the model's own. Named because a mixture
+   --    model's own is forty thousand, whose cache the device counts twice,
+   --    and a measurement that has to be taken on that model needs a way to
+   --    ask for less.
+   --  @param Device_Bytes Bytes of its own memory the device may fill with
+   --    weights, as --device-memory selects, or zero for the engine's own
+   --    share. Named for the same model: its stacks are eleven gigabytes,
+   --    the share is less, and whether they fit decides which path a
+   --    mixture takes on the device.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -235,6 +253,9 @@ package Speed_Run is
       Draft_Lookup : Boolean := False;
       Repeats     : Positive;
       Budget      : Boolean := False;
+      Timeline    : Boolean := False;
+      Context     : Natural := 0;
+      Device_Bytes : Interfaces.Unsigned_64 := 0;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.

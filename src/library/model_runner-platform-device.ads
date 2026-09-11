@@ -232,6 +232,15 @@ package Model_Runner.Platform.Device is
    --  @return Bytes in the heap Second_Kind draws from, or zero.
    function Second_Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
 
+   --  Nanoseconds one tick of the device's timestamp counter is, or zero
+   --  where the device's compute queue cannot write timestamps or the
+   --  context is not open. What a timeline of a sequence's steps is
+   --  scaled by.
+   --
+   --  @param Item Open context.
+   --  @return Nanoseconds a tick, or 0.0.
+   function Timestamp_Period (Item : Context) return Float;
+
    --  The largest storage buffer a shader on this device may read.
    --
    --  A matrix reaches a shader as one buffer, so this is the bound on what
@@ -295,6 +304,9 @@ private
       --  Second_Memory_Bytes describe them.
       Second      : Integer := -1;
       Second_Heap : Interfaces.Unsigned_64 := 0;
+
+      --  Nanoseconds a timestamp tick, as Timestamp_Period describes it.
+      Tick        : Float := 0.0;
 
       --  What the device says one storage buffer may hold. Read where the
       --  name and the kind are read, from the same structure.

@@ -21,11 +21,18 @@
 //  A bias the architecture adds before it chooses is added here when the
 //  push block says so, from the weight bound at nought.
 //
-//  One invocation a position, doing the whole of it: a hundred and
-//  twenty-eight exponentials and a few hundred compares, which is nothing
-//  beside the products on either side and not worth a reduction.
+//  A workgroup a position, a lane an expert. It was one invocation a
+//  position doing the whole of it -- a hundred and twenty-eight
+//  exponentials and a few hundred compares, which read as nothing beside
+//  the products either side -- and the device's own clock said it was a
+//  fifth of a layer: the scores lived in a private array of five hundred
+//  and twelve, which is scratch memory, and every compare of the choosing
+//  was a load from it. The scores live in shared memory now, the largest
+//  and each choice are found by the lanes together, and the sums that
+//  decide a share are still taken in the order the host takes them, so
+//  the answer is the same bits as before.
 
-layout(local_size_x = 1) in;
+layout(local_size_x = 128) in;
 
 layout(std430, binding = 0) readonly  buffer Weight { float g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
@@ -47,11 +54,24 @@ layout(push_constant) uniform Shape {
 
 //  More than any mixture this program has been shown routes over.
 const uint MOST = 512u;
+const uint LANES = 128u;
 
-float score[MOST];
+shared float score[MOST];
+
+//  A choice: the largest score and, among equal ones, the lowest expert,
+//  which is the one the host's scan lands on.
+shared float best_score[LANES];
+shared uint  best_at[LANES];
+
+//  What the lanes are told between the steps lane nought takes alone.
+shared float largest;
+shared float sum;
+shared uint  chosen[16];
+shared float share[16];
 
 void main() {
-    uint pos = gl_GlobalInvocationID.x;
+    uint pos  = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
 
     if (pos >= shape.count) {
         return;
@@ -60,56 +80,104 @@ void main() {
     uint experts = min(shape.experts, MOST);
     uint at = pos * shape.experts;
 
-    float largest = -1.0 / 0.0;
+    //  The scores, biased where the architecture says, and each lane's
+    //  largest of its own.
+    float mine = -1.0 / 0.0;
 
-    for (uint e = 0u; e < experts; ++e) {
+    for (uint e = lane; e < experts; e += LANES) {
         float s = x[at + e];
         if (shape.joins != 0u) {
             s += g[shape.base + e];
         }
         score[e] = s;
-        largest = max(largest, s);
+        mine = max(mine, s);
     }
 
-    float sum = 0.0;
+    best_score[lane] = mine;
+    barrier();
 
-    for (uint e = 0u; e < experts; ++e) {
-        float w = exp(score[e] - largest);
-        score[e] = w;
-        sum += w;
+    for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
+        if (lane < step) {
+            best_score[lane] = max(best_score[lane], best_score[lane + step]);
+        }
+        barrier();
     }
 
-    for (uint e = 0u; e < experts; ++e) {
+    if (lane == 0u) {
+        largest = best_score[0];
+    }
+    barrier();
+
+    //  The exponentials, one a lane; their sum in the host's order, since
+    //  a tree would give another last bit.
+    for (uint e = lane; e < experts; e += LANES) {
+        score[e] = exp(score[e] - largest);
+    }
+    barrier();
+
+    if (lane == 0u) {
+        float s = 0.0;
+        for (uint e = 0u; e < experts; ++e) {
+            s += score[e];
+        }
+        sum = s;
+    }
+    barrier();
+
+    for (uint e = lane; e < experts; e += LANES) {
         score[e] = score[e] / sum;
     }
+    barrier();
 
-    //  The largest Used, in order, each struck out once taken; ties go to
-    //  the lower number, as a strict comparison walking upward gives.
-    uint  chosen[16];
-    float share[16];
-    float total = 0.0;
-
+    //  The choosing: Used rounds, each the largest that is left, found by
+    //  every lane over its own experts and then across the lanes.
     for (uint k = 0u; k < shape.used; ++k) {
-        int   best = -1;
-        float most = 0.0;
+        float most = -1.0;
+        uint  best = 0u;
 
-        for (uint e = 0u; e < experts; ++e) {
-            if (best < 0 || score[e] > most) {
-                best = int(e);
+        for (uint e = lane; e < experts; e += LANES) {
+            if (score[e] > most) {
                 most = score[e];
+                best = e;
             }
         }
 
-        chosen[k] = uint(best);
-        share[k] = most;
-        total += most;
-        score[best] = -1.0;
+        best_score[lane] = most;
+        best_at[lane] = best;
+        barrier();
+
+        for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
+            if (lane < step) {
+                float other = best_score[lane + step];
+                uint  where = best_at[lane + step];
+                if (other > best_score[lane]
+                    || (other == best_score[lane] && where < best_at[lane])) {
+                    best_score[lane] = other;
+                    best_at[lane] = where;
+                }
+            }
+            barrier();
+        }
+
+        if (lane == 0u) {
+            chosen[k] = best_at[0];
+            share[k] = best_score[0];
+            score[best_at[0]] = -1.0;
+        }
+        barrier();
     }
 
-    uint out_at = pos * 2u * shape.used;
+    if (lane == 0u) {
+        float total = 0.0;
+        for (uint k = 0u; k < shape.used; ++k) {
+            total += share[k];
+        }
 
-    for (uint k = 0u; k < shape.used; ++k) {
-        r[out_at + k] = chosen[k];
-        r[out_at + shape.used + k] = floatBitsToUint(share[k] / total);
+        uint out_at = pos * 2u * shape.used;
+
+        for (uint k = 0u; k < shape.used; ++k) {
+            r[out_at + k] = chosen[k];
+            r[out_at + shape.used + k] = floatBitsToUint(share[k] / total);
+        }
     }
 }

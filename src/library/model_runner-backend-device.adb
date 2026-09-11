@@ -1,3 +1,5 @@
+with Ada.Characters.Latin_1;
+with Ada.Strings.Unbounded;
 with Ada.Unchecked_Conversion;
 with System;
 with System.Storage_Elements;
@@ -89,6 +91,193 @@ package body Model_Runner.Backend.Device is
    --  fence waits saved, which is why it is a copy and not a reason to give
    --  every product its own buffer.
    Landing : T.Real_Array_Access := null;
+
+   --  The timeline Keep_Timeline keeps: sums of the device's stamps by the
+   --  shape of the sequence. A shape is the steps, described as Products
+   --  describes them, and the positions the run was for to within a
+   --  doubling -- a prompt's experts are each run for however many
+   --  positions chose them, and a shape a count would be one a run.
+   --  Sixteen is more shapes than a model runs, and a seventeenth is
+   --  counted and not summed.
+   Shape_Limit : constant := 16;
+   Label_Limit : constant := 40;
+
+   --  Which doubling a count of positions is in: one, two and three, four
+   --  to seven, and so on.
+   function Band (Count : Positive) return Natural is
+      Result : Natural := 0;
+      Left   : Positive := Count;
+   begin
+      while Left > 1 loop
+         Left := Left / 2;
+         Result := Result + 1;
+      end loop;
+      return Result;
+   end Band;
+
+   subtype Step_Label is String (1 .. Label_Limit);
+   type Label_Array is array (1 .. Products.Sequence_Limit) of Step_Label;
+   type Length_Array is array (1 .. Products.Sequence_Limit) of Natural;
+
+   type Shape_Sums is record
+      Held      : Natural := 0;
+      Positions : Natural := 0;
+      Least     : Natural := 0;
+      Most      : Natural := 0;
+      Runs      : Natural := 0;
+      Labels    : Label_Array := [others => [others => ' ']];
+      Lengths   : Length_Array := [others => 0];
+      Sums      : Products.Step_Times := [others => 0.0];
+      Whole     : Float := 0.0;
+   end record;
+
+   type Shape_Array is array (1 .. Shape_Limit) of Shape_Sums;
+
+   Timing       : Boolean := False;
+   Shapes       : Shape_Array;
+   Shapes_Held  : Natural := 0;
+   Shapes_Lost  : Natural := 0;
+
+   --  Add what the engine's last run stamped to the shape it belongs to.
+   procedure Note_Timeline (Steps : Products.Sequence; Count : Positive) is
+      Line : constant Products.Timeline := Products.Last_Timeline (Engine);
+
+      Labels  : Label_Array := [others => [others => ' ']];
+      Lengths : Length_Array := [others => 0];
+      Found   : Natural := 0;
+   begin
+      if not Timing or else Line.Held = 0
+        or else Line.Held /= Products.Length (Steps)
+      then
+         return;
+      end if;
+
+      for Index in 1 .. Line.Held loop
+         declare
+            Text : constant String := Products.Describe (Steps, Index);
+            Up   : constant Natural := Natural'Min (Text'Length, Label_Limit);
+         begin
+            Labels (Index) (1 .. Up) := Text (Text'First .. Text'First + Up - 1);
+            Lengths (Index) := Up;
+         end;
+      end loop;
+
+      for Shape in 1 .. Shapes_Held loop
+         if Shapes (Shape).Held = Line.Held
+           and then Shapes (Shape).Positions = Band (Count)
+           and then Shapes (Shape).Labels = Labels
+         then
+            Found := Shape;
+            exit;
+         end if;
+      end loop;
+
+      if Found = 0 then
+         if Shapes_Held = Shape_Limit then
+            Shapes_Lost := Shapes_Lost + 1;
+            return;
+         end if;
+         Shapes_Held := Shapes_Held + 1;
+         Found := Shapes_Held;
+         Shapes (Found) :=
+           (Held => Line.Held, Positions => Band (Count), Least => Count,
+            Most => Count, Labels => Labels, Lengths => Lengths,
+            others => <>);
+      end if;
+
+      Shapes (Found).Least := Natural'Min (Shapes (Found).Least, Count);
+      Shapes (Found).Most := Natural'Max (Shapes (Found).Most, Count);
+      Shapes (Found).Runs := Shapes (Found).Runs + 1;
+      Shapes (Found).Whole := Shapes (Found).Whole + Line.Whole;
+      for Index in 1 .. Line.Held loop
+         Shapes (Found).Sums (Index) :=
+           Shapes (Found).Sums (Index) + Line.Steps (Index);
+      end loop;
+   end Note_Timeline;
+
+   procedure Keep_Timeline (On : Boolean) is
+      Ok : Boolean := True;
+   begin
+      Timing := On;
+      Shapes_Held := 0;
+      Shapes_Lost := 0;
+
+      if Ready_Now then
+         Products.Time_Steps (Engine, On, Ok);
+      end if;
+
+      if not Ok then
+         Timing := False;
+      end if;
+   end Keep_Timeline;
+
+   function Timeline_Report return String is
+      use Ada.Strings.Unbounded;
+
+      Text : Unbounded_String;
+
+      --  A number of microseconds with one decimal, and a whole number,
+      --  without the space 'Image puts in front.
+      function Micro (Value : Float) return String is
+         Tenths : constant Natural :=
+           Natural (Float'Max (Value, 0.0) * 10.0);
+         Whole  : constant String := Natural'Image (Tenths / 10);
+         Part   : constant String := Natural'Image (Tenths mod 10);
+      begin
+         return Whole (Whole'First + 1 .. Whole'Last) & "."
+           & Part (Part'First + 1 .. Part'Last);
+      end Micro;
+
+      function Plain (Value : Natural) return String is
+         Whole : constant String := Natural'Image (Value);
+      begin
+         return Whole (Whole'First + 1 .. Whole'Last);
+      end Plain;
+   begin
+      if Shapes_Held = 0 then
+         return (if Timing then "device timeline: nothing was run"
+                 else "device timeline: not kept");
+      end if;
+
+      for Shape in 1 .. Shapes_Held loop
+         declare
+            This : Shape_Sums renames Shapes (Shape);
+            Runs : constant Float := Float (This.Runs);
+         begin
+            Append
+              (Text,
+               Plain (This.Runs) & " runs of " & Plain (This.Held)
+               & " steps at " & Plain (This.Least)
+               & (if This.Most > This.Least
+                  then " to " & Plain (This.Most) & " positions"
+                  elsif This.Least = 1 then " position" else " positions")
+               & ": " & Micro (This.Whole / Runs) & " us a run"
+               & Ada.Characters.Latin_1.LF);
+
+            for Index in 1 .. This.Held loop
+               Append
+                 (Text,
+                  "  " & Plain (Index) & " "
+                  & This.Labels (Index) (1 .. This.Lengths (Index)) & ": "
+                  & Micro (This.Sums (Index) / Runs) & " us"
+                  & (if This.Whole > 0.0
+                     then " (" & Plain (Natural (This.Sums (Index)
+                                                  / This.Whole * 100.0))
+                          & "%)"
+                     else "")
+                  & Ada.Characters.Latin_1.LF);
+            end loop;
+         end;
+      end loop;
+
+      if Shapes_Lost > 0 then
+         Append (Text, Plain (Shapes_Lost)
+                 & " runs of other shapes were not summed"
+                 & Ada.Characters.Latin_1.LF);
+      end if;
+
+      return To_String (Text);
+   end Timeline_Report;
 
    function Describe return Capabilities is
       Result : Capabilities;
@@ -226,6 +415,11 @@ package body Model_Runner.Backend.Device is
          Named (1 .. Named_Last) :=
            Text (Text'First .. Text'First + Named_Last - 1);
       end;
+
+      --  A timeline asked for before the engine was is kept from here.
+      if Timing then
+         Products.Time_Steps (Engine, True, Timing);
+      end if;
 
       Sharing := Share_Host;
       Opened_Which := Which;
@@ -1999,6 +2193,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      Note_Timeline (Steps, Positive (Slots));
+
       --  The keys and the values, where the caller wants them here rather
       --  than out of the device's own cache afterwards.
       if Mirror then
@@ -2249,6 +2445,10 @@ package body Model_Runner.Backend.Device is
         (Engine, Steps, Vector.all, Count,
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Cancelled, Cancel);
+
+      if Ok then
+         Note_Timeline (Steps, Count);
+      end if;
 
       if Cancelled then
          Status := E.Make (E.Generation_Cancelled);

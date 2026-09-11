@@ -1,5 +1,6 @@
 with Ada.Unchecked_Conversion;
 with Ada.Numerics.Elementary_Functions;
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with AUnit.Assertions;
@@ -4129,6 +4130,234 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end The_Heads_Step_Says_What_Three_Steps_Say;
 
+   ---------------------------------
+   -- The_Device_Stamps_Its_Steps --
+   ---------------------------------
+
+   --  A timed sequence comes back with one interval a step and a whole
+   --  that is at least the sum's order, each step described by what it
+   --  is; and the backend's timeline sums what its own sequences stamped
+   --  by shape, saying so in a report a reader can read. Holds
+   --  Time_Steps, Timed, Last_Timeline and Describe on the engine,
+   --  Timestamp_Period on the context, and Keep_Timeline and
+   --  Timeline_Report on the backend.
+   procedure The_Device_Stamps_Its_Steps
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Span : constant N.Element_Count := 32;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+      Added  : Boolean;
+      Halted : Boolean;
+
+      Identity : Model_Runner.Bytes.Byte_Array_Access;
+      Query    : N.Real_Array (0 .. Span - 1);
+      Through  : N.Real_Array (0 .. Span * 2 - 1) := [others => 0.0];
+      Steps    : Products.Sequence;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Assert (not Products.Timed (Engine), "an engine is not timed unasked");
+      Assert (Products.Last_Timeline (Engine).Held = 0,
+              "a timeline exists before any run");
+
+      Products.Time_Steps (Engine, True, Ok);
+
+      --  A device whose queue writes no timestamps says so, and that is
+      --  what the period says too.
+      if not Ok then
+         Assert (Devices.Timestamp_Period (Opened) = 0.0,
+                 "stamps were refused on a device that has a period");
+         Assert (not Products.Timed (Engine), "refused, and yet timed");
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Assert (Devices.Timestamp_Period (Opened) > 0.0,
+              "stamps were taken on a device without a period");
+      Assert (Products.Timed (Engine), "asked, and not timed");
+
+      Model_Runner.Bytes.Allocate
+        (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Identity);
+      Assert (Identity /= null, "no room for the matrix");
+      Identity.all := [others => 0];
+      for Row in 0 .. Span - 1 loop
+         declare
+            At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Row * Span + Row) * 4 + 1;
+         begin
+            Identity.all (At_Byte .. At_Byte + 3) :=
+              Model_Runner.Bytes.Put_F32 (1.0);
+         end;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      --  Two products, the second chained on the first: two steps, two
+      --  intervals, and a description each.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity.all'Address,
+         Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+         0, Products.Values_F32, Natural (Span), Natural (Span), Added);
+      Assert (Added, "a sequence would not take the product");
+      Products.Add_Chained_Product
+        (Steps, Identity.all'Address,
+         Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+         0, Products.Values_F32, Natural (Span), Natural (Span), Added);
+      Assert (Added, "a sequence would not take the chained product");
+
+      Assert (Products.Describe (Steps, 1) = "product 32x32 f32",
+              "the first step is described as '"
+              & Products.Describe (Steps, 1) & "'");
+      Assert (Products.Describe (Steps, 2) = "product 32x32 f32",
+              "the second step is described as '"
+              & Products.Describe (Steps, 2) & "'");
+      Assert (Products.Describe (Steps, 3) = "",
+              "a step past the sequence is described");
+
+      Products.Run (Engine, Steps, Query, 1, Through, Ok, Halted);
+      Assert (Ok, "a timed sequence was refused");
+
+      for Index in 0 .. Span - 1 loop
+         Assert (abs (Through (Span + Index) - Query (Index)) <= 1.0e-6,
+                 "a timed sequence answered differently");
+      end loop;
+
+      declare
+         Line : constant Products.Timeline := Products.Last_Timeline (Engine);
+      begin
+         Assert (Line.Held = 2, "two steps were run and"
+                 & Natural'Image (Line.Held) & " were stamped");
+         Assert (Line.Steps (1) >= 0.0 and then Line.Steps (2) >= 0.0,
+                 "an interval is negative");
+         Assert (Line.Whole > 0.0, "two dispatches took no time at all");
+         Assert (Line.Whole + 1.0e-3 >= Line.Steps (1) + Line.Steps (2),
+                 "the whole is less than its steps");
+      end;
+
+      Products.Time_Steps (Engine, False, Ok);
+      Assert (Ok and then not Products.Timed (Engine),
+              "stopping the stamps was refused");
+
+      Model_Runner.Bytes.Free (Identity);
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+
+      --  And the backend's own sums, over a routing it runs as a sequence
+      --  of two steps.
+      Device.Close;
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+
+      Device.Keep_Timeline (True);
+      Assert (Device.Timeline_Report = "device timeline: nothing was run",
+              "a timeline kept before any run says '"
+              & Device.Timeline_Report & "'");
+
+      declare
+         Experts : constant := 4;
+         Used    : constant := 2;
+         Width   : constant := 32;
+
+         Router_Bytes : B.Byte_Array_Access;
+         Router       : T.View;
+         Input        : T.Real_Array_Access;
+         Choice       : Device.Choice_Array (0 .. Used - 1);
+         Shares       : N.Real_Array (0 .. Used - 1);
+         Status       : E.Error_Info;
+         Values       : N.Real_Array (0 .. Experts * Width - 1);
+      begin
+         for Index in Values'Range loop
+            Values (Index) := N.Real (Natural (Index) mod 11) / 11.0 - 0.5;
+         end loop;
+         declare
+            Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+         begin
+            B.Allocate (Bytes'Length, Router_Bytes);
+            Assert (Router_Bytes /= null, "no room for a router");
+            Router_Bytes.all := Bytes;
+         end;
+         T.Make (G.Type_F32, Experts, Width, Router_Bytes, 0, Router, Status);
+         Assert (E.Is_Ok (Status), "a router's view could not be built");
+
+         T.Allocate (Width, Input);
+         Assert (Input /= null, "no room for the input");
+         for Index in Input.all'Range loop
+            Input.all (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+         end loop;
+
+         for Pass in 1 .. 3 loop
+            Device.Dispatch_Route
+              (Router, null, Experts, Used, Input, 1, Choice, Shares, Status);
+            Assert (E.Is_Ok (Status), "the routing was refused: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         declare
+            Report : constant String := Device.Timeline_Report;
+
+            function Has (Part : String) return Boolean
+            is (Ada.Strings.Fixed.Index (Report, Part) > 0);
+         begin
+            Assert (Has ("3 runs of 2 steps at 1 position: "),
+                    "three routings were not summed as one shape: "
+                    & Report);
+            Assert (Has (" us a run"), "the heading has no mean: " & Report);
+            Assert (Has ("  1 product 4x32 f32: "),
+                    "the router product is not the first line: " & Report);
+            Assert (Has ("  2 route 2 of 4: "),
+                    "the routing is not the second line: " & Report);
+            Assert (Has ("%)"), "a step has no share: " & Report);
+         end;
+
+         Device.Keep_Timeline (False);
+         Assert (Device.Timeline_Report = "device timeline: not kept",
+                 "a timeline stopped says '" & Device.Timeline_Report & "'");
+
+         T.Free (Input);
+         B.Free (Router_Bytes);
+      end;
+
+      Device.Close;
+   end The_Device_Stamps_Its_Steps;
+
    ---------------------------------------------
    -- Packed_Rows_Multiply_As_The_Pool_Multiplies --
    ---------------------------------------------
@@ -4649,6 +4878,11 @@ package body Tests.Backend_Cases is
          "a batch packed once and read by members multiplies as the pool "
          & "multiplies the same rows, to the bit, and refuses a member past "
          & "the batch");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Device_Stamps_Its_Steps'Access,
+         "a timed sequence comes back with an interval a step from the "
+         & "device's own clock, each step described, and the backend sums "
+         & "them by shape into a report");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Heads_Step_Says_What_Three_Steps_Say'Access,
          "the fused heads step -- a head normalization, a rotation and a "

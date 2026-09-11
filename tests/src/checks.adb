@@ -5090,13 +5090,14 @@ package body Checks is
       --  redistributed from this repository. Both hold today because the
       --  fixtures are generated and tiny, and both would stop holding the
       --  moment somebody committed a real one to make a test easier. The
-      --  largest thing here is a test source; a small real model is a
-      --  hundred times that.
+      --  largest thing here is the README, which passed a mebibyte of
+      --  prose in September 2026 and is why the bound is two; a small
+      --  real model is a hundred times that.
       declare
          use type Dirs.File_Kind;
          use type Dirs.File_Size;
 
-         Limit : constant Dirs.File_Size := 1_048_576;
+         Limit : constant Dirs.File_Size := 2_097_152;
 
          procedure Weigh (Directory : String);
 

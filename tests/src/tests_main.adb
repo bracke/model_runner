@@ -1829,6 +1829,24 @@ begin
             when others =>
                return 0;
          end Waiting;
+
+         --  A count whose absence is zero, which means the model's own.
+         function Whole (Name : String) return Natural is
+         begin
+            return Natural'Value (Option (Name, ""));
+         exception
+            when others =>
+               return 0;
+         end Whole;
+
+         --  A count of bytes, which is past what a Natural holds.
+         function Bytes (Name : String) return Interfaces.Unsigned_64 is
+         begin
+            return Interfaces.Unsigned_64'Value (Option (Name, ""));
+         exception
+            when others =>
+               return 0;
+         end Bytes;
       begin
          --  Refused on a busy machine, exactly as `tests benchmark` and
          --  `tests outside` are and on the same bound, because all three
@@ -1932,6 +1950,9 @@ begin
             Draft_Lookup => Given ("--draft-lookup"),
             Repeats     => Number ("--repeats", 3),
             Budget      => Given ("--budget"),
+            Timeline    => Given ("--device-timeline"),
+            Context     => Whole ("--context-size"),
+            Device_Bytes => Bytes ("--device-memory"),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

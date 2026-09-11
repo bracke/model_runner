@@ -193,6 +193,36 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices released to make room.
    function Given_Back return Natural;
 
+   --  Keep a timeline of every sequence the device runs, or stop.
+   --
+   --  Every sequence from then on is stamped by the device's own clock,
+   --  step by step, and the intervals are summed by the shape of the
+   --  sequence -- the same steps at the same widths, run for a number of
+   --  positions within the same doubling -- so that a layer run forty
+   --  times a token and a hundred tokens over is one line a step rather
+   --  than four thousand.
+   --  Timeline_Report says what was summed. Turning it on empties the sums.
+   --
+   --  A device whose compute queue writes no timestamps keeps none, and
+   --  the report says so.
+   --
+   --  Task safety: run from one task, before the sequences it should see.
+   --
+   --  @param On True to keep one, False to stop.
+   procedure Keep_Timeline (On : Boolean);
+
+   --  What the timeline kept, one shape at a time.
+   --
+   --  A heading a shape -- how many runs, how many steps, how many
+   --  positions or what range of them, and the mean microseconds a run
+   --  cost the device from its first dispatch to its last -- then a line
+   --  a step with the mean microseconds and the share of the run it was.
+   --  See Products.Timeline for what a step's interval means where steps
+   --  overlap.
+   --
+   --  @return The report, or a line saying nothing was kept.
+   function Timeline_Report return String;
+
    --  How many bytes of context the device is holding.
    --
    --  A device holding the weights and not the context is a device that

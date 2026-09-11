@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device timeline.** `tests speed --device-timeline` has the device
+  stamp every step of every sequence with its own clock -- a timestamp
+  query before the first dispatch and after each step's last -- and sums
+  the intervals by the sequence's shape, a line a step with its share.
+  `Products.Time_Steps` and `Last_Timeline`, `Describe` on a sequence,
+  `Backend.Device.Keep_Timeline` and `Timeline_Report`, and the period
+  read from the device's limits. The command also takes `--context-size`
+  and `--device-memory`, which the mixture needs to be measured at all.
+
+- **The router chosen by a workgroup a position.** The first thing the
+  timeline said: `route.comp` -- a hundred and twenty-eight exponentials
+  and a top-eight in one invocation -- was 151 of a Qwen3-30B-A3B
+  layer's 812 microseconds, its scores in a private array of five
+  hundred and twelve that lives in scratch memory. A lane an expert, the
+  scores in shared memory, the same sums in the same order: 12
+  microseconds, the same bits, and the token 18.5 -> 21.0 tokens a second
+  at 1302 positions, 22.3 -> 26.0 from a short prompt.
+
 - **`tests benchmark` measures a mixture's expert shapes** -- 768 by 2048
   and 2048 by 768 in the panelled k-quants at 1 to 80 vectors, beside the
   dense shape -- in the quantized arithmetic a run uses. The cost an
@@ -82,6 +100,12 @@ Keep a Changelog and the project uses semantic versioning.
   neither heap alone fit both.
 
 ### Fixed
+
+- **A layer with attention sinks is attended on the host.** The device's
+  attention has no sinks, and the fused attention-and-projection took a
+  resident GPT-OSS token regardless, so its sinks moved no logit there;
+  the fixture check had been saying so. Neither whole-layer path takes a
+  layer with sinks either.
 
 - **A gather routed on the device read the routing step's choice before it
   was published.** The fence logic knew every other thing a step reads; the

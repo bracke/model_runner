@@ -2,7 +2,6 @@ with Ada.Text_IO;
 with Ada.Directories;
 
 with Host_Load;
-with Interfaces;
 with Ada.Real_Time;
 
 with Model_Runner.Backend.CPU;
@@ -153,6 +152,9 @@ package body Speed_Run is
       Draft_Lookup : Boolean := False;
       Repeats     : Positive;
       Budget      : Boolean := False;
+      Timeline    : Boolean := False;
+      Context     : Natural := 0;
+      Device_Bytes : Interfaces.Unsigned_64 := 0;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -253,13 +255,18 @@ package body Speed_Run is
             declare
                Ready : Boolean;
             begin
-               Model_Runner.Backend.Device.Open (Ready);
+               Model_Runner.Backend.Device.Open (Ready, Device_Bytes);
                if not Ready then
                   Containers.Close (Container);
                   Shards.Close (Source);
                   Say ("no device answered");
                   return;
                end if;
+
+               --  From here, so that the sequences a load runs -- a held
+               --  stack is uploaded and not run, but a warm-up would be --
+               --  are in the sums with the rest.
+               Model_Runner.Backend.Device.Keep_Timeline (Timeline);
             end;
          end if;
 
@@ -367,8 +374,8 @@ package body Speed_Run is
                   Outcome : Gen.Result;
                   Local   : E.Error_Info;
                begin
-                  L.Open (Session, Engine, Workers => Where,
-                          Cache => Cache, Status => Local);
+                  L.Open (Session, Engine, Context => Context,
+                          Workers => Where, Cache => Cache, Status => Local);
                   exit when E.Is_Error (Local);
 
                   --  After Open, so that what a budget reports is this run
@@ -559,6 +566,13 @@ package body Speed_Run is
 
             CPU.Close (Team);
          end;
+
+         if Timeline and then Backend = Model_Runner.Backend.Backend_Device
+         then
+            IO.Put (IO.Standard_Error,
+                    Model_Runner.Backend.Device.Timeline_Report);
+            Model_Runner.Backend.Device.Keep_Timeline (False);
+         end if;
 
          L.Close (Engine, Status);
          Containers.Close (Container);

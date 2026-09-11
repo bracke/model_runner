@@ -145,6 +145,13 @@ package body Model_Runner.Platform.Device is
    Offset_Limits             : constant := 296;
    Offset_Storage_Range      : constant := Offset_Limits + 28;
 
+   --  And how many nanoseconds one tick of the device's timestamp is, a
+   --  binary32 four hundred and twenty-four bytes into the limits -- after
+   --  the sample mask words and the flag that says a compute queue may
+   --  write timestamps at all, which is the one read before it.
+   Offset_Timestamps_Allowed : constant := Offset_Limits + 420;
+   Offset_Timestamp_Period   : constant := Offset_Limits + 424;
+
    Device_Kind_Discrete : constant := 2;
 
    --  Queue families and devices, which is the rest of what opening one
@@ -952,8 +959,20 @@ package body Model_Runner.Platform.Device is
                Stated : C.unsigned;
                for Stated'Address use Room (Offset_Storage_Range + 1)'Address;
                pragma Import (Ada, Stated);
+
+               Allowed : Interfaces.Unsigned_32;
+               for Allowed'Address
+                 use Room (Offset_Timestamps_Allowed + 1)'Address;
+               pragma Import (Ada, Allowed);
+
+               Period : Interfaces.IEEE_Float_32;
+               for Period'Address use Room (Offset_Timestamp_Period + 1)'Address;
+               pragma Import (Ada, Period);
             begin
                Item.Storage := Interfaces.Unsigned_64 (Stated);
+               Item.Tick :=
+                 (if Allowed /= 0 and then Interfaces.">" (Period, 0.0)
+                  then Float (Period) else 0.0);
             end;
          end if;
       end;
@@ -1259,6 +1278,7 @@ package body Model_Runner.Platform.Device is
       Item.Second := -1;
       Item.Second_Heap := 0;
       Item.Storage := 0;
+      Item.Tick := 0.0;
    end Close;
 
    function Is_Open (Item : Context) return Boolean
@@ -1322,5 +1342,7 @@ package body Model_Runner.Platform.Device is
 
    function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
    is (Item.Storage);
+
+   function Timestamp_Period (Item : Context) return Float is (Item.Tick);
 
 end Model_Runner.Platform.Device;

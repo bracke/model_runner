@@ -19144,6 +19144,47 @@ on the same reasoning that priced the dispatches at twelve and got 0.3; the
 log's own reading at twenty-two layers was a wash; and building it means a
 descriptor bank a layer. Not for a bound that small.
 
+### The device's own clock on every step, and the router it found
+
+Every device thesis above was priced by ablation -- build it, alternate two
+binaries, read the difference -- and the dispatch price came out eight times
+wrong that way. The device has a clock: a timestamp query before the first
+dispatch and after each step's last, read back after the fence and scaled by
+the period the limits state. `tests speed --device-timeline` sums the
+intervals by the shape of the sequence and prints a line a step. A Qwen3-30B-
+A3B layer, one generated token from a short prompt, microseconds:
+
+| step | | µs |
+| --- | --- | ---: |
+| 2 | product 4096x2048 q2_K (queries) | 56.7 |
+| 4 | product 512x2048 q4_K (values) | 17.6 |
+| 7 | attend, five positions | 12.0 |
+| 8 | product 2048x4096 q3_K, joined | 107.2 |
+| 11 | product 128x2048 f32 (router) | 56.9 |
+| 12 | route 8 of 128 | **151.0** |
+| 13, 14 | gather 768x2048 q2_K, gate and up | 96.4, 71.5 |
+| 16 | gather 2048x768 q3_K, down | 211.4 |
+| | whole, 17 steps | 812.5 |
+
+Forty-eight of those is 39 ms, a ceiling of 25.6 tokens a second against the
+22.3 measured, so the host is five milliseconds of a token and the rest is
+the device's own time. **The router was a quarter of the layer.** The routing
+step held its scores in a private array of five hundred and twelve, which is
+scratch memory, and the eight rounds of choosing were a thousand loads from
+it. Rewritten as a workgroup a position with the scores in shared memory and
+the two sums that decide a share still taken in the host's order, it reads
+12 µs, the same bits, and the token reads:
+
+| | before | after |
+| --- | ---: | ---: |
+| 1302-token prompt | 18.47, 18.59, 18.43 t/s | 20.91, 21.08, 20.91 |
+| short prompt | 22.38, 22.24, 22.35 | 25.73, 26.22, 25.80 |
+
+What the timeline says next: at 1302 positions attention is 221 µs of an
+862 µs layer, 24 GB/s over the keys and values, and the three-bit products
+read 26-33 GB/s where the four-, six- and eight-bit ones read 55-62. Those
+two steps are 39 per cent of the layer after the router.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

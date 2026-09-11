@@ -4297,15 +4297,23 @@ package body Model_Runner.Llama is
       --  What the device wrote and the host was owed, before this reads it.
       Settle_Cache (Item);
 
-      Model_Runner.Backend.Device.Attend
-        (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
-         Source.Settings.Group_Size, Natural (First), Natural (Last),
-         Natural (Block_Base (Item) + K_Base),
-         Natural (Block_Base (Item) + Item.Keys.all'Length + V_Base),
-         Natural (KV_Width), Natural (V_Width),
-         Scale, Source.Settings.Attention_Cap, Target, Took,
-         Positions => Natural (Positions), Window => Window,
-         Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
+      --  The device's attention has no sinks, so a layer with them is
+      --  attended below, on the host, out of the same cache. It was asked
+      --  regardless, and a mixture with sinks answered as if it had none:
+      --  the fixture check said the sinks moved no logit.
+      Took := False;
+
+      if Sinks = null then
+         Model_Runner.Backend.Device.Attend
+           (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
+            Source.Settings.Group_Size, Natural (First), Natural (Last),
+            Natural (Block_Base (Item) + K_Base),
+            Natural (Block_Base (Item) + Item.Keys.all'Length + V_Base),
+            Natural (KV_Width), Natural (V_Width),
+            Scale, Source.Settings.Attention_Cap, Target, Took,
+            Positions => Natural (Positions), Window => Window,
+            Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
+      end if;
 
       if Took then
          Usable := True;
@@ -8460,6 +8468,11 @@ package body Model_Runner.Llama is
 
       function Whole_Layer_Fits (L : Layer) return Boolean
       is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
+
+          --  The device's attention has no sinks. A mixture with them
+          --  went whole for a day and the fixture check said its sinks
+          --  answered to nothing, which is what this line is.
+          and then L.Sinks = null
           and then L.Attention_Norm /= null
           and then L.Attention_Norm_Bias = null
           and then L.Feed_Norm /= null
@@ -9101,7 +9114,13 @@ package body Model_Runner.Llama is
                   Ok       => True);
                Shared : E.Error_Info;
             begin
-               if Item.Held /= Exact or else not Resident then
+               --  A layer with sinks attends on the host: the device's
+               --  attention has none, and the pair below took every
+               --  mixture with them as if it had none -- the fixture check
+               --  said their sinks moved no logit.
+               if Item.Held /= Exact or else not Resident
+                 or else Current.Sinks /= null
+               then
                   --  How much arithmetic the heads are between them: every
                   --  head reads the positions the cache holds, a head's
                   --  worth of each. A generated token early in a
@@ -9579,6 +9598,7 @@ package body Model_Runner.Llama is
       --  copy is what carrying does not write.
       function Whole_Layer_Fits (L : Layer) return Boolean
       is (T.Is_Present (L.Gate)
+          and then L.Sinks = null
           and then L.Out_Bias = null
           and then L.Up_Bias = null
           and then L.Down_Bias = null

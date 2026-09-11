@@ -72,6 +72,15 @@ package body Model_Runner.Platform.Device.Products is
    --  writer has finished.
    Structure_Memory_Barrier : constant := 46;
    Pipeline_Stage_Compute   : constant := 16#800#;
+
+   --  A timestamp query pool, and the stamps a timed sequence writes into
+   --  it: one before the first dispatch and one after each step's last,
+   --  each latched when everything before it has left the pipeline.
+   Structure_Query_Pool     : constant := 11;
+   Query_Timestamp          : constant := 2;
+   Pipeline_Stage_Bottom    : constant := 16#2000#;
+   Query_Result_64          : constant := 1;
+   Query_Result_Wait        : constant := 2;
    Access_Shader_Read       : constant := 16#20#;
    Access_Shader_Write      : constant := 16#40#;
    Bind_Point_Compute   : constant := 1;
@@ -645,6 +654,16 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
+   type Query_Pool_Create_Info is record
+      Kind       : C.unsigned := Structure_Query_Pool;
+      Next       : Address := Null_Handle;
+      Flags      : C.unsigned := 0;
+      Query_Kind : C.unsigned := Query_Timestamp;
+      Count      : C.unsigned := C.unsigned (Sequence_Limit + 1);
+      Statistics : C.unsigned := 0;
+   end record
+     with Convention => C;
+
    type Command_Begin_Info is record
       Kind        : C.unsigned := Structure_Command_Begin;
       Next        : Address := Null_Handle;
@@ -899,6 +918,25 @@ package body Model_Runner.Platform.Device.Products is
      function (Device : Address; Fence : Address) return C.int
      with Convention => C;
 
+   --  Reset a run of queries, write a timestamp into one, and read what a
+   --  run of them latched.
+   type Reset_Queries_Call is access
+     procedure (Buffer : Address; Pool : Address; First : C.unsigned;
+                Count : C.unsigned)
+     with Convention => C;
+
+   type Write_Stamp_Call is access
+     procedure (Buffer : Address; Stage : C.unsigned; Pool : Address;
+                Query : C.unsigned)
+     with Convention => C;
+
+   type Query_Results_Call is access
+     function (Device : Address; Pool : Address; First : C.unsigned;
+               Count : C.unsigned; Bytes : Interfaces.Unsigned_64;
+               Data : Address; Stride : Interfaces.Unsigned_64;
+               Flags : C.unsigned) return C.int
+     with Convention => C;
+
    function To_Create is
      new Ada.Unchecked_Conversion (Address, Create_Call);
    function To_Destroy is
@@ -937,6 +975,12 @@ package body Model_Runner.Platform.Device.Products is
      new Ada.Unchecked_Conversion (Address, Fence_Status_Call);
    function To_Reset_Fences is
      new Ada.Unchecked_Conversion (Address, Reset_Fences_Call);
+   function To_Reset_Queries is
+     new Ada.Unchecked_Conversion (Address, Reset_Queries_Call);
+   function To_Write_Stamp is
+     new Ada.Unchecked_Conversion (Address, Write_Stamp_Call);
+   function To_Query_Results is
+     new Ada.Unchecked_Conversion (Address, Query_Results_Call);
 
    --  The instance every entry point below is found through. Set from the
    --  engine whose operation is running, because an entry point belongs to
@@ -1402,6 +1446,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Imports := Takes_Host_Memory (On);
       Item.Import_To := Host_Alignment (On);
       Item.Storage := Storage_Limit (On);
+      Item.Tick := Timestamp_Period (On);
       Item.Plain := Plain_Memory_Kinds (On);
       Item.Share := Share_Host;
       --  The budget, by heap. Unasked, it is what it always was: the share
@@ -2642,6 +2687,10 @@ package body Model_Runner.Platform.Device.Products is
       Item.Descriptor := Null_Handle;
       Give_Back (Item.Signal, "vkDestroySemaphore");
       Give_Back (Item.Fence_Two, "vkDestroyFence");
+      Give_Back (Item.Queries, "vkDestroyQueryPool");
+      Give_Back (Item.Queries_Two, "vkDestroyQueryPool");
+      Item.Timing := False;
+      Item.Line := (others => <>);
       Give_Back (Item.Pool, "vkDestroyDescriptorPool");
       Give_Back (Item.Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Group_Line, "vkDestroyPipeline");
@@ -2711,6 +2760,56 @@ package body Model_Runner.Platform.Device.Products is
 
    function Readies_Heads (Item : Engine) return Boolean
    is (Item.Heads_Line /= Null_Handle);
+
+   function Timed (Item : Engine) return Boolean is (Item.Timing);
+
+   function Last_Timeline (Item : Engine) return Timeline is (Item.Line);
+
+   procedure Time_Steps (Item : in out Engine; On : Boolean; Ok : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+      Create  : constant Create_Call := To_Create (Point ("vkCreateQueryPool"));
+      Request : aliased Query_Pool_Create_Info;
+      Made    : aliased Address := Null_Handle;
+   begin
+      Ok := False;
+
+      if not On then
+         Item.Timing := False;
+         Ok := True;
+         return;
+      end if;
+
+      --  Nothing to scale a stamp by is a device that writes none.
+      if Item.Logical = Null_Handle or else Item.Tick <= 0.0
+        or else Create = null
+      then
+         return;
+      end if;
+
+      --  One pool a slot, since a slot's stamps are read after its own
+      --  fence and the other slot may be recording over its own by then.
+      if Item.Queries = Null_Handle then
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            return;
+         end if;
+         Item.Queries := Made;
+      end if;
+
+      if Item.Queries_Two = Null_Handle then
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            return;
+         end if;
+         Item.Queries_Two := Made;
+      end if;
+
+      Item.Timing := True;
+      Ok := True;
+   end Time_Steps;
 
    function Waited (Item : Engine) return Natural is (Item.Waited);
 
@@ -3599,6 +3698,13 @@ package body Model_Runner.Platform.Device.Products is
       Item.Fence_Two := Fence;
       Item.Pending_Two := Pending;
       Item.Sets_Two := Sets;
+
+      declare
+         Queries : constant Address := Item.Queries;
+      begin
+         Item.Queries := Item.Queries_Two;
+         Item.Queries_Two := Queries;
+      end;
    end Swap_Slots;
 
    --  Wait for what this slot last handed over, and nothing else.
@@ -5048,6 +5154,69 @@ package body Model_Runner.Platform.Device.Products is
    ------------
 
    function Length (Steps : Sequence) return Natural is (Steps.Held);
+
+   function Describe (Steps : Sequence; Index : Positive) return String is
+      --  The packing's own name, without the prefix every one carries and
+      --  in the case the formats are written in.
+      function Packing_Name (Packing : Weight_Packing) return String is
+         Whole : constant String := Weight_Packing'Image (Packing);
+         Word  : String := Whole (Whole'First + 7 .. Whole'Last);
+      begin
+         for Letter of Word loop
+            if Letter in 'A' .. 'Z' and then Letter /= 'K' then
+               Letter := Character'Val (Character'Pos (Letter) + 32);
+            end if;
+         end loop;
+         return Word;
+      end Packing_Name;
+
+      --  Rows by columns, without the space 'Image puts before a number;
+      --  for a routing step, how many experts of how many.
+      function Shape
+        (Rows, Columns : Natural; Between : String := "x") return String
+      is
+         R : constant String := Natural'Image (Rows);
+         C : constant String := Natural'Image (Columns);
+      begin
+         return R (R'First + 1 .. R'Last) & Between
+           & C (C'First + 1 .. C'Last);
+      end Shape;
+   begin
+      if Index > Steps.Held then
+         return "";
+      end if;
+
+      declare
+         This : Step renames Steps.Items (Index);
+      begin
+         if This.Norms then
+            return "norm " & Shape (1, This.Rows);
+         elsif This.Rotates then
+            return "rotate";
+         elsif This.Places then
+            return "place";
+         elsif This.Readies then
+            return "heads";
+         elsif This.Attends then
+            return "attend";
+         elsif This.Routes then
+            return "route " & Shape (This.Used, This.Columns, " of ");
+         elsif This.Mixes then
+            return "mix";
+         elsif This.Blends then
+            return (if This.Unit /= 2 then "combine"
+                    elsif This.Folded then "join folded" else "join");
+         elsif This.Gathers > 0 then
+            return "gather " & Shape (This.Each, This.Columns) & " "
+              & Packing_Name (This.Packing)
+              & (if This.Joins then " +join" else "");
+         else
+            return "product " & Shape (This.Rows, This.Columns) & " "
+              & Packing_Name (This.Packing)
+              & (if This.Joins then " +join" else "");
+         end if;
+      end;
+   end Describe;
 
    -----------------
    -- Add_Product --
@@ -6690,6 +6859,13 @@ package body Model_Runner.Platform.Device.Products is
          Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
          Dispatch : constant Dispatch_Call :=
            To_Dispatch (Point ("vkCmdDispatch"));
+
+         --  Whether this run stamps its steps, and what with. Looked up
+         --  only when it does, for the reason Barrier is.
+         Stamping : constant Boolean :=
+           Item.Timing and then Item.Queries /= Null_Handle;
+         Reset_Queries : Reset_Queries_Call := null;
+         Write_Stamp   : Write_Stamp_Call := null;
          --  Looked up only when something chains. Resolving an entry point
          --  is not free, and a sequence of products that share an activation
          --  -- which is every sequence the engine names today -- would
@@ -6740,11 +6916,30 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Stamping then
+            Reset_Queries :=
+              To_Reset_Queries (Point ("vkCmdResetQueryPool"));
+            Write_Stamp := To_Write_Stamp (Point ("vkCmdWriteTimestamp"));
+            if Reset_Queries = null or else Write_Stamp = null then
+               Release_All;
+               return;
+            end if;
+         end if;
+
          if Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
          then
             Release_All;
             return;
+         end if;
+
+         --  Every stamp this run may write is cleared first, and the one
+         --  before the first dispatch written; the pool must be reset in
+         --  the command buffer before it is written in it.
+         if Stamping then
+            Reset_Queries
+              (Item.Buffer, Item.Queries, 0, C.unsigned (Sequence_Limit + 1));
+            Write_Stamp (Item.Buffer, Pipeline_Stage_Bottom, Item.Queries, 0);
          end if;
 
          Bind_Pipeline
@@ -7498,6 +7693,13 @@ package body Model_Runner.Platform.Device.Products is
                end loop;
 
                <<Next_Dispatch>>
+               --  After this step's last dispatch, folded or not: a folded
+               --  join dispatched nothing and its interval says so.
+               if Stamping then
+                  Write_Stamp
+                    (Item.Buffer, Pipeline_Stage_Bottom, Item.Queries,
+                     C.unsigned (Index));
+               end if;
             end;
          end loop;
 
@@ -7525,6 +7727,10 @@ package body Model_Runner.Platform.Device.Products is
               or else Places (Index).Borrowed;
          end loop;
 
+         --  A timed sequence is waited for, so that its stamps can be read
+         --  now rather than kept until this slot comes round again.
+         Reads_Back := Reads_Back or else Item.Timing;
+
          Hand_Over (Item, Good);
 
          if Good and then Reads_Back then
@@ -7535,6 +7741,47 @@ package body Model_Runner.Platform.Device.Products is
       if not Good then
          Release_All;
          return;
+      end if;
+
+      --  What the stamps latched, scaled to microseconds. Read after the
+      --  fence, so the wait flag is a formality; a device that answers the
+      --  read with anything but success leaves the line empty rather than
+      --  publishing ticks it did not write.
+      if Item.Timing and then Item.Queries /= Null_Handle then
+         declare
+            Results : constant Query_Results_Call :=
+              To_Query_Results (Point ("vkGetQueryPoolResults"));
+
+            type Stamp_Array is
+              array (0 .. Sequence_Limit) of aliased Interfaces.Unsigned_64
+              with Convention => C;
+
+            Stamps : aliased Stamp_Array := [others => 0];
+         begin
+            Item.Line := (others => <>);
+
+            if Results /= null
+              and then Results
+                (Item.Logical, Item.Queries, 0, C.unsigned (Steps.Held + 1),
+                 Interfaces.Unsigned_64 ((Steps.Held + 1) * 8),
+                 Stamps'Address, 8,
+                 C.unsigned (Query_Result_64 + Query_Result_Wait)) = 0
+            then
+               Item.Line.Held := Steps.Held;
+               for Index in 1 .. Steps.Held loop
+                  Item.Line.Steps (Index) :=
+                    (if Stamps (Index) >= Stamps (Index - 1)
+                     then Float (Stamps (Index) - Stamps (Index - 1))
+                          * Item.Tick / 1000.0
+                     else 0.0);
+               end loop;
+               Item.Line.Whole :=
+                 (if Stamps (Steps.Held) >= Stamps (0)
+                  then Float (Stamps (Steps.Held) - Stamps (0))
+                       * Item.Tick / 1000.0
+                  else 0.0);
+            end if;
+         end;
       end if;
 
       --  And what came out, product by product, out of the one mapping.

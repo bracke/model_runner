@@ -365,6 +365,52 @@ package Model_Runner.Platform.Device.Products is
    --  nothing has to grow.
    Sequence_Limit : constant := 32;
 
+   --  What the device's own clock said each step of a sequence took.
+   --
+   --  Microseconds, from the device's timestamp counter: a stamp is
+   --  written before the first dispatch and after each step's last, and a
+   --  step's figure is the interval between its stamp and the one before
+   --  it. A stamp says when everything recorded before it had finished, so
+   --  where two steps run side by side -- the two arms of a gated
+   --  feed-forward share no barrier and do -- the second is charged with
+   --  the overlap and the first with what finished before it started.
+   --  Whole is the first stamp to the last, which is what the sequence
+   --  cost the device however the steps overlapped.
+   type Step_Times is array (1 .. Sequence_Limit) of Float;
+
+   type Timeline is record
+      Held  : Natural := 0;
+      Whole : Float := 0.0;
+      Steps : Step_Times := [others => 0.0];
+   end record;
+
+   --  Ask the device to stamp every step of every sequence, or stop.
+   --
+   --  What it costs is the wait: a timed sequence is waited for before Run
+   --  returns, so that its stamps can be read, where an untimed one that
+   --  leaves its answer on the device is handed over and left. The device
+   --  side of the figures is unchanged by that -- the stamps are between
+   --  dispatches the device runs back to back either way -- but the token
+   --  rate measured alongside is the rate with the wait in it.
+   --
+   --  @param Item Ready engine.
+   --  @param On True to stamp, False to stop.
+   --  @param Ok True when the device can do it: a device whose compute
+   --    queue writes no timestamps refuses, and the engine goes on untimed.
+   procedure Time_Steps (Item : in out Engine; On : Boolean; Ok : out Boolean);
+
+   --  Whether steps are being stamped.
+   --
+   --  @param Item Engine to ask.
+   --  @return True after Time_Steps said yes and before it was told to stop.
+   function Timed (Item : Engine) return Boolean;
+
+   --  What the last Run's stamps said.
+   --
+   --  @param Item Engine to ask.
+   --  @return The timeline, with Held zero before any timed run.
+   function Last_Timeline (Item : Engine) return Timeline;
+
    --  How many experts one gathered product may read at once, which is
    --  the third dimension of its dispatch. Sixteen is what the shader's
    --  push block has room for, and twice what any mixture this program
@@ -385,6 +431,19 @@ package Model_Runner.Platform.Device.Products is
    --  @param Steps Sequence to read.
    --  @return The count, which is zero for a sequence just opened.
    function Length (Steps : Sequence) return Natural;
+
+   --  What one step of a sequence is, in a word and a shape.
+   --
+   --  The kind first -- norm, product, gather, join, combine, rotate,
+   --  place, attend, heads, route, mix -- then the rows and columns and
+   --  the packing where the step has a matrix, so that a timeline can say
+   --  which of thirty steps a figure belongs to without the caller having
+   --  named them.
+   --
+   --  @param Steps Sequence to read.
+   --  @param Index Which step, from 1 to Length.
+   --  @return The description, or the empty string past Length.
+   function Describe (Steps : Sequence; Index : Positive) return String;
 
    --  Name one product for a sequence to perform.
    --
@@ -1606,6 +1665,16 @@ private
       Armed      : Boolean := False;
       Fence      : System.Address := System.Null_Address;
       Fence_Two  : System.Address := System.Null_Address;
+
+      --  A pool of timestamp queries a slot, made when Time_Steps is first
+      --  asked and kept until Close; the nanoseconds one tick of them is,
+      --  which is zero on a device that writes none; whether Run stamps
+      --  its steps; and what the stamps of the last run said.
+      Queries     : System.Address := System.Null_Address;
+      Queries_Two : System.Address := System.Null_Address;
+      Tick        : Float := 0.0;
+      Timing      : Boolean := False;
+      Line        : Timeline;
 
       --  What the device says its largest heap is, and the share of it these
       --  matrices may take -- the sum over both tiers, where there are two.
