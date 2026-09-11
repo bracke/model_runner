@@ -74,4 +74,8 @@ package Model_Runner.Shares is
 
    type Team_Access is access all Team'Class;
 
+   --  Which rows of a batch a product reads, counting from zero: what a
+   --  mixture's expert is handed, the positions that chose it.
+   type Member_Rows is array (Natural range <>) of Natural;
+
 end Model_Runner.Shares;

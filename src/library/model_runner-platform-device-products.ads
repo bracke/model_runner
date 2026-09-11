@@ -767,7 +767,6 @@ package Model_Runner.Platform.Device.Products is
       V_Stride    : Natural := 0;
       Kept        : Boolean := True);
 
-
    --  Name a write into the device's cache for a sequence to perform.
    --
    --  The keys and the values a layer produced belong in the cache before

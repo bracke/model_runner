@@ -19098,6 +19098,52 @@ time. `Products.Hold` is `Acquire` without the dispatch, and `Prepare` holds
 every stack where the model is `Stacked` -- the same eleven gigabytes cross
 once, during the load, and the first token is as fast as the hundredth.
 
+### A batch's mixture shared by expert, and the rows packed once
+
+The processor's prompt on a mixture read 71 tokens a second against
+llama.cpp's 108 at 110 tokens, and the section above read that as the pool:
+an expert's product, a few vectors by 768 rows, cut across eight workers
+three hundred times a layer. **Built, and it was not the pool.** An expert to
+a worker -- `Mixture_Batch` posts one job a layer through `Dispatch_Shares`,
+each worker gathers, multiplies, gates and scatters its own experts whole,
+the experts dealt into the shares largest first and back and forth so a
+share has the same count as the next and about the same rows -- reads 68.7,
+70.9, 72.7 against 73.3, 65.0, 68.1. A wash.
+
+**What paid was the quantization.** A product quantizes its activation
+first, and a mixture's prompt hands every row to eight experts and to a gate
+and an up each, so the same row was packed sixteen times a layer.
+`Workers_CPU.Pack` quantizes the layer's rows once, for each kind of sums
+the layer's formats want; `Multiply_Packed` gathers an expert's members out
+of the packed batch and multiplies them serially. On the 1419-token prompt,
+where the eleven-gigabyte panel copy's noise is amortized:
+
+| | |
+| --- | ---: |
+| packed once | 68.58, 68.65 t/s |
+| by row | 65.58, 65.72 |
+
+Four and a half per cent, the same bits, held by a test that multiplies
+packed members against the pool's own product of the same rows.
+
+**And the comparison that matters now.** `llama-bench`'s `pp1419` on the
+processor for this file is **250.5 t/s**, so at a long prompt this program
+is 3.6 behind where at 110 tokens it is 1.5. llama.cpp's rate rises with the
+members an expert gets and this one's does not: a dense prompt here reads
+440 t/s on TinyLlama, 4.8e11 multiply-adds a second, and the mixture reads
+2.3e11 at eighty members an expert and the same at seven. Whatever holds it
+flat is in the strip kernel at 768 rows -- a per-call cost a 5632-row matrix
+amortizes and a 768-row one does not -- and that is a `tests benchmark`
+question at those shapes.
+
+**One submission a token, priced and not built.** A dispatch between
+dispatches costs about 1.5 microseconds; a submission is a queue call, a
+fence reset and a semaphore, tens of microseconds, and there are forty-eight
+a token. At most two or three milliseconds of a forty-five millisecond token,
+on the same reasoning that priced the dispatches at twelve and got 0.3; the
+log's own reading at twenty-two layers was a wash; and building it means a
+descriptor bank a layer. Not for a bound that small.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -1613,6 +1613,181 @@ package body Model_Runner.Backend.CPU is
       end if;
    end Dispatch_Batch;
 
+   ----------
+   -- Pack --
+   ----------
+
+   procedure Pack
+     (Item    : in out Packed_Rows;
+      Vectors : T.Real_Array_Access;
+      Count   : Element_Count;
+      Columns : Element_Count;
+      Super   : Boolean;
+      Ok      : out Boolean)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+
+      Elements : constant Element_Count := Count * Columns;
+   begin
+      Unpack (Item);
+      Ok := False;
+
+      if not Quantizing
+        or else Vectors = null
+        or else Count = 0
+        or else not QI.Is_Packable (Columns)
+        or else Vectors.all'Length < Elements
+        or else (Super and then Columns mod QI.Activation_Super /= 0)
+      then
+         return;
+      end if;
+
+      declare
+         Blocks : constant Element_Count := Elements / QI.Activation_Block;
+      begin
+         Item.Values := new QI.Signed_Array (0 .. Elements - 1);
+         Item.Totals := new QI.Sum_Array (0 .. Blocks - 1);
+         Item.Halves :=
+           new QI.Sum_Array
+             (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half) - 1);
+         T.Allocate (Blocks, Item.Scales);
+
+         if Item.Values = null or else Item.Totals = null
+           or else Item.Halves = null or else Item.Scales = null
+         then
+            Unpack (Item);
+            return;
+         end if;
+
+         QI.Quantize_Vectors
+           (Vectors.all, Count, Columns, Item.Values.all, Item.Scales.all,
+            Item.Totals.all, Item.Halves.all, Ok, Super => Super);
+      end;
+
+      if not Ok then
+         Unpack (Item);
+         return;
+      end if;
+
+      Item.Count := Count;
+      Item.Columns := Columns;
+      Item.Super := Super;
+   end Pack;
+
+   ------------
+   -- Unpack --
+   ------------
+
+   procedure Unpack (Item : in out Packed_Rows) is
+      procedure Release is new Ada.Unchecked_Deallocation
+        (Model_Runner.Quantization.Integers.Signed_Array,
+         Signed_Array_Access);
+      procedure Release is new Ada.Unchecked_Deallocation
+        (Model_Runner.Quantization.Integers.Sum_Array, Sum_Array_Access);
+   begin
+      Release (Item.Values);
+      Release (Item.Totals);
+      Release (Item.Halves);
+      T.Free (Item.Scales);
+      Item.Count := 0;
+      Item.Columns := 0;
+   end Unpack;
+
+   ---------------------
+   -- Multiply_Packed --
+   ---------------------
+
+   procedure Multiply_Packed
+     (Weight  : T.View;
+      Rows    : Packed_Rows;
+      Members : Model_Runner.Shares.Member_Rows;
+      Target  : T.Real_Array_Access;
+      Ok      : out Boolean)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+
+      procedure Release is new Ada.Unchecked_Deallocation
+        (QI.Signed_Array, Signed_Array_Access);
+      procedure Release is new Ada.Unchecked_Deallocation
+        (QI.Sum_Array, Sum_Array_Access);
+
+      Held    : constant Element_Count := Element_Count (Members'Length);
+      Columns : constant Element_Count := Rows.Columns;
+
+      --  Blocks a row is cut into, and halves a block.
+      Per_Row  : constant Element_Count :=
+        (if Columns = 0 then 0 else Columns / QI.Activation_Block);
+      Per_Half : constant := QI.Activation_Block / QI.Activation_Half;
+
+      Values : Signed_Array_Access := null;
+      Scales : T.Real_Array_Access := null;
+      Totals : Sum_Array_Access := null;
+      Halves : Sum_Array_Access := null;
+   begin
+      Ok := False;
+
+      if Rows.Count = 0 or else Held = 0 or else Target = null
+        or else Weight.Columns /= Columns
+        or else Target.all'Length < Held * Weight.Rows
+        or else not QI.Packs_Vectors (Weight.Format, Held, Weight.Interleaved)
+        or else QI.Supers_Vectors (Weight.Format) /= Rows.Super
+      then
+         return;
+      end if;
+
+      for Member of Members loop
+         if Element_Count (Member) >= Rows.Count then
+            return;
+         end if;
+      end loop;
+
+      --  An allocator that fails raises rather than answering null, so
+      --  the three below are not tested; the one made through Tensors is.
+      Values := new QI.Signed_Array (0 .. Held * Columns - 1);
+      Totals := new QI.Sum_Array (0 .. Held * Per_Row - 1);
+      Halves := new QI.Sum_Array (0 .. Held * Per_Row * Per_Half - 1);
+      T.Allocate (Held * Per_Row, Scales);
+
+      if Scales /= null then
+         --  The members' rows, gathered out of the packed batch: a row is
+         --  Columns bytes, Per_Row scales and totals, twice that many
+         --  halves, each run contiguous per row.
+         for Index in Members'Range loop
+            declare
+               Row  : constant Element_Count :=
+                 Element_Count (Index - Members'First);
+               From : constant Element_Count :=
+                 Element_Count (Members (Index));
+            begin
+               Values.all (Row * Columns .. Row * Columns + Columns - 1) :=
+                 Rows.Values.all
+                   (From * Columns .. From * Columns + Columns - 1);
+               Scales.all (Row * Per_Row .. Row * Per_Row + Per_Row - 1) :=
+                 Rows.Scales.all
+                   (From * Per_Row .. From * Per_Row + Per_Row - 1);
+               Totals.all (Row * Per_Row .. Row * Per_Row + Per_Row - 1) :=
+                 Rows.Totals.all
+                   (From * Per_Row .. From * Per_Row + Per_Row - 1);
+               Halves.all
+                 (Row * Per_Row * Per_Half
+                  .. Row * Per_Row * Per_Half + Per_Row * Per_Half - 1) :=
+                 Rows.Halves.all
+                   (From * Per_Row * Per_Half
+                    .. From * Per_Row * Per_Half + Per_Row * Per_Half - 1);
+            end;
+         end loop;
+
+         T.Mat_Mul_Range_Packed
+           (Weight, Values.all, Scales.all, Totals.all, Halves.all,
+            Held, Target.all, 0, Weight.Rows - 1, Ok);
+      end if;
+
+      Release (Values);
+      Release (Totals);
+      Release (Halves);
+      T.Free (Scales);
+   end Multiply_Packed;
+
 begin
    --  Asked here and not where it is used. The decoders interpret what a
    --  model file holds and may not reach a host; this backend runs them and

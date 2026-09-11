@@ -20,6 +20,7 @@ with Model_Runner.Platform;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Quantization.Interleave;
+with Model_Runner.Shares;
 with Model_Runner.Tensors;
 
 with Fixtures;
@@ -4128,6 +4129,119 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end The_Heads_Step_Says_What_Three_Steps_Say;
 
+   ---------------------------------------------
+   -- Packed_Rows_Multiply_As_The_Pool_Multiplies --
+   ---------------------------------------------
+
+   --  A batch quantized once and read by members against the same rows
+   --  handed to the pool as they are: the same products, so the same bits.
+   --  Holds Pack, Multiply_Packed and Unpack, and the member order, with a
+   --  Q8_0 matrix the integer kernels take and a batch every member reads
+   --  out of order.
+   procedure Packed_Rows_Multiply_As_The_Pool_Multiplies
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Rows    : constant N.Element_Count := 16;
+      Columns : constant N.Element_Count := 64;
+      Count   : constant N.Element_Count := 5;
+
+      Weights : N.Real_Array (0 .. Rows * Columns - 1);
+      Held    : B.Byte_Array_Access;
+      View    : T.View;
+      Status  : E.Error_Info;
+
+      Vectors  : T.Real_Array_Access;
+      Gathered : T.Real_Array_Access;
+      Straight : T.Real_Array_Access;
+      Through  : T.Real_Array_Access;
+
+      Packed : CPU.Packed_Rows;
+      Ok     : Boolean;
+
+      --  Three of the five, out of order.
+      Members : constant Model_Runner.Shares.Member_Rows := [3, 0, 4];
+   begin
+      if not CPU.Integer_Activations then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: the pool does not quantize here, so nothing is packed");
+         return;
+      end if;
+
+      for Index in Weights'Range loop
+         Weights (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+
+      declare
+         Bytes : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Weights);
+      begin
+         B.Allocate (Bytes'Length, Held);
+         Assert (Held /= null, "no room for the matrix");
+         Held.all := Bytes;
+      end;
+
+      T.Make (G.Type_Q8_0, Rows, Columns, Held, 0, View, Status);
+      Assert (E.Is_Ok (Status), "the view could not be built");
+
+      T.Allocate (Count * Columns, Vectors);
+      T.Allocate (N.Element_Count (Members'Length) * Columns, Gathered);
+      T.Allocate (N.Element_Count (Members'Length) * Rows, Straight);
+      T.Allocate (N.Element_Count (Members'Length) * Rows, Through);
+      Assert (Vectors /= null and then Gathered /= null
+              and then Straight /= null and then Through /= null,
+              "no room for the vectors");
+
+      for Index in Vectors.all'Range loop
+         Vectors.all (Index) := N.Real (Index mod 7) / 7.0 - 0.3;
+      end loop;
+
+      for Index in Members'Range loop
+         declare
+            Into : constant N.Element_Count :=
+              N.Element_Count (Index - Members'First) * Columns;
+            From : constant N.Element_Count :=
+              N.Element_Count (Members (Index)) * Columns;
+         begin
+            Gathered.all (Into .. Into + Columns - 1) :=
+              Vectors.all (From .. From + Columns - 1);
+         end;
+      end loop;
+
+      CPU.Dispatch_Batch
+        (null, View, Gathered, N.Element_Count (Members'Length), Straight,
+         Status);
+      Assert (E.Is_Ok (Status), "the product of the gathered rows failed");
+
+      CPU.Pack (Packed, Vectors, Count, Columns, False, Ok);
+      Assert (Ok, "the rows would not pack");
+
+      CPU.Multiply_Packed (View, Packed, Members, Through, Ok);
+      Assert (Ok, "the packed rows would not multiply");
+
+      for Index in Through.all'Range loop
+         Assert (Through.all (Index) = Straight.all (Index),
+                 "the packed product answers" & N.Real'Image (Through.all (Index))
+                 & " where the pool answers" & N.Real'Image (Straight.all (Index))
+                 & " at" & N.Element_Count'Image (Index));
+      end loop;
+
+      --  A member past the batch is refused, and the rows come back.
+      CPU.Multiply_Packed (View, Packed, [0, 7], Through, Ok);
+      Assert (not Ok, "a member past the batch was multiplied");
+
+      CPU.Unpack (Packed);
+      CPU.Multiply_Packed (View, Packed, Members, Through, Ok);
+      Assert (not Ok, "rows given back were multiplied");
+
+      T.Free (Vectors);
+      T.Free (Gathered);
+      T.Free (Straight);
+      T.Free (Through);
+      B.Free (Held);
+   end Packed_Rows_Multiply_As_The_Pool_Multiplies;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -4530,6 +4644,11 @@ package body Tests.Backend_Cases is
         (T, A_Gathered_Mixture_Says_What_The_Host_Says'Access,
          "a mixture's second half as one sequence -- routed, gathered out "
          & "of its stacks and summed by shares -- says what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Packed_Rows_Multiply_As_The_Pool_Multiplies'Access,
+         "a batch packed once and read by members multiplies as the pool "
+         & "multiplies the same rows, to the bit, and refuses a member past "
+         & "the batch");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Heads_Step_Says_What_Three_Steps_Say'Access,
          "the fused heads step -- a head normalization, a rotation and a "

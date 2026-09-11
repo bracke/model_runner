@@ -250,6 +250,68 @@ package Model_Runner.Backend.CPU is
    --  for a package that decides what a model says. Both sides name the
    --  interface instead, and Sharing below is how a caller that has a pool
    --  hands it to one that may not know what a pool is.
+   --  A batch of activations quantized once, for products that read a few
+   --  of its rows each.
+   --
+   --  A product quantizes its activation before it multiplies, which is
+   --  a pass over the vectors at about two nanoseconds an element. A
+   --  mixture's prompt hands each expert the rows of the positions that
+   --  chose it -- every row to eight experts, and to a gate and an up
+   --  projection each -- so the same row was quantized sixteen times a
+   --  layer, which came to a quarter of the prompt. Packed once here, the
+   --  products gather the packed rows instead.
+   --
+   --  The quantization differs by the format that will read it -- the
+   --  k-quants want their sums over a super-block -- so a batch is packed
+   --  for one answer to that, and a caller with matrices of both kinds
+   --  packs twice. Where the pool does not quantize at all, Pack says so
+   --  and the caller multiplies the rows as they are.
+   type Packed_Rows is limited private;
+
+   --  Quantize Count rows of Columns.
+   --
+   --  @param Item Receives the packed rows; anything it held is released.
+   --  @param Vectors Count runs of Columns values.
+   --  @param Count How many.
+   --  @param Columns How wide.
+   --  @param Super Whether the sums are wanted over a super-block, which
+   --    is what Supers_Vectors says of the format that will read them.
+   --  @param Ok True when the rows are packed; False where the pool does
+   --    not quantize, the width cannot be packed, or there was no room.
+   procedure Pack
+     (Item    : in out Packed_Rows;
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count   : Element_Count;
+      Columns : Element_Count;
+      Super   : Boolean;
+      Ok      : out Boolean);
+
+   --  Give the packed rows back.
+   --
+   --  @param Item Packed rows to release; empty afterwards.
+   procedure Unpack (Item : in out Packed_Rows);
+
+   --  One matrix against some of the packed rows, on the calling task.
+   --
+   --  The rows named in Members, in that order, gathered out of the packed
+   --  batch and multiplied serially -- which is what a worker that has an
+   --  expert to itself does. The answer is Members'Length runs of the
+   --  matrix's rows.
+   --
+   --  @param Weight The matrix; its format must be one the packed rows
+   --    were made for.
+   --  @param Rows The packed batch.
+   --  @param Members Which rows of it, counting from zero.
+   --  @param Target Receives Members'Length results of Weight's row count.
+   --  @param Ok False where the format cannot read packed rows or a member
+   --    is past the batch; the caller multiplies the rows as they are.
+   procedure Multiply_Packed
+     (Weight  : Model_Runner.Tensors.View;
+      Rows    : Packed_Rows;
+      Members : Model_Runner.Shares.Member_Rows;
+      Target  : Model_Runner.Tensors.Real_Array_Access;
+      Ok      : out Boolean);
+
    subtype Task_Item is Model_Runner.Shares.Work;
    subtype Task_Item_Access is Model_Runner.Shares.Work_Access;
 
@@ -327,6 +389,16 @@ private
      access Model_Runner.Quantization.Integers.Signed_Array;
    type Sum_Array_Access is
      access Model_Runner.Quantization.Integers.Sum_Array;
+
+   type Packed_Rows is limited record
+      Count   : Element_Count := 0;
+      Columns : Element_Count := 0;
+      Super   : Boolean := False;
+      Values  : Signed_Array_Access := null;
+      Scales  : Model_Runner.Tensors.Real_Array_Access := null;
+      Totals  : Sum_Array_Access := null;
+      Halves  : Sum_Array_Access := null;
+   end record;
 
    type Job is record
       Count  : Element_Count := 1;

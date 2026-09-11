@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A batch's mixture on the processor packs its rows once.** Every row
+  went to eight experts and to a gate and an up each, quantized sixteen
+  times a layer; `Workers_CPU.Pack` and `Multiply_Packed` quantize the
+  layer once and gather an expert's members out of it, an expert to a
+  worker. Qwen3-30B-A3B's 1419-token prompt 65.6 -> 68.6 tokens a second,
+  the same bits. llama.cpp reads 250 there, and where that goes is a
+  kernel question at 768 rows, not the pool.
+
 - **The heads of a layer are made ready in one step on the device.**
   `heads.comp` normalizes each query or key head where the architecture
   states it, turns it, and places the keys and values in the cache: six
