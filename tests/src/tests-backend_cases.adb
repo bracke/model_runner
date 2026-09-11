@@ -4130,6 +4130,223 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end The_Heads_Step_Says_What_Three_Steps_Say;
 
+   -------------------------------------------------------
+   -- A_Listed_Mixture_Says_What_The_Gathered_One_Says --
+   -------------------------------------------------------
+
+   --  A batch's mixture as one sequence -- the routing inverted, every
+   --  expert run over the positions that chose it as one dispatch a
+   --  matrix, the answers by slot until the mix -- against the same
+   --  positions gathered one at a time as a token is. Twice: once with
+   --  binary32 stacks, which the row kernel walks and answers within the
+   --  router's last bit of the gathered run; and once with Q8_0 stacks
+   --  over a batch long enough for the matrix kernel, whose half-precision
+   --  operand is held to a tolerance. Holds Add_Invert and Add_Listed_Product, and the
+   --  inverting, listed and mixing kernels' listed paths.
+   procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 64;
+      Feed    : constant := 32;
+      Count   : constant := 40;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+      Added  : Boolean;
+      Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Gates  : N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Ups    : N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : N.Real_Array (0 .. Experts * Width * Feed - 1);
+      Inputs : N.Real_Array (0 .. Count * Width - 1);
+
+      --  What the batch's sequence leaves: the router's scores, the
+      --  routing, the inversion's room, the three listed answers with
+      --  their padding, the combination, and the mix, a position each.
+      Padded : constant := Used + (15 * Experts + Count - 1) / Count;
+      Batch_Room : constant N.Element_Count :=
+        N.Element_Count (Count)
+        * (Experts + 2 * Used + 32 * Experts + 3 * Used
+           + 3 * Padded * Feed + Padded * Width + Width);
+
+      Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
+      One   : N.Real_Array
+        (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
+        := [others => 0.0];
+
+      --  Run the batch and the positions one at a time over stacks in
+      --  one packing, and say how far apart the mixes are.
+      procedure Both (Packing : Products.Weight_Packing; Worst : out N.Real)
+      is
+         use type Products.Weight_Packing;
+
+         Plain : constant Boolean := Packing = Products.Values_F32;
+
+         G_Bytes : constant B.Byte_Array :=
+           (if Plain then Fixtures.Encode_F32 (Gates)
+            else Fixtures.Encode_Q8_0 (Gates));
+         U_Bytes : constant B.Byte_Array :=
+           (if Plain then Fixtures.Encode_F32 (Ups)
+            else Fixtures.Encode_Q8_0 (Ups));
+         D_Bytes : constant B.Byte_Array :=
+           (if Plain then Fixtures.Encode_F32 (Downs)
+            else Fixtures.Encode_Q8_0 (Downs));
+
+         Steps : Products.Sequence;
+
+         At_Mix : constant N.Element_Count :=
+           N.Element_Count (Count)
+           * (Experts + 2 * Used + 32 * Experts + 3 * Used
+              + 3 * Padded * Feed + Padded * Width);
+         One_Mix : constant N.Element_Count :=
+           N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
+                            + Used * Width);
+      begin
+         Worst := 0.0;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address,
+            B.Byte_Count (Router'Length) * 4, 0,
+            Products.Values_F32, Experts, Width, Added, Kept => False);
+         Assert (Added, "the router's product was refused");
+         Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+         Assert (Added, "the routing step was refused");
+         Products.Add_Invert (Steps, Experts, Used, 2, Added);
+         Assert (Added, "the inversion was refused");
+         Products.Add_Listed_Product
+           (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+            Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
+            Added, Kept => False, Chained => False);
+         Assert (Added, "the listed gates were refused");
+         Products.Add_Listed_Product
+           (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
+            Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
+            Added, Kept => False, Chained => False);
+         Assert (Added, "the listed ups were refused");
+         Products.Add_Combination (Steps, 0, Added, Kept => False);
+         Assert (Added, "the combination was refused");
+         Products.Add_Listed_Product
+           (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+            Packing, Experts * Width, Width, Feed, Experts, Used, 3, Count,
+            Added, Kept => False, By_Slot => True);
+         Assert (Added, "the listed downs were refused");
+         Products.Add_Mix (Steps, Width, Used, 7, 3, Added);
+         Assert (Added, "the listed mix was refused");
+
+         Products.Run (Engine, Steps, Inputs, Count, Batch, Ok, Halted);
+         Assert (Ok, "the batch's listed mixture was refused");
+
+         for Position in 0 .. Count - 1 loop
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Router (Router'First)'Address,
+               B.Byte_Count (Router'Length) * 4, 0,
+               Products.Values_F32, Experts, Width, Added, Kept => False);
+            Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+            Products.Add_Gathered_Product
+              (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+               Packing, Experts * Feed, Feed, Width, [others => 0], Used,
+               Added, Kept => False, Chained => False, Routed => 2);
+            Products.Add_Gathered_Product
+              (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
+               Packing, Experts * Feed, Feed, Width, [others => 0], Used,
+               Added, Kept => False, Chained => False, Routed => 2);
+            Products.Add_Combination (Steps, 0, Added, Kept => False);
+            Products.Add_Gathered_Product
+              (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+               Packing, Experts * Width, Width, Feed, [others => 0], Used,
+               Added, Kept => False, Chained => True, Apart => Feed,
+               Routed => 2);
+            Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+            Assert (Added, "the gathered mixture was refused");
+
+            Products.Run
+              (Engine, Steps,
+               Inputs (N.Element_Count (Position * Width)
+                       .. N.Element_Count (Position * Width + Width - 1)),
+               1, One, Ok, Halted);
+            Assert (Ok, "the gathered mixture would not run");
+
+            for Row in 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Batch (At_Mix + N.Element_Count (Position * Width + Row))
+                       - One (One_Mix + N.Element_Count (Row))));
+            end loop;
+         end loop;
+      end Both;
+
+      Worst : N.Real;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Router'Range loop
+         Router (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Gates'Range loop
+         Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
+         Ups (Index) := N.Real ((Index * 3) mod 5) / 5.0 - 0.4;
+      end loop;
+      for Index in Downs'Range loop
+         Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
+      end loop;
+      for Index in Inputs'Range loop
+         Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
+      end loop;
+
+      --  Not to the bit: the router's product goes to the thin kernel
+      --  for a batch of one and to the row kernel for forty, and the two
+      --  associate a score differently, so the shares differ in their
+      --  last bit. The experts' products are the same products.
+      Both (Products.Values_F32, Worst);
+      Assert (Worst < 1.0E-6,
+              "the listed mixture over binary32 stacks answers"
+              & N.Real'Image (Worst)
+              & " away from the positions gathered one at a time, where "
+              & "the products are the same products");
+
+      Both (Products.Packed_Q8_0, Worst);
+      Assert (Worst < 2.0E-2,
+              "the listed mixture over Q8_0 stacks answers"
+              & N.Real'Image (Worst)
+              & " away from the positions gathered one at a time");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Listed_Mixture_Says_What_The_Gathered_One_Says;
+
    ------------------------------------------------
    -- A_Split_Attention_Says_What_One_Piece_Says --
    ------------------------------------------------
@@ -4999,6 +5216,12 @@ package body Tests.Backend_Cases is
          "a batch packed once and read by members multiplies as the pool "
          & "multiplies the same rows, to the bit, and refuses a member past "
          & "the batch");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Listed_Mixture_Says_What_The_Gathered_One_Says'Access,
+         "a batch's mixture -- the routing inverted and every expert run "
+         & "over its positions as one dispatch a matrix -- says what the "
+         & "positions gathered one at a time say, within the router's last "
+         & "bit on the row kernel and a tolerance on the matrix kernel");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Split_Attention_Says_What_One_Piece_Says'Access,
          "one query against a cache cut into slices and merged says what "

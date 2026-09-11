@@ -19246,6 +19246,32 @@ the short-prompt figure is level with it now. The same bits on every
 published device row, conformance clean, and a test holds a query over
 seven hundred positions in three slices to the same attention in one piece.
 
+### A batch's mixture on the device as one sequence
+
+The timeline's fourth finding was structural: a mixture's prompt on the
+device was thirteen and a half thousand sequences -- one four-step sequence
+an expert a layer a batch, each submitted and waited for -- with the
+attention half on the old product-a-call path. The device was busy for six
+of the prompt's 12.8 seconds. Now `invert.comp` turns a batch's routing
+inside out into each expert's run of positions, the row and matrix kernels
+each have a listed mode whose third dispatch axis is the expert, and the
+mix reads each position's answers back by slot: the whole batched layer of a
+mixture is one sequence of eighteen steps, as a token's is seventeen. The
+same change lets a dense layer with head normalizations go whole in a batch,
+which Qwen3-8B's prompt had been excluded from.
+
+| prompt tokens a second | before | after |
+| --- | ---: | ---: |
+| Qwen3-30B-A3B, 1302 tokens | 97.7, 88.8, 99.3 | 237.1, 273.0, 235.0 |
+| Qwen3-8B, 1302 tokens | 56.9, 138.1 | 238.9, 238.1 |
+| Qwen3-8B, 110 tokens | 44.2, 44.1 | 64.9, 66.2 |
+
+The same greedy digests on every published row. llama-bench's Vulkan
+`pp1302` for the mixture file is 300, so the gap is 1.25 from 3.1; the
+device's own time is 4.2 of the 5.5 seconds now, and the host's share --
+the rotary table computed a layer a batch, and the reading out -- is the
+next question.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

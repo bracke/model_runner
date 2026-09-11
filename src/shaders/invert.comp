@@ -1,0 +1,108 @@
+#version 450
+
+//  A batch's routing turned inside out: from each position's experts to
+//  each expert's positions.
+//
+//  route.comp writes, for each position, the experts it chose and their
+//  shares. A batch's experts run one dispatch a matrix with the expert as
+//  the third dimension, and what an expert's workgroups need is the other
+//  view: how many positions chose it, and which, in a run they can walk.
+//  This writes, in words: a count an expert, then where each expert's run
+//  begins, then the runs of positions, then the runs of shares in the
+//  same order, and then for each position and rank which slot of the runs
+//  it was given -- which is what the mix at the end reads to find a
+//  position's answers again. The runs of positions and of shares are
+//  each given room for the entries and fifteen more an expert, which is
+//  the most the padding below can add; the engine sizes the buffer so.
+//
+//  One workgroup for the whole batch. The counting and the placing are
+//  dealt round the lanes with atomics on shared counters, so the order of
+//  positions within an expert's run is whatever the lanes made it; every
+//  slot's product is that position's alone and the mix finds each by its
+//  slot, so no answer depends on the order.
+//
+//  Each expert's run is padded to a whole number of sixteen slots, which
+//  is what the matrix kernel stores at a time, and the padding slots name
+//  position nought with no share: they compute a real position's answer,
+//  which is finite, and nothing reads it back.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 1) readonly  buffer Routing { uint r[]; };
+layout(std430, binding = 2) writeonly buffer Lists   { uint l[]; };
+
+layout(push_constant) uniform Shape {
+    uint experts;
+    uint used;
+    uint count;
+} shape;
+
+//  More experts than any mixture this program has been shown has.
+const uint MOST = 512u;
+
+shared uint counted[MOST];
+shared uint begins[MOST];
+shared uint filled[MOST];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint experts = min (shape.experts, MOST);
+    uint entries = shape.count * shape.used;
+
+    for (uint e = lane; e < experts; e += 256u) {
+        counted[e] = 0u;
+        filled[e] = 0u;
+    }
+    barrier ();
+
+    for (uint i = lane; i < entries; i += 256u) {
+        uint pos = i / shape.used;
+        uint k = i - pos * shape.used;
+        uint e = r[pos * 2u * shape.used + k];
+        if (e < experts) {
+            atomicAdd (counted[e], 1u);
+        }
+    }
+    barrier ();
+
+    if (lane == 0u) {
+        uint at = 0u;
+        for (uint e = 0u; e < experts; e++) {
+            begins[e] = at;
+            at += (counted[e] + 15u) / 16u * 16u;
+        }
+    }
+    barrier ();
+
+    uint runs = entries + 15u * experts;
+    uint list_at = 2u * experts;
+    uint share_at = list_at + runs;
+    uint slot_at = share_at + runs;
+
+    //  The padding first, so that a real position's entry lands over it.
+    for (uint e = lane; e < experts; e += 256u) {
+        for (uint pad = counted[e]; pad < (counted[e] + 15u) / 16u * 16u;
+             pad++) {
+            l[list_at + begins[e] + pad] = 0u;
+            l[share_at + begins[e] + pad] = 0u;
+        }
+    }
+    barrier ();
+
+    for (uint e = lane; e < experts; e += 256u) {
+        l[e] = counted[e];
+        l[experts + e] = begins[e];
+    }
+
+    for (uint i = lane; i < entries; i += 256u) {
+        uint pos = i / shape.used;
+        uint k = i - pos * shape.used;
+        uint e = r[pos * 2u * shape.used + k];
+        if (e < experts) {
+            uint slot = begins[e] + atomicAdd (filled[e], 1u);
+            l[list_at + slot] = pos;
+            l[share_at + slot] = r[pos * 2u * shape.used + shape.used + k];
+            l[slot_at + i] = slot;
+        }
+    }
+}

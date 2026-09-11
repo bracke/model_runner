@@ -9596,8 +9596,26 @@ package body Model_Runner.Llama is
       --  answer on must know that the layer it hands to will be there to
       --  take it: one that falls back reads the host's copy, and the host's
       --  copy is what carrying does not write.
+      --  A mixture layer goes whole where the device holds its expert
+      --  stacks and nothing stands between the router and the experts
+      --  that the device does not do -- as a token's does, and for a batch
+      --  through the routing inverted and every expert run over the
+      --  positions that chose it as one dispatch a matrix.
+      function Mixture_Whole (L : Layer) return Boolean
+      is (Source.Stacked
+          and then L.Experts /= null
+          and then T.Is_Present (L.Router)
+          and then T.Is_Present (L.Gate_Stack)
+          and then T.Is_Present (L.Up_Stack)
+          and then T.Is_Present (L.Down_Stack)
+          and then L.Expert_Gate_Bias = null
+          and then L.Expert_Down_Bias = null
+          and then not (Settings.Gate_Alpha > 0.0)
+          and then Settings.Experts_Used
+                   <= Model_Runner.Backend.Device.Max_Members);
+
       function Whole_Layer_Fits (L : Layer) return Boolean
-      is (T.Is_Present (L.Gate)
+      is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
           and then L.Sinks = null
           and then L.Out_Bias = null
           and then L.Up_Bias = null
@@ -9606,7 +9624,20 @@ package body Model_Runner.Llama is
           and then L.Post_Attention_Norm = null
           and then L.Post_Feed_Norm = null
           and then L.Key_Bias = null
-          and then L.Key_Norm = null);
+
+          --  A head normalization goes to the device, both or neither,
+          --  as the token's whole layer takes them.
+          and then (L.Query_Norm = null) = (L.Key_Norm = null));
+
+      --  Whether the session holds a block of the device's cache, taking
+      --  one where it may: what the whole layer writes its keys and
+      --  values into, asked before the layer is committed to it.
+      function Has_Block (Of_Item : Session_Access) return Boolean is
+         Held : Boolean;
+      begin
+         Take_Block (Of_Item, Held);
+         return Held;
+      end Has_Block;
 
       procedure Release is
       begin
@@ -10251,7 +10282,15 @@ package body Model_Runner.Llama is
               and then Current.Attention_Norm_Bias = null
               and then Current.Feed_Norm /= null
               and then Current.Query_Bias = null
-              and then Current.Query_Norm = null
+
+              --  A head normalization is a step of the whole layer and
+              --  of nothing else here: a layer with one goes whole or
+              --  goes to the host, which is what the fallback below
+              --  keeps to.
+              and then (Current.Query_Norm = null
+                        or else (Item.Held = Exact
+                                 and then Whole_Layer_Fits (Current)
+                                 and then Has_Block (Item'Unchecked_Access)))
               and then Source.Settings.Kind not in Falcon | Phi2
             then
                Charge (Item, Normalizing, Mark);
@@ -10345,7 +10384,8 @@ package body Model_Runner.Llama is
                   if Turnable
                     and then Resident
                     and then Item.Held = Exact
-                    and then Settings.Experts = 0
+                    and then (Settings.Experts = 0
+                              or else Mixture_Whole (Current))
                     and then Whole_Layer_Fits (Current)
                   then
                      Model_Runner.Backend.Device.Whole_Layer
@@ -10417,7 +10457,22 @@ package body Model_Runner.Llama is
                           Carrying
                           and then Index < Source.Layers.all'Last
                           and then Whole_Layer_Fits
-                                     (Source.Layers.all (Index + 1)));
+                                     (Source.Layers.all (Index + 1)),
+
+                        --  The head normalizations, where the layer has
+                        --  them, and the mixture where the layer is one.
+                        Query_Norm => Current.Query_Norm,
+                        Key_Norm   => Current.Key_Norm,
+                        Router     =>
+                          (if Settings.Experts > 0 then Current.Router
+                           else T.Empty_View),
+                        Router_Bias => Current.Router_Bias,
+                        Gate_Stack  => Current.Gate_Stack,
+                        Up_Stack    => Current.Up_Stack,
+                        Down_Stack  => Current.Down_Stack,
+                        Feed        => Settings.Expert_Feed,
+                        Used        => Settings.Experts_Used,
+                        Experts     => Settings.Experts);
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -10434,7 +10489,7 @@ package body Model_Runner.Llama is
                      Rotated := True;
                      Fused := True;
                      Cached := True;
-                  else
+                  elsif Current.Query_Norm = null then
                      Model_Runner.Backend.Device.Normalize_And_Project
                        ([Current.Query, Current.Key, Current.Value],
                         Acts, Current.Attention_Norm.all, Settings.Epsilon,

@@ -147,8 +147,25 @@ layout(push_constant) uniform Shape {
     //  Whether the member numbers are read from the routing buffer
     //  instead: the first Used words of what a routing step wrote for the
     //  one position a token is.
+    //
+    //  Two and three are a batch's experts, listed. The third dimension
+    //  is then the expert itself and the routing buffer holds what
+    //  invert.comp wrote from a batch's routing: how many positions chose
+    //  each expert, where each expert's run of them begins, the run of
+    //  positions, and the run of shares. A workgroup takes its expert's
+    //  whole run, a group of vectors at a time, and writes each answer at
+    //  the position's slot in the run rather than at the position -- so
+    //  a hundred and twenty-eight experts go over as one dispatch a
+    //  matrix rather than one sequence an expert, which is what a
+    //  prompt's mixture cost. Two reads its vectors by position, from the
+    //  list; three reads them by slot, which is what the product before
+    //  it wrote. members[0] is the expert count, which says where the
+    //  runs begin in the buffer.
     uint routed;
 } shape;
+
+const uint LISTED_BY_POSITION = 2u;
+const uint LISTED_BY_SLOT     = 3u;
 
 const uint FMT_F32    = 0u;
 const uint FMT_F16    = 1u;
@@ -386,16 +403,42 @@ void main() {
     //  and the vector that member reads. Zero, and nothing, for a plain
     //  product.
     uint member = gl_WorkGroupID.z;
-    uint which = shape.routed != 0u ? route[member] : shape.members[member];
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
 
-    for (uint k = 0u; k < GROUP; ++k) {
-        from[k] = min(shape.first + k, shape.count - 1u) * shape.columns
-                  + member * shape.apart;
-        sum[k] = 0.0;
+    //  A listed expert's run: how many positions and where they begin.
+    //  An expert nobody chose has nothing to do, and every lane of its
+    //  workgroup leaves together, which keeps the barrier below legal.
+    uint experts = shape.members[0];
+    uint run_count = listed ? route[member]
+                            : min(GROUP, shape.count - shape.first);
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
     }
 
     uint base = shape.base + slice + row * row_bytes();
+
+    //  A plain product is one group of vectors; a listed run is as many
+    //  groups as it takes, the row read again for each. The body of this
+    //  loop is the whole of the kernel below and is not indented for it.
+    for (uint chunk = 0u; chunk < run_count; chunk += GROUP) {
+
+    for (uint k = 0u; k < GROUP; ++k) {
+        if (listed) {
+            uint slot = run_at + min(chunk + k, run_count - 1u);
+            from[k] = (shape.routed == LISTED_BY_POSITION
+                       ? route[list_at + slot] : slot) * shape.columns;
+        } else {
+            from[k] = min(shape.first + k, shape.count - 1u) * shape.columns
+                      + member * shape.apart;
+        }
+        sum[k] = 0.0;
+    }
 
     if (shape.format == FMT_F32) {
         //  Words rather than bytes, which the base allows because both the
@@ -995,7 +1038,7 @@ void main() {
     //  above and belong to nobody.
     //  What this lane holds is its eighth of the row. The add is outside
     //  the test below because every lane of the cluster has to reach it.
-    uint taken = min(GROUP, shape.count - shape.first);
+    uint taken = min(GROUP, run_count - chunk);
 
     for (uint k = 0u; k < GROUP; ++k) {
         shares[gl_LocalInvocationID.x * GROUP + k] = sum[k];
@@ -1004,25 +1047,28 @@ void main() {
     barrier();
 
     //  One lane of each cluster adds its row up and writes it. The others
-    //  have nothing left to do, and reached the barrier before stopping.
-    if (part != 0u) {
-        return;
-    }
+    //  have nothing left to do for this group, and reached the barrier
+    //  before the one below, which keeps the next group's shares from
+    //  landing on what this one is still reading.
+    if (part == 0u && wanted < shape.rows) {
+        for (uint k = 0u; k < GROUP; ++k) {
+            if (k < taken) {
+                float whole = 0.0;
+                for (uint lane = 0u; lane < LANES; ++lane) {
+                    whole += shares[(gl_LocalInvocationID.x + lane) * GROUP
+                                    + k];
+                }
+                uint out_at = listed
+                              ? (run_at + chunk + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
 
-    if (wanted >= shape.rows) {
-        return;
-    }
-
-    for (uint k = 0u; k < GROUP; ++k) {
-        if (k < taken) {
-            float whole = 0.0;
-            for (uint lane = 0u; lane < LANES; ++lane) {
-                whole += shares[(gl_LocalInvocationID.x + lane) * GROUP + k];
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
             }
-            uint out_at = member * shape.rows * shape.count
-                          + (shape.first + k) * shape.rows + row;
-
-            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }
+    }
+
+    barrier();
+
     }
 }

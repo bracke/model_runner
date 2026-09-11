@@ -23,6 +23,10 @@ layout(local_size_x = 256) in;
 layout(std430, binding = 1) readonly  buffer Vectors { uint v[]; };
 layout(std430, binding = 3) writeonly buffer Halves  { uint h[]; };
 
+//  A batch's routing inverted, where the copy is of listed experts'
+//  vectors: see below.
+layout(std430, binding = 4) readonly  buffer Lists   { uint l[]; };
+
 layout(push_constant) uniform Shape {
     //  Values the batch really holds, and values the copy is to hold. The
     //  second is the first rounded up, and the difference is the padding
@@ -33,12 +37,58 @@ layout(push_constant) uniform Shape {
     uint first;
     uint format;
     uint base;
+
+    //  Whether the copy is of the runs a batch's experts walk, and how:
+    //  zero for the batch as it stands; two for each run's positions
+    //  taken from the lists at binding four, so that the run is contiguous
+    //  where the matrix instruction wants it; three for the runs as they
+    //  already lie, which is what the combined arms are. held is then the
+    //  width of a vector and count the batch's positions, base the expert
+    //  count that says where the lists lie, and room the most slots the
+    //  runs may hold; what lies past the runs' end is zeroed.
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
 } shape;
 
 void main() {
     //  Two values to a word, because that is how half precision is packed
     //  and it halves the invocations.
     uint at = gl_GlobalInvocationID.x;
+
+    if (shape.routed >= 2u) {
+        //  Two words a lane, of one slot's vector: which slot, and which
+        //  of its components. The width is a whole number of pairs.
+        uint experts = shape.base;
+        uint width = shape.held;
+        uint pairs = width >> 1u;
+        uint slot = at / pairs;
+        uint c = (at - slot * pairs) * 2u;
+
+        if (slot >= shape.room) {
+            return;
+        }
+
+        //  Where the runs end: the last expert's start and its count,
+        //  padded as invert.comp pads it.
+        uint last = experts - 1u;
+        uint total = l[experts + last] + (l[last] + 15u) / 16u * 16u;
+
+        if (slot >= total) {
+            h[at] = 0u;
+            return;
+        }
+
+        uint from = (shape.routed == 2u ? l[2u * experts + slot] : slot)
+                    * width + c;
+        h[at] = packHalf2x16(vec2(uintBitsToFloat(v[from]),
+                                  uintBitsToFloat(v[from + 1u])));
+        return;
+    }
+
     uint words = shape.room >> 1u;
 
     if (at >= words) {

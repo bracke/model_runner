@@ -942,6 +942,10 @@ package body Model_Runner.Backend.Device is
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Halted);
 
+      if Ok then
+         Note_Timeline (Steps, Natural'Max (Positions, 1));
+      end if;
+
       if Halted or else not Ok then
          Ok := False;
          return;
@@ -1187,6 +1191,10 @@ package body Model_Runner.Backend.Device is
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Halted);
 
+      if Ok then
+         Note_Timeline (Steps, Natural'Max (Positions, 1));
+      end if;
+
       if Halted or else not Ok then
          Ok := False;
          return;
@@ -1307,6 +1315,10 @@ package body Model_Runner.Backend.Device is
         (Engine, Steps, Vector.all, 1,
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Cancelled, Cancel);
+
+      if Ok then
+         Note_Timeline (Steps, 1);
+      end if;
 
       --  Asked to stop comes before could not compute, for the reason the
       --  single product gives: it is the truer answer.
@@ -1526,6 +1538,8 @@ package body Model_Runner.Backend.Device is
       if Cancelled or else not Ran then
          return;
       end if;
+
+      Note_Timeline (Steps, Positive (Slots));
 
       declare
          --  Past the normalization's room, which nothing here reads.
@@ -2076,48 +2090,115 @@ package body Model_Runner.Backend.Device is
          Step_Route := Products.Length (Steps);
          Step_Room (Model_Runner.Numerics.Element_Count (2 * Used));
 
-         Products.Add_Gathered_Product
-           (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
-            Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
-            [others => 0], Used, Added,
-            Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
-            Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-            Routed => Step_Route);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+         if Slots > 1 then
+            --  A batch: the routing inverted, and every expert run over
+            --  the positions that chose it as one dispatch a matrix,
+            --  the answers by slot until the mix puts each position's
+            --  back together. A token gathers its few experts straight
+            --  from the routing, below. The slots a position take room
+            --  for the padding of the runs, as Add_Listed_Product sizes
+            --  it.
+            declare
+               Padded : constant Natural :=
+                 Used
+                 + (15 * Natural'Min (Experts, Natural (Slots) * Used)
+                    + Natural (Slots) - 1)
+                   / Natural (Slots);
+            begin
+               Products.Add_Invert
+                 (Steps, Experts, Used, Step_Route, Added, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Route := Products.Length (Steps);
+               Step_Room
+                 (Model_Runner.Numerics.Element_Count
+                    (32 * Experts + 3 * Used));
 
-         Products.Add_Gathered_Product
-           (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
-            Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
-            [others => 0], Used, Added,
-            Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
-            Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-            Routed => Step_Route);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+               Products.Add_Listed_Product
+                 (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
+                  Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
+                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
+                  Kept => False, From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
 
-         Products.Add_Combination (Steps, Unit, Added, Kept => False);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+               Products.Add_Listed_Product
+                 (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
+                  Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
+                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
+                  Kept => False, From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
 
-         Products.Add_Gathered_Product
-           (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
-            Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
-            [others => 0], Used, Added,
-            Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
-            Kept => False, Chained => True, Apart => Feed,
-            Routed => Step_Route);
-         if not Added then
-            return;
+               Products.Add_Combination (Steps, Unit, Added, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+
+               Products.Add_Listed_Product
+                 (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
+                  Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
+                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
+                  Kept => False, By_Slot => True);
+               if not Added then
+                  return;
+               end if;
+               Step_Downs := Products.Length (Steps);
+               Step_Room (Model_Runner.Numerics.Element_Count (Padded) * Width);
+            end;
+         else
+            Products.Add_Gathered_Product
+              (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
+               Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
+               [others => 0], Used, Added,
+               Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
+               Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+               Routed => Step_Route);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+
+            Products.Add_Gathered_Product
+              (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
+               Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
+               [others => 0], Used, Added,
+               Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
+               Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+               Routed => Step_Route);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+
+            Products.Add_Combination (Steps, Unit, Added, Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+
+            Products.Add_Gathered_Product
+              (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
+               Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
+               [others => 0], Used, Added,
+               Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
+               Kept => False, Chained => True, Apart => Feed,
+               Routed => Step_Route);
+            if not Added then
+               return;
+            end if;
+            Step_Downs := Products.Length (Steps);
+            Step_Room (Model_Runner.Numerics.Element_Count (Used) * Width);
          end if;
-         Step_Downs := Products.Length (Steps);
-         Step_Room (Model_Runner.Numerics.Element_Count (Used) * Width);
 
          Products.Add_Mix
            (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
@@ -2345,6 +2426,10 @@ package body Model_Runner.Backend.Device is
         (Engine, Steps, Vector.all, Positive (Spread),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
          Ok, Cancelled, Cancel);
+
+      if Ok then
+         Note_Timeline (Steps, Positive (Spread));
+      end if;
 
       if Cancelled then
          Status := E.Make (E.Generation_Cancelled);

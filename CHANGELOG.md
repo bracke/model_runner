@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A batch's mixture on the device is one sequence.** `invert.comp`
+  turns the routing inside out into each expert's run of positions; the
+  row and matrix kernels have a listed mode whose third dispatch axis is
+  the expert; the mix reads each position's answers back by slot. A
+  mixture's prompt was a four-step sequence an expert a layer a batch,
+  submitted and waited for thirteen thousand times: Qwen3-30B-A3B's
+  1302-token prompt 95 -> 240 tokens a second against llama.cpp's 300.
+  The batched whole layer takes a dense layer with head normalizations
+  as well: Qwen3-8B's prompt 57-138 -> 238.
+
 - **A generated token's attention on the device reads its group's keys
   and values once, cut into slices.** A workgroup was a head and read its
   group's cache whole, eight times a layer for a group of eight; a sixth

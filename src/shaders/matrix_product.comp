@@ -125,6 +125,10 @@ layout(std430, binding = 3) writeonly buffer Made { float16_t made[]; };
 //  is what it makes its reader pay rather than the bytes it moves.
 layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
 
+//  The same binding as a batch's routing inverted, where the product is
+//  every expert's over its run: see the push block.
+layout(std430, binding = 4) readonly buffer Lists { uint lists[]; };
+
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
@@ -139,6 +143,21 @@ layout(push_constant) uniform Shape {
     //  Whether the residual above is added to the answer before it is
     //  stored. Zero for every product that no join followed.
     uint joins;
+
+    //  The rest of the row kernel's block, of which one word matters
+    //  here: routed at two or three is a listed product. The third
+    //  dimension of the dispatch is then the expert, the weights are its
+    //  slice of the stack -- stride bytes a slice -- and the vectors are
+    //  its run of the half-precision copy half_batch.comp laid out from
+    //  the lists at binding four: the run begins at the slot the lists
+    //  give and holds as many vectors as they count, padded to sixteen. A
+    //  tile of vectors past the run's end has nothing to do and leaves;
+    //  the answers are stored by slot.
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
 } shape;
 
 //  Rows and vectors of the answer one workgroup computes, and how much of
@@ -335,8 +354,20 @@ int q3k_scale (uint at, uint which) {
 void main() {
     uint row0 = gl_WorkGroupID.x * TILE_R;
 
+    //  A listed product's expert: its run of vectors and its slice of
+    //  the stack. The run's end is what the stores below stop at.
+    bool listed = shape.routed >= 2u;
+    uint expert = gl_WorkGroupID.z;
+    uint run_at = listed ? lists[shape.members[0] + expert] : 0u;
+    uint run_count = listed ? lists[expert] : shape.count;
+    uint slice = listed ? expert * shape.stride : 0u;
+
+    if (listed && gl_WorkGroupID.y * TILE_V >= run_count) {
+        return;
+    }
+
     //  This lane group's quarter of the tile's vectors.
-    uint vec0 = gl_WorkGroupID.y * TILE_V
+    uint vec0 = run_at + gl_WorkGroupID.y * TILE_V
                 + (gl_LocalInvocationID.x >> 6u) * (TILE_V / SUBS);
 
     //  Nothing here asks how long the batch is. The host rounds it up to a
@@ -392,7 +423,7 @@ void main() {
             uint r       = (gl_LocalInvocationID.x & 63u) >> 1u;
             uint into    = chunk * TILE_R * WT_STRIDE
                            + r * WT_STRIDE + half_of * 16u;
-            uint row     = shape.base + (row0 + r) * rb;
+            uint row     = shape.base + slice + (row0 + r) * rb;
 
 #ifdef MORE_FORMATS
             if (is_nibble (shape.format)) {
@@ -1023,6 +1054,12 @@ void main() {
         for (uint j = 0u; j < AV; ++j) {
             uint where = (vec0 + j * 16u) * shape.rows
                          + row0 + i * 16u;
+
+            //  A block of sixteen vectors past this expert's run is the
+            //  next expert's, and is left to it.
+            if (listed && vec0 + j * 16u >= run_at + run_count) {
+                continue;
+            }
 
             if (shape.first > 0u) {
                 coopMatStore

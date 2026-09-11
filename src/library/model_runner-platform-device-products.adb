@@ -1777,6 +1777,21 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         --  And a batch's routing inverted.
+         declare
+            Inverted : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Invert;
+         begin
+            Request.Size := Interfaces.C.size_t (Inverted'Length * 4);
+            Request.Code := Inverted'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Inverter := Made;
+            end if;
+         end;
+
          --  And the thin product.
          declare
             Thinned : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -2267,6 +2282,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Merge_Line := Made;
+            end if;
+         end if;
+
+         if Item.Inverter /= Null_Handle then
+            Request.Stage.Module := Item.Inverter;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Invert_Line := Made;
             end if;
          end if;
 
@@ -2955,6 +2980,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
+      Give_Back (Item.Invert_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -2971,6 +2997,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
       Give_Back (Item.Thinner, "vkDestroyShaderModule");
+      Give_Back (Item.Inverter, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
@@ -5479,6 +5506,11 @@ package body Model_Runner.Platform.Device.Products is
             return "route " & Shape (This.Used, This.Columns, " of ");
          elsif This.Mixes then
             return "mix";
+         elsif This.Inverts then
+            return "invert";
+         elsif This.Listed then
+            return "listed " & Shape (This.Each, This.Columns) & " "
+              & Packing_Name (This.Packing);
          elsif This.Blends then
             return (if This.Unit /= 2 then "combine"
                     elsif This.Folded then "join folded" else "join");
@@ -5697,6 +5729,113 @@ package body Model_Runner.Platform.Device.Products is
    -- Add_Mix --
    -------------
 
+   procedure Add_Invert
+     (Steps      : in out Sequence;
+      Experts    : Natural;
+      Used       : Natural;
+      Route_Step : Positive;
+      Added      : out Boolean;
+      Kept       : Boolean := False) is
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Route_Step > Steps.Held
+        or else not Steps.Items (Route_Step).Routes
+        or else Steps.Items (Route_Step).Used /= Used
+        or else Steps.Items (Route_Step).Columns /= Experts
+        or else Experts = 0
+        or else Experts > Max_Experts
+      then
+         return;
+      end if;
+
+      --  Rows is room: two words an expert, three a position and rank,
+      --  and thirty more an expert for the padding of the runs is what
+      --  the lists take, and a step's room is Rows a position.
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => 32 * Experts + 3 * Used, Columns => Experts,
+         Chained => True, Reads => Route_Step,
+         Kept => Kept, Inverts => True, Used => Used,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Invert;
+
+   procedure Add_Listed_Product
+     (Steps       : in out Sequence;
+      Base        : System.Address;
+      Span        : Model_Runner.Bytes.Byte_Count;
+      At_Byte     : Model_Runner.Bytes.Byte_Count;
+      Packing     : Weight_Packing;
+      Stack       : Natural;
+      Each        : Natural;
+      Columns     : Natural;
+      Experts     : Natural;
+      Used        : Natural;
+      Invert_Step : Positive;
+      Count       : Positive;
+      Added       : out Boolean;
+      Key         : System.Address := System.Null_Address;
+      Kept        : Boolean := True;
+      From_Step   : Natural := 0;
+      By_Slot     : Boolean := False;
+      Chained     : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if not Chained then 0
+         elsif From_Step = 0 then Steps.Held else From_Step);
+
+      --  Slots a position, with the padding: fifteen slots at most for
+      --  each expert that has a run, spread over the positions.
+      Slots : constant Natural :=
+        Used + (15 * Natural'Min (Experts, Count * Used) + Count - 1)
+               / Count;
+
+      --  What the source holds a position: the vectors themselves, or
+      --  the slots' worth where they are read by slot.
+      Wanted : constant Natural :=
+        (if By_Slot then Columns * Slots else Columns);
+   begin
+      Added := False;
+
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Each = 0
+        or else Experts = 0
+        or else Each * Experts > Stack
+        or else (Chained
+                 and then (Source not in 1 .. Steps.Held
+                           or else Steps.Items (Source).Rows /= Wanted))
+        or else (not Chained
+                 and then (By_Slot
+                           or else Steps.Items (1).Columns /= Columns))
+        or else Invert_Step > Steps.Held
+        or else not Steps.Items (Invert_Step).Inverts
+        or else Steps.Items (Invert_Step).Used /= Used
+        or else Steps.Items (Invert_Step).Columns /= Experts
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
+         Rows => Each * Slots, Columns => Columns, Key => Key,
+         Chained => Chained, Reads => Source,
+         Kept => Kept,
+         Blends => False, Unit => 0, Attends => False,
+         Gathers => Experts, Stack => Stack, Each => Each,
+         Routed => Invert_Step, Used => Used,
+         Listed => True, By_Slot => By_Slot,
+         others => <>);
+      Added := True;
+   end Add_Listed_Product;
+
    procedure Add_Mix
      (Steps         : in out Sequence;
       Width         : Natural;
@@ -5715,10 +5854,16 @@ package body Model_Runner.Platform.Device.Products is
         or else Downs_Step > Steps.Held
         or else Route_Step > Steps.Held
         or else Residual_Step > Steps.Held
-        or else not Steps.Items (Route_Step).Routes
+        or else not (Steps.Items (Route_Step).Routes
+                     or else Steps.Items (Route_Step).Inverts)
         or else Steps.Items (Route_Step).Used /= Used
-        or else Steps.Items (Downs_Step).Gathers /= Used
-        or else Steps.Items (Downs_Step).Rows /= Used * Width
+        or else Steps.Items (Downs_Step).Listed
+                /= Steps.Items (Route_Step).Inverts
+        or else (not Steps.Items (Downs_Step).Listed
+                 and then Steps.Items (Downs_Step).Gathers /= Used)
+        or else (if Steps.Items (Downs_Step).Listed
+                 then Steps.Items (Downs_Step).Each /= Width
+                 else Steps.Items (Downs_Step).Rows /= Used * Width)
         or else (Residual_Step /= 0
                  and then Steps.Items (Residual_Step).Rows /= Width)
       then
@@ -6196,8 +6341,35 @@ package body Model_Runner.Platform.Device.Products is
       --  Whether a step goes to the tile kernel. A gather of more than one
       --  member never does: the tile kernel reads one matrix at one base,
       --  and a gather of one is that, at the base of the slice it names.
+      --  The slots a listed product's runs may take, with the padding
+      --  and a tile's worth past the end for the loads a tile makes
+      --  beyond its run.
+      function Listed_Slots (Which : Positive) return Natural
+      is (Steps.Items (Which).Rows / Steps.Items (Which).Each * Count
+          + Tile_Vectors);
+
+      --  Whether a listed product goes to the matrix kernel, every
+      --  expert's run as a tile of the half-precision copy that
+      --  half_batch.comp lays out from the lists: where the batch is
+      --  long enough for the tile at all, and the slice's rows divide
+      --  by it. The row kernel walks the runs otherwise.
+      --
+      --  The wide tile, whatever an expert's run: a run of thirty-two in
+      --  a tile of a hundred and twenty-eight is three quarters padding,
+      --  and the narrow tile measured slower for it, because what the
+      --  tile kernel spends its time on is decoding the rows into the
+      --  instruction's operand, once a tile of vectors, and the wide tile
+      --  decodes each expert's rows once.
+      function Listed_Tiled (Which : Positive) return Boolean
+      is (Steps.Items (Which).Listed
+          and then Uses_Matrix
+                     (Item, Steps.Items (Which).Packing,
+                      Steps.Items (Which).Each,
+                      Steps.Items (Which).Columns, Count));
+
       function Tiled (Which : Positive) return Boolean
       is (Steps.Items (Which).Gathers <= 1
+          and then not Steps.Items (Which).Listed
           and then Uses_Matrix
                      (Item, Steps.Items (Which).Packing,
                       Steps.Items (Which).Rows,
@@ -6322,6 +6494,12 @@ package body Model_Runner.Platform.Device.Products is
                     (Interfaces.Unsigned_64 (This.Columns),
                      Interfaces.Unsigned_64 (This.Rows))
                   * Interfaces.Unsigned_64 (Room) * 2);
+            elsif Listed_Tiled (Index) then
+               --  The runs' vectors, laid out by slot.
+               Half_Bytes := Interfaces.Unsigned_64'Max
+                 (Half_Bytes,
+                  Interfaces.Unsigned_64 (This.Columns)
+                  * Interfaces.Unsigned_64 (Listed_Slots (Index)) * 2);
             end if;
 
             --  A combining step carries no matrix: it reads the two
@@ -6448,6 +6626,17 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Weight :=
                  (if This.Base = System.Null_Address then 0
                   else Interfaces.Unsigned_64 (This.Columns) * 4);
+            elsif This.Inverts then
+               --  An inverting step reads the routing step it names and
+               --  carries no weight.
+               if This.Rows = 0
+                 or else This.Reads not in 1 .. Index - 1
+                 or else Item.Invert_Line = Null_Handle
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
             elsif This.Mixes then
                --  A mixing step reads the gathered projection down and
                --  the routing step it names, and a residual where it has
@@ -6499,6 +6688,8 @@ package body Model_Runner.Platform.Device.Products is
               or else (This.Chained
                        and then This.Columns
                                   * (if This.Apart > 0 then This.Gathers
+                                     elsif This.Listed and then This.By_Slot
+                                     then This.Rows / This.Each
                                      else 1)
                                   /= Steps.Items
                                        ((if This.Reads = 0 then Index - 1
@@ -6614,7 +6805,7 @@ package body Model_Runner.Platform.Device.Products is
             --  matrix: one reads the two results before it, the other reads
             --  the cache the device holds.
             if This.Blends or else This.Attends or else This.Places
-              or else This.Rotates or else This.Mixes
+              or else This.Rotates or else This.Mixes or else This.Inverts
               or else (This.Routes and then This.Base = System.Null_Address)
               or else (This.Readies and then This.Base = System.Null_Address)
             then
@@ -6966,6 +7157,27 @@ package body Model_Runner.Platform.Device.Products is
                goto Next_Set;
             end if;
 
+            if Steps.Items (Index).Inverts then
+               --  The routing step's choice in, its own room out.
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (1) := Told (3);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
             if Steps.Items (Index).Mixes then
                --  The routing step's choice, the gathered projection
                --  down, its own room out, and the residual where there
@@ -7075,8 +7287,12 @@ package body Model_Runner.Platform.Device.Products is
             --  The half-precision copy, or -- for a gather routed on the
             --  device -- the routing step's choice, bound where the row
             --  kernel reads its members from.
+            --  A listed product on the matrix kernel reads the runs'
+            --  half-precision copy here and its lists at the residual's
+            --  binding; on the row kernel it reads the lists here.
             Told (4) :=
               (if Steps.Items (Index).Routed /= 0
+                 and then not Listed_Tiled (Index)
                then (Buffer => Item.Result_Buffer,
                      Offset => Places (Steps.Items (Index).Routed).At_Byte,
                      Extent => Places (Steps.Items (Index).Routed).Bytes)
@@ -7090,6 +7306,12 @@ package body Model_Runner.Platform.Device.Products is
                then Source_Of
                       (Steps.Items (Index).Joined,
                        Steps.Items (Steps.Items (Index).Joined).Reads)
+               --  A listed product's kernels read the lists at the
+               --  residual's binding, which a listed product never has.
+               elsif Steps.Items (Index).Listed
+               then (Buffer => Item.Result_Buffer,
+                     Offset => Places (Steps.Items (Index).Routed).At_Byte,
+                     Extent => Places (Steps.Items (Index).Routed).Bytes)
                else Told (3));
 
             --  And bounded to the columns the batch really holds. A tile
@@ -7737,6 +7959,30 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
+               if This.Inverts then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Invert_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Columns),
+                        Columns => C.unsigned (This.Used),
+                        Count   => C.unsigned (Count),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+
+                     --  One workgroup for the whole batch.
+                     Dispatch (Item.Buffer, 1, 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
                if This.Routes then
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute, Item.Route_Line);
@@ -7772,10 +8018,22 @@ package body Model_Runner.Platform.Device.Products is
                   declare
                      Whole : constant Natural := This.Rows * Count;
 
+                     --  A mix over listed answers is told so through
+                     --  Base, and the expert count through First, which
+                     --  says where the inversion's runs lie.
+                     Listed : constant Boolean :=
+                       Steps.Items (This.Reads_Two).Inverts;
+
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Rows),
                         Columns => C.unsigned (This.Used),
                         Count   => C.unsigned (Count),
+                        First   =>
+                          (if Listed
+                           then C.unsigned
+                                  (Steps.Items (This.Reads_Two).Columns)
+                           else 0),
+                        Base    => (if Listed then 1 else 0),
                         Joins   => (if This.Joined /= 0 then 1 else 0),
                         others  => <>);
                   begin
@@ -7997,6 +8255,113 @@ package body Model_Runner.Platform.Device.Products is
                Bind_Pipeline
                  (Item.Buffer, Bind_Point_Compute,
                   Row_Line (Item, Count, This.Packing));
+
+               --  A listed product on the matrix kernel: the runs'
+               --  vectors laid out by slot in half precision first, then
+               --  every expert's tiles down the third axis.
+               if Listed_Tiled (Index) and then Barrier /= null then
+                  declare
+                     Slots  : constant Natural := Listed_Slots (Index);
+                     Halved_Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Columns),
+                        Columns => C.unsigned (Slots),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing => 0,
+                        Base    => C.unsigned (This.Gathers),
+                        Joins   => 0,
+                        Table   => 0,
+                        Members => [others => 0],
+                        Stride  => 0,
+                        Apart   => 0,
+                        Routed  => (if This.By_Slot then 3 else 2));
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Each),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => 0,
+                        Table   => 0,
+                        Members => [0 => C.unsigned (This.Gathers),
+                                    others => 0],
+                        Stride  => C.unsigned (Slice_Bytes (Index)),
+                        Apart   => 0,
+                        Routed  => (if This.By_Slot then 3 else 2));
+                  begin
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Halved_Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned
+                          ((Slots * This.Columns / 2 + Group_Size - 1)
+                           / Group_Size), 1, 1);
+
+                     Barrier
+                       (Item.Buffer, Pipeline_Stage_Compute,
+                        Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        Tile_Pipeline (Item, This.Packing, Count));
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned (This.Each / Tile_Rows),
+                        C.unsigned
+                          ((Count + 15 + Tile_Width (Count) - 1)
+                           / Tile_Width (Count)),
+                        C.unsigned (This.Gathers));
+
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        Row_Line (Item, Count, This.Packing));
+                  end;
+
+                  goto Next_Dispatch;
+               end if;
+
+               --  A listed product is one dispatch, every expert down
+               --  the third axis and each walking its own run; the rows
+               --  the shader is told are one expert's.
+               if This.Listed then
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Each),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => 0,
+                        Table   => 0,
+                        Members => [0 => C.unsigned (This.Gathers),
+                                    others => 0],
+                        Stride  => C.unsigned (Slice_Bytes (Index)),
+                        Apart   => 0,
+                        Routed  => (if This.By_Slot then 3 else 2));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned
+                          ((Natural (Shape.Rows) * Row_Lanes
+                            + Row_Width (Item, This.Packing, Count) - 1)
+                           / Row_Width (Item, This.Packing, Count)),
+                        1,
+                        C.unsigned (This.Gathers));
+                  end;
+
+                  goto Next_Dispatch;
+               end if;
 
                while First < Count loop
                   declare

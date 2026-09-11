@@ -47,10 +47,29 @@ void main() {
 
     precise float acc = 0.0;
 
-    for (uint k = 0u; k < shape.used; ++k) {
-        float share = uintBitsToFloat(r[at_share + k]);
-        precise float term = share * d[(pos * shape.used + k) * shape.width + w];
-        acc = acc + term;
+    //  A batch's experts answered by slot, in the runs invert.comp laid
+    //  out: the routing bound here is then its lists, first is the expert
+    //  count that says where they lie, and each of this position's
+    //  answers is found by the slot it was given and weighed by the share
+    //  written beside it. The terms are added in rank order, as below.
+    if (shape.base != 0u) {
+        uint runs = shape.count * shape.used + 15u * shape.first;
+        uint share_at = 2u * shape.first + runs;
+        uint slot_at = share_at + runs;
+
+        for (uint k = 0u; k < shape.used; ++k) {
+            uint slot = r[slot_at + pos * shape.used + k];
+            float share = uintBitsToFloat(r[share_at + slot]);
+            precise float term = share * d[slot * shape.width + w];
+            acc = acc + term;
+        }
+    } else {
+        for (uint k = 0u; k < shape.used; ++k) {
+            float share = uintBitsToFloat(r[at_share + k]);
+            precise float term =
+              share * d[(pos * shape.used + k) * shape.width + w];
+            acc = acc + term;
+        }
     }
 
     if (shape.joins != 0u) {

@@ -109,6 +109,10 @@ package Model_Runner.Platform.Device.Products is
    --  -- is the better one.
    Thin_Rows    : constant := 512;
    Thin_Vectors : constant := 8;
+
+   --  Most experts a batch's routing is inverted over, which is what
+   --  invert.comp keeps counters for in shared memory.
+   Max_Experts : constant := 512;
    Slice_Least : constant := 256;
 
    --  Whole numbers written into the cache buffer for a kernel to read
@@ -616,13 +620,101 @@ package Model_Runner.Platform.Device.Products is
       Bias_Span : Model_Runner.Bytes.Byte_Count := 0;
       Bias_At   : Model_Runner.Bytes.Byte_Count := 0);
 
+   --  Name the inversion of a batch's routing for a sequence to perform.
+   --
+   --  invert.comp turns what the routing step wrote -- each position's
+   --  experts and shares -- into each expert's run of positions and
+   --  shares, with a count and a start an expert and, for each position
+   --  and rank, the slot it was given: what a listed product walks and a
+   --  listed mix reads back. A token's mixture gathers its few experts
+   --  straight from the routing and needs none of this; a batch's runs
+   --  every expert over the positions that chose it, one dispatch a
+   --  matrix, and this is what tells each expert's workgroups which.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Experts How many experts the routing chose among.
+   --  @param Used How many each position chose.
+   --  @param Route_Step The routing step.
+   --  @param Added False when the sequence is full or the step named is
+   --    not a routing step of that shape.
+   --  @param Kept False when nothing on the host reads the lists.
+   procedure Add_Invert
+     (Steps      : in out Sequence;
+      Experts    : Natural;
+      Used       : Natural;
+      Route_Step : Positive;
+      Added      : out Boolean;
+      Kept       : Boolean := False);
+
+   --  Name one product of every expert of a stack over the positions that
+   --  chose it, for a sequence to perform.
+   --
+   --  The batch's counterpart of Add_Gathered_Product: the third
+   --  dimension of the dispatch is the expert, and each expert's
+   --  workgroups walk the run of positions the inverted routing in
+   --  Invert_Step gives it, a group of vectors at a time, writing every
+   --  answer at the position's slot in the runs -- Each rows a slot, Used
+   --  slots a position, laid run after run -- rather than at the
+   --  position. Reading by position takes each vector from the step in
+   --  From_Step at the position the list names, which is what the gate
+   --  and the up do; reading by slot takes it at the slot, which is what
+   --  the down does with the combined arms before it.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base Storage the stack lies in, as for Add_Gathered_Product.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where the stack begins in it.
+   --  @param Packing How the rows are packed.
+   --  @param Stack Rows the whole stack holds.
+   --  @param Each Rows each expert's slice holds.
+   --  @param Columns Columns of every row.
+   --  @param Experts How many experts the stack holds and the dispatch
+   --    covers; Each times Experts may not exceed Stack.
+   --  @param Used How many experts each position chose, which is how
+   --    many slots a position has in the runs.
+   --  @param Invert_Step The inversion of the routing.
+   --  @param Count Positions the batch holds, which with Used and Experts
+   --    bounds the slots the runs take: each expert's run is padded to
+   --    sixteen, and the step's room is sized for the most padding there
+   --    can be.
+   --  @param Added False when the sequence is full or a step named is not
+   --    what it should be.
+   --  @param Key Where these weights live; what later products name.
+   --  @param Kept False when nothing on the host reads the answer.
+   --  @param From_Step The step whose result the vectors are read from.
+   --  @param By_Slot True to read a vector at its slot rather than at the
+   --    position the list names.
+   --  @param Chained False to read the vectors from the activation the
+   --    caller supplied rather than from a step.
+   procedure Add_Listed_Product
+     (Steps       : in out Sequence;
+      Base        : System.Address;
+      Span        : Model_Runner.Bytes.Byte_Count;
+      At_Byte     : Model_Runner.Bytes.Byte_Count;
+      Packing     : Weight_Packing;
+      Stack       : Natural;
+      Each        : Natural;
+      Columns     : Natural;
+      Experts     : Natural;
+      Used        : Natural;
+      Invert_Step : Positive;
+      Count       : Positive;
+      Added       : out Boolean;
+      Key         : System.Address := System.Null_Address;
+      Kept        : Boolean := True;
+      From_Step   : Natural := 0;
+      By_Slot     : Boolean := False;
+      Chained     : Boolean := True);
+
    --  Name a mixture's weighted sum for a sequence to perform.
    --
    --  Reads the gathered projection down in Downs_Step -- Used slices of
    --  Width a position -- and the shares the routing step in Route_Step
    --  wrote, and writes each position's sum, best expert first, with the
    --  residual in Residual_Step added after: the layer's second join,
-   --  folded in.
+   --  folded in. Where Route_Step names an inversion and Downs_Step a
+   --  listed product, each position's answers are found by their slots
+   --  and weighed by the shares the inversion laid beside them.
    --
    --  @param Steps Sequence to add to.
    --  @param Width Components a position's answer holds.
@@ -1621,6 +1713,9 @@ private
       --  merge.comp: the slices of a split attention put together.
       Merger     : System.Address := System.Null_Address;
 
+      --  invert.comp: a batch's routing turned into each expert's run.
+      Inverter   : System.Address := System.Null_Address;
+
       --  thin.comp: a few binary32 rows against a few vectors, a
       --  workgroup a row.
       Thinner    : System.Address := System.Null_Address;
@@ -1656,6 +1751,7 @@ private
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
+      Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
       Heads_Line  : System.Address := System.Null_Address;
 
@@ -2042,6 +2138,15 @@ private
       --  the share the routing step it names in Reads_Two wrote, sums
       --  them best first, and adds the residual the step in Joined made.
       Mixes   : Boolean := False;
+
+      --  An inverting step, as Add_Invert describes it: the routing in
+      --  Reads turned into each of Experts experts' runs of positions.
+      --  And a listed product, as Add_Listed_Product describes it: Gathers
+      --  is then Experts, Routed the inverting step, and By_Slot says
+      --  where a vector is read.
+      Inverts : Boolean := False;
+      Listed  : Boolean := False;
+      By_Slot : Boolean := False;
 
       --  A heads step rather than a product, as Add_Heads describes it:
       --  the queries or keys in Reads, Heads of Head_Size, each head
