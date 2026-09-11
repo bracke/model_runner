@@ -4150,8 +4150,8 @@ package body Tests.Backend_Cases is
 
       Experts : constant := 4;
       Used    : constant := 2;
-      Width   : constant := 64;
-      Feed    : constant := 32;
+      Width   : constant := 128;
+      Feed    : constant := 128;
       Count   : constant := 40;
 
       Held   : Devices.Inventory;

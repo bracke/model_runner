@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A tile of its own for listed products** -- thirty-two vectors over
+  two subgroups, sixty-four rows -- since a run of thirty-two positions
+  in the dense tile of a hundred and twenty-eight is three quarters
+  padding and every tile of rows reads the run again: 13.0 -> 9.4
+  million cycles a gate stack, Qwen3-30B-A3B's 1302-token prompt ~255 ->
+  ~320 tokens a second, level with llama.cpp's 300. The two-bit decode
+  goes two values at a time in half precision, which measured nothing
+  and is kept for its instruction count.
+
 - **The timeline reports the device's busy time**, summed over every run,
   and the output head runs as a sequence of one so the timeline sees it:
   a Qwen3-30B-A3B token is 26.5 ms of device in a 28.5 ms wall, the host's

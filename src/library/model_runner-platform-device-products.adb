@@ -124,6 +124,19 @@ package body Model_Runner.Platform.Device.Products is
    Tile_Rows    : constant := 32;
    Tile_Vectors : constant := 128;
 
+   --  And the tile a listed product's runs are cut into -- thirty-two
+   --  vectors, sixty-four rows, two subgroups stepping sixty-four columns
+   --  -- as matrix_product.comp says why. Measured against the clock,
+   --  which drifts with the heat: a hundred and twenty-eight vectors
+   --  wide, as the dense tile is, 13.0 million cycles a gate stack at
+   --  512 positions; sixty-four wide 10.2; thirty-two wide and two
+   --  subgroups 9.4, and 8.5 to 9.3 at thirty-two rows against 10.5 to
+   --  10.7 for the down stack, which is why the rows stay at sixty-four.
+   --  A hundred and twenty-eight rows read 11.5.
+   Listed_Vectors : constant := 32;
+   Listed_Rows    : constant := 64;
+   Listed_Step    : constant := 64;
+
    --  And the narrow tile's width, which the same source compiled with
    --  NARROW declares. A tile costs what its width costs whether the batch
    --  fills it or not, so a batch this size or smaller is given one of
@@ -149,8 +162,10 @@ package body Model_Runner.Platform.Device.Products is
    --  written to room the result buffer is given for it.
    --  Columns a tile reads at a time: the narrow one a chunk, the wide one
    --  a chunk for each of its four lane groups.
+   Wide_Step : constant := 128;
+
    function Tile_Step (Count : Natural) return Positive
-   is (if Narrowed (Count) then 32 else 128);
+   is (if Narrowed (Count) then 32 else Wide_Step);
 
    function Whole_Tiles (Count : Natural) return Natural
    is ((Count + Tile_Width (Count) - 1) / Tile_Width (Count)
@@ -625,6 +640,13 @@ package body Model_Runner.Platform.Device.Products is
              then Item.Narrow_More_Line else Item.Narrow_Line)
        else (if On_Extra (Packing)
              then Item.Extra_Line else Item.Matrix_Line));
+
+   --  The tile a listed product binds: the wide tile's words at sixty-four
+   --  vectors, in the compilation that decodes the format.
+   function Listed_Pipeline
+     (Item : Engine; Packing : Weight_Packing) return Address
+   is (if On_Extra (Packing) then Item.Listed_More_Line
+       else Item.Listed_Line);
 
    function Uses_Matrix
      (Item    : Engine;
@@ -2011,6 +2033,10 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Matrix_Narrow;
             Thin_More : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Matrix_Narrow_Extra;
+            Listed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Listed;
+            Listed_More : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Listed_Extra;
             Request : aliased Shader_Create_Info;
          begin
             if Create = null then
@@ -2075,6 +2101,25 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Narrow_More := Made;
+                  end if;
+
+                  Request.Size := Interfaces.C.size_t (Listed'Length * 4);
+                  Request.Code := Listed'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Listed_Tile := Made;
+                  end if;
+
+                  Request.Size :=
+                    Interfaces.C.size_t (Listed_More'Length * 4);
+                  Request.Code := Listed_More'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Listed_Tile_More := Made;
                   end if;
                end if;
             end if;
@@ -2508,6 +2553,30 @@ package body Model_Runner.Platform.Device.Products is
                                 Made'Access) = 0
                      then
                         Item.Extra_Line := Made;
+                     end if;
+                  end if;
+
+                  --  And the wide tile at sixty-four vectors, for listed
+                  --  products.
+                  if Item.Listed_Tile /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Listed_Tile_More /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile_More;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_More_Line := Made;
                      end if;
                   end if;
 
@@ -2983,6 +3052,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Invert_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
@@ -3000,6 +3071,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Inverter, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
@@ -6354,18 +6427,25 @@ package body Model_Runner.Platform.Device.Products is
       --  long enough for the tile at all, and the slice's rows divide
       --  by it. The row kernel walks the runs otherwise.
       --
-      --  The wide tile, whatever an expert's run: a run of thirty-two in
-      --  a tile of a hundred and twenty-eight is three quarters padding,
-      --  and the narrow tile measured slower for it, because what the
-      --  tile kernel spends its time on is decoding the rows into the
-      --  instruction's operand, once a tile of vectors, and the wide tile
-      --  decodes each expert's rows once.
+      --  The wide tile's words at sixty-four vectors, whatever an expert's
+      --  run: a run of thirty-two in a tile of a hundred and twenty-eight
+      --  is three quarters padding the instruction multiplies all the
+      --  same, and the narrow tile of thirty-two -- one subgroup -- read
+      --  slower than either, because it decodes a row into the
+      --  instruction's operand once a tile and a subgroup alone hides
+      --  none of that.
       function Listed_Tiled (Which : Positive) return Boolean
       is (Steps.Items (Which).Listed
           and then Uses_Matrix
                      (Item, Steps.Items (Which).Packing,
                       Steps.Items (Which).Each,
-                      Steps.Items (Which).Columns, Count));
+                      Steps.Items (Which).Columns, Count)
+          --  The listed tile steps as the wide one does, whatever the
+          --  batch, so the columns have to divide by its step.
+          and then Steps.Items (Which).Columns mod Listed_Step = 0
+          and then Steps.Items (Which).Each mod Listed_Rows = 0
+          and then Listed_Pipeline (Item, Steps.Items (Which).Packing)
+                   /= Null_Handle);
 
       function Tiled (Which : Positive) return Boolean
       is (Steps.Items (Which).Gathers <= 1
@@ -8308,15 +8388,15 @@ package body Model_Runner.Platform.Device.Products is
 
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,
-                        Tile_Pipeline (Item, This.Packing, Count));
+                        Listed_Pipeline (Item, This.Packing));
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned (This.Each / Tile_Rows),
+                        C.unsigned (This.Each / Listed_Rows),
                         C.unsigned
-                          ((Count + 15 + Tile_Width (Count) - 1)
-                           / Tile_Width (Count)),
+                          ((Count + 15 + Listed_Vectors - 1)
+                           / Listed_Vectors),
                         C.unsigned (This.Gathers));
 
                      Bind_Pipeline

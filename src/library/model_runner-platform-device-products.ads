@@ -1690,6 +1690,8 @@ private
 
       Narrow     : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
+      Listed_Tile : System.Address := System.Null_Address;
+      Listed_Tile_More : System.Address := System.Null_Address;
 
       --  And the normalization, which is here for the submission it saves
       --  rather than for itself: a layer normalizes twice and the host
@@ -1734,6 +1736,13 @@ private
       Eight_Bundle_Line : System.Address := System.Null_Address;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
+
+      --  The wide tile compiled once more at sixty-four vectors a tile,
+      --  for listed products: a run of thirty-two in a tile of a hundred
+      --  and twenty-eight is three quarters padding the instruction
+      --  multiplies all the same.
+      Listed_Line : System.Address := System.Null_Address;
+      Listed_More_Line : System.Address := System.Null_Address;
       --  One for every count a round may bring, up to the eight-wide
       --  kernel, indexed by that count. A pipeline is cheap now the words
       --  are one module and the width is a constant it is told; what these

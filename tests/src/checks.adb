@@ -5700,18 +5700,29 @@ package body Checks is
                return 0;
             end Number_After;
 
-            Rows_Said : constant Natural :=
+            --  The shader states its rows under LISTED first and then
+            --  for the rest, and its vectors under NARROW, under LISTED
+            --  and then for the rest, in that order.
+            Listed_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ");
+            Rows_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_R = ", Skip => 1);
             Thin_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ");
-            Vecs_Said : constant Natural :=
+            Listed_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 1);
+            Vecs_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ", Skip => 2);
             Rows_Asked : constant Natural :=
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
               Number_After (Engine, "Tile_Vectors : constant := ");
             Thin_Asked : constant Natural :=
               Number_After (Engine, "Narrow_Vectors : constant := ");
+            Listed_Asked : constant Natural :=
+              Number_After (Engine, "Listed_Vectors : constant := ");
+            Listed_Rows_Asked : constant Natural :=
+              Number_After (Engine, "Listed_Rows    : constant := ");
 
             --  And the step, which nothing outside the shader reads and
             --  which the staging is written to by hand.
@@ -5723,21 +5734,30 @@ package body Checks is
             if Rows_Said = 0 or else Vecs_Said = 0
               or else Rows_Asked = 0 or else Vecs_Asked = 0
               or else Thin_Said = 0 or else Thin_Asked = 0
+              or else Listed_Said = 0 or else Listed_Asked = 0
+              or else Listed_Rows_Said = 0 or else Listed_Rows_Asked = 0
             then
-               Fail ("one of the matrix tile's four numbers could not be "
-                     & "read: the shader states TILE_R and TILE_V and the "
-                     & "engine states Tile_Rows and Tile_Vectors, and this "
-                     & "check reads all four as text");
+               Fail ("one of the matrix tile's numbers could not be "
+                     & "read: the shader states TILE_R and TILE_V for each "
+                     & "of its compilations and the engine states Tile_Rows,"
+                     & " Tile_Vectors, Narrow_Vectors, Listed_Vectors and "
+                     & "Listed_Rows, and this check reads them all as text");
             elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked
               or else Thin_Said /= Thin_Asked
+              or else Listed_Said /= Listed_Asked
+              or else Listed_Rows_Said /= Listed_Rows_Asked
             then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
                      & Natural'Image (Rows_Said) & " rows by"
                      & Natural'Image (Vecs_Said) & " vectors, or"
-                     & Natural'Image (Thin_Said) & " under NARROW, and the "
+                     & Natural'Image (Thin_Said) & " under NARROW, or"
+                     & Natural'Image (Listed_Rows_Said) & " by"
+                     & Natural'Image (Listed_Said) & " under LISTED, and the "
                      & "engine dispatches for" & Natural'Image (Rows_Asked)
                      & " by" & Natural'Image (Vecs_Asked) & " or"
-                     & Natural'Image (Thin_Asked)
+                     & Natural'Image (Thin_Asked) & " or"
+                     & Natural'Image (Listed_Rows_Asked) & " by"
+                     & Natural'Image (Listed_Asked)
                      & "; whatever a workgroup does not reach is left "
                      & "uncomputed, which is noise and not an error");
             end if;
@@ -5763,10 +5783,16 @@ package body Checks is
             --  and the measurement in docs/measured-figures.txt.
             Result.Performed := Result.Performed + 1;
 
-            if Rows_Said /= 32 or else Step_Said /= 32 then
+            --  The rows are staged thirty-two at a time, as many times as
+            --  the tile is tall, so a taller tile has to be a whole number
+            --  of thirty-two.
+            if Rows_Said /= 32 or else Step_Said /= 32
+              or else Listed_Rows_Said mod 32 /= 0
+            then
                Fail ("src/shaders/matrix_product.comp states TILE_R"
-                     & Natural'Image (Rows_Said) & " and KCH"
-                     & Natural'Image (Step_Said)
+                     & Natural'Image (Rows_Said) & " and"
+                     & Natural'Image (Listed_Rows_Said) & " under LISTED and"
+                     & " KCH" & Natural'Image (Step_Said)
                      & "; its staging loop is written by hand for thirty-two"
                      & " of each and computes from the wrong place at any"
                      & " other shape, without failing to compile or to run");
@@ -5928,6 +5954,31 @@ package body Checks is
                   & " for the other eight formats is older than the source; "
                   & "compile it with -DNARROW -DMORE_FORMATS to "
                   & "matrix_narrow_extra.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
+
+         --  And the two listed tiles, the same source again with LISTED
+         --  and with LISTED beside MORE_FORMATS.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Digest
+         then
+            Fail ("the listed compilation of src/shaders/matrix_product.comp"
+                  & " is older than the source; compile it with -DLISTED to"
+                  & " matrix_listed.spv, and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Extra_Digest
+         then
+            Fail ("the listed compilation of src/shaders/matrix_product.comp"
+                  & " for the other eight formats is older than the source; "
+                  & "compile it with -DLISTED -DMORE_FORMATS to "
+                  & "matrix_listed_extra.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
       end;

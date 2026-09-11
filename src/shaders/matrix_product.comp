@@ -96,6 +96,9 @@
 #ifdef NARROW
 layout(local_size_x = 64) in;
 const uint SUBS = 1u;
+#elif defined(LISTED)
+layout(local_size_x = 128) in;
+const uint SUBS = 2u;
 #else
 layout(local_size_x = 256) in;
 const uint SUBS = 4u;
@@ -164,7 +167,11 @@ layout(push_constant) uniform Shape {
 //  the columns it takes at a time. The step is one Q8_0 block deep, which
 //  is what makes the decode below a whole number of blocks; sixty-four and
 //  a hundred and twenty-eight were measured and are slower.
+#ifdef LISTED
+const uint TILE_R = 64u;
+#else
 const uint TILE_R = 32u;
+#endif
 
 //  A tile is as wide as it is whether the batch filling it is a hundred and
 //  twenty-eight vectors or nine, and what the rounding invents is zeros the
@@ -173,7 +180,19 @@ const uint TILE_R = 32u;
 //  is seven eighths waste, and this source is compiled again with NARROW to
 //  give those a tile their own size. The weight tile is the same either way
 //  -- it is the vector side that shrinks.
+//
+//  LISTED is the tile for listed products: thirty-two vectors over two
+//  subgroups, since a run is thirty-two positions on average and a tile
+//  of a hundred and twenty-eight is three quarters padding for each,
+//  which the instruction multiplies all the same, and one subgroup alone
+//  hides nothing; and sixty-four rows, since every tile of rows reads its
+//  expert's whole run of vectors again. The engine's constants beside
+//  Listed_Vectors carry the measurements. A specialization constant was
+//  tried for the width and the constants derived from it did not follow
+//  it.
 #ifdef NARROW
+const uint TILE_V = 32u;
+#elif defined(LISTED)
 const uint TILE_V = 32u;
 #else
 const uint TILE_V = 128u;
@@ -416,11 +435,13 @@ void main() {
 
         //  Sixty-four invocations decode thirty-two rows of the step,
         //  half a row each: sixteen values apiece, taken four bytes to a
-        //  word.
+        //  word -- and the next thirty-two rows after, where the tile is
+        //  taller.
+        for (uint rr = 0u; rr < TILE_R; rr += 32u)
         {
             uint chunk   = gl_LocalInvocationID.x >> 6u;
             uint half_of = gl_LocalInvocationID.x & 1u;
-            uint r       = (gl_LocalInvocationID.x & 63u) >> 1u;
+            uint r       = rr + ((gl_LocalInvocationID.x & 63u) >> 1u);
             uint into    = chunk * TILE_R * WT_STRIDE
                            + r * WT_STRIDE + half_of * 16u;
             uint row     = shape.base + slice + (row0 + r) * rb;

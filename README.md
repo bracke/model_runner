@@ -19289,6 +19289,29 @@ listed expert products decode each expert's rows into the matrix
 instruction's operand at 29 G weights a second, the rate the dense products
 decode at too. That decode is the lever now, on both kinds of model.
 
+### The listed products' tile, and what the decode was not
+
+The section before named the decode as the prompt's lever; with the
+arithmetic taken out a listed product read five times faster. Measured
+against the device's clock -- which drifts between 1.3 and 2.1 GHz on a hot
+afternoon, so every figure here is microseconds times the run's mean clock
+-- the decode was nothing: as it was, 9.9 million cycles a gate stack; two
+values at a time in half precision through a packed multiply-add, 10.7. The
+ablation had taken the loads' consumers away with the arithmetic. What paid
+was the tile. A run of thirty-two positions in a tile of a hundred and
+twenty-eight is three quarters padding, and every tile of rows reads the
+run again; a third compilation of the tile kernel for listed products --
+thirty-two vectors over two subgroups, sixty-four rows -- reads 9.4 where
+the dense tile read 13.0.
+
+| prompt tokens a second, 1302 tokens | before | after |
+| --- | ---: | ---: |
+| Qwen3-30B-A3B | 237, 276, 271, 250, 247, 262 | 352, 275, 319, 343, 332, 296 |
+
+llama-bench's Vulkan `pp1302` for the file reads 300.8 the same afternoon.
+The prompt is level with llama.cpp's, from a gap of 3.1 this morning; the
+dense models are untouched by a tile they do not use.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
