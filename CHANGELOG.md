@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The matrix attention kernel takes heads of a hundred and
+  twenty-eight**, through a second compilation staging the wider head,
+  and weighs a tile's values in one pass through the shared store rather
+  than four. A prompt's attention on Qwen3-30B-A3B ~9.5 -> 5.2-5.8
+  million cycles a layer at 512 positions; Qwen3-8B's 1302-token prompt
+  232 -> 257 tokens a second.
+
 - **`--kv-cache f16` on the device reads the half-precision copy** the
   device already keeps: a generated token's attention at 1302 positions
   103 -> 66 microseconds a layer on Qwen3-30B-A3B, 28.1 -> 29.4 tokens a

@@ -135,9 +135,12 @@ package Model_Runner.Platform.Device.Products is
    Matrix_Queries : constant := 16;
 
    --  The widest head that kernel takes, which is what the shared memory
-   --  its queries are staged into is sized for. A model with wider heads
-   --  attends through the scalar kernel.
+   --  its queries are staged into is sized for; and the widest its second
+   --  compilation takes, for the models whose heads are a hundred and
+   --  twenty-eight. A model with heads wider still attends through the
+   --  scalar kernel.
    Matrix_Head : constant := 64;
+   Matrix_Wide_Head : constant := 128;
 
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
@@ -1649,6 +1652,7 @@ private
       --  And attention through the matrix instruction, where the device
       --  offers it. Null on a device that does not.
       Attend_Matrix : System.Address := System.Null_Address;
+      Attend_Matrix_Wide : System.Address := System.Null_Address;
 
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
@@ -1782,6 +1786,7 @@ private
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;
+      Matrix_Wide_Attend : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;

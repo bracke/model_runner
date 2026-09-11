@@ -4678,6 +4678,144 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Halved_Attention_Says_Nearly_What_The_Exact_Says;
 
+   ----------------------------------------------------------
+   -- A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One --
+   ----------------------------------------------------------
+
+   --  A batch of thirty-two queries with heads a hundred and twenty-eight
+   --  wide, which is what Qwen3's are, against the same queries one at a
+   --  time. A batch that long takes the matrix kernel where the device
+   --  has the instruction, and a head that wide takes its second
+   --  compilation; one query takes the scalar kernel over the cache
+   --  proper. The matrix kernel's operands are the half-precision copy,
+   --  so the two are held to a tolerance, and both are compared to a
+   --  narrow head of sixty-four through the same steps, which the first
+   --  compilation answers, so that a device without the instruction --
+   --  where both batches run the tiled scalar kernel -- says the same
+   --  thing about the test as one with it.
+   procedure A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 4;
+      Groups    : constant := 2;
+      Positions : constant := 200;
+      Batch     : constant := 32;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Near : constant N.Real := 4.0e-3;
+
+      procedure Compare (Head_Size : Positive) is
+         Span    : constant N.Element_Count :=
+           N.Element_Count (Heads * Head_Size);
+         KV_Span : constant N.Element_Count :=
+           N.Element_Count (Groups * Head_Size);
+         Room    : constant N.Element_Count :=
+           N.Element_Count (Positions + Batch) * KV_Span;
+
+         Cache   : N.Real_Array (0 .. Room * 2 - 1);
+         Query   : N.Real_Array (0 .. Span * Batch - 1);
+         Alone   : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
+         Batched : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+      begin
+         for Index in Cache'Range loop
+            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Ok);
+         Assert (Ok, "the cache would not be reserved");
+
+         Products.Put_Cache (Engine, 0, Cache, Ok);
+         Assert (Ok, "the cache would not be written");
+
+         for Which in 0 .. Batch - 1 loop
+            declare
+               One : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            begin
+               Products.Attend_Resident
+                 (Engine, Query (Span * N.Element_Count (Which)
+                                 .. Span * N.Element_Count (Which + 1) - 1),
+                  Heads => Heads, Head_Size => Head_Size,
+                  Value_Size => Head_Size, Group_Size => Heads / Groups,
+                  First => 0, Last => Positions - 1 + Which,
+                  K_Base => 0, V_Base => Natural (Room),
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
+               Assert (Ok, "attention on its own was refused");
+               Alone (Span * N.Element_Count (Which)
+                      .. Span * N.Element_Count (Which + 1) - 1) := One;
+            end;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.0625, Cap => 0.0, Added => Added);
+         Assert (Added, "a sequence would not take the attention step");
+
+         Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
+         Assert (Ok, "the batch was refused");
+
+         for Index in Batched'Range loop
+            Worst := N.Real'Max (Worst, abs (Alone (Index) - Batched (Index)));
+         end loop;
+
+         Assert (Worst <= Near,
+                 "a batch with heads" & Positive'Image (Head_Size)
+                 & " wide answers" & N.Real'Image (Worst)
+                 & " away from the queries one at a time");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Compare (Head_Size => 64);
+      Compare (Head_Size => 128);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One;
+
    ---------------------------------
    -- The_Device_Stamps_Its_Steps --
    ---------------------------------
@@ -5441,6 +5579,11 @@ package body Tests.Backend_Cases is
          "a token attending out of the half-precision copy says nearly "
          & "what the cache proper says, in bundles of four and of eight, "
          & "and a batch with the copy preferred still answers every head");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One'Access,
+         "a batch with heads a hundred and twenty-eight wide attends "
+         & "through the matrix instruction and says what the queries one "
+         & "at a time say, as a head of sixty-four does");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Device_Stamps_Its_Steps'Access,
          "a timed sequence comes back with an interval a step from the "

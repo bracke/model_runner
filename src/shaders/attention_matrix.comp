@@ -43,11 +43,15 @@
 //  their own, stored to shared memory and added into ordinary registers,
 //  where a rescale is a multiply like any other.
 //
-//  Sixty-four is the widest head this compilation takes: the queries are
-//  the one thing still staged, because they arrive in binary32 and are
-//  read by every tile, and shared memory is what bounds how many of these
-//  a part will run at once. A model with wider heads attends through
-//  attention.comp as it did before.
+//  Sixty-four is the widest head the first compilation takes: the queries
+//  are the one thing still staged, because they arrive in binary32 and
+//  are read by every tile, and shared memory is what bounds how many of
+//  these a part will run at once. A second compilation, WIDE_HEAD, stages
+//  a hundred and twenty-eight -- fourteen kilobytes of shared memory a
+//  workgroup against eight -- for the models whose heads are that wide,
+//  which attended through attention.comp's tiled kernel until then at
+//  five milliseconds of a twenty-five millisecond layer. A head wider
+//  still attends there yet.
 
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
@@ -131,7 +135,11 @@ layout(push_constant) uniform Shape {
 //  instruction's sixteen.
 const uint BR = 16u;
 const uint BC = 64u;
+#ifdef WIDE_HEAD
+const uint DM = 128u;
+#else
 const uint DM = 64u;
+#endif
 
 //  The keys and the values, as the instruction reads them, in the same
 //  buffer as the cache proper and after it. Aliasing the binding is how a
@@ -235,12 +243,13 @@ void main() {
     //  rows: a flat loop over row times component would divide by a push
     //  constant to get the row back, and an integer division by a value
     //  the compiler cannot see is a long sequence.
-    if (lane < dk) {
+    //  A head wider than the subgroup takes a second component a lane.
+    for (uint c = lane; c < dk; c += 64u) {
         for (uint m = 0u; m < BR; m++) {
             uint slot = min (block * BR + m, shape.positions - 1u);
 
-            qs[m * DM + lane] =
-                float16_t (q[slot * shape.heads * dk + head * dk + lane]);
+            qs[m * DM + c] =
+                float16_t (q[slot * shape.heads * dk + head * dk + c]);
         }
     }
 
@@ -391,66 +400,74 @@ void main() {
 
         barrier();
 
-        //  What this tile weighs, a chunk of thirty-two components at a
-        //  time: a product of its own, read straight out of the cache,
-        //  stored where the scores were and added into what the invocation
-        //  already carries after that has been rescaled.
-        [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
-            if (ch * 32u < dv) {
-                coopmat<float, gl_ScopeSubgroup, 16, 16,
-                        gl_MatrixUseAccumulator> pacc[BR / 16u][2];
+        //  What this tile weighs, every component at once: a product of
+        //  its own, read straight out of the cache, stored where the
+        //  scores were -- which is sized for the whole answer -- and added
+        //  into what the invocation already carries after that has been
+        //  rescaled. It went a chunk of thirty-two components at a time,
+        //  two barriers a chunk; a head of a hundred and twenty-eight is
+        //  four chunks, and the barriers were a quarter of the tile.
+        {
+            coopmat<float, gl_ScopeSubgroup, 16, 16,
+                    gl_MatrixUseAccumulator> pacc[BR / 16u][DM / 16u];
+
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                    pacc[m][t] =
+                        coopmat<float, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseAccumulator>(0.0);
+                }
+            }
+
+            [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseA> pm[BR / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
-                        pacc[m][t] =
-                            coopmat<float, gl_ScopeSubgroup, 16, 16,
-                                    gl_MatrixUseAccumulator>(0.0);
-                    }
+                    coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
+                                 gl_CooperativeMatrixLayoutRowMajor);
                 }
 
-                [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
-                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
-                            gl_MatrixUseA> pm[BR / 16u];
-                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
-                            gl_MatrixUseB> vm[2];
+                [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                    if (t * 16u < dv) {
+                        coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseB> vm;
 
-                    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                        coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
-                                     gl_CooperativeMatrixLayoutRowMajor);
-                    }
-
-                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
-                        coopMatLoad (vm[t], kvh,
+                        coopMatLoad (vm, kvh,
                                      v_at + (base + n0) * shape.v_width
-                                     + ch * 32u + t * 16u,
+                                     + t * 16u,
                                      shape.v_width,
                                      gl_CooperativeMatrixLayoutRowMajor);
-                    }
 
-                    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                        [[unroll]] for (uint t = 0u; t < 2u; t++) {
-                            pacc[m][t] =
-                                coopMatMulAdd (pm[m], vm[t], pacc[m][t]);
+                        [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                            pacc[m][t] = coopMatMulAdd (pm[m], vm, pacc[m][t]);
                         }
                     }
                 }
+            }
 
-                barrier();
+            barrier();
 
-                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    [[unroll]] for (uint t = 0u; t < 2u; t++) {
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                    if (t * 16u < dv) {
                         coopMatStore (pacc[m][t], ss,
-                                      m * 16u * 32u + t * 16u, 32u,
+                                      m * 16u * DM + t * 16u, DM,
                                       gl_CooperativeMatrixLayoutRowMajor);
                     }
                 }
+            }
 
-                barrier();
+            barrier();
 
-                [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
-                    uint r = (lane >> 5u) + 2u * i;
+            [[unroll]] for (uint ch = 0u; ch < DM / 32u; ch++) {
+                if (ch * 32u < dv) {
+                    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+                        uint r = (lane >> 5u) + 2u * i;
 
-                    held[ch][i] = held[ch][i] * carry[i] + ss[r * 32u + col];
+                        held[ch][i] = held[ch][i] * carry[i]
+                                      + ss[r * DM + ch * 32u + col];
+                    }
                 }
             }
         }

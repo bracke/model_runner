@@ -362,21 +362,34 @@ package body Model_Runner.Platform.Device.Products is
    --  Which of the two attention kernels this device got. The subgroup one
    --  where it offered the operations, the shared-memory one everywhere
    --  else.
-   --  Whether the matrix kernel takes this shape. It stages a head's
-   --  queries into shared memory sized for Matrix_Head and reads the cache
-   --  sixteen components at a time, so a head wider than that or not a
+   --  Which matrix kernel takes this shape, or none. It stages a head's
+   --  queries into shared memory sized for Matrix_Head, or for
+   --  Matrix_Wide_Head in its second compilation, and reads the cache
+   --  sixteen components at a time, so a head wider than both or not a
    --  multiple of sixteen is not one it can answer.
+   function Matrix_Kernel
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Address
+   is (if Positions < Matrix_Queries
+         or else Head_Size mod 16 /= 0
+         or else Value_Size mod 16 /= 0
+       then Null_Handle
+       elsif Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
+       then Item.Matrix_Attend
+       elsif Head_Size <= Matrix_Wide_Head
+         and then Value_Size <= Matrix_Wide_Head
+       then Item.Matrix_Wide_Attend
+       else Null_Handle);
+
    function Attends_By_Matrix
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural) return Boolean
-   is (Item.Matrix_Attend /= Null_Handle
-       and then Positions >= Matrix_Queries
-       and then Head_Size <= Matrix_Head
-       and then Value_Size <= Matrix_Head
-       and then Head_Size mod 16 = 0
-       and then Value_Size mod 16 = 0);
+   is (Matrix_Kernel (Item, Positions, Head_Size, Value_Size)
+       /= Null_Handle);
 
    --  Whether attention reads the half-precision copy rather than the
    --  cache proper: a round always, where the kernel exists, and a token
@@ -518,7 +531,7 @@ package body Model_Runner.Platform.Device.Products is
       Span       : Natural := Bundle_Least) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
-       then Item.Matrix_Attend
+       then Matrix_Kernel (Item, Positions, Head_Size, Value_Size)
        elsif not Rounding
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
@@ -2081,6 +2094,21 @@ package body Model_Runner.Platform.Device.Products is
                then
                   Item.Attend_Matrix := Made;
                end if;
+
+               --  And the same words staging a head twice as wide.
+               declare
+                  Wide : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attention_Matrix_Wide;
+               begin
+                  Request.Size := Interfaces.C.size_t (Wide'Length * 4);
+                  Request.Code := Wide'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Matrix_Wide := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -2588,6 +2616,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Matrix_Attend := Made;
+            end if;
+         end if;
+
+         if Item.Attend_Matrix_Wide /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Matrix_Wide;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Wide_Attend := Made;
             end if;
          end if;
 
@@ -3166,7 +3204,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");

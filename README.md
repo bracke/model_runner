@@ -19354,6 +19354,33 @@ normalizing the same vector again is more than one workgroup doing it once
 plus the bubble, on a part that fills the bubble with the next dispatch
 anyway. Reverted whole.
 
+### The matrix attention kernel at a head of a hundred and twenty-eight
+
+Both Qwen3 models have heads of a hundred and twenty-eight, and the matrix
+attention kernel staged a head's queries into shared memory sized for
+sixty-four -- so their prompts attended through the tiled scalar kernel, four
+to five milliseconds of a twenty-five millisecond layer at five hundred and
+twelve positions. The kernel is compiled twice now, the second time with the
+staging at a hundred and twenty-eight, and the engine binds by head width.
+The weighted values also go through the shared store in one pass rather
+than four chunks, which is two barriers a tile rather than eight; wider
+tiles and taller blocks were both tried and both worse.
+
+| Qwen3-30B-A3B, attention a layer at 512 positions | |
+| --- | ---: |
+| tiled scalar kernel, as it was | ~9.5 Mcycles |
+| matrix kernel, wide head, chunks of 32 | 5.9-6.2 |
+| matrix kernel, wide head, one pass | **5.2-5.8** |
+
+Cycles rather than microseconds because the clock drifts between runs.
+Qwen3-8B's 1302-token prompt reads **232 -> 257 tokens a second**, eleven
+per cent; the mixture's attention is seven per cent of its prompt, inside
+the CLI's spread. The TinyLlama device rows are the same bits. And a
+measurement artefact worth knowing: a model run right after the other one
+reads its weights back from disk during the prompt -- the eighteen-gigabyte
+mixture evicts the five-gigabyte dense file from the page cache -- and reads
+seventy-five tokens a second for it. Alternate one model at a time.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

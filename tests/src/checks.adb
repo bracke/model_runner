@@ -6004,6 +6004,19 @@ package body Checks is
                   & "was compiled; compile it with --target-env vulkan1.3 "
                   & "and run 'tests shader' again with every shader named");
          end if;
+
+         --  And its second compilation, staging a head twice as wide.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Attention_Matrix_Wide_Digest
+         then
+            Fail ("the wide compilation of src/shaders/attention_matrix.comp"
+                  & " is older than the source; compile it with "
+                  & "--target-env vulkan1.3 -DWIDE_HEAD to "
+                  & "attention_matrix_wide.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
       end;
 
       --  And the fifth, which goes with it.
