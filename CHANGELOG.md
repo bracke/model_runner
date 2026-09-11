@@ -5,6 +5,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A batch's mixture is gathered by expert on the processor as well.**
+  Qwen3-30B-A3B's 110-token prompt on the pool, `--repack rows`: 36 -> 71
+  tokens a second, the same text.
+
 ### Fixed
 
 - **A model is refused for not fitting the device on what a token reads, not

@@ -10027,16 +10027,22 @@ package body Model_Runner.Llama is
                --  in. Everything before it -- the projections, the attention,
                --  the output -- still goes through the batch.
                if Settings.Experts > 0 then
-                  --  Gathered by expert where the backend pays for a read,
-                  --  which is what makes an expert's matrices cross once a
-                  --  layer instead of once for every position that chose
-                  --  them. The processor reads the same memory either way
-                  --  and keeps the simpler loop.
+                  --  Gathered by expert, which is what makes an expert's
+                  --  matrices cross once a layer instead of once for every
+                  --  position that chose them. This used to be the device's
+                  --  alone, on the reading that the processor reads the
+                  --  same memory either way; it does not, because a
+                  --  position at a time is one vector against every matrix
+                  --  and the gathered run is a strip -- Qwen3-30B-A3B's
+                  --  110-token prompt on the pool reads 36 tokens a second
+                  --  a position at a time and 71 gathered, the same text.
+                  --  The reference keeps the loop: it has no batched
+                  --  product to gather into.
                   Grouped := False;
 
-                  if Model_Runner.Backend."="
+                  if Model_Runner.Backend."/="
                        (Item.Owner.Able.Kind,
-                        Model_Runner.Backend.Backend_Device)
+                        Model_Runner.Backend.Backend_Reference)
                     and then Count > 1
                   then
                      Mixture_Batch

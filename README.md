@@ -18892,6 +18892,36 @@ granularities**. The spare buffers and the persistent mapping are not
 workarounds for a missing suballocator. They are what taking memory per
 matrix costs, paid down, and paying it is worth what it buys.
 
+### A batch's mixture gathered by expert on the processor too
+
+`Mixture_Batch` -- every position that chose an expert gathered into one run
+of vectors, the expert's three matrices read once and multiplied by all of
+them, the answers scattered back by rank -- was the device's alone, on the
+reasoning that the processor reads the same memory either way and keeps the
+simpler loop. **It does not read the same memory either way.** A position at
+a time is one vector against every matrix; the gathered run is a strip, and
+a strip is what every k-quant kernel in this program was written for.
+
+Qwen3-30B-A3B, 110-token prompt, `--repack rows`, alternated on the pool:
+
+| | a position at a time | gathered by expert |
+| --- | ---: | ---: |
+| prompt | 35.91, 36.01, 35.66 t/s | **72.57, 70.56** (one reading at 40.60) |
+| generating | 20.30, 20.09, 19.42 | 20.05, 20.10, 19.79 |
+
+The same 24-token text at temperature 0 either way. The reference backend
+keeps the loop, having no batched product to gather into. What remains of
+llama.cpp's 108 is the pool: an expert's product is about six vectors by 768
+rows cut across eight workers, and the next thing is sharing across experts
+rather than across rows within one.
+
+**Also found in the same sitting, and not a change:** `bin/model_runner` was
+a development build that morning, and on the decode-then-dot paths a
+development build is ten times slower -- 1.08 tokens a second on TinyLlama
+Q2_K where the release build reads 11.4. Every published figure comes from
+`tests speed`, which the tests crate builds at release, so none was affected;
+a reading taken from `bin/` is a reading to check the profile of first.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
