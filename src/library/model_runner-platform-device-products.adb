@@ -378,6 +378,73 @@ package body Model_Runner.Platform.Device.Products is
        and then Head_Size mod 16 = 0
        and then Value_Size mod 16 = 0);
 
+   --  Whether attention reads the half-precision copy rather than the
+   --  cache proper: a round always, where the kernel exists, and a token
+   --  where the copy is preferred. A token read the cache proper alone
+   --  for a long time, on a measurement that said half precision gained
+   --  nothing -- 1.362 and 1.375 s against 1.374 and 1.415 -- which was
+   --  true of a head a workgroup reading its group's cache eight times:
+   --  that token was short of work, not of bytes. Bundled and sliced, a
+   --  token at thirteen hundred positions is the bytes, and the copy is
+   --  half of them.
+   function Attends_By_Halves
+     (Item : Engine; Rounding : Boolean) return Boolean
+   is ((Rounding or else Item.Halves)
+       and then Item.Halved_Line /= Null_Handle);
+
+   --  Whether the kernel Attend_Kernel binds for these positions reads
+   --  the half-precision copy of the cache rather than the cache proper:
+   --  the matrix kernel and a round's do, the tiled one does not, and a
+   --  token's does where the copy is preferred. What the bases in the
+   --  push block are moved by.
+   function Reads_Copy
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Rounding   : Boolean) return Boolean
+   is (if Rounding then Attends_By_Halves (Item, True)
+       elsif Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+       then True
+       elsif Item.Tile_Line /= Null_Handle and then Positions >= Query_Block
+       then False
+       else Attends_By_Halves (Item, False));
+
+   --  Whether a batch of this many positions is a token attending out of
+   --  the copy: too short for the matrix and the tiled kernels, which
+   --  read what they read whatever a token prefers, and the copy
+   --  preferred. The kernel and the workgroups it wants are decided on
+   --  this together, as the other kernels' are: a token's workgroups
+   --  bound to the tiled kernel would answer a bundle's worth of heads
+   --  and leave the rest as they were.
+   function Token_By_Halves
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Attends_By_Halves (Item, False)
+       and then not Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+       and then not (Item.Tile_Line /= Null_Handle
+                     and then Positions >= Query_Block));
+
+   --  How wide a bundle a token attending out of the copy takes: eight,
+   --  four, or nought for the plain half-precision kernel, a head a
+   --  workgroup. Nought too over a short cache, as the exact bundle
+   --  decides it: a bundle pays where there is enough cache to read,
+   --  and at seventy positions a head a workgroup reads 13 us where the
+   --  bundle of eight reads 25.
+   function Halved_Bundle
+     (Item : Engine; Group_Size : Natural; Span : Natural) return Natural
+   is (if Span < Bundle_Least
+       then 0
+       elsif Item.Eight_Halved_Line /= Null_Handle
+         and then Group_Size mod Wide_Bundle = 0
+       then Wide_Bundle
+       elsif Item.Bundle_Line /= Null_Handle
+         and then Group_Size mod Head_Bundle = 0
+       then Head_Bundle
+       else 0);
+
    --  Whether a batch too short for the tiled kernels takes the bundled
    --  one over the cache proper: a generated token, whose workgroups are
    --  a head each and whose heads share a group's keys and values. The
@@ -456,6 +523,13 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
+       --  A token out of the copy, in the widest bundle its group takes.
+       elsif not Rounding
+         and then Token_By_Halves (Item, Positions, Head_Size, Value_Size)
+       then (case Halved_Bundle (Item, Group_Size, Span) is
+               when Wide_Bundle => Item.Eight_Halved_Line,
+               when Head_Bundle => Item.Bundle_Line,
+               when others      => Item.Halved_Line)
        elsif not Rounding
          and then Exact_Bundle
                     (Item, Positions, Head_Size, Value_Size, Group_Size,
@@ -476,21 +550,6 @@ package body Model_Runner.Platform.Device.Products is
        elsif Item.Group_Line /= Null_Handle
        then Item.Group_Line
        else Item.Attend_Line);
-
-   --  Whether the kernel that choice lands on reads the half-precision copy
-   --  rather than the cache proper, which decides where the bases point.
-   --  Asked wherever they are computed, so that the two cannot disagree.
-   --
-   --  A round and nothing else, though the kernel would serve any case the
-   --  matrix and the tiled ones leave alone. It was tried that way and the
-   --  case it would have taken -- one token generated with a long cache
-   --  behind it -- reads 1.362 and 1.375 s against 1.374 and 1.415, which
-   --  is a wash: one query against thirty-two heads is not short of
-   --  bandwidth, it is short of work. Half precision for nothing gained is
-   --  a bad bargain, so that case keeps the cache proper and its answer.
-   function Attends_By_Halves
-     (Item : Engine; Rounding : Boolean) return Boolean
-   is (Rounding and then Item.Halved_Line /= Null_Handle);
 
    --  And how many workgroups that kernel wants down the second axis: one
    --  per query position, or one per block of them where the tiled kernel
@@ -516,6 +575,13 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then C.unsigned ((Heads + Head_Bundle - 1) / Head_Bundle)
+       elsif not Rounding
+         and then Token_By_Halves (Item, Positions, Head_Size, Value_Size)
+       then (if Halved_Bundle (Item, Group_Size, Span) > 0
+             then C.unsigned
+                    ((Heads + Halved_Bundle (Item, Group_Size, Span) - 1)
+                     / Halved_Bundle (Item, Group_Size, Span))
+             else C.unsigned (Heads))
        elsif not Rounding
          and then Bundles_Exact
                     (Item, Positions, Head_Size, Value_Size, Group_Size,
@@ -2455,6 +2521,29 @@ package body Model_Runner.Platform.Device.Products is
             then
                Item.Bundle_Line := Made;
             end if;
+
+            --  And the same words at a bundle of eight, as the exact
+            --  bundle has, for a token attending out of the copy.
+            declare
+               Which  : aliased Specialization_Entry :=
+                 (Which => 1, At_Was => 0, Span => 4);
+               Value  : aliased C.unsigned := Wide_Bundle;
+               Told   : aliased Specialization_Info;
+            begin
+               Told.Count := 1;
+               Told.Entries := Which'Address;
+               Told.Span := 4;
+               Told.Values := Value'Address;
+               Request.Stage.Specialized := Told'Address;
+
+               if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                          Null_Handle, Made'Access) = 0
+               then
+                  Item.Eight_Halved_Line := Made;
+               end if;
+
+               Request.Stage.Specialized := Null_Handle;
+            end;
          end if;
 
          if Item.Group_Line /= Null_Handle
@@ -3047,6 +3136,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
+      Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
       Give_Back (Item.Invert_Line, "vkDestroyPipeline");
@@ -3118,6 +3208,13 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Heads_Line /= Null_Handle);
 
    function Timed (Item : Engine) return Boolean is (Item.Timing);
+
+   procedure Prefer_Halves (Item : in out Engine; On : Boolean) is
+   begin
+      Item.Halves := On and then Item.Halved_Line /= Null_Handle;
+   end Prefer_Halves;
+
+   function Prefers_Halves (Item : Engine) return Boolean is (Item.Halves);
 
    function Last_Timeline (Item : Engine) return Timeline is (Item.Line);
 
@@ -5285,12 +5382,12 @@ package body Model_Runner.Platform.Device.Products is
             K_Base     =>
               C.unsigned
                 (K_Base
-                 + (if Attends_By_Matrix (Item, Slots, Head_Size, Value_Size)
+                 + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
                     then Natural (Item.Cache_Elements * 2) else 0)),
             V_Base     =>
               C.unsigned
                 (V_Base
-                 + (if Attends_By_Matrix (Item, Slots, Head_Size, Value_Size)
+                 + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
                     then Natural (Item.Cache_Elements * 2) else 0)),
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
@@ -7798,23 +7895,17 @@ package body Model_Runner.Platform.Device.Products is
                         K_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.K_Base)
-                             + (if (This.Table = 0
-                                    and then Attends_By_Matrix
-                                       (Item, Count, This.Head_Size,
-                                        This.Value_Size))
-                                  or else Attends_By_Halves
-                                            (Item, This.Table > 0)
+                             + (if Reads_Copy
+                                     (Item, Count, This.Head_Size,
+                                      This.Value_Size, This.Table > 0)
                                 then Item.Cache_Elements * 2
                                 else 0)),
                         V_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.V_Base)
-                             + (if (This.Table = 0
-                                    and then Attends_By_Matrix
-                                       (Item, Count, This.Head_Size,
-                                        This.Value_Size))
-                                  or else Attends_By_Halves
-                                            (Item, This.Table > 0)
+                             + (if Reads_Copy
+                                     (Item, Count, This.Head_Size,
+                                      This.Value_Size, This.Table > 0)
                                 then Item.Cache_Elements * 2
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),

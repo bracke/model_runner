@@ -1706,6 +1706,11 @@ private
       --  Exactly one pair is allocated; the other stays null, which is what
       --  the reads below test rather than carrying a converted copy.
       Held       : Cache_Precision := Exact;
+
+      --  Whether the session asked for halves and got them on the device,
+      --  where the host's copy is exact and the device attends out of its
+      --  own half-precision copy: what Precision reports as Halved.
+      Device_Halves : Boolean := False;
       Keys       : Model_Runner.Tensors.Real_Array_Access := null;
       Values     : Model_Runner.Tensors.Real_Array_Access := null;
       Half_Keys  : Model_Runner.Tensors.Half_Array_Access := null;

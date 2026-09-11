@@ -1169,46 +1169,61 @@ void main() {
 #endif
 
 #ifndef FOURS
-        for (uint h = 0u; h < HEADS; h++) {
-            for (uint k = 0; k < room / 64; k++) {
-                parts[(h * (room / 64) + k) * LANES + lane] = held[i][h][k];
-            }
-        }
+        //  As many heads at a time as the store holds: eight floats a
+        //  lane is four heads of a hundred and twenty-eight components,
+        //  and a bundle of eight goes through twice. It went through once
+        //  for every bundle, and a bundle of eight wrote its second four
+        //  past the end of the store -- which a device answers with
+        //  whatever lies there, and this one answered with the second
+        //  four heads wrong.
+        const uint CHUNK = 8u / (room / 64u);
 
-        barrier ();
-
-        //  Every lane of the workgroup writes a component of some head:
-        //  the parts are read in the order the subgroups lie, as before.
-        for (uint slot = lane; slot < HEADS * (room / 64) * 64u;
-             slot += LANES) {
-            uint h = slot / ((room / 64) * 64u);
-            uint rest = slot % ((room / 64) * 64u);
-            uint k = rest / 64u;
-            uint c = rest % 64u + k * 64u;
-
-            if (c < shape.value_size) {
-                float total = 0.0;
-
-                for (uint pp = 0u; pp < LANES / 64u; pp++) {
-                    total += parts[(h * (room / 64) + k) * LANES
-                                   + pp * 64u + c - k * 64u];
+        for (uint from = 0u; from < HEADS; from += CHUNK) {
+            for (uint hh = 0u; hh < CHUNK && from + hh < HEADS; hh++) {
+                for (uint k = 0; k < room / 64; k++) {
+                    parts[(hh * (room / 64) + k) * LANES + lane]
+                      = held[i][from + hh][k];
                 }
-
-                uint out_at = slot_of[i] * shape.heads * shape.value_size
-                              + (head + h) * shape.value_size;
-
-                if (slices > 1u) {
-                    out_at = shape.positions * shape.heads * shape.value_size
-                             + ((slice * shape.positions + slot_of[i])
-                                * shape.heads + head + h)
-                               * (shape.value_size + 2u);
-                }
-
-                y[out_at + c] = slices > 1u ? total : total / sum[i][h];
             }
-        }
 
-        barrier ();
+            barrier ();
+
+            //  Every lane of the workgroup writes a component of some
+            //  head: the parts are read in the order the subgroups lie,
+            //  as before.
+            for (uint slot = lane; slot < CHUNK * (room / 64) * 64u;
+                 slot += LANES) {
+                uint hh = slot / ((room / 64) * 64u);
+                uint rest = slot % ((room / 64) * 64u);
+                uint k = rest / 64u;
+                uint c = rest % 64u + k * 64u;
+
+                if (from + hh < HEADS && c < shape.value_size) {
+                    float total = 0.0;
+
+                    for (uint pp = 0u; pp < LANES / 64u; pp++) {
+                        total += parts[(hh * (room / 64) + k) * LANES
+                                       + pp * 64u + c - k * 64u];
+                    }
+
+                    uint h = from + hh;
+                    uint out_at = slot_of[i] * shape.heads * shape.value_size
+                                  + (head + h) * shape.value_size;
+
+                    if (slices > 1u) {
+                        out_at = shape.positions * shape.heads
+                                 * shape.value_size
+                                 + ((slice * shape.positions + slot_of[i])
+                                    * shape.heads + head + h)
+                                   * (shape.value_size + 2u);
+                    }
+
+                    y[out_at + c] = slices > 1u ? total : total / sum[i][h];
+                }
+            }
+
+            barrier ();
+        }
 #endif
     }
 }

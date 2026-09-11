@@ -340,6 +340,138 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Fused_Layer_Is_Not_Charged_To_Attending;
 
+   -------------------------------------------------
+   -- A_Halved_Session_On_The_Device_Reads_The_Copy --
+   -------------------------------------------------
+
+   --  A session asking for halves on the device gets the device's halves:
+   --  the host's copy of record stays exact, the device attends a token
+   --  out of its half-precision copy, and the session says Halved for
+   --  it. What it answers is held near what the exact session answers,
+   --  not to the bit. And the next session opened exact takes the device
+   --  back with it, since the device is told for the process.
+   procedure A_Halved_Session_On_The_Device_Reads_The_Copy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7];
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Able   : Boolean;
+         Awake  : Boolean;
+
+         Exact, Halved : Logit_Vector;
+         Worst         : N.Real := 0.0;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device attended out of its copy here");
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Model_Runner.Backend.Backend_Device, Able);
+
+         if not Able then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device attended out of its copy here");
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         --  Exact first, so the device is known not to be reading the
+         --  copy before it is asked to.
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the exact session did not open");
+         Assert (L."=" (L.Precision (Live), L.Exact),
+                 "an exact session on the device says it is not");
+         Assert (not Model_Runner.Backend.Device.Attends_In_Halves,
+                 "the device reads its copy for an exact session");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Exact, Status => Status);
+            Assert (E.Is_Ok (Status), "the exact evaluation failed");
+         end loop;
+
+         L.Close (Live);
+
+         --  Then halves, which the device takes as its own.
+         L.Open (Live, Under.Ready, Cache => L.Halved, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the halved session did not open on the device: "
+                 & E.Error_Code'Image (Status.Code));
+
+         if not Model_Runner.Backend.Device.Attends_In_Halves then
+            --  A device without the half-precision kernels: the session
+            --  is exact and says so, and there is nothing more to ask.
+            Assert (L."=" (L.Precision (Live), L.Exact),
+                    "a session the device could not halve says Halved");
+            L.Close (Live);
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         Assert (L."=" (L.Precision (Live), L.Halved),
+                 "a session attending out of the copy says it is exact");
+
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Halved, Status => Status);
+            Assert (E.Is_Ok (Status), "the halved evaluation failed");
+         end loop;
+
+         for Index in Exact'Range loop
+            Worst := N.Real'Max (Worst, abs (Exact (Index) - Halved (Index)));
+         end loop;
+
+         Assert (Worst < 5.0e-2,
+                 "a token attending out of the copy answers"
+                 & N.Real'Image (Worst) & " away from the exact session");
+
+         L.Close (Live);
+
+         --  Closing the session leaves the device as it was told: the
+         --  device is told for the process, by whichever session opened
+         --  last, and by a caller with no session at all.
+         Assert (Model_Runner.Backend.Device.Attends_In_Halves,
+                 "closing a halved session took the copy away from the "
+                 & "device, which is told for the process");
+         Model_Runner.Backend.Device.Attend_In_Halves (False);
+         Assert (not Model_Runner.Backend.Device.Attends_In_Halves,
+                 "the device kept reading its copy after being told not to");
+         Model_Runner.Backend.Device.Attend_In_Halves (True);
+         Assert (Model_Runner.Backend.Device.Attends_In_Halves,
+                 "the device would not read its copy when told to directly");
+
+         --  And an exact session opened after takes the device back.
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the last exact session did not open");
+         Assert (not Model_Runner.Backend.Device.Attends_In_Halves,
+                 "the device kept reading its copy for an exact session");
+         Assert (L."=" (L.Precision (Live), L.Exact),
+                 "an exact session after a halved one says Halved");
+         L.Close (Live);
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Halved_Session_On_The_Device_Reads_The_Copy;
+
    --  A causal model cannot do this and must not: change the last token of
    --  a prompt and the first position's state is what it was. So the test
    --  is the same text twice with one later token different, and the
@@ -8955,6 +9087,10 @@ package body Tests.Inference_Cases is
         (T, A_Fused_Layer_Is_Not_Charged_To_Attending'Access,
          "a layer that went over to the device as one sequence is charged "
          & "to fusing and not to attending");
+      Register_Routine
+        (T, A_Halved_Session_On_The_Device_Reads_The_Copy'Access,
+         "a session asking for halves on the device attends out of the "
+         & "device's half-precision copy and says so");
       Register_Routine
         (T, What_A_Token_Reads_Decides_Whether_It_Fits'Access,
          "a model is refused for not fitting on what a token reads and not "

@@ -4468,6 +4468,216 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Split_Attention_Says_What_One_Piece_Says;
 
+   ------------------------------------------------------
+   -- A_Halved_Attention_Says_Nearly_What_The_Exact_Says --
+   ------------------------------------------------------
+
+   --  Attention read out of the half-precision copy, as a session opened
+   --  with a halved cache reads it on the device, against the same
+   --  attention over the cache proper. Sixty-four components a head and
+   --  seven hundred positions, so the cache is sliced; groups of four and
+   --  of eight, which are the two bundles a token out of the copy takes.
+   --  The copy keeps the keys and values to eleven bits, so the two are
+   --  held to a tolerance of the copy's making, not the bit.
+   --
+   --  Then a batch of sixteen queries with the copy still preferred,
+   --  which is the tiled kernel's shape and not a token's: it reads the
+   --  cache proper and must go on answering every head. The kernel and
+   --  its workgroups are decided together, and a token's workgroups on
+   --  the tiled kernel answered one bundle's heads and left the rest as
+   --  they were -- which is what this arm is here to say.
+   procedure A_Halved_Attention_Says_Nearly_What_The_Exact_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Head_Size : constant := 64;
+      Groups    : constant := 2;
+      Positions : constant := 700;
+      Batch     : constant := 16;
+
+      KV_Span : constant N.Element_Count := Groups * Head_Size;
+      Room    : constant N.Element_Count :=
+        N.Element_Count (Positions + Batch) * KV_Span;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+
+      Cache : N.Real_Array (0 .. Room * 2 - 1);
+
+      Near : constant N.Real := 4.0e-3;
+
+      --  One query and a batch, at this many heads in Groups groups.
+      procedure Compare (Heads : Positive) is
+         Span : constant N.Element_Count := N.Element_Count (Heads) * Head_Size;
+
+         Query    : N.Real_Array (0 .. Span * Batch - 1);
+         Exact    : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
+         Halved   : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+         Recorded : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+         Batched  : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+      begin
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+         end loop;
+
+         --  Every query of the batch over the cache proper, on its own:
+         --  the p-th looks Last + p positions back, as a batch does.
+         Products.Prefer_Halves (Engine, False);
+
+         for Which in 0 .. Batch - 1 loop
+            declare
+               One : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            begin
+               Products.Attend_Resident
+                 (Engine, Query (Span * N.Element_Count (Which)
+                                 .. Span * N.Element_Count (Which + 1) - 1),
+                  Heads => Heads, Head_Size => Head_Size,
+                  Value_Size => Head_Size, Group_Size => Heads / Groups,
+                  First => 0, Last => Positions - 1 + Which,
+                  K_Base => 0, V_Base => Natural (Room),
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.125, Cap => 0.0, Target => One, Ok => Ok);
+               Assert (Ok, "attention over the cache proper was refused");
+               Exact (Span * N.Element_Count (Which)
+                      .. Span * N.Element_Count (Which + 1) - 1) := One;
+            end;
+         end loop;
+
+         Products.Prefer_Halves (Engine, True);
+         Assert (Products.Prefers_Halves (Engine),
+                 "the engine would not prefer the copy it has the kernel for");
+
+         Products.Attend_Resident
+           (Engine, Query (0 .. Span - 1),
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.125, Cap => 0.0, Target => Halved, Ok => Ok);
+         Assert (Ok, "attention out of the copy was refused");
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.125, Cap => 0.0, Added => Added);
+         Assert (Added, "a sequence would not take the attention step");
+
+         Products.Run (Engine, Steps, Query (0 .. Span - 1), 1, Recorded,
+                       Ok, Halted);
+         Assert (Ok, "a sequence attending out of the copy was refused");
+
+         for Index in 0 .. Span - 1 loop
+            Worst := N.Real'Max (Worst, abs (Exact (Index) - Halved (Index)));
+            Assert (abs (Exact (Index) - Halved (Index)) <= Near,
+                    "the copy answers away from the cache proper at "
+                    & "component" & N.Element_Count'Image (Index) & " of"
+                    & Positive'Image (Heads) & " heads:"
+                    & N.Real'Image (Halved (Index)) & " against"
+                    & N.Real'Image (Exact (Index)));
+            Assert (abs (Recorded (Index) - Halved (Index)) <= 1.0e-5,
+                    "the sequence out of the copy differs from the one "
+                    & "piece at component" & N.Element_Count'Image (Index)
+                    & ":" & N.Real'Image (Recorded (Index)) & " against"
+                    & N.Real'Image (Halved (Index)));
+         end loop;
+
+         Assert (Worst > 0.0,
+                 "the copy answered to the bit, which the cache proper "
+                 & "does not: it was not read");
+
+         --  And the batch, with the copy still preferred.
+         Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
+         Assert (Ok, "a batch with the copy preferred was refused");
+
+         for Index in Batched'Range loop
+            Assert (abs (Exact (Index) - Batched (Index)) <= Near,
+                    "a batch with the copy preferred answers away from the "
+                    & "queries one at a time at component"
+                    & N.Element_Count'Image (Index) & " of"
+                    & Positive'Image (Heads) & " heads:"
+                    & N.Real'Image (Batched (Index)) & " against"
+                    & N.Real'Image (Exact (Index)));
+         end loop;
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Assert (not Products.Prefers_Halves (Engine),
+              "an engine just opened already preferred the copy");
+
+      Products.Prefer_Halves (Engine, True);
+
+      if not Products.Prefers_Halves (Engine) then
+         --  No half-precision kernel on this device: nothing to compare.
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+
+      Products.Reserve (Engine, Cache'Length, Ok);
+
+      if not Ok then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      Compare (Heads => 8);
+      Compare (Heads => 16);
+
+      Products.Prefer_Halves (Engine, False);
+      Assert (not Products.Prefers_Halves (Engine),
+              "the engine kept preferring the copy after being told not to");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Halved_Attention_Says_Nearly_What_The_Exact_Says;
+
    ---------------------------------
    -- The_Device_Stamps_Its_Steps --
    ---------------------------------
@@ -5226,6 +5436,11 @@ package body Tests.Backend_Cases is
         (T, A_Split_Attention_Says_What_One_Piece_Says'Access,
          "one query against a cache cut into slices and merged says what "
          & "the same attention in one piece says, within a tolerance");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Halved_Attention_Says_Nearly_What_The_Exact_Says'Access,
+         "a token attending out of the half-precision copy says nearly "
+         & "what the cache proper says, in bundles of four and of eight, "
+         & "and a batch with the copy preferred still answers every head");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Device_Stamps_Its_Steps'Access,
          "a timed sequence comes back with an interval a step from the "

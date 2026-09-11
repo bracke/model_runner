@@ -7682,9 +7682,29 @@ package body Model_Runner.Llama is
            + Item.Cells.all (Settings.Layers - 1);
       begin
          --  One storage or the other, never both.
-         Item.Held := Cache;
+         --
+         --  On the device, half precision is the device's: it keeps every
+         --  position in both precisions and a token's attention reads the
+         --  copy when asked, which is what a session asking for halves
+         --  gets there, while the host's copy of record stays exact --
+         --  the host reads it back only to save or roll a context, and a
+         --  session that later runs on the processor runs exact. The
+         --  device is told for the process, so the last session opened
+         --  says; every session of a run asks for the same.
+         if Model_Runner.Backend."="
+              (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+           and then Cache in Exact | Halved
+         then
+            Model_Runner.Backend.Device.Attend_In_Halves (Cache = Halved);
+            Item.Held := Exact;
+            Item.Device_Halves :=
+              Cache = Halved
+              and then Model_Runner.Backend.Device.Attends_In_Halves;
+         else
+            Item.Held := Cache;
+         end if;
 
-         case Cache is
+         case Item.Held is
             when Exact =>
                T.Allocate (Rows * KV, Item.Keys);
                T.Allocate (Rows * KV_Out, Item.Values);
@@ -7803,12 +7823,12 @@ package body Model_Runner.Llama is
             end if;
          end if;
 
-         if (Cache = Exact
+         if (Item.Held = Exact
              and then (Item.Keys = null or else Item.Values = null))
-           or else (Cache = Halved
+           or else (Item.Held = Halved
                     and then (Item.Half_Keys = null
                               or else Item.Half_Values = null))
-           or else (Cache = Eighth
+           or else (Item.Held = Eighth
                     and then (Item.Byte_Keys = null
                               or else Item.Byte_Values = null
                               or else Item.Key_Scales = null
@@ -7949,7 +7969,8 @@ package body Model_Runner.Llama is
    -- Precision --
    ----------------
 
-   function Precision (Item : Session) return Cache_Precision is (Item.Held);
+   function Precision (Item : Session) return Cache_Precision
+   is (if Item.Device_Halves then Halved else Item.Held);
 
    -------------------
    -- Hidden_State --

@@ -7356,7 +7356,10 @@ ones leave alone, and the biggest of those is one token generated with a long
 cache behind it. Tried that way it reads 1.362 and 1.375 s against 1.374 and
 1.415 -- a wash, because one query against thirty-two heads is short of work
 rather than short of bandwidth. Half precision for nothing gained is a bad
-bargain, so that case keeps the cache proper and its exact answer.
+bargain, so that case keeps the cache proper and its exact answer. (That
+was the kernel of the day; bundled and sliced, the same case is the bytes,
+and `### A token's attention out of the half-precision copy, and the norms
+that would not fold` binds the copy for it when `--kv-cache f16` asks.)
 
 ### The setup around the strip kernel, which is not what it looked like
 
@@ -19311,6 +19314,45 @@ the dense tile read 13.0.
 llama-bench's Vulkan `pp1302` for the file reads 300.8 the same afternoon.
 The prompt is level with llama.cpp's, from a gap of 3.1 this morning; the
 dense models are untouched by a tile they do not use.
+
+### A token's attention out of the half-precision copy, and the norms that would not fold
+
+The device keeps every cached position in half precision already, for the
+matrix kernel's sake, and a generated token reading that copy was measured
+a wash once -- `### The half-precision cache, which the sweep refused` and
+the bundle section above -- when its kernel was a head a workgroup reading
+the group's cache eight times: short of work, not of bytes. Bundled, sliced
+and read across the lanes, a token at thirteen hundred positions is the
+bytes, and the copy is half of them. So `--kv-cache f16` means something on
+the device now: the host's copy of record stays exact, and a token attends
+out of the device's copy through the half-precision bundle compiled once
+more at eight heads.
+
+| Qwen3-30B-A3B, a token at 1302 positions | exact cache | the copy |
+| --- | ---: | ---: |
+| attention, a layer | 103.5, 103.1 us | **66.0, 66.4 us** |
+| 64 tokens generated | 2.281, 2.267 s | **2.178, 2.158 s** |
+| 64 tokens after 6 positions | 2.037, 2.040 s | 2.016, 2.048 s |
+
+The same sixty-four tokens on both; 28.1 to 29.4 tokens a second at the
+long context and a wash at the short one, where a head a workgroup is bound
+either way. The conformance sweep is the exact cache's and unchanged --
+halves are a thing asked for, on the device as on the processor -- and the
+copy's answer is held to the cache proper within 4e-3 at seven hundred
+positions, in bundles of four and of eight. The bundle of eight is the
+one the test caught: the half-precision compilation's scalar tail put every
+head's parts through a shared store sized for four heads of a hundred and
+twenty-eight components, and the second four went past its end. The
+round's bundle of four had never reached it.
+
+The other thing left in a token was forty-five microseconds of small
+dispatches a layer, and the two normalizations were tried folded into the
+products that read them -- no dispatch, no bubble. Three ways, every one
+slower: 2.02 to between 2.24 and 2.5 seconds over sixty-four tokens at the
+same clocks, because every workgroup of a four-thousand-row product
+normalizing the same vector again is more than one workgroup doing it once
+plus the bubble, on a part that fills the bubble with the next dispatch
+anyway. Reverted whole.
 
 ## License
 

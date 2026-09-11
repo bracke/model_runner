@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-cache f16` on the device reads the half-precision copy** the
+  device already keeps: a generated token's attention at 1302 positions
+  103 -> 66 microseconds a layer on Qwen3-30B-A3B, 28.1 -> 29.4 tokens a
+  second, a wash at a short context; the host's copy of record stays
+  exact and the session reports Halved. The half-precision bundle is
+  compiled once more at eight heads, and its scalar tail no longer
+  writes a bundle of eight past the end of the shared store. Folding
+  the two normalizations into the products that read them measured
+  slower three ways and is not kept.
+
 - **A tile of its own for listed products** -- thirty-two vectors over
   two subgroups, sixty-four rows -- since a run of thirty-two positions
   in the dense tile of a hundred and twenty-eight is three quarters

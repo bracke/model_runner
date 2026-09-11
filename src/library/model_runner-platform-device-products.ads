@@ -429,6 +429,29 @@ package Model_Runner.Platform.Device.Products is
    --    queue writes no timestamps refuses, and the engine goes on untimed.
    procedure Time_Steps (Item : in out Engine; On : Boolean; Ok : out Boolean);
 
+   --  Attend a generated token out of the half-precision copy of the
+   --  cache, or out of the cache proper.
+   --
+   --  place.comp and heads.comp write every position twice, as it is and
+   --  as half precision; the matrix kernel reads the copy for a prompt
+   --  and a round's kernel reads it for a row, and a token read the cache
+   --  proper, at the precision its answer is published in. At thirteen
+   --  hundred positions a token's attention is the bytes of keys and
+   --  values it reads, and the copy is half of them. What it costs is the
+   --  last bits of a long context's attention, which is what --kv-cache
+   --  f16 asks for on the processor too.
+   --
+   --  @param Item Ready engine.
+   --  @param On True to read the copy, False the cache proper.
+   procedure Prefer_Halves (Item : in out Engine; On : Boolean);
+
+   --  Whether a token's attention reads the half-precision copy.
+   --
+   --  @param Item Engine to ask.
+   --  @return True after Prefer_Halves said so, where the device has the
+   --    kernels for it.
+   function Prefers_Halves (Item : Engine) return Boolean;
+
    --  Whether steps are being stamped.
    --
    --  @param Item Engine to ask.
@@ -1734,6 +1757,11 @@ private
       Bundle_Line : System.Address := System.Null_Address;
       Exact_Bundle_Line : System.Address := System.Null_Address;
       Eight_Bundle_Line : System.Address := System.Null_Address;
+
+      --  The half-precision bundle at eight heads, for a token attending
+      --  out of the copy, and whether a token does.
+      Eight_Halved_Line : System.Address := System.Null_Address;
+      Halves : Boolean := False;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
 

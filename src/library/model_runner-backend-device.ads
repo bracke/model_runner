@@ -193,6 +193,27 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices released to make room.
    function Given_Back return Natural;
 
+   --  Attend a generated token out of the half-precision copy of the
+   --  cache, or out of the cache proper.
+   --
+   --  What --kv-cache f16 means on the device: the device keeps every
+   --  position in both precisions already, and a token's attention at a
+   --  long context is the bytes of keys and values it reads. The host's
+   --  copy of record stays exact. Off, a token reads the cache proper,
+   --  at the precision its answer is published in.
+   --
+   --  Task safety: run from one task, before the sequences it should
+   --  govern.
+   --
+   --  @param On True to read the copy.
+   procedure Attend_In_Halves (On : Boolean);
+
+   --  Whether a generated token attends out of the half-precision copy.
+   --
+   --  @return True after Attend_In_Halves said so, where the device has
+   --    the kernels for it.
+   function Attends_In_Halves return Boolean;
+
    --  Keep a timeline of every sequence the device runs, or stop.
    --
    --  Every sequence from then on is stamped by the device's own clock,

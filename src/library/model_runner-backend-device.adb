@@ -195,6 +195,22 @@ package body Model_Runner.Backend.Device is
       end loop;
    end Note_Timeline;
 
+   --  Whether a token should attend out of the copy, kept for an engine
+   --  opened after it was asked.
+   Halves_Wanted : Boolean := False;
+
+   procedure Attend_In_Halves (On : Boolean) is
+   begin
+      Halves_Wanted := On;
+
+      if Ready_Now then
+         Products.Prefer_Halves (Engine, On);
+      end if;
+   end Attend_In_Halves;
+
+   function Attends_In_Halves return Boolean
+   is (Ready_Now and then Products.Prefers_Halves (Engine));
+
    procedure Keep_Timeline (On : Boolean) is
       Ok : Boolean := True;
    begin
@@ -443,9 +459,14 @@ package body Model_Runner.Backend.Device is
            Text (Text'First .. Text'First + Named_Last - 1);
       end;
 
-      --  A timeline asked for before the engine was is kept from here.
+      --  A timeline asked for before the engine was is kept from here,
+      --  and the copy preferred before it was is read from here.
       if Timing then
          Products.Time_Steps (Engine, True, Timing);
+      end if;
+
+      if Halves_Wanted then
+         Products.Prefer_Halves (Engine, True);
       end if;
 
       Sharing := Share_Host;
