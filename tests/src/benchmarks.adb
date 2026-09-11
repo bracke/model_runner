@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Command_Line;
 with Ada.Real_Time;
 with Interfaces;
@@ -24,6 +25,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Platform;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.Quantization.Integers;
 with Model_Runner.Tensors;
 
@@ -743,6 +745,178 @@ package body Benchmarks is
       --  this tool can reach, and inventing a proxy for them would report a
       --  number about the proxy. What attention costs is read from a run at
       --  a long prompt instead.
+      --  A mixture's expert as the pool multiplies it: 768 rows of 2048,
+      --  and 2048 of 768, in the panelled k-quants, at the members an
+      --  expert of Qwen3-30B-A3B gets on a short prompt and a long one,
+      --  beside the dense shape at the same counts.
+      --
+      --  Here because the number that decides the plan for the mixture is
+      --  whether the cost an element rises at 768 rows and whether it
+      --  falls from eight vectors to eighty: the whole prompt reads 2.3e11
+      --  multiply-adds a second at seven members an expert and the same at
+      --  eighty, against 4.8e11 dense, and nothing in this tool could say
+      --  where.
+      procedure Measure_Expert_Shapes is
+         Team : aliased Model_Runner.Backend.CPU.Pool
+           (Model_Runner.Backend.CPU.Default_Workers
+              (Model_Runner.Platform.Core_Count));
+
+         type Shape is record
+            Rows, Columns : N.Element_Count;
+         end record;
+
+         Shapes : constant array (1 .. 3) of Shape :=
+           [(768, 2048), (2048, 768), (5632, 2048)];
+         Counts : constant array (1 .. 4) of N.Element_Count :=
+           [1, 8, 32, 80];
+         Formats : constant array (1 .. 3) of G.Tensor_Type :=
+           [G.Type_Q2_K, G.Type_Q3_K, G.Type_Q4_K];
+
+         function Name_Of (Format : G.Tensor_Type) return String
+         is (case Format is
+                when G.Type_Q2_K => "q2_k",
+                when G.Type_Q3_K => "q3_k",
+                when G.Type_Q4_K => "q4_k",
+                when others => "?");
+
+         --  Nanoseconds an element for one product of this shape, in
+         --  panels, at this many vectors, or zero where it cannot be built.
+         function Cost
+           (Format : G.Tensor_Type; Rows, Columns, Count : N.Element_Count)
+            return Long_Float
+         is
+            Span : constant B.Byte_Count :=
+              B.Byte_Count (Columns) / B.Byte_Count (G.Block_Elements (Format))
+              * B.Byte_Count (G.Block_Bytes (Format));
+            Blocks : constant N.Element_Count :=
+              Columns / N.Element_Count (G.Block_Elements (Format));
+
+            Plain   : B.Byte_Array_Access;
+            Panels  : B.Byte_Array_Access;
+            Item    : T.View;
+            Status  : E.Error_Info;
+            Inputs  : T.Real_Array_Access;
+            Outputs : T.Real_Array_Access;
+            Rates   : Rate_Array (1 .. Rounds) := [others => 0.0];
+            Built   : Boolean;
+         begin
+            if not Model_Runner.Quantization.Interleave.Interleaves
+                     (Format, Rows, Columns)
+            then
+               return 0.0;
+            end if;
+
+            T.Allocate (Columns * Count, Inputs);
+            T.Allocate (Rows * Count, Outputs);
+            B.Allocate (Span * B.Byte_Count (Rows), Plain);
+            B.Allocate
+              (Model_Runner.Quantization.Interleave.Panel_Bytes
+                 (Format, Rows, Blocks), Panels);
+            if Inputs = null or else Outputs = null then
+               T.Free (Inputs);
+               T.Free (Outputs);
+               B.Free (Plain);
+               B.Free (Panels);
+               return 0.0;
+            end if;
+
+            Fill (Plain.all);
+            Tame_Scales
+              (Plain.all, Format,
+               B.Byte_Count (Rows) * B.Byte_Count (Columns)
+               / B.Byte_Count (G.Block_Elements (Format)));
+
+            Model_Runner.Quantization.Interleave.Build
+              (Format, Plain.all, 0, Panels.all, 0, Rows, Blocks, Built);
+            if Built then
+               if Ada.Environment_Variables.Exists ("BENCH_PLAIN") then
+                  T.Make (Format, Rows, Columns, Plain, 0, Item, Status);
+               else
+                  T.Make_Panels (Format, Rows, Columns, Panels, 0, Item, Status);
+               end if;
+               Built := E.Is_Ok (Status);
+            end if;
+
+            if not Built then
+               T.Free (Inputs);
+               T.Free (Outputs);
+               B.Free (Plain);
+               B.Free (Panels);
+               return 0.0;
+            end if;
+
+            for Index in Inputs.all'Range loop
+               Inputs.all (Index) := N.Real (Index mod 17) * 0.125 - 1.0;
+            end loop;
+
+            for Pass in Rates'Range loop
+               declare
+                  Started : constant Ada.Real_Time.Time :=
+                    Ada.Real_Time.Clock;
+                  Passes  : Long_Long_Integer := 0;
+                  Elapsed : Duration := 0.0;
+               begin
+                  loop
+                     Model_Runner.Backend.CPU.Dispatch_Batch
+                       (Team'Unchecked_Access, Item, Inputs, Count, Outputs,
+                        Status);
+                     exit when E.Is_Error (Status);
+                     Passes := Passes + 1;
+                     Elapsed :=
+                       Ada.Real_Time.To_Duration
+                         (Ada.Real_Time.Clock - Started);
+                     exit when Elapsed >= Seconds;
+                  end loop;
+
+                  if Passes > 0 and then Elapsed > 0.0 then
+                     Rates (Pass) :=
+                       Long_Float (Passes) / Long_Float (Elapsed);
+                  end if;
+               end;
+            end loop;
+
+            T.Free (Inputs);
+            T.Free (Outputs);
+            B.Free (Plain);
+            B.Free (Panels);
+
+            if Middle (Rates) <= 0.0 then
+               return 0.0;
+            end if;
+
+            --  Seconds a product over the elements a product touches --
+            --  every weight against every vector -- in nanoseconds.
+            return 1.0E9 / Middle (Rates)
+              / Long_Float (Rows * Columns * Count);
+         end Cost;
+         --  In the arithmetic a run uses, as the token budget measures.
+         Held : constant Boolean :=
+           Model_Runner.Backend.CPU.Integer_Activations;
+      begin
+         Model_Runner.Backend.CPU.Use_Integer_Activations (True);
+
+         for Format of Formats loop
+            for Each of Shapes loop
+               IO.Put ("  " & Name_Of (Format) & " "
+                       & Model_Runner.Text.Trim (N.Element_Count'Image (Each.Rows)) & " by "
+                       & Model_Runner.Text.Trim (N.Element_Count'Image (Each.Columns)) & ":");
+               for Count of Counts loop
+                  declare
+                     Value : constant Long_Float :=
+                       Cost (Format, Each.Rows, Each.Columns, Count);
+                  begin
+                     IO.Put ("  " & Model_Runner.Text.Trim (N.Element_Count'Image (Count))
+                             & " vectors "
+                             & Long_Float'Image (Value) & " ns");
+                  end;
+               end loop;
+               IO.New_Line;
+            end loop;
+         end loop;
+
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+      end Measure_Expert_Shapes;
+
       procedure Measure_Token_Budget
         (Name  : String;
          Batch : N.Element_Count;
@@ -1798,6 +1972,10 @@ package body Benchmarks is
                    & N.Element_Count'Image (Columns) & " per pass;"
                    & " load "
                    & Model_Runner.Text.Image (Started_At, 2));
+      IO.New_Line;
+
+      IO.Put_Line ("expert-shaped products, in panels, on the pool");
+      Measure_Expert_Shapes;
       IO.New_Line;
 
       IO.Put_Line ("row dot product");

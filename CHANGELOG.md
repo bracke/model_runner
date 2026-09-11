@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests benchmark` measures a mixture's expert shapes** -- 768 by 2048
+  and 2048 by 768 in the panelled k-quants at 1 to 80 vectors, beside the
+  dense shape -- in the quantized arithmetic a run uses. The cost an
+  element is the same at 768 rows as at 5632 and flat with the vectors:
+  the strip kernel is at its arithmetic's rate, 5.3e11 multiply-adds a
+  second, and the plan's tokens-tiled product is refuted before it was
+  built.
+
+- **A batch's mixture on the processor is shared in runs of sixteen
+  members**, so the shares are level whatever the experts' sizes; the
+  pool had been half idle. Qwen3-30B-A3B's 110-token prompt 71 -> 78-80
+  tokens a second.
+
 - **A batch's mixture on the processor packs its rows once.** Every row
   went to eight experts and to a gate and an up each, quantized sixteen
   times a layer; `Workers_CPU.Pack` and `Multiply_Packed` quantize the

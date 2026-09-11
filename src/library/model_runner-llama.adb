@@ -5447,14 +5447,27 @@ package body Model_Runner.Llama is
             Counts : array (0 .. Many - 1) of Natural := [others => 0];
             Filled : Natural := 0;
 
-            --  Which expert each item of the job is. The pool cuts the
-            --  items into shares of equal count, and experts are not of
-            --  equal size -- one chosen by twenty positions is twenty
-            --  times another -- so the experts are dealt into the shares
-            --  largest first, back and forth, and laid out share by
-            --  share: the same number of experts a share, and about the
-            --  same rows.
-            Order  : array (0 .. Many - 1) of Natural;
+            --  The items of the job: an expert's members in runs of at
+            --  most Chunk_Size, so that a run is about the same work as
+            --  the next whatever the expert. Dealt whole, an expert
+            --  chosen by eighty positions beside one chosen by two left
+            --  the pool half idle -- the shares are cut by count -- and
+            --  the samples said so: as many workers waiting for a share
+            --  as in a kernel. In runs, the shares are level to a run.
+            --
+            --  Order says which run each item of the job is, the runs
+            --  dealt into the shares largest first and back and forth.
+            Chunk_Size : constant := 16;
+
+            Most_Chunks : constant Natural :=
+              Natural (Count) * Used + Many;
+
+            Chunk_Expert : array (0 .. Most_Chunks - 1) of Natural;
+            Chunk_Start  : array (0 .. Most_Chunks - 1) of Natural;
+            Chunk_Count  : array (0 .. Most_Chunks - 1) of Natural;
+            Chunks       : Natural := 0;
+
+            Order  : array (0 .. Most_Chunks - 1) of Natural;
             Widest : Natural := 0;
 
             --  The layer's rows quantized once, for the gates and ups to
@@ -5503,21 +5516,25 @@ package body Model_Runner.Llama is
                end if;
 
                for Index_Of in Natural (From) .. Natural (To) loop
-                  if Share.Ok and then Counts (Order (Index_Of)) > 0 then
+                  if Share.Ok then
                      declare
-                        Which : constant Natural := Order (Index_Of);
+                        Chunk : constant Natural := Order (Index_Of);
+                        Which : constant Natural := Chunk_Expert (Chunk);
+                        Start : constant Natural := Chunk_Start (Chunk);
+                        Members_Held : constant Natural :=
+                          Chunk_Count (Chunk);
 
                         Held : constant Element_Count :=
-                          Element_Count (Counts (Which));
+                          Element_Count (Members_Held);
 
                         Expert_At : Expert renames
                           Current.Experts.all (Which);
                      begin
                         begin
-                           for Index in 0 .. Counts (Which) - 1 loop
+                           for Index in 0 .. Members_Held - 1 loop
                               declare
                                  Pick : constant Natural :=
-                                   Listed (Starts (Which) + Index);
+                                   Listed (Start + Index);
                                  Where : constant Element_Count :=
                                    Element_Count (Pick / Used);
                                  At_In : constant Element_Count :=
@@ -5536,12 +5553,12 @@ package body Model_Runner.Llama is
                            --  and from the rows as they are otherwise.
                            declare
                               Picked : Model_Runner.Shares.Member_Rows
-                                (0 .. Counts (Which) - 1);
+                                (0 .. Members_Held - 1);
                               Done   : Boolean;
                            begin
                               for Index in Picked'Range loop
                                  Picked (Index) :=
-                                   Listed (Starts (Which) + Index) / Used;
+                                   Listed (Start + Index) / Used;
                               end loop;
 
                               Done := False;
@@ -5591,7 +5608,7 @@ package body Model_Runner.Llama is
                               end if;
                            end;
 
-                           for Index in 0 .. Counts (Which) - 1 loop
+                           for Index in 0 .. Members_Held - 1 loop
                               declare
                                  At_Arm : constant Element_Count :=
                                    Element_Count (Index) * Feed;
@@ -5648,10 +5665,10 @@ package body Model_Runner.Llama is
                               Share.Ok := False;
                            end if;
 
-                           for Index in 0 .. Counts (Which) - 1 loop
+                           for Index in 0 .. Members_Held - 1 loop
                               declare
                                  Pick : constant Natural :=
-                                   Listed (Starts (Which) + Index);
+                                   Listed (Start + Index);
 
                                  From_At : constant Element_Count :=
                                    Out_Room.all'First
@@ -5738,8 +5755,21 @@ package body Model_Runner.Llama is
                end if;
             end loop;
 
+            --  The runs: each expert's members in Chunk_Size at a time.
             for Which in Counts'Range loop
-               Widest := Natural'Max (Widest, Counts (Which));
+               declare
+                  Done : Natural := 0;
+               begin
+                  while Done < Counts (Which) loop
+                     Chunk_Expert (Chunks) := Which;
+                     Chunk_Start (Chunks) := Starts (Which) + Done;
+                     Chunk_Count (Chunks) :=
+                       Natural'Min (Chunk_Size, Counts (Which) - Done);
+                     Widest := Natural'Max (Widest, Chunk_Count (Chunks));
+                     Done := Done + Chunk_Count (Chunks);
+                     Chunks := Chunks + 1;
+                  end loop;
+               end;
             end loop;
 
             --  The rows packed once, for each kind of sums a gate or up
@@ -5774,9 +5804,8 @@ package body Model_Runner.Llama is
             declare
                Bins   : constant Positive :=
                  Positive (Workers_CPU.Worker_Total (Item.Team.all)) + 1;
-               Sorted : array (0 .. Many - 1) of Natural;
-               Bin_Of : array (0 .. Many - 1) of Natural;
-               Sizes  : array (0 .. Bins - 1) of Natural := [others => 0];
+               Sorted : array (0 .. Chunks - 1) of Natural;
+               Bin_Of : array (0 .. Chunks - 1) of Natural;
                Bin    : Natural := 0;
                Ahead  : Boolean := True;
                Placed : Natural := 0;
@@ -5785,13 +5814,14 @@ package body Model_Runner.Llama is
                   Sorted (Which) := Which;
                end loop;
 
-               for Outer in 1 .. Many - 1 loop
+               for Outer in 1 .. Chunks - 1 loop
                   declare
                      Moving : constant Natural := Sorted (Outer);
                      Inner  : Integer := Outer - 1;
                   begin
                      while Inner >= 0
-                       and then Counts (Sorted (Inner)) < Counts (Moving)
+                       and then Chunk_Count (Sorted (Inner))
+                                < Chunk_Count (Moving)
                      loop
                         Sorted (Inner + 1) := Sorted (Inner);
                         Inner := Inner - 1;
@@ -5802,7 +5832,6 @@ package body Model_Runner.Llama is
 
                for Rank in Sorted'Range loop
                   Bin_Of (Sorted (Rank)) := Bin;
-                  Sizes (Bin) := Sizes (Bin) + 1;
 
                   if Ahead then
                      if Bin = Bins - 1 then
@@ -5829,10 +5858,12 @@ package body Model_Runner.Llama is
                end loop;
             end;
 
-            Workers_CPU.Dispatch_Shares
-              (Item.Team, Element_Count (Many), Share'Unchecked_Access,
-               Status,
-               Cost => Count * Element_Count (Used) * Feed * Width * 3);
+            if Chunks > 0 then
+               Workers_CPU.Dispatch_Shares
+                 (Item.Team, Element_Count (Chunks), Share'Unchecked_Access,
+                  Status,
+                  Cost => Count * Element_Count (Used) * Feed * Width * 3);
+            end if;
 
             Workers_CPU.Unpack (Packed_Super);
             Workers_CPU.Unpack (Packed_Plain);
