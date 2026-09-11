@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The three-bit row product is dealt across the lanes as the two-bit
+  one is** -- four loads a block a lane where there were twenty -- and
+  measured no faster: a token's products read at the memory's rate plus
+  a fixed ramp of about twenty microseconds each, which no decode
+  reaches. Kept as the cleaner kernel; the measurement is recorded.
+
 - **The matrix attention kernel takes heads of a hundred and
   twenty-eight**, through a second compilation staging the wider head,
   and weighs a tile's values in one pass through the shared store rather

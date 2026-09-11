@@ -19381,6 +19381,27 @@ reads its weights back from disk during the prompt -- the eighteen-gigabyte
 mixture evicts the five-gigabyte dense file from the page cache -- and reads
 seventy-five tokens a second for it. Alternate one model at a time.
 
+### The three-bit row product dealt, and what a token's products wait on
+
+A token's `Q3_K` products read at 45-52 GB/s where the `Q2_K` up stack reads
+70 and the output head 66, so the three-bit decode looked like the drag. The
+lanes are dealt now as the two-bit format deals them -- two words of quants
+and the two mask words that go with them a lane, four groups taken out of
+them, four loads a block where a lane read twenty and four lanes read the
+same words -- and it is no faster: the output projection 79 -> 78
+microseconds, the down stacks 104 -> 108, two blocks an iteration the same,
+the narrower workgroup worse. Kept for being the cleaner kernel at the same
+conformance and the same tokens.
+
+What the numbers say instead is that every product of a token layer reads
+at the memory's rate plus about twenty microseconds: 3.6 MB at 66 GB/s is 55
+and reads 78; 5.4 MB is 82 and reads 104. The gate and up stacks are the
+proof -- the same bytes read 80 and 58, because the up stack needs nothing
+of the gate's and starts under its tail, so only the gate is charged the
+ramp. Seventy microseconds a layer, 3.4 ms of a 29 ms token, and no decode
+reaches it; fewer products a layer or more bytes in flight at the start of
+one would, and that is a different change.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
