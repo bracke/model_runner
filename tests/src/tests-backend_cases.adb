@@ -4130,6 +4130,127 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end The_Heads_Step_Says_What_Three_Steps_Say;
 
+   ------------------------------------------------
+   -- A_Split_Attention_Says_What_One_Piece_Says --
+   ------------------------------------------------
+
+   --  One query against a cache long enough to be cut into slices, as a
+   --  sequence cuts it, against the same attention submitted on its own,
+   --  which is never cut. Eight heads in groups of four over sixty-four
+   --  components, so the bundled kernel is the one bound and the keys are
+   --  read across the lanes; seven hundred positions, so there are three
+   --  slices and a merge. The two associate differently and are held to a
+   --  tolerance, not the bit.
+   procedure A_Split_Attention_Says_What_One_Piece_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 8;
+      Head_Size : constant := 64;
+      Groups    : constant := 2;
+      Positions : constant := 700;
+
+      Span    : constant N.Element_Count := Heads * Head_Size;
+      KV_Span : constant N.Element_Count := Groups * Head_Size;
+      Room    : constant N.Element_Count :=
+        N.Element_Count (Positions) * KV_Span;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+      Added  : Boolean;
+      Halted : Boolean;
+
+      Cache    : N.Real_Array (0 .. Room * 2 - 1);
+      Query    : N.Real_Array (0 .. Span - 1);
+      Alone    : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+      Recorded : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+
+      Steps : Products.Sequence;
+
+      Near : constant N.Real := 1.0e-5;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      Products.Reserve (Engine, Cache'Length, Ok);
+
+      if not Ok then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      Products.Attend_Resident
+        (Engine, Query,
+         Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+         Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+         K_Base => 0, V_Base => Natural (Room),
+         KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+         Scale => 0.125, Cap => 0.0, Target => Alone, Ok => Ok);
+      Assert (Ok, "attention on its own was refused");
+
+      Products.Open_Sequence (Steps);
+      Products.Add_Attention
+        (Steps,
+         Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+         Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+         K_Base => 0, V_Base => Natural (Room),
+         KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+         Scale => 0.125, Cap => 0.0, Added => Added);
+      Assert (Added, "a sequence would not take the attention step");
+
+      Products.Run (Engine, Steps, Query, 1, Recorded, Ok, Halted);
+      Assert (Ok, "a sequence holding a split attention was refused");
+
+      for Index in 0 .. Span - 1 loop
+         Assert (abs (Alone (Index) - Recorded (Index)) <= Near,
+                 "the slices put together differ from the one piece at "
+                 & "component" & N.Element_Count'Image (Index) & ":"
+                 & N.Real'Image (Recorded (Index)) & " against"
+                 & N.Real'Image (Alone (Index)));
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Split_Attention_Says_What_One_Piece_Says;
+
    ---------------------------------
    -- The_Device_Stamps_Its_Steps --
    ---------------------------------
@@ -4878,6 +4999,10 @@ package body Tests.Backend_Cases is
          "a batch packed once and read by members multiplies as the pool "
          & "multiplies the same rows, to the bit, and refuses a member past "
          & "the batch");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Split_Attention_Says_What_One_Piece_Says'Access,
+         "one query against a cache cut into slices and merged says what "
+         & "the same attention in one piece says, within a tolerance");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Device_Stamps_Its_Steps'Access,
          "a timed sequence comes back with an interval a step from the "

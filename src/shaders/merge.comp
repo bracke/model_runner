@@ -1,0 +1,75 @@
+#version 450
+
+//  The slices of a split attention put together.
+//
+//  attention.comp cuts a long cache into slices when the engine dispatches
+//  several workgroups down its third axis, and each slice leaves its
+//  unnormalized blend, its largest score and its sum after the answers.
+//  A softmax over the whole is the softmax over the slices rescaled to a
+//  common largest: the blend of slice s is worth exp(top_s - M) of itself,
+//  and so is its sum, where M is the largest of the tops. This is one
+//  workgroup a head of a position, a lane a component of the value.
+//
+//  A slice that saw nothing left minus infinity as its largest and zero as
+//  its sum; exp of minus infinity is zero and it takes no part.
+//
+//  The order the slices are added in is the order they lie in, so the
+//  answer is the same however the workgroups ran; it is not the order the
+//  unsplit kernel adds positions in, and the last bits differ from it.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 2) buffer Blend { float y[]; };
+
+layout(push_constant, std430) uniform Shape {
+    uint heads;
+    uint value_size;
+    uint positions;
+    uint slices;
+} shape;
+
+void main() {
+    uint head = gl_WorkGroupID.x;
+    uint slot = gl_WorkGroupID.y;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (head >= shape.heads || slot >= shape.positions) {
+        return;
+    }
+
+    uint stride = shape.value_size + 2u;
+    uint records = shape.positions * shape.heads * shape.value_size;
+
+    float largest = -1.0 / 0.0;
+
+    for (uint s = 0u; s < shape.slices; ++s) {
+        uint at = records + ((s * shape.positions + slot) * shape.heads + head)
+                            * stride;
+        largest = max (largest, y[at + shape.value_size]);
+    }
+
+    float total = 0.0;
+
+    for (uint s = 0u; s < shape.slices; ++s) {
+        uint at = records + ((s * shape.positions + slot) * shape.heads + head)
+                            * stride;
+        total += y[at + shape.value_size + 1u]
+                 * exp (y[at + shape.value_size] - largest);
+    }
+
+    uint out_at = slot * shape.heads * shape.value_size
+                  + head * shape.value_size;
+
+    for (uint c = lane; c < shape.value_size; c += 64u) {
+        float blend = 0.0;
+
+        for (uint s = 0u; s < shape.slices; ++s) {
+            uint at = records
+                      + ((s * shape.positions + slot) * shape.heads + head)
+                        * stride;
+            blend += y[at + c] * exp (y[at + shape.value_size] - largest);
+        }
+
+        y[out_at + c] = blend / total;
+    }
+}

@@ -85,6 +85,32 @@ package Model_Runner.Platform.Device.Products is
    --  served as well as one whose group is eight.
    Head_Bundle : constant := 4;
 
+   --  And the wider bundle the exact kernel is also made at, for a model
+   --  whose group is eight: its keys and values cross once a layer
+   --  rather than twice.
+   Wide_Bundle : constant := 8;
+
+   --  And the fewest cached positions the exact bundle is bound over: a
+   --  short cache is a few workgroups doing little each, and a head a
+   --  workgroup is more workgroups.
+   Bundle_Least : constant := 256;
+
+   --  Most slices a long cache is cut into for a generated token, and the
+   --  fewest positions a slice is worth: attention.comp takes a slice a
+   --  workgroup down its third axis and merge.comp puts them together.
+   --  A part with a dozen compute units and eight bundles of heads wants
+   --  more workgroups than eight, and a slice shorter than a tile or two
+   --  is a workgroup that does less than its start costs.
+   Slice_Limit : constant := 16;
+
+   --  Most rows and most vectors a binary32 product goes to thin.comp
+   --  with, a workgroup a row and vector: past either the row kernel's
+   --  economy -- a row read once for every vector an invocation carries
+   --  -- is the better one.
+   Thin_Rows    : constant := 512;
+   Thin_Vectors : constant := 8;
+   Slice_Least : constant := 256;
+
    --  Whole numbers written into the cache buffer for a kernel to read
    --  back with floatBitsToUint. A round's per-row table is two of them a
    --  row -- where the row has got to and where its cache begins -- and it
@@ -1562,6 +1588,14 @@ private
       --  that group's slice once for each head that wants it.
       Bundled_Attend : System.Address := System.Null_Address;
 
+      --  And GROUPED over the cache proper, for a generated token. A
+      --  token's workgroup was a head, and a head reads its group's keys
+      --  and values whole: with eight heads to a group the cache crossed
+      --  eight times a layer, and the device's clock put attention at a
+      --  third of a layer at thirteen hundred positions. A bundle reads
+      --  it twice, in the precision the token's answer is published in.
+      Exact_Bundled_Attend : System.Address := System.Null_Address;
+
       Narrow     : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
 
@@ -1584,6 +1618,13 @@ private
       --  two.
       Header     : System.Address := System.Null_Address;
 
+      --  merge.comp: the slices of a split attention put together.
+      Merger     : System.Address := System.Null_Address;
+
+      --  thin.comp: a few binary32 rows against a few vectors, a
+      --  workgroup a row.
+      Thinner    : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -1594,6 +1635,8 @@ private
       Extra_Line  : System.Address := System.Null_Address;
       Halved_Line : System.Address := System.Null_Address;
       Bundle_Line : System.Address := System.Null_Address;
+      Exact_Bundle_Line : System.Address := System.Null_Address;
+      Eight_Bundle_Line : System.Address := System.Null_Address;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
       --  One for every count a round may bring, up to the eight-wide
@@ -1612,6 +1655,8 @@ private
       Place_Line  : System.Address := System.Null_Address;
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
+      Merge_Line  : System.Address := System.Null_Address;
+      Thin_Line   : System.Address := System.Null_Address;
       Heads_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which

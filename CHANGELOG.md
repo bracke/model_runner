@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A generated token's attention on the device reads its group's keys
+  and values once, cut into slices.** A workgroup was a head and read its
+  group's cache whole, eight times a layer for a group of eight; a sixth
+  compilation of `attention.comp` bundles a group's heads -- four or eight,
+  through a specialization constant -- reads keys across the lanes with a
+  clustered add, values four at a time, and cuts a long cache into slices
+  a workgroup each that `merge.comp` puts together. Qwen3-30B-A3B's
+  attention at 1302 positions 225 -> 104 microseconds a layer, the
+  token 24.6 -> 28.4 tokens a second; Qwen3-8B 11.0 -> 11.5; a short
+  cache keeps the kernel it had; the same bits on every published row.
+
+- **A mixture's router goes to a thin kernel**, a workgroup a row: the row
+  kernel gave a hundred and twenty-eight binary32 rows four workgroups
+  and read the megabyte at eighteen gigabytes a second. `thin.comp`
+  reads it at the memory's rate, 57 -> 18 microseconds a layer, and the
+  token 28.4 -> 30.2 tokens a second at 1302 positions, 32.1 -> 34.6
+  from a short prompt -- llama.cpp's tg64 for the file is 34.4.
+
 - **The three-bit row product shares a super-block across the row's
   lanes**, as the four- and two-bit ones do, reading words rather than a
   byte a quant and a byte a mask bit: `q3_K` products 26-33 -> 46-51 GB/s

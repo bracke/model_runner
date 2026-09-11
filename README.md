@@ -19213,6 +19213,39 @@ attention is 31 per cent of the layer now, at 24 GB/s over the keys and
 values, and the router's binary32 product is 8 per cent on too few
 workgroups; those are the next two.
 
+### A token's attention read once and cut into slices, and the router on a thin kernel
+
+The timeline's third finding: at 1302 positions attention was 225 µs of an
+862 µs mixture layer, and the reason was not the kernel but what it read --
+a workgroup a head, each reading its group's keys and values whole, eight
+heads to a group, so 5.3 MB of cache crossed eight times a layer at the
+memory's whole rate. A sixth compilation of `attention.comp` bundles a
+group's heads over the cache proper (four or eight, a specialization
+constant), reads the keys across the lanes with a clustered add and the
+values four at a time, and cuts a long cache into slices a workgroup each
+that `merge.comp` puts together. Each step was timed on the way and three
+were refuted; the one that mattered most was the driver's register count,
+which said a bundle of eight ran four waves a SIMD until the two-word
+paths were left out of that compilation.
+
+The router -- 128 binary32 rows, a megabyte -- had four workgroups from the
+row kernel and read at 18 GB/s; `thin.comp` gives every row a workgroup and
+reads it at 57.
+
+| | before | after |
+| --- | ---: | ---: |
+| attention, a layer at 1302 positions | 225 µs | 104 µs |
+| the router, a layer | 57 | 18 |
+| a Qwen3-30B-A3B layer at 1302 positions | 727 | 564 |
+| Qwen3-30B-A3B, 1302-token prompt | 24.72, 24.60, 24.53 t/s | 30.20, 30.16, 30.32 |
+| Qwen3-30B-A3B, short prompt | 32.04, 32.17, 32.09 | 34.58, 34.87, 34.47 |
+| Qwen3-8B, 1302 positions | 10.98, 10.93 | 11.46, 11.49 |
+
+llama-bench's tg64 for the mixture file is 34.4 from an empty context, and
+the short-prompt figure is level with it now. The same bits on every
+published device row, conformance clean, and a test holds a query over
+seven hundred positions in three slices to the same attention in one piece.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

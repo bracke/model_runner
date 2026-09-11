@@ -1,6 +1,6 @@
 #version 450
 
-//  This source is compiled three times. The second compilation defines
+//  This source is compiled six times. The second compilation defines
 //  SUBGROUPS and the third defines SUBGROUPS and QUERY_TILE, which sets
 //  QUERIES above one: a workgroup then answers a block of query positions
 //  rather than one, and the key it reads for a cached position is
@@ -42,6 +42,7 @@
 #ifdef SUBGROUPS
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_clustered  : require
 #endif
 
 #ifdef HALVED
@@ -158,12 +159,18 @@ uint word_at (uint at) {
 #else
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 
+//  The same cache four at a time, for the key reads: a lane reads its
+//  own key, a row on its own, and a word a load was a hundred and
+//  twenty-eight loads a key where thirty-two will do.
+layout(std430, binding = 0) readonly  buffer Cache4 { vec4 kv4[]; };
+
 float held_at (uint at) { return kv[at]; }
 
 uint word_at (uint at) { return floatBitsToUint (kv[at]); }
 #endif
 
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
+layout(std430, binding = 1) readonly  buffer Query4 { vec4 q4[]; };
 layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
 
 layout(push_constant, std430) uniform Shape {
@@ -265,8 +272,19 @@ const uint QUERIES = 1u;
 //  served as well as one whose group is eight; the engine binds this only
 //  where the group divides by it, and a model that gives every head its own
 //  keys is left on the kernel it was on.
+//
+//  The sixth compilation is SUBGROUPS, WIDE, GROUPED and FOURS: a bundle
+//  over the cache proper, reading four at a time on the engine's promise
+//  that every base and width allows it, for a generated token. The engine
+//  makes two pipelines of it, a bundle of four and one of eight, through
+//  the constant below.
+//
+//  A specialization constant under GROUPED, so that the same words serve
+//  a bundle of four and a bundle of eight: a group of eight heads read as
+//  two bundles crosses the cache twice, and once as one. The engine sets
+//  it when it makes a pipeline and leaves it at four for the round's.
 #ifdef GROUPED
-const uint HEADS = 4u;
+layout(constant_id = 1) const uint HEADS = 4u;
 #else
 const uint HEADS = 1u;
 #endif
@@ -274,6 +292,19 @@ const uint HEADS = 1u;
 //  One tile of scores per query of the block and head of the bundle, one
 //  entry per invocation.
 shared float tile[QUERIES * HEADS * LANES];
+
+//  Where the parts of every head's blend meet at the end, all at once:
+//  gathering them a head and a half at a time through the tile was
+//  thirty-two barriers a bundle of eight, and a barrier across four
+//  subgroups is not free.
+//
+//  Eight floats a lane: two heads of the four-wide value path at a time,
+//  which is also a bundle of four heads, two halves each, of the other
+//  path, and the scores of a tile's positions for a bundle of eight.
+//  Shared memory is what bounds how many workgroups a compute unit holds
+//  at once, and a token's attention is a few workgroups waiting for
+//  memory.
+shared float parts[8u * LANES];
 
 #ifdef SUBGROUPS
 //  One partial per subgroup. Sixty-four of them, because a device may make
@@ -550,22 +581,161 @@ void main() {
     uint comp = lane & 63u;
     uint part = lane >> 6u;
 
+    //  Which slice of the cached positions this workgroup takes, where
+    //  the engine dispatched several down the third axis. A generated
+    //  token is one query against a long cache, and a workgroup a head --
+    //  or a bundle of them -- is a handful of workgroups streaming
+    //  megabytes each; a part with a dozen compute units wants dozens. So
+    //  the positions are cut into slices, a workgroup a slice, each
+    //  carrying its own largest score, its own sum and its own
+    //  unnormalized blend, and merge.comp puts the slices together. With
+    //  one slice this writes the answer itself, as it always did.
+    //
+    //  A slice is a whole number of tiles, so the tiles fall where they
+    //  fell and every position is in exactly one slice.
+    uint slices = gl_NumWorkGroups.z;
+    uint slice = gl_WorkGroupID.z;
+
+    uint span = last_max - first_min + 1u;
+    uint per = (span + slices - 1u) / slices;
+    per = (per + LANES - 1u) / LANES * LANES;
+
+    uint my_first = first_min + slice * per;
+    uint my_last = min (last_max, my_first + per - 1u);
+    bool empty_slice = my_first > last_max;
+
+#ifndef FOURS
     float held[QUERIES][HEADS][room / 64];
+#endif
     float top[QUERIES][HEADS];
     float sum[QUERIES][HEADS];
 
+#ifndef HALVED
+    //  Four components a lane for the values, where the cache allows it:
+    //  thirty-two lanes cover a position's hundred and twenty-eight and
+    //  the parts of a tile's positions are dealt round the eight runs of
+    //  thirty-two. A load an instruction was sixty-four words of one
+    //  position a wave; this is a kilobyte of two, and a quarter of the
+    //  instructions for the same bytes -- the value loads were a third of
+    //  a generated token's attention at thirteen hundred positions.
+    uint v_comp = lane & 31u;
+    uint v_part = lane >> 5u;
+#ifdef FOURS
+    //  Promised by the engine, which binds this compilation only where
+    //  every base and width is a multiple of four, so the paths a word
+    //  at a time are not compiled and the registers they took are free:
+    //  a bundle of eight with both paths compiled took every register
+    //  the part has, four waves a SIMD, and read no faster for it.
+    const bool v_aligned = true;
+#else
+    bool v_aligned = ((shape.v_base + held_of[0]) & 3u) == 0u
+                     && (shape.v_width & 3u) == 0u
+                     && (shape.value_size & 3u) == 0u
+                     && shape.value_size <= 128u;
+#endif
+
+    vec4 heldv[QUERIES][HEADS];
+#endif
+
     for (uint i = 0u; i < QUERIES; i++) {
         for (uint h = 0u; h < HEADS; h++) {
+#ifndef FOURS
             for (uint k = 0; k < room / 64; k++) {
                 held[i][h][k] = 0.0;
             }
+#endif
             top[i][h] = -1.0 / 0.0;
             sum[i][h] = 0.0;
+#ifndef HALVED
+            heldv[i][h] = vec4 (0.0);
+#endif
         }
     }
 
-    for (uint base = first_min; base <= last_max; base += LANES) {
+#if defined(SUBGROUPS) && defined(FOURS)
+    //  The keys read across the lanes rather than down them.
+    //
+    //  A lane a key reads a row on its own, so every load of a wave is
+    //  sixty-four rows' worth of lines for a kilobyte of words, and the
+    //  device's clock put those loads at half a generated token's
+    //  attention at thirteen hundred positions. Here a key is read by as
+    //  many lanes as it has words of four -- thirty-two for a head of a
+    //  hundred and twenty-eight -- each taking the four components it
+    //  will always take, so a wave's load is two whole rows, eight lines,
+    //  and each lane's share of every query is in its registers for the
+    //  whole tile. The partial products meet through a clustered add and
+    //  the scores are put down in shared memory in the lane-a-position
+    //  order the softmax below reads them in. The order of the addition
+    //  differs from the component-by-component one, and the last bits
+    //  with it.
+    //
+    //  For a single query only: a block's queries would want a share of
+    //  each in every lane, and the block kernel has its own economy.
+    uint pieces = shape.head_size >> 2u;
+    bool across = QUERIES == 1u
+                  && (pieces == 16u || pieces == 32u || pieces == 64u)
+                  && pieces <= gl_SubgroupSize;
+
+    uint piece = gl_SubgroupInvocationID % pieces;
+    vec4 qv[HEADS];
+
+    if (across) {
+        for (uint h = 0u; h < HEADS; h++) {
+            qv[h] = q4[((q_of[0] + (head + h) * shape.head_size) >> 2u)
+                       + piece];
+        }
+    }
+
+//  Four rounds' keys asked for before any is used, so four loads are in
+//  flight a lane rather than one: a round's cluster adds wait on its
+//  load, and thirty-two waits in a row are what a tile costs otherwise.
+#define ACROSS_ROUNDS(WIDTH) \
+    for (uint r = 0u; r < WIDTH; r += 4u) { \
+        vec4 kk[4]; \
+        for (uint e = 0u; e < 4u; e++) { \
+            uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
+                           + which; \
+            uint pos = min (base + at_tile, last_max); \
+            uint k_at = shape.k_base + held_of[0] + pos * shape.kv_width \
+                        + group * shape.head_size; \
+            kk[e] = kv4[(k_at >> 2u) + piece]; \
+        } \
+        for (uint e = 0u; e < 4u; e++) { \
+            uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
+                           + which; \
+            for (uint h = 0u; h < HEADS; h++) { \
+                float whole = subgroupClusteredAdd (dot (qv[h], kk[e]), \
+                                                    WIDTH); \
+                if (piece == 0u && at_tile < LANES) { \
+                    parts[at_tile * HEADS + h] = whole; \
+                } \
+            } \
+        } \
+    }
+#endif
+
+    for (uint base = my_first; !empty_slice && base <= my_last;
+         base += LANES) {
         uint step = base + lane;
+
+#if defined(SUBGROUPS) && defined(FOURS)
+        if (across) {
+            //  This subgroup's positions of the tile, a few keys a round.
+            //  A cluster's width has to be a constant the compiler sees,
+            //  so the three widths are three copies of the rounds.
+            uint mine_at = gl_SubgroupID * gl_SubgroupSize;
+            uint which = gl_SubgroupInvocationID / pieces;
+
+            if (pieces == 32u) {
+                ACROSS_ROUNDS(32u)
+            } else if (pieces == 16u) {
+                ACROSS_ROUNDS(16u)
+            } else {
+                ACROSS_ROUNDS(64u)
+            }
+        }
+        barrier ();
+#endif
 
         //  The key at this lane's cached position, read once and multiplied
         //  into every query of the block and every head of the bundle. That
@@ -579,6 +749,15 @@ void main() {
             }
         }
 
+#if defined(SUBGROUPS) && defined(FOURS)
+        if (across) {
+            if (step <= last_max) {
+                for (uint h = 0u; h < HEADS; h++) {
+                    dot[0][h] = parts[lane * HEADS + h];
+                }
+            }
+        } else
+#endif
         if (step <= last_max) {
             uint k_at = shape.k_base + held_of[0] + step * shape.kv_width
                         + group * shape.head_size;
@@ -598,6 +777,47 @@ void main() {
             //  increasing order, so nothing moves.
             uint whole = shape.head_size & ~7u;
 
+#ifndef HALVED
+            //  Four components a load where the key and every query
+            //  begin on a word of four, which the engine's alignment
+            //  gives every cache it lays out; the order of the
+            //  accumulation is the order it was.
+#ifdef FOURS
+            const bool aligned = true;
+#else
+            bool aligned = (k_at & 3u) == 0u && (q_of[0] & 3u) == 0u
+                           && (shape.head_size & 3u) == 0u;
+#endif
+
+            if (aligned) {
+                for (uint c = 0; c < whole; c += 8u) {
+                    vec4 k0 = kv4[(k_at + c) >> 2u];
+                    vec4 k1 = kv4[((k_at + c) >> 2u) + 1u];
+
+                    for (uint i = 0u; i < QUERIES; i++) {
+                        for (uint h = 0u; h < HEADS; h++) {
+                            uint at = (q_of[i] + (head + h) * shape.head_size
+                                       + c) >> 2u;
+                            vec4 q0 = q4[at];
+                            vec4 q1 = q4[at + 1u];
+
+                            dot[i][h] += q0.x * k0.x;
+                            dot[i][h] += q0.y * k0.y;
+                            dot[i][h] += q0.z * k0.z;
+                            dot[i][h] += q0.w * k0.w;
+                            dot[i][h] += q1.x * k1.x;
+                            dot[i][h] += q1.y * k1.y;
+                            dot[i][h] += q1.z * k1.z;
+                            dot[i][h] += q1.w * k1.w;
+                        }
+                    }
+                }
+            }
+#endif
+#ifndef FOURS
+#ifndef HALVED
+            else
+#endif
             for (uint c = 0; c < whole; c += 8u) {
                 float kc[8];
 
@@ -625,6 +845,7 @@ void main() {
                     }
                 }
             }
+#endif
         }
 
         //  The weight of this lane's score for each query, worked out once
@@ -721,11 +942,74 @@ void main() {
         }
         barrier();
 
-        uint span = min(LANES, last_max - base + 1);
+        uint span = min(LANES, my_last - base + 1);
 
         uint lo = min (part * 64u, span);
         uint hi = min (lo + 64u, span);
 
+#ifndef HALVED
+        if (v_aligned) {
+            uint vlo = min (v_part * 32u, span);
+            uint vhi = min (vlo + 32u, span);
+            uint c4 = v_comp * 4u;
+
+            if (c4 < shape.value_size) {
+                uint v_at = (shape.v_base + held_of[0]
+                             + group * shape.value_size + c4) >> 2u;
+                uint v_step = shape.v_width >> 2u;
+
+                //  The carry applied first and the tile's terms added
+                //  straight into the held blend, rather than summed apart
+                //  and added once: the same terms, the same order among
+                //  them, one fewer set of accumulators. A bundle of eight
+                //  heads with a set apart took every register the part
+                //  has and ran at four waves a SIMD; the bytes a token's
+                //  attention reads are what it waits for, and a wave
+                //  waiting alone waits longest.
+                for (uint i = 0u; i < QUERIES; i++) {
+                    for (uint h = 0u; h < HEADS; h++) {
+                        heldv[i][h] *= carry[i][h];
+                    }
+                }
+
+                uint run = vlo + ((vhi - vlo) & ~3u);
+
+                for (uint j = vlo; j < run; j += 4u) {
+                    vec4 v[4];
+
+                    for (uint e = 0u; e < 4u; e++) {
+                        v[e] = kv4[v_at + (base + j + e) * v_step];
+                    }
+
+                    for (uint i = 0u; i < QUERIES; i++) {
+                        for (uint h = 0u; h < HEADS; h++) {
+                            uint at = (i * HEADS + h) * LANES + j;
+
+                            for (uint e = 0u; e < 4u; e++) {
+                                heldv[i][h] += tile[at + e] * v[e];
+                            }
+                        }
+                    }
+                }
+
+                for (uint j = run; j < vhi; j++) {
+                    vec4 v = kv4[v_at + (base + j) * v_step];
+
+                    for (uint i = 0u; i < QUERIES; i++) {
+                        for (uint h = 0u; h < HEADS; h++) {
+                            heldv[i][h] += tile[(i * HEADS + h) * LANES + j]
+                                           * v;
+                        }
+                    }
+                }
+            }
+
+            barrier();
+            continue;
+        }
+#endif
+
+#ifndef FOURS
         for (uint k = 0; k < room / 64; k++) {
             uint c = comp + k * 64;
             if (c >= shape.value_size) {
@@ -796,6 +1080,7 @@ void main() {
         }
 
         barrier();
+#endif
     }
 
     for (uint i = 0u; i < QUERIES; i++) {
@@ -805,36 +1090,125 @@ void main() {
             break;
         }
 
-        //  The parts added up. One invocation of the four that share a
-        //  component writes it, and the tile is free to gather them in --
-        //  the scores it held are spent. The loop over k does not leave
-        //  early: it has barriers in it and every invocation has to reach
-        //  them, so the component it does not carry is written by nobody
-        //  rather than escaped from.
-        //
-        //  A head of the bundle at a time, because the gathering uses the
-        //  tile and the tile is one.
+        //  The parts added up: every subgroup's share of every head's
+        //  blend put down in shared memory at once and summed by whichever
+        //  lane writes that component, in the order the subgroups lie.
+        //  It was a head and a half at a time through the tile, two
+        //  barriers each, and a barrier across four subgroups is not free.
         for (uint h = 0u; h < HEADS; h++) {
-            uint out_at = slot_of[i] * shape.heads * shape.value_size
-                          + (head + h) * shape.value_size;
+            //  A slice of several writes its unnormalized blend, its
+            //  largest score and its sum where merge.comp reads them:
+            //  after every position's answer, a record a slice, position
+            //  and head, the blend and then the two numbers.
+            if (slices > 1u && lane == 0u) {
+                uint at = shape.positions * shape.heads * shape.value_size
+                          + ((slice * shape.positions + slot_of[i])
+                             * shape.heads + head + h)
+                            * (shape.value_size + 2u);
 
-            for (uint k = 0; k < room / 64; k++) {
-                barrier ();
-                tile[lane] = held[i][h][k];
-                barrier ();
-
-                uint c = comp + k * 64;
-
-                if (part == 0u && c < shape.value_size) {
-                    float total = 0.0;
-
-                    for (uint pp = 0u; pp < LANES / 64u; pp++) {
-                        total += tile[pp * 64u + comp];
-                    }
-
-                    y[out_at + c] = total / sum[i][h];
-                }
+                y[at + shape.value_size] = top[i][h];
+                y[at + shape.value_size + 1u] = sum[i][h];
             }
         }
+
+#ifndef HALVED
+        if (v_aligned) {
+            //  The runs' parts of every head added up, two heads at a
+            //  time through the same store: a head's parts are a run's
+            //  worth of components each, laid head by run by component.
+            for (uint from = 0u; from < HEADS; from += 2u) {
+                barrier ();
+
+                for (uint hh = 0u; hh < 2u && from + hh < HEADS; hh++) {
+                    uint at = (hh * (LANES / 32u) + v_part) * room
+                              + v_comp * 4u;
+                    vec4 mine = heldv[i][from + hh];
+                    parts[at]      = mine.x;
+                    parts[at + 1u] = mine.y;
+                    parts[at + 2u] = mine.z;
+                    parts[at + 3u] = mine.w;
+                }
+
+                barrier ();
+
+                for (uint slot = lane; slot < 2u * room; slot += LANES) {
+                    uint hh = slot / room;
+                    uint c = slot % room;
+
+                    if (from + hh < HEADS && c < shape.value_size) {
+                        float total = 0.0;
+
+                        for (uint pp = 0u; pp < LANES / 32u; pp++) {
+                            total += parts[(hh * (LANES / 32u) + pp) * room
+                                           + c];
+                        }
+
+                        uint h = from + hh;
+                        uint out_at = slot_of[i] * shape.heads
+                                      * shape.value_size
+                                      + (head + h) * shape.value_size;
+
+                        if (slices > 1u) {
+                            out_at = shape.positions * shape.heads
+                                     * shape.value_size
+                                     + ((slice * shape.positions
+                                         + slot_of[i])
+                                        * shape.heads + head + h)
+                                       * (shape.value_size + 2u);
+                        }
+
+                        y[out_at + c] =
+                          slices > 1u ? total : total / sum[i][h];
+                    }
+                }
+            }
+
+            barrier ();
+            continue;
+        }
+#endif
+
+#ifndef FOURS
+        for (uint h = 0u; h < HEADS; h++) {
+            for (uint k = 0; k < room / 64; k++) {
+                parts[(h * (room / 64) + k) * LANES + lane] = held[i][h][k];
+            }
+        }
+
+        barrier ();
+
+        //  Every lane of the workgroup writes a component of some head:
+        //  the parts are read in the order the subgroups lie, as before.
+        for (uint slot = lane; slot < HEADS * (room / 64) * 64u;
+             slot += LANES) {
+            uint h = slot / ((room / 64) * 64u);
+            uint rest = slot % ((room / 64) * 64u);
+            uint k = rest / 64u;
+            uint c = rest % 64u + k * 64u;
+
+            if (c < shape.value_size) {
+                float total = 0.0;
+
+                for (uint pp = 0u; pp < LANES / 64u; pp++) {
+                    total += parts[(h * (room / 64) + k) * LANES
+                                   + pp * 64u + c - k * 64u];
+                }
+
+                uint out_at = slot_of[i] * shape.heads * shape.value_size
+                              + (head + h) * shape.value_size;
+
+                if (slices > 1u) {
+                    out_at = shape.positions * shape.heads * shape.value_size
+                             + ((slice * shape.positions + slot_of[i])
+                                * shape.heads + head + h)
+                               * (shape.value_size + 2u);
+                }
+
+                y[out_at + c] = slices > 1u ? total : total / sum[i][h];
+            }
+        }
+
+        barrier ();
+#endif
     }
 }

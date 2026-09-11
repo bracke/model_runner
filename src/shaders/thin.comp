@@ -1,0 +1,78 @@
+#version 450
+
+//  A product of a few binary32 rows against a few vectors, a workgroup a
+//  row and vector.
+//
+//  A mixture's router is a hundred and twenty-eight rows of two thousand,
+//  a megabyte, and the row kernel gave it eight lanes a row: four
+//  workgroups on a part with a dozen compute units, every lane walking a
+//  quarter of a row alone, and the device's own clock read the product at
+//  fifty-seven microseconds -- eighteen gigabytes a second where the same
+//  memory reads fifty-five for the products either side of it. Here every
+//  row is a workgroup of two hundred and fifty-six lanes, each taking every
+//  two hundred and fifty-sixth word of four; a hundred and twenty-eight
+//  workgroups and a reduction through shared memory once a row.
+//
+//  Binary32 weights only, one vector a workgroup: a quantized row has a
+//  block to decode and the row kernel's economy of decoding it once holds;
+//  a batch of vectors reads the row once for each, which is what the row
+//  kernel's accumulators exist to avoid, so the engine binds this for a
+//  handful of vectors and no more. The sum is a tree over the lanes rather
+//  than a walk along the row, so the last bits differ from the row
+//  kernel's, as they differ between that kernel's own widths.
+//
+//  The push block is the row kernel's, read as far as this needs.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly  buffer Weights { vec4 w4[]; };
+layout(std430, binding = 1) readonly  buffer Vectors { vec4 x4[]; };
+layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+} shape;
+
+shared float shares[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint vector = shape.first + gl_WorkGroupID.y;
+    uint lane = gl_LocalInvocationID.x;
+
+    //  The base is bytes and the columns are a whole number of fours,
+    //  which the engine holds to before it binds this.
+    uint quads = shape.columns >> 2u;
+    uint w_at = (shape.base >> 4u) + row * quads;
+    uint x_at = vector * quads;
+
+    float mine = 0.0;
+
+    if (row < shape.rows && vector < shape.count) {
+        for (uint q = lane; q < quads; q += 256u) {
+            mine += dot (w4[w_at + q], x4[x_at + q]);
+        }
+    }
+
+    shares[lane] = mine;
+    barrier ();
+
+    for (uint step = 128u; step > 0u; step >>= 1u) {
+        if (lane < step) {
+            shares[lane] += shares[lane + step];
+        }
+        barrier ();
+    }
+
+    if (lane == 0u && row < shape.rows && vector < shape.count) {
+        uint out_at = vector * shape.rows + row;
+        y[out_at] = shape.joins != 0u ? shares[0] + rj[out_at] : shares[0];
+    }
+}

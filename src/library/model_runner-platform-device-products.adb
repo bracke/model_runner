@@ -363,13 +363,77 @@ package body Model_Runner.Platform.Device.Products is
        and then Head_Size mod 16 = 0
        and then Value_Size mod 16 = 0);
 
+   --  Whether a batch too short for the tiled kernels takes the bundled
+   --  one over the cache proper: a generated token, whose workgroups are
+   --  a head each and whose heads share a group's keys and values. The
+   --  kernel and the first axis of the dispatch decide this together.
+   --  How wide that bundle is: eight where the group divides by eight and
+   --  the eight-wide pipeline was made, four where it divides by four,
+   --  and nought for no bundle at all.
+   function Exact_Bundle
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      K_Base     : Natural := 0;
+      V_Base     : Natural := 0;
+      KV_Width   : Natural := 0;
+      V_Width    : Natural := 0;
+      Span       : Natural := Bundle_Least) return Natural
+   is (if Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+         or else (Item.Tile_Line /= Null_Handle
+                  and then Positions >= Query_Block)
+         --  A short cache is a few workgroups doing little each, and a
+         --  head a workgroup is more of them: the bundle pays where
+         --  there is enough cache to read.
+         or else Span < Bundle_Least
+         --  The bundled compilation reads four at a time and nothing
+         --  else, on the engine's word that every base and width allows
+         --  it; a cache that does not is attended a word at a time.
+         or else Head_Size mod 4 /= 0
+         or else Value_Size mod 4 /= 0
+         or else Value_Size > 128
+         or else K_Base mod 4 /= 0
+         or else V_Base mod 4 /= 0
+         or else KV_Width mod 4 /= 0
+         or else V_Width mod 4 /= 0
+       then 0
+       elsif Item.Eight_Bundle_Line /= Null_Handle
+         and then Group_Size mod Wide_Bundle = 0
+       then Wide_Bundle
+       elsif Item.Exact_Bundle_Line /= Null_Handle
+         and then Group_Size mod Head_Bundle = 0
+       then Head_Bundle
+       else 0);
+
+   function Bundles_Exact
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      K_Base     : Natural := 0;
+      V_Base     : Natural := 0;
+      KV_Width   : Natural := 0;
+      V_Width    : Natural := 0;
+      Span       : Natural := Bundle_Least) return Boolean
+   is (Exact_Bundle (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+       > 0);
+
    function Attend_Kernel
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural;
       Group_Size : Natural := 1;
-      Rounding   : Boolean := False) return Address
+      Rounding   : Boolean := False;
+      K_Base     : Natural := 0;
+      V_Base     : Natural := 0;
+      KV_Width   : Natural := 0;
+      V_Width    : Natural := 0;
+      Span       : Natural := Bundle_Least) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then Item.Matrix_Attend
@@ -377,6 +441,17 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
        then Item.Tile_Line
+       elsif not Rounding
+         and then Exact_Bundle
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+                  = Wide_Bundle
+       then Item.Eight_Bundle_Line
+       elsif not Rounding
+         and then Bundles_Exact
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+       then Item.Exact_Bundle_Line
        elsif Rounding
          and then Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
@@ -413,12 +488,56 @@ package body Model_Runner.Platform.Device.Products is
      (Item       : Engine;
       Heads      : Natural;
       Group_Size : Natural;
-      Rounding   : Boolean := False) return C.unsigned
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Rounding   : Boolean := False;
+      K_Base     : Natural := 0;
+      V_Base     : Natural := 0;
+      KV_Width   : Natural := 0;
+      V_Width    : Natural := 0;
+      Span       : Natural := Bundle_Least) return C.unsigned
    is (if Rounding
          and then Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then C.unsigned ((Heads + Head_Bundle - 1) / Head_Bundle)
+       elsif not Rounding
+         and then Bundles_Exact
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+       then C.unsigned
+              ((Heads
+                + Exact_Bundle
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+                - 1)
+               / Exact_Bundle
+                   (Item, Positions, Head_Size, Value_Size, Group_Size,
+                    K_Base, V_Base, KV_Width, V_Width, Span))
        else C.unsigned (Heads));
+
+   --  How many slices the cached positions are cut into down the third
+   --  axis: one, except for a batch too short for the tiled kernels over
+   --  a cache long enough to be worth cutting, where merge.comp is there
+   --  to put the slices together.
+   function Attend_Slices
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      Rounding   : Boolean) return Natural
+   is (if Rounding
+         or else Item.Merge_Line = Null_Handle
+         or else Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+         or else (Item.Tile_Line /= Null_Handle
+                  and then Positions >= Query_Block)
+         or else Last < First
+       then 1
+       else Natural'Min
+              (Slice_Limit,
+               (Last - First + Slice_Least) / Slice_Least));
 
    function Attend_Groups
      (Item       : Engine;
@@ -438,6 +557,23 @@ package body Model_Runner.Platform.Device.Products is
    --  Whether this format generates better on the narrower workgroup. Two
    --  of them do and the rest do not, which is why this is a list and not a
    --  rule: Q8_0 is four per cent worse on it and Q2_K sixteen.
+   --  Whether a product goes to thin.comp: binary32, a few rows, a few
+   --  vectors, and a matrix that begins on a word of four so the kernel
+   --  may read four at a time.
+   function Thin
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Count   : Natural;
+      Base    : Interfaces.Unsigned_64) return Boolean
+   is (Item.Thin_Line /= Null_Handle
+       and then Packing = Values_F32
+       and then Rows <= Thin_Rows
+       and then Count <= Thin_Vectors
+       and then Columns mod 4 = 0
+       and then Base mod 16 = 0);
+
    function Half_Grouped
      (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
    is (Count = 1
@@ -762,6 +898,17 @@ package body Model_Runner.Platform.Device.Products is
      with Convention => C;
 
    Heads_Bytes : constant := 18 * 4;
+
+   --  What merge.comp is told.
+   type Merge_Constants is record
+      Heads      : C.unsigned := 0;
+      Value_Size : C.unsigned := 0;
+      Positions  : C.unsigned := 0;
+      Slices     : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   Merge_Bytes : constant := 4 * 4;
 
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
@@ -1615,6 +1762,36 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         --  And the merge of a split attention's slices.
+         declare
+            Merged : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Merge;
+         begin
+            Request.Size := Interfaces.C.size_t (Merged'Length * 4);
+            Request.Code := Merged'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Merger := Made;
+            end if;
+         end;
+
+         --  And the thin product.
+         declare
+            Thinned : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Thin;
+         begin
+            Request.Size := Interfaces.C.size_t (Thinned'Length * 4);
+            Request.Code := Thinned'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Thinner := Made;
+            end if;
+         end;
+
          --  And the rotation, which is the same story: a device that
          --  refuses it turns on the host, as every device did before.
          declare
@@ -1751,6 +1928,23 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end;
                end if;
+
+               --  And a sixth, GROUPED over the cache proper, beside the
+               --  subgroup one it falls back to.
+               declare
+                  Bundled : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attention_Bundle_Exact;
+               begin
+                  Request.Size := Interfaces.C.size_t (Bundled'Length * 4);
+                  Request.Code := Bundled'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Exact_Bundled_Attend := Made;
+                  end if;
+               end;
             end if;
          end if;
       end;
@@ -2066,6 +2260,26 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Merger /= Null_Handle then
+            Request.Stage.Module := Item.Merger;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Merge_Line := Made;
+            end if;
+         end if;
+
+         if Item.Thinner /= Null_Handle then
+            Request.Stage.Module := Item.Thinner;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Thin_Line := Made;
+            end if;
+         end if;
+
          if Item.Mixer /= Null_Handle then
             Request.Stage.Module := Item.Mixer;
 
@@ -2171,6 +2385,41 @@ package body Model_Runner.Platform.Device.Products is
             then
                Item.Bundle_Line := Made;
             end if;
+         end if;
+
+         if Item.Group_Line /= Null_Handle
+           and then Item.Exact_Bundled_Attend /= Null_Handle
+         then
+            Request.Stage.Module := Item.Exact_Bundled_Attend;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Exact_Bundle_Line := Made;
+            end if;
+
+            --  And the same words at a bundle of eight, told through the
+            --  shader's second specialization constant.
+            declare
+               Which  : aliased Specialization_Entry :=
+                 (Which => 1, At_Was => 0, Span => 4);
+               Value  : aliased C.unsigned := Wide_Bundle;
+               Told   : aliased Specialization_Info;
+            begin
+               Told.Count := 1;
+               Told.Entries := Which'Address;
+               Told.Span := 4;
+               Told.Values := Value'Address;
+               Request.Stage.Specialized := Told'Address;
+
+               if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                          Null_Handle, Made'Access) = 0
+               then
+                  Item.Eight_Bundle_Line := Made;
+               end if;
+
+               Request.Stage.Specialized := Null_Handle;
+            end;
          end if;
 
          if Item.Attend_Matrix /= Null_Handle then
@@ -2702,6 +2951,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
+      Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
+      Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
+      Give_Back (Item.Merge_Line, "vkDestroyPipeline");
+      Give_Back (Item.Thin_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -2715,6 +2968,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Merger, "vkDestroyShaderModule");
+      Give_Back (Item.Thinner, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
@@ -4331,6 +4587,26 @@ package body Model_Runner.Platform.Device.Products is
                Release_Borrowed;
                return;
             end if;
+         elsif Thin (Item, Packing, Rows, Columns, Count, Weight_Base) then
+            --  The thin kernel, as a sequence would bind it for the same
+            --  product: a call and a sequence answer the same bits.
+            Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Thin_Line);
+
+            declare
+               Shape : aliased Shape_Constants :=
+                 (Rows    => C.unsigned (Rows),
+                  Columns => C.unsigned (Columns),
+                  Count   => C.unsigned (Count),
+                  First   => 0,
+                  Packing => C.unsigned (Weight_Packing'Pos (Packing)),
+                  Base    => C.unsigned (Weight_Base),
+                  Joins   => 0, Table => 0, others => <>);
+            begin
+               Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                     Product_Bytes, Shape'Address);
+               Dispatch (Item.Buffer, C.unsigned (Rows), C.unsigned (Count),
+                         1);
+            end;
          else
             declare
                First : Natural := 0;
@@ -6024,7 +6300,17 @@ package body Model_Runner.Platform.Device.Products is
 
             Mine : constant Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (This.Rows)
-              * Interfaces.Unsigned_64 (Room) * 4;
+              * Interfaces.Unsigned_64 (Room) * 4
+              --  And after an attending step's answers, room for the
+              --  records its slices leave for the merge: a blend and two
+              --  numbers a slice, position and head. Sized for the most
+              --  slices, whatever this run cuts.
+              + (if This.Attends and then Item.Merge_Line /= Null_Handle
+                 then Interfaces.Unsigned_64 (Slice_Limit)
+                      * Interfaces.Unsigned_64 (Room)
+                      * Interfaces.Unsigned_64
+                          (This.Rows + 2 * This.Heads) * 4
+                 else 0);
          begin
             if Tiled (Index) then
                --  What it reads, and what it may be asked to write: a
@@ -7182,7 +7468,12 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute,
                      Attend_Kernel (Item, Count, This.Head_Size,
                                     This.Value_Size, This.Group_Size,
-                                    Rounding => This.Table > 0));
+                                    Rounding => This.Table > 0,
+                                    K_Base => This.K_Base,
+                                    V_Base => This.V_Base,
+                                    KV_Width => This.KV_Width,
+                                    V_Width => This.V_Width,
+                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0)));
 
                   declare
                      Shape : aliased Attention_Constants :=
@@ -7248,20 +7539,60 @@ package body Model_Runner.Platform.Device.Products is
                                 then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
                         Table_At   => C.unsigned (This.Table));
+
+                     Slices : constant Natural :=
+                       (if Barrier = null then 1
+                        else Attend_Slices
+                               (Item, Count, This.Head_Size, This.Value_Size,
+                                This.First, This.Last,
+                                Rounding => This.Table > 0));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         Attend_Heads
-                          (Item, This.Heads, This.Group_Size,
-                           Rounding => This.Table > 0),
+                          (Item, This.Heads, This.Group_Size, Count,
+                           This.Head_Size, This.Value_Size,
+                           Rounding => This.Table > 0,
+                           K_Base => This.K_Base, V_Base => This.V_Base,
+                           KV_Width => This.KV_Width,
+                           V_Width => This.V_Width,
+                           Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0)),
                         Attend_Groups
                           (Item,
                            (if Halved (Index) then Whole_Tiles (Count)
                             else Count),
                            This.Head_Size, This.Value_Size,
-                           Rounding => This.Table > 0), 1);
+                           Rounding => This.Table > 0),
+                        C.unsigned (Slices));
+
+                     --  The slices put together, once every one of them
+                     --  has left its record: a workgroup a head of a
+                     --  position, reading the same result region it
+                     --  writes.
+                     if Slices > 1 then
+                        declare
+                           Merged : aliased Merge_Constants :=
+                             (Heads      => C.unsigned (This.Heads),
+                              Value_Size => C.unsigned (This.Value_Size),
+                              Positions  => C.unsigned (Count),
+                              Slices     => C.unsigned (Slices));
+                        begin
+                           Barrier
+                             (Item.Buffer, Pipeline_Stage_Compute,
+                              Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                              0, Null_Handle, 0, Null_Handle);
+                           Bind_Pipeline
+                             (Item.Buffer, Bind_Point_Compute,
+                              Item.Merge_Line);
+                           Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                                 Merge_Bytes, Merged'Address);
+                           Dispatch
+                             (Item.Buffer, C.unsigned (This.Heads),
+                              C.unsigned (Count), 1);
+                        end;
+                     end if;
                   end;
 
                   if Halved (Index) then
@@ -7623,6 +7954,37 @@ package body Model_Runner.Platform.Device.Products is
 
                      Half_From := Reading;
                      Half_Wide := This.Columns;
+                  end;
+
+                  goto Next_Dispatch;
+               end if;
+
+               --  A few binary32 rows against a few vectors go to the
+               --  thin kernel, a workgroup a row: the row kernel gave a
+               --  mixture's router four workgroups.
+               if This.Gathers = 0
+                 and then Thin (Item, This.Packing, This.Rows, This.Columns,
+                                Count, Places (Index).Base)
+               then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Thin_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => (if This.Joins then 1 else 0),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (This.Rows),
+                               C.unsigned (Count), 1);
                   end;
 
                   goto Next_Dispatch;

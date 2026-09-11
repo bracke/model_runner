@@ -5430,6 +5430,46 @@ package body Checks is
          end if;
       end;
 
+      --  The thin product, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/thin.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/thin.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Thin_Digest then
+            Fail ("src/shaders/thin.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
+      --  The merge of a split attention's slices, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/merge.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/merge.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Merge_Digest then
+            Fail ("src/shaders/merge.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  A mixture's routing and its weighted sum, asked the same way.
       declare
          Found : Boolean;
@@ -5751,6 +5791,21 @@ package body Checks is
                   & "vulkan1.1 -DSUBGROUPS -DWIDE -DHALVED -DGROUPED to "
                   & "attention_bundled.spv, and run 'tests shader' again "
                   & "with every shader named");
+         end if;
+
+         --  And the sixth, GROUPED over the cache proper: what a generated
+         --  token binds.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest
+                    /= Model_Runner.Shaders.Attention_Bundle_Exact_Digest
+         then
+            Fail ("the sixth compilation of src/shaders/attention.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DGROUPED to "
+                  & "attention_bundle_exact.spv, and run 'tests shader' "
+                  & "again with every shader named");
          end if;
       end;
 
