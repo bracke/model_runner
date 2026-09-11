@@ -207,6 +207,31 @@ package Model_Runner.Platform.Device is
    --  @return Bytes, or zero when the context is not open.
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
 
+   --  A second heap the device reads weights out of, when it has one.
+   --
+   --  The kind the weights are uploaded into comes out of one heap, and a
+   --  device may report another that the processor can also write: on an
+   --  integrated part both are the machine's own memory and the device
+   --  reads a buffer in either at the same rate -- measured on this one at
+   --  52.9 tokens a second against 52.5 -- so a model larger than the first
+   --  heap's share can hold the rest in the second instead of giving
+   --  matrices back and uploading them again every token, where the host
+   --  has the memory for it: the engine takes the second heap only for a
+   --  budget the caller names past the first heap's share, for the reason
+   --  its Open gives. The kind is one of the
+   --  same heap-and-flags list Upload was chosen from, preferring one the
+   --  processor caches; Second_Memory_Bytes is that heap's size, and zero
+   --  where there is no such heap, which is also the answer for a device
+   --  with one heap and for a closed context.
+   --
+   --  @param Item Open context.
+   --  @return The memory kind's index, or -1 where the device offers none.
+   function Second_Kind (Item : Context) return Integer;
+
+   --  @param Item Open context.
+   --  @return Bytes in the heap Second_Kind draws from, or zero.
+   function Second_Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
+
    --  The largest storage buffer a shader on this device may read.
    --
    --  A matrix reaches a shader as one buffer, so this is the bound on what
@@ -265,6 +290,11 @@ private
       Fast     : Natural := 0;
       Shared   : Boolean := False;
       Heap     : Interfaces.Unsigned_64 := 0;
+
+      --  The second heap's kind and size, as Second_Kind and
+      --  Second_Memory_Bytes describe them.
+      Second      : Integer := -1;
+      Second_Heap : Interfaces.Unsigned_64 := 0;
 
       --  What the device says one storage buffer may hold. Read where the
       --  name and the kind are read, from the same structure.

@@ -1,0 +1,115 @@
+#version 450
+
+//  A mixture's router, decided on the device.
+//
+//  A position's router scores, one an expert, become a distribution and
+//  the largest few of it are chosen: which experts, and with what share
+//  of the answer. Every mixture this program runs chooses that way -- a
+//  softmax over every expert, the highest Used of them, and the chosen
+//  shares put back on a scale where they sum to one -- and the host did
+//  it between two submissions, which is what put a wait and a copy
+//  between a layer's attention and its experts. Here it is one dispatch
+//  between two others, and nothing leaves the device.
+//
+//  What is written is what the gathered products and the weighted sum
+//  after them read: for each position, Used expert numbers and then Used
+//  shares, as words, the shares by their bits. The order is the order of
+//  choosing, largest first, which is the order the shares are summed in
+//  and the reason the answer is the same sum of the same terms as the
+//  host's.
+//
+//  A bias the architecture adds before it chooses is added here when the
+//  push block says so, from the weight bound at nought.
+//
+//  One invocation a position, doing the whole of it: a hundred and
+//  twenty-eight exponentials and a few hundred compares, which is nothing
+//  beside the products on either side and not worth a reduction.
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float g[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { uint  r[]; };
+
+layout(push_constant) uniform Shape {
+    uint experts;
+    uint used;
+    uint count;
+    uint first;
+    uint packing;
+
+    //  Where the bias begins in the weight buffer, in elements.
+    uint base;
+
+    //  Whether a bias is added before the choosing.
+    uint joins;
+} shape;
+
+//  More than any mixture this program has been shown routes over.
+const uint MOST = 512u;
+
+float score[MOST];
+
+void main() {
+    uint pos = gl_GlobalInvocationID.x;
+
+    if (pos >= shape.count) {
+        return;
+    }
+
+    uint experts = min(shape.experts, MOST);
+    uint at = pos * shape.experts;
+
+    float largest = -1.0 / 0.0;
+
+    for (uint e = 0u; e < experts; ++e) {
+        float s = x[at + e];
+        if (shape.joins != 0u) {
+            s += g[shape.base + e];
+        }
+        score[e] = s;
+        largest = max(largest, s);
+    }
+
+    float sum = 0.0;
+
+    for (uint e = 0u; e < experts; ++e) {
+        float w = exp(score[e] - largest);
+        score[e] = w;
+        sum += w;
+    }
+
+    for (uint e = 0u; e < experts; ++e) {
+        score[e] = score[e] / sum;
+    }
+
+    //  The largest Used, in order, each struck out once taken; ties go to
+    //  the lower number, as a strict comparison walking upward gives.
+    uint  chosen[16];
+    float share[16];
+    float total = 0.0;
+
+    for (uint k = 0u; k < shape.used; ++k) {
+        int   best = -1;
+        float most = 0.0;
+
+        for (uint e = 0u; e < experts; ++e) {
+            if (best < 0 || score[e] > most) {
+                best = int(e);
+                most = score[e];
+            }
+        }
+
+        chosen[k] = uint(best);
+        share[k] = most;
+        total += most;
+        score[best] = -1.0;
+    }
+
+    uint out_at = pos * 2u * shape.used;
+
+    for (uint k = 0u; k < shape.used; ++k) {
+        r[out_at + k] = chosen[k];
+        r[out_at + shape.used + k] = floatBitsToUint(share[k] / total);
+    }
+}

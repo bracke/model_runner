@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Ada.Numerics.Elementary_Functions;
 with Ada.Text_IO;
 
@@ -3455,6 +3456,487 @@ package body Tests.Backend_Cases is
       return AUnit.Format ("cpu backend");
    end Name;
 
+   ------------------------------------------------
+   -- A_Gathered_Mixture_Says_What_The_Host_Says --
+   ------------------------------------------------
+
+   --  A mixture layer's second half as one sequence: the router's product,
+   --  the routing step, the chosen experts' three projections gathered
+   --  out of their stacks, the unit between them and the sum by shares.
+   --  Held against the same arithmetic done here on the host, in the
+   --  order the engine has always done it: softmax, the largest two, the
+   --  shares over their sum, best first.
+   --
+   --  Close rather than to the bit, because the device's softmax and its
+   --  unit sum and exponentiate in binary32 where the host's do so in
+   --  binary64. What the bound catches is what matters: a wrong expert, a
+   --  wrong slice out of a stack, a share applied to the wrong answer or
+   --  not at all, each of which moves the sum by far more than a last bit.
+   procedure A_Gathered_Mixture_Says_What_The_Host_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 32;
+      Feed    : constant := 16;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+      Added : Boolean;
+      Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Gates  : N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Ups    : N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : N.Real_Array (0 .. Experts * Width * Feed - 1);
+      Input  : N.Real_Array (0 .. Width - 1);
+
+      --  Every step's room: the router's scores, the routing's words, the
+      --  gathered gates and ups, the combination, the gathered downs, and
+      --  the mix.
+      Landing : N.Real_Array
+        (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
+        := [others => 0.0];
+
+      Wanted : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+      Chosen : array (0 .. Used - 1) of Natural := [others => 0];
+      Shares : array (0 .. Used - 1) of N.Real := [others => 0.0];
+
+      Steps : Products.Sequence;
+
+      function Bits is new Ada.Unchecked_Conversion
+        (N.Real, Interfaces.Unsigned_32);
+
+      --  The host's own reading of the same layer.
+      procedure Host_Mixture is
+         Scores : N.Real_Array (0 .. Experts - 1);
+         Taken  : array (0 .. Experts - 1) of Boolean := [others => False];
+         Total  : N.Real := 0.0;
+         Fine   : Boolean;
+      begin
+         for E_Index in 0 .. Experts - 1 loop
+            Scores (N.Element_Count (E_Index)) := 0.0;
+            for Col in 0 .. Width - 1 loop
+               Scores (N.Element_Count (E_Index)) :=
+                 Scores (N.Element_Count (E_Index))
+                 + Router (N.Element_Count (E_Index * Width + Col))
+                   * Input (N.Element_Count (Col));
+            end loop;
+         end loop;
+
+         Model_Runner.Kernels.Softmax (Scores, Fine);
+         Assert (Fine, "the host's softmax was not finite");
+
+         for Slot in 0 .. Used - 1 loop
+            declare
+               Best : Integer := -1;
+            begin
+               for E_Index in 0 .. Experts - 1 loop
+                  if not Taken (E_Index)
+                    and then (Best < 0
+                              or else Scores (N.Element_Count (E_Index))
+                                      > Scores (N.Element_Count (Best)))
+                  then
+                     Best := E_Index;
+                  end if;
+               end loop;
+
+               Taken (Best) := True;
+               Chosen (Slot) := Best;
+               Shares (Slot) := Scores (N.Element_Count (Best));
+               Total := Total + Shares (Slot);
+            end;
+         end loop;
+
+         for Slot in 0 .. Used - 1 loop
+            Shares (Slot) := Shares (Slot) / Total;
+         end loop;
+
+         for Slot in 0 .. Used - 1 loop
+            declare
+               Which : constant Natural := Chosen (Slot);
+               Gated : N.Real_Array (0 .. Feed - 1);
+               Down  : N.Real_Array (0 .. Width - 1);
+            begin
+               for Row in 0 .. Feed - 1 loop
+                  declare
+                     G_Sum, U_Sum : N.Real := 0.0;
+                     At_Row : constant N.Element_Count :=
+                       N.Element_Count ((Which * Feed + Row) * Width);
+                  begin
+                     for Col in 0 .. Width - 1 loop
+                        G_Sum := G_Sum
+                          + Gates (At_Row + N.Element_Count (Col))
+                            * Input (N.Element_Count (Col));
+                        U_Sum := U_Sum
+                          + Ups (At_Row + N.Element_Count (Col))
+                            * Input (N.Element_Count (Col));
+                     end loop;
+
+                     Gated (N.Element_Count (Row)) :=
+                       G_Sum
+                       / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                          (Float (-G_Sum))))
+                       * U_Sum;
+                  end;
+               end loop;
+
+               for Row in 0 .. Width - 1 loop
+                  declare
+                     Sum : N.Real := 0.0;
+                     At_Row : constant N.Element_Count :=
+                       N.Element_Count ((Which * Width + Row) * Feed);
+                  begin
+                     for Col in 0 .. Feed - 1 loop
+                        Sum := Sum
+                          + Downs (At_Row + N.Element_Count (Col))
+                            * Gated (N.Element_Count (Col));
+                     end loop;
+                     Down (N.Element_Count (Row)) := Sum;
+                  end;
+               end loop;
+
+               for Row in Wanted'Range loop
+                  Wanted (Row) := Wanted (Row) + Shares (Slot) * Down (Row);
+               end loop;
+            end;
+         end loop;
+      end Host_Mixture;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      --  Structure rather than constants, and different in every stack, so
+      --  that a slice read out of the wrong stack or at the wrong offset
+      --  says so.
+      for Index in Router'Range loop
+         Router (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Gates'Range loop
+         Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
+         Ups (Index) := N.Real ((Index * 3) mod 5) / 5.0 - 0.4;
+      end loop;
+      for Index in Downs'Range loop
+         Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+      end loop;
+
+      Host_Mixture;
+
+      declare
+         function Bytes_Of (Values : N.Real_Array)
+           return Model_Runner.Bytes.Byte_Count
+         is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+      begin
+         Products.Open_Sequence (Steps);
+
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address, Bytes_Of (Router), 0,
+            Products.Values_F32, Experts, Width, Added, Kept => False);
+         Assert (Added, "the router's product was refused");
+
+         Products.Add_Route (Steps, Experts, Used, Added);
+         Assert (Added, "the routing step was refused");
+
+         Products.Add_Gathered_Product
+           (Steps, Gates (Gates'First)'Address, Bytes_Of (Gates), 0,
+            Products.Values_F32, Experts * Feed, Feed, Width,
+            [others => 0], Used, Added, Kept => False,
+            Chained => False, Routed => 2);
+         Assert (Added, "the gathered gates were refused");
+
+         Products.Add_Gathered_Product
+           (Steps, Ups (Ups'First)'Address, Bytes_Of (Ups), 0,
+            Products.Values_F32, Experts * Feed, Feed, Width,
+            [others => 0], Used, Added, Kept => False,
+            Chained => False, Routed => 2);
+         Assert (Added, "the gathered ups were refused");
+
+         Products.Add_Combination (Steps, 0, Added, Kept => False);
+         Assert (Added, "the combination was refused");
+
+         Products.Add_Gathered_Product
+           (Steps, Downs (Downs'First)'Address, Bytes_Of (Downs), 0,
+            Products.Values_F32, Experts * Width, Width, Feed,
+            [others => 0], Used, Added, Kept => False,
+            Chained => True, Apart => Feed, Routed => 2);
+         Assert (Added, "the gathered downs were refused");
+
+         Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+         Assert (Added, "the mixing step was refused");
+         Assert (Products.Length (Steps) = 7, "seven steps were named");
+      end;
+
+      Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
+      Assert (Ok, "the gathered mixture was refused");
+      Assert (not Halted, "nothing asked it to stop");
+
+      --  The routing step's choice, as words: the same experts in the
+      --  same order as the host chose.
+      for Slot in 0 .. Used - 1 loop
+         Assert
+           (Natural (Bits (Landing (N.Element_Count (Experts + Slot))))
+              = Chosen (Slot),
+            "the device chose expert"
+            & Natural'Image
+                (Natural (Bits (Landing (N.Element_Count (Experts + Slot)))))
+            & " where the host chose" & Natural'Image (Chosen (Slot))
+            & " at rank" & Natural'Image (Slot));
+      end loop;
+
+      declare
+         At_Mix : constant N.Element_Count :=
+           N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
+                            + Used * Width);
+         Worst : N.Real := 0.0;
+      begin
+         for Row in 0 .. Width - 1 loop
+            Worst := N.Real'Max
+              (Worst,
+               abs (Landing (At_Mix + N.Element_Count (Row))
+                    - Wanted (N.Element_Count (Row))));
+         end loop;
+
+         Assert (Worst < 1.0E-4,
+                 "the gathered mixture answers" & N.Real'Image (Worst)
+                 & " away from the host's reading of the same layer");
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Gathered_Mixture_Says_What_The_Host_Says;
+
+   ----------------------------------------------
+   -- The_Backend_Routes_And_Gathers_As_It_Slices --
+   ----------------------------------------------
+
+   --  The four ways the backend reads a mixture's stacks, held against each
+   --  other: a slice at a time, an expert over a batch, a token's experts
+   --  gathered, and the routing that says which. The slice road and the
+   --  gathered road multiply the same stack through the same kernel, so a
+   --  slice read at the wrong offset, a member landed in the wrong place
+   --  or an expert's own stretch read from the wrong start would show as a
+   --  disagreement far above the bound.
+   procedure The_Backend_Routes_And_Gathers_As_It_Slices
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 32;
+      Feed    : constant := 16;
+
+      Ready  : Boolean;
+      Status : E.Error_Info;
+
+      Router_Bytes, Gate_Bytes, Up_Bytes, Down_Bytes : B.Byte_Array_Access;
+      Router, Gates, Ups, Downs : T.View;
+
+      Input   : T.Real_Array_Access;
+      Two     : T.Real_Array_Access;
+      Mixed   : T.Real_Array_Access;
+      Gate_At : T.Real_Array_Access;
+      Up_At   : T.Real_Array_Access;
+      Down_At : T.Real_Array_Access;
+      Both    : T.Real_Array_Access;
+
+      Choice : Device.Choice_Array (0 .. Used - 1);
+      Shares : N.Real_Array (0 .. Used - 1);
+      Members : Device.Member_List := [others => 0];
+
+      procedure Fill
+        (Rows, Columns : N.Element_Count;
+         Modulus : Positive; Stride : Positive;
+         Into : out B.Byte_Array_Access;
+         View : out T.View)
+      is
+         Values : N.Real_Array (0 .. Rows * Columns - 1);
+      begin
+         for Index in Values'Range loop
+            Values (Index) :=
+              N.Real ((Natural (Index) * Stride) mod Modulus)
+              / N.Real (Modulus) - 0.5;
+         end loop;
+
+         declare
+            Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+         begin
+            B.Allocate (Bytes'Length, Into);
+            Assert (Into /= null, "no room for a stack");
+            Into.all := Bytes;
+         end;
+
+         T.Make (G.Type_F32, Rows, Columns, Into, 0, View, Status);
+         Assert (E.Is_Ok (Status), "a stack's view could not be built");
+      end Fill;
+   begin
+      Device.Close;
+      Device.Open (Ready);
+
+      if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device gathered a stack here");
+         return;
+      end if;
+
+      Fill (Experts, Width, 11, 1, Router_Bytes, Router);
+      Fill (Experts * Feed, Width, 7, 1, Gate_Bytes, Gates);
+      Fill (Experts * Feed, Width, 5, 3, Up_Bytes, Ups);
+      Fill (Experts * Width, Feed, 9, 7, Down_Bytes, Downs);
+
+      T.Allocate (Width, Input);
+      T.Allocate (2 * Width, Two);
+      T.Allocate (Used * Width, Mixed);
+      T.Allocate (Feed, Gate_At);
+      T.Allocate (Feed, Up_At);
+      T.Allocate (Width, Down_At);
+      T.Allocate (2 * Width, Both);
+      Assert (Input /= null and then Two /= null and then Mixed /= null
+              and then Gate_At /= null and then Up_At /= null
+              and then Down_At /= null and then Both /= null,
+              "no room for the vectors");
+
+      for Index in Input.all'Range loop
+         Input.all (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+      end loop;
+      Two.all (Two.all'First .. Two.all'First + Width - 1) := Input.all;
+      Two.all (Two.all'First + Width .. Two.all'First + 2 * Width - 1) :=
+        Input.all;
+
+      --  Which experts, and with what shares.
+      Device.Dispatch_Route
+        (Router, null, Experts, Used, Input, 1, Choice, Shares, Status);
+      Assert (E.Is_Ok (Status),
+              "the routing was refused: " & E.Error_Code'Image (Status.Code));
+      Assert (Choice (0) /= Choice (1), "the same expert was chosen twice");
+      Assert (Choice (0) < Experts and then Choice (1) < Experts,
+              "an expert past the stack was chosen");
+      Assert (abs (Shares (0) + Shares (1) - 1.0) < 1.0E-5,
+              "the shares do not sum to one");
+      Assert (Shares (0) >= Shares (1), "the shares are not best first");
+
+      for Slot in 0 .. Used - 1 loop
+         Members (Slot + 1) := Choice (Slot);
+      end loop;
+
+      --  The experts gathered, as a token reads them.
+      Device.Dispatch_Mixture
+        (Gates, Ups, Downs, Feed, Width, Members, Used, 0, Input, Mixed,
+         Status);
+      Assert (E.Is_Ok (Status),
+              "the gathered mixture was refused: "
+              & E.Error_Code'Image (Status.Code));
+
+      for Slot in 0 .. Used - 1 loop
+         declare
+            Which : constant Natural := Choice (Slot);
+            Worst : N.Real := 0.0;
+         begin
+            --  The same expert a slice at a time, with the unit here.
+            Device.Dispatch_Slice
+              (Gates, Feed, Which, Input, 1, Gate_At, Status);
+            Assert (E.Is_Ok (Status), "a gate slice was refused");
+            Device.Dispatch_Slice (Ups, Feed, Which, Input, 1, Up_At, Status);
+            Assert (E.Is_Ok (Status), "an up slice was refused");
+
+            for Index in N.Element_Count range 0 .. Feed - 1 loop
+               Gate_At.all (Index) :=
+                 Gate_At.all (Index)
+                 / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                    (Float (-Gate_At.all (Index)))))
+                 * Up_At.all (Index);
+            end loop;
+
+            Device.Dispatch_Slice
+              (Downs, Width, Which, Gate_At, 1, Down_At, Status);
+            Assert (E.Is_Ok (Status), "a down slice was refused");
+
+            for Row in N.Element_Count range 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Down_At.all (Row)
+                       - Mixed.all (N.Element_Count (Slot) * Width + Row)));
+            end loop;
+
+            Assert (Worst < 1.0E-5,
+                    "expert" & Natural'Image (Which) & " gathered answers"
+                    & N.Real'Image (Worst)
+                    & " away from the same expert a slice at a time");
+
+            --  And the same expert over a batch of two, both this vector:
+            --  the same sequence a token's gather records, for one member
+            --  and two positions, so both rows are the gathered answer.
+            Device.Dispatch_Expert
+              (Gates, Ups, Downs, Feed, Width, Which, 0, Two, 2, Both,
+               Status);
+            Assert (E.Is_Ok (Status), "an expert over a batch was refused");
+
+            Worst := 0.0;
+            for Row in N.Element_Count range 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  N.Real'Max
+                    (abs (Both.all (Row)
+                          - Mixed.all (N.Element_Count (Slot) * Width + Row)),
+                     abs (Both.all (Width + Row)
+                          - Mixed.all (N.Element_Count (Slot) * Width
+                                       + Row))));
+            end loop;
+
+            Assert (Worst < 1.0E-6,
+                    "expert" & Natural'Image (Which) & " over a batch answers"
+                    & N.Real'Image (Worst)
+                    & " away from the same expert gathered");
+         end;
+      end loop;
+
+      T.Free (Input);
+      T.Free (Two);
+      T.Free (Mixed);
+      T.Free (Gate_At);
+      T.Free (Up_At);
+      T.Free (Down_At);
+      T.Free (Both);
+      B.Free (Router_Bytes);
+      B.Free (Gate_Bytes);
+      B.Free (Up_Bytes);
+      B.Free (Down_Bytes);
+      Device.Close;
+   end The_Backend_Routes_And_Gathers_As_It_Slices;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -3853,6 +4335,14 @@ package body Tests.Backend_Cases is
         (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
          "a device with less memory than the matrices need gives back the "
          & "one wanted longest ago and keeps computing");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Gathered_Mixture_Says_What_The_Host_Says'Access,
+         "a mixture's second half as one sequence -- routed, gathered out "
+         & "of its stacks and summed by shares -- says what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Backend_Routes_And_Gathers_As_It_Slices'Access,
+         "the backend's routing, gathered experts and expert over a batch "
+         & "agree with the same stacks read a slice at a time");
       Register_Routine
         (T, Device_Refuses_What_It_Must'Access,
          "the device backend refuses no device, a format it cannot read, "

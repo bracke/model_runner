@@ -1466,6 +1466,9 @@ package body Model_Runner.Llama is
       end if;
 
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
+      Current.Gate_Stack := Gates;
+      Current.Up_Stack := Ups;
+      Current.Down_Stack := Downs;
 
       for Which in Current.Experts.all'Range loop
          Slice
@@ -3224,6 +3227,52 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      --  Whether a mixture's experts go to the device as stacks. Only
+      --  where every weight fits the device's budget, distinct storage
+      --  counted once as the fit check counts it: a stack is one matrix to
+      --  the residency, and a model whose stacks do not all fit would give
+      --  back and upload again a whole stack where it gave back a slice.
+      Item.Stacked := False;
+
+      if Item.Settings.Experts > 0
+        and then Item.Settings.Experts_Used > 0
+        and then Item.Settings.Experts_Used
+                 <= Model_Runner.Backend.Device.Max_Members
+        and then Item.Able.Memory_Bytes > 0
+        and then Model_Runner.Backend."="
+                   (Item.Able.Kind, Model_Runner.Backend.Backend_Device)
+      then
+         declare
+            Held  : constant View_List := Matrices (Item);
+            Total : Interfaces.Unsigned_64 := 0;
+         begin
+            for Index in Held'Range loop
+               declare
+                  Seen_Before : Boolean := False;
+               begin
+                  for Earlier in Held'First .. Index - 1 loop
+                     if Held (Earlier).all.Base = Held (Index).all.Base
+                       and then Held (Earlier).all.Offset
+                                = Held (Index).all.Offset
+                     then
+                        Seen_Before := True;
+                        exit;
+                     end if;
+                  end loop;
+
+                  if not Seen_Before then
+                     Total := Total
+                       + Interfaces.Unsigned_64 (Held (Index).all.Rows)
+                         * Interfaces.Unsigned_64
+                             (T.Row_Bytes (Held (Index).all));
+                  end if;
+               end;
+            end loop;
+
+            Item.Stacked := Total <= Item.Able.Memory_Bytes;
+         end;
+      end if;
+
       P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));
       Item.Packing := Repack;
       Item.Ready := True;
@@ -3420,6 +3469,62 @@ package body Model_Runner.Llama is
               (Weight, Vectors, Count, Target, Status, Item.Stopping);
       end case;
    end Product_Batch;
+
+   --  One expert's product over a batch, out of the stack it is a slice
+   --  of, where the device holds the stacks; Product_Batch on the slice's
+   --  own view everywhere else. The same answer either way; what differs
+   --  is what the device keeps -- the stack once, rather than the slice
+   --  beside it.
+   --
+   --  @param Item Session the layer belongs to.
+   --  @param Slice The expert's own view, which is what a watcher names.
+   --  @param Stack The stack the expert is a slice of.
+   --  @param Each Rows one expert's slice holds.
+   --  @param Member Which expert.
+   --  @param Vectors Count vectors of the stack's column count.
+   --  @param Count How many.
+   --  @param Target Receives Count results of Each rows.
+   --  @param Status Success, or the first refusal.
+   procedure Product_Slice
+     (Item    : Session;
+      Slice   : T.View;
+      Stack   : T.View;
+      Each    : Element_Count;
+      Member  : Natural;
+      Vectors : T.Real_Array_Access;
+      Count   : Element_Count;
+      Target  : T.Real_Array_Access;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      if not Item.Owner.all.Stacked
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else not T.Is_Present (Stack)
+      then
+         Product_Batch (Item, Slice, Vectors, Count, Target, Status);
+         return;
+      end if;
+
+      if Item.Seen /= null then
+         declare
+            Which : constant String := Named_As (Item.Owner.all, Slice);
+            Room  : constant Element_Count := Count * Slice.Columns;
+         begin
+            if Which /= "" and then Vectors.all'Length >= Room then
+               Item.Seen.Note
+                 (Which,
+                  Vectors.all (Vectors.all'First
+                               .. Vectors.all'First + Room - 1),
+                  Count);
+            end if;
+         end;
+      end if;
+
+      Model_Runner.Backend.Device.Dispatch_Slice
+        (Stack, Each, Member, Vectors, Count, Target, Status,
+         Item.Stopping);
+   end Product_Slice;
 
    --  The model's per-dimension divisors, or none when it carries no table.
    function Turns (Item : Model'Class) return Real_Array
@@ -4652,7 +4757,54 @@ package body Model_Runner.Llama is
 
       Total  : Real := 0.0;
       Usable : Boolean;
+
+      --  Whether this position's experts are read gathered out of the
+      --  stacks the device holds, which is also where it is routed: the
+      --  same kernel a batch and a token's whole layer choose through, so
+      --  that every road through a mixture on the device chooses alike.
+      Gathered : constant Boolean :=
+        Item.Owner.all.Stacked
+        and then Current.Expert_Gate_Bias = null
+        and then Current.Expert_Down_Bias = null
+        and then not (Settings.Gate_Alpha > 0.0)
+        and then Used <= Model_Runner.Backend.Device.Max_Members
+        and then T.Is_Present (Current.Gate_Stack)
+        and then T.Is_Present (Current.Up_Stack)
+        and then T.Is_Present (Current.Down_Stack);
    begin
+      if Gathered then
+         declare
+            Choice : Model_Runner.Backend.Device.Choice_Array
+              (0 .. Used - 1);
+            Shares : Real_Array (0 .. Element_Count (Used) - 1);
+         begin
+            if Item.Seen /= null then
+               declare
+                  Which : constant String :=
+                    Named_As (Item.Owner.all, Current.Router);
+               begin
+                  if Which /= "" then
+                     Item.Seen.Note (Which, Input.all, 1);
+                  end if;
+               end;
+            end if;
+
+            Model_Runner.Backend.Device.Dispatch_Route
+              (Current.Router, Current.Router_Bias, Settings.Experts, Used,
+               Input, 1, Choice, Shares, Status, Item.Stopping);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            for Slot in Chosen'Range loop
+               Chosen (Slot) := Choice (Slot);
+               Share (Slot) := Shares (Element_Count (Slot));
+            end loop;
+         end;
+
+         goto Routed;
+      end if;
+
       Product (Item, Current.Router, Input, Item.Routing, Status);
       if E.Is_Error (Status) then
          return;
@@ -4711,7 +4863,94 @@ package body Model_Runner.Llama is
          Share (Slot) := Share (Slot) / Total;
       end loop;
 
+      <<Routed>>
+
       Result.all := [others => 0.0];
+
+      --  Gathered, where the device holds the stacks: the chosen experts'
+      --  three projections and the gate between them as one submission of
+      --  four dispatches, where a slice at a time was two submissions of
+      --  twenty-four. What comes back is each expert's projection down,
+      --  and the shares and the sum are applied here in the order they
+      --  always were, so the answer is the same sum of the same terms.
+      --
+      --  Biases and the clamped gate are what the sequence does not do,
+      --  so an architecture carrying them takes the road below.
+      if Gathered then
+         declare
+            Width : constant Element_Count :=
+              Element_Count (Settings.Embedding);
+            Feed  : constant Element_Count :=
+              Element_Count (Settings.Expert_Feed);
+
+            Members : Model_Runner.Backend.Device.Member_List :=
+              [others => 0];
+         begin
+            for Slot in Chosen'Range loop
+               Members (Slot + 1) := Chosen (Slot);
+            end loop;
+
+            if Item.Mixed = null
+              or else Item.Mixed.all'Length < Element_Count (Used) * Width
+            then
+               T.Free (Item.Mixed);
+               T.Allocate (Element_Count (Used) * Width, Item.Mixed);
+               if Item.Mixed = null then
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+            end if;
+
+            --  What each product was given, where anything asked to be
+            --  told: the same names the slice-at-a-time road notes.
+            if Item.Seen /= null then
+               for Slot in Chosen'Range loop
+                  declare
+                     Which : Expert renames
+                       Current.Experts.all (Chosen (Slot));
+
+                     Gate_Name : constant String :=
+                       Named_As (Item.Owner.all, Which.Gate);
+                     Up_Name   : constant String :=
+                       Named_As (Item.Owner.all, Which.Up);
+                  begin
+                     if Gate_Name /= "" then
+                        Item.Seen.Note (Gate_Name, Input.all, 1);
+                     end if;
+
+                     if Up_Name /= "" then
+                        Item.Seen.Note (Up_Name, Input.all, 1);
+                     end if;
+                  end;
+               end loop;
+            end if;
+
+            Model_Runner.Backend.Device.Dispatch_Mixture
+              (Current.Gate_Stack, Current.Up_Stack, Current.Down_Stack,
+               Feed, Width, Members, Used, Gate_Unit (Item.Owner.all),
+               Input, Item.Mixed, Status, Item.Stopping);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            for Slot in Chosen'Range loop
+               declare
+                  From : constant Element_Count :=
+                    Item.Mixed.all'First + Element_Count (Slot) * Width;
+               begin
+                  Item.Expert_Row.all
+                    (Item.Expert_Row.all'First
+                     .. Item.Expert_Row.all'First + Width - 1) :=
+                    Item.Mixed.all (From .. From + Width - 1);
+               end;
+
+               K.Scale (Item.Expert_Row.all, Share (Slot));
+               K.Add (Result.all, Item.Expert_Row.all);
+            end loop;
+
+            return;
+         end;
+      end if;
 
       --  Every chosen expert's two arms at once.
       --
@@ -5014,6 +5253,56 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  Routed on the device where the device holds the stacks, through
+      --  the kernel a token's whole layer routes through, so that a prompt
+      --  and a token choose the same experts with the same shares: the
+      --  host's softmax sums in binary64 and the device's in binary32,
+      --  and a share a bit apart is an answer a bit apart.
+      if Item.Owner.all.Stacked
+        and then Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind,
+                    Model_Runner.Backend.Backend_Device)
+        and then Used <= Model_Runner.Backend.Device.Max_Members
+      then
+         declare
+            Choice : Model_Runner.Backend.Device.Choice_Array
+              (0 .. Natural (Count) * Used - 1);
+         begin
+            if Item.Seen /= null then
+               declare
+                  Which : constant String :=
+                    Named_As (Item.Owner.all, Current.Router);
+               begin
+                  if Which /= "" then
+                     Item.Seen.Note
+                       (Which,
+                        Rows.all (Rows.all'First
+                                  .. Rows.all'First + Count * Width - 1),
+                        Count);
+                  end if;
+               end;
+            end if;
+
+            Model_Runner.Backend.Device.Dispatch_Route
+              (Current.Router, Current.Router_Bias, Many, Used, Rows, Count,
+               Choice,
+               Item.Pick_Share.all
+                 (Item.Pick_Share.all'First
+                  .. Item.Pick_Share.all'First
+                     + Count * Element_Count (Used) - 1),
+               Status, Item.Stopping);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            for Index in Choice'Range loop
+               Item.Pick_Which.all (Index) := Choice (Index);
+            end loop;
+
+            goto Chosen;
+         end;
+      end if;
+
       --  Every position's router scores at once, which is one product where
       --  it was one a position.
       Product_Batch
@@ -5092,6 +5381,8 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
+      <<Chosen>>
+
       --  And every expert once, with all the positions that chose it.
       for Which in 0 .. Many - 1 loop
          declare
@@ -5133,16 +5424,73 @@ package body Model_Runner.Llama is
                   end;
                end loop;
 
-               Product_Batch
-                 (Item, Expert_At.Gate, Item.Gather_In, Held,
-                  Item.Gather_A, Status);
+               --  The whole of this expert as one submission, where the
+               --  device holds the stacks and the architecture puts
+               --  nothing between the products that the device cannot:
+               --  the gate through the same kernel a token's gathered
+               --  mixture puts it through, which is what keeps a prompt
+               --  and a token agreeing to the bit.
+               if Item.Owner.all.Stacked
+                 and then Current.Expert_Gate_Bias = null
+                 and then Current.Expert_Down_Bias = null
+                 and then not (Settings.Gate_Alpha > 0.0)
+                 and then Model_Runner.Backend."="
+                            (Item.Owner.Able.Kind,
+                             Model_Runner.Backend.Backend_Device)
+                 and then T.Is_Present (Current.Gate_Stack)
+                 and then T.Is_Present (Current.Up_Stack)
+                 and then T.Is_Present (Current.Down_Stack)
+               then
+                  if Item.Seen /= null then
+                     declare
+                        Room : constant Element_Count := Held * Width;
+                        Gate_Name : constant String :=
+                          Named_As (Item.Owner.all, Expert_At.Gate);
+                        Up_Name   : constant String :=
+                          Named_As (Item.Owner.all, Expert_At.Up);
+                     begin
+                        if Gate_Name /= "" then
+                           Item.Seen.Note
+                             (Gate_Name,
+                              Item.Gather_In.all
+                                (Item.Gather_In.all'First
+                                 .. Item.Gather_In.all'First + Room - 1),
+                              Held);
+                        end if;
+
+                        if Up_Name /= "" then
+                           Item.Seen.Note
+                             (Up_Name,
+                              Item.Gather_In.all
+                                (Item.Gather_In.all'First
+                                 .. Item.Gather_In.all'First + Room - 1),
+                              Held);
+                        end if;
+                     end;
+                  end if;
+
+                  Model_Runner.Backend.Device.Dispatch_Expert
+                    (Current.Gate_Stack, Current.Up_Stack,
+                     Current.Down_Stack, Feed, Width, Which,
+                     Gate_Unit (Item.Owner.all), Item.Gather_In, Held,
+                     Item.Gather_Out, Status, Item.Stopping);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  goto Scatter;
+               end if;
+
+               Product_Slice
+                 (Item, Expert_At.Gate, Current.Gate_Stack, Feed, Which,
+                  Item.Gather_In, Held, Item.Gather_A, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
 
-               Product_Batch
-                 (Item, Expert_At.Up, Item.Gather_In, Held,
-                  Item.Gather_B, Status);
+               Product_Slice
+                 (Item, Expert_At.Up, Current.Up_Stack, Feed, Which,
+                  Item.Gather_In, Held, Item.Gather_B, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
@@ -5193,12 +5541,14 @@ package body Model_Runner.Llama is
                   end;
                end loop;
 
-               Product_Batch
-                 (Item, Expert_At.Down, Item.Gather_A, Held,
-                  Item.Gather_Out, Status);
+               Product_Slice
+                 (Item, Expert_At.Down, Current.Down_Stack, Width, Which,
+                  Item.Gather_A, Held, Item.Gather_Out, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
+
+               <<Scatter>>
 
                --  Scattered back, each to the place its position and its
                --  rank name, so the sums below are in the order they were.
@@ -7023,6 +7373,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Expert_Arms);
       T.Free (Item.Expert_Feeds);
       T.Free (Item.Expert_Outs);
+      T.Free (Item.Mixed);
       T.Free (Item.Route_Rows);
       T.Free (Item.Pick_Share);
       T.Free (Item.Gather_In);
@@ -7578,15 +7929,35 @@ package body Model_Runner.Llama is
       --  layer as well as of this one: a layer that falls back reads the
       --  host's copy of the activation, and the host's copy is what
       --  carrying does not write.
+      --  A mixture layer goes whole where the device holds its expert
+      --  stacks and the architecture puts nothing between the router and
+      --  the experts that the device does not do: no expert biases and no
+      --  clamped gate. The routing then happens where the router ran.
+      function Mixture_Whole (L : Layer) return Boolean
+      is (Source.Stacked
+          and then L.Experts /= null
+          and then T.Is_Present (L.Router)
+          and then T.Is_Present (L.Gate_Stack)
+          and then T.Is_Present (L.Up_Stack)
+          and then T.Is_Present (L.Down_Stack)
+          and then L.Expert_Gate_Bias = null
+          and then L.Expert_Down_Bias = null
+          and then not (Settings.Gate_Alpha > 0.0)
+          and then Settings.Experts_Used
+                   <= Model_Runner.Backend.Device.Max_Members);
+
       function Whole_Layer_Fits (L : Layer) return Boolean
-      is (T.Is_Present (L.Gate)
+      is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
           and then L.Attention_Norm /= null
           and then L.Attention_Norm_Bias = null
           and then L.Feed_Norm /= null
           and then L.Query_Bias = null
-          and then L.Query_Norm = null
           and then L.Key_Bias = null
-          and then L.Key_Norm = null
+
+          --  A head normalization goes to the device, both or neither:
+          --  the sequence normalizes the queries and the keys as a pair
+          --  and an architecture states them as one.
+          and then (L.Query_Norm = null) = (L.Key_Norm = null)
           and then L.Out_Bias = null
           and then L.Up_Bias = null
           and then L.Down_Bias = null
@@ -7969,7 +8340,7 @@ package body Model_Runner.Llama is
             if Item.Held = Exact
               and then Settings.Rotary > 0
               and then Element_Count (Settings.Rotary) <= Head_Size
-              and then Settings.Experts = 0
+              and then (Settings.Experts = 0 or else Mixture_Whole (Current))
               and then Whole_Layer_Fits (Current)
               and then Source.Settings.Kind not in Falcon | Phi2
               and then Model_Runner.Backend."="
@@ -8038,7 +8409,22 @@ package body Model_Runner.Llama is
                         else 0),
                      Lifted   => Lifted_Norms (Source),
                      Max_Bias => Settings.Max_Bias,
-                     Cancel   => Item.Stopping);
+                     Cancel   => Item.Stopping,
+
+                     --  The head normalizations, where the layer has
+                     --  them, and the mixture where the layer is one.
+                     Query_Norm => Current.Query_Norm,
+                     Key_Norm   => Current.Key_Norm,
+                     Router     =>
+                       (if Settings.Experts > 0 then Current.Router
+                        else T.Empty_View),
+                     Router_Bias => Current.Router_Bias,
+                     Gate_Stack  => Current.Gate_Stack,
+                     Up_Stack    => Current.Up_Stack,
+                     Down_Stack  => Current.Down_Stack,
+                     Feed        => Settings.Expert_Feed,
+                     Used        => Settings.Experts_Used,
+                     Experts     => Settings.Experts);
                end if;
             end if;
 

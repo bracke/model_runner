@@ -578,7 +578,6 @@ package Model_Runner.Llama is
    --  Nothing asked, which is what a caller who names none of these means.
    No_Rotary_Request : constant Rotary_Request := (others => <>);
 
-
    --  Load, validate and prepare a model from an open byte source.
    --
    --  The source must stay open for the life of the model.
@@ -1497,6 +1496,15 @@ private
       --  adding to a numerator.
       Sinks : Model_Runner.Tensors.Real_Array_Access;
       Experts : Expert_Array_Access := null;
+
+      --  The experts' three matrices as the file stores them: one stack
+      --  each, the expert axis outermost, of which every entry of Experts
+      --  is a slice. A device that holds the whole model keeps each stack
+      --  as one matrix and reads a token's chosen experts out of it in one
+      --  dispatch, which is what Model.Stacked says it does.
+      Gate_Stack : Model_Runner.Tensors.View;
+      Up_Stack   : Model_Runner.Tensors.View;
+      Down_Stack : Model_Runner.Tensors.View;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -1604,6 +1612,14 @@ private
       --  How the weights were written into Repacked, when they were. A
       --  merge needs to know, because it may only add to binary32.
       Packing     : Repack_Mode := No_Repack;
+
+      --  Whether a mixture's experts reach the device as whole stacks
+      --  rather than a slice at a time. Decided once, at Prepare: a stack
+      --  is one matrix to the device's residency, so this is right only
+      --  where the whole model fits the device's budget -- read a slice at
+      --  a time, a model that does not fit gives back and uploads again
+      --  only the slices a token touches, and a stack would be all of them.
+      Stacked     : Boolean := False;
 
       --  What has been merged into those weights, as a digest of every
       --  adapter and the scale it was applied at. Zero for a model as its
@@ -1769,6 +1785,11 @@ private
       --  stride on a group is for. Eight submissions a layer become one.
       Expert_Feeds : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Outs  : Model_Runner.Tensors.Group_Room_Access := null;
+
+      --  What a gathered mixture hands back: every chosen expert's
+      --  projection down, one after another, before the shares weight
+      --  them. Taken when the model is Stacked and the device is asked.
+      Mixed        : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  What a batch's mixture needs, to read every expert's matrices once
       --  a layer instead of once for every position that chose them.

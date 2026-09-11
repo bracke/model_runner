@@ -8296,16 +8296,20 @@ package body Tests.Inference_Cases is
          declare
             Settings : constant L.Configuration := L.Config (Under.Ready);
 
-            One_By_One, All_At_Once : N.Real_Array
+            One_By_One, All_At_Once, Whole : N.Real_Array
               (0 .. N.Element_Count (Settings.Vocabulary) - 1);
 
             Apart : N.Real := 0.0;
+            Drift : N.Real := 0.0;
          begin
             Assert (Settings.Experts > 0,
                     "the fixture asked for a mixture and has none");
 
-            --  A token at a time, which is the arrangement every other
-            --  comparison in this suite already holds.
+            --  A position at a time through the batched evaluator, which
+            --  is the road a token took before the device took a mixture
+            --  layer whole: the router's product and the choosing on the
+            --  device, the chosen experts gathered, the shares and the sum
+            --  on the host in rank order. Six batches of one.
             declare
                Live : L.Session;
             begin
@@ -8313,8 +8317,8 @@ package body Tests.Inference_Cases is
                Assert (E.Is_Ok (Status), "the stepped session would not open");
 
                for Index in Tokens'Range loop
-                  L.Evaluate
-                    (Live, Under.Ready, Tokens (Index), One_By_One,
+                  L.Evaluate_Batch
+                    (Live, Under.Ready, Tokens (Index .. Index), One_By_One,
                      Status => Status);
                   Assert (E.Is_Ok (Status),
                           "a stepped position failed: "
@@ -8341,9 +8345,37 @@ package body Tests.Inference_Cases is
                L.Close (Live);
             end;
 
+            --  And a token at a time, which on a device that holds the
+            --  stacks is the whole layer as one sequence: the head
+            --  normalizations, the routing, the gathered experts and the
+            --  weighted sum all on the device. Its normalizations sum in
+            --  binary32 where the host's sum in binary64, so it is held
+            --  close rather than to the bit -- what the bound catches is a
+            --  wrong expert, a wrong share or a dropped residual, each of
+            --  which moves a logit by far more than a last bit.
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the token session would not open");
+
+               for Index in Tokens'Range loop
+                  L.Evaluate
+                    (Live, Under.Ready, Tokens (Index), Whole,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "a token failed: "
+                          & E.Error_Code'Image (Status.Code));
+               end loop;
+
+               L.Close (Live);
+            end;
+
             for Index in One_By_One'Range loop
                Apart := N.Real'Max
                  (Apart, abs (One_By_One (Index) - All_At_Once (Index)));
+               Drift := N.Real'Max
+                 (Drift, abs (Whole (Index) - All_At_Once (Index)));
             end loop;
 
             --  The same products in the same order, so the same bits. A
@@ -8355,6 +8387,11 @@ package body Tests.Inference_Cases is
                     & N.Real'Image (Apart)
                     & " away from the same positions one at a time, where "
                     & "the products are the same products in the same order");
+
+            Assert (Drift < 1.0E-4,
+                    "a mixture layer taken whole on the device answers"
+                    & N.Real'Image (Drift)
+                    & " away from the same positions batched");
          end;
 
          L.Close (Under.Ready, Ignored);

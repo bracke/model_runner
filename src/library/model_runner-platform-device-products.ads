@@ -329,6 +329,14 @@ package Model_Runner.Platform.Device.Products is
    --  nothing has to grow.
    Sequence_Limit : constant := 32;
 
+   --  How many experts one gathered product may read at once, which is
+   --  the third dimension of its dispatch. Sixteen is what the shader's
+   --  push block has room for, and twice what any mixture this program
+   --  has been shown chooses.
+   Max_Gather : constant := 16;
+
+   type Member_List is array (1 .. Max_Gather) of Natural;
+
    type Sequence is limited private;
 
    --  Empty a sequence so that products may be added to it.
@@ -383,6 +391,137 @@ package Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
       At_Vector : Natural := 0);
+
+   --  Name one product over a few slices of a stack of matrices.
+   --
+   --  A mixture of experts stores every expert's matrix of one kind in one
+   --  tensor, the expert axis outermost, and a token reads a few of them.
+   --  Read an expert at a time, each slice is a matrix of its own to the
+   --  device -- its own upload, its own residency, its own dispatch -- and
+   --  a generated token dispatches twenty-four of them a layer. Read as a
+   --  gather, the stack is one buffer the device keeps once, and the
+   --  members are the third dimension of one dispatch: the shader is told
+   --  which expert each workgroup reads and how many bytes a slice is.
+   --
+   --  The stack is named as a whole -- Base, Span, At_Byte, and Stack rows
+   --  of Columns -- because that is what is uploaded and kept; Each is the
+   --  rows of one slice, and the step's answer is Members'Length slices of
+   --  Each rows, one after another, which is what the caller reads back.
+   --
+   --  Apart is where each member's own vector begins in what the step
+   --  reads, in elements: zero when every member reads the same vector,
+   --  as a gate and an up projection do, and Columns when each reads its
+   --  own stretch of one activation laid end to end, as a projection down
+   --  does. Chained, the step reads the result of the step it names, or
+   --  the one before it, whose rows must then be Columns times the members
+   --  where Apart is set and Columns where it is not.
+   --
+   --  A gather of one member at any batch is a plain product on the slice
+   --  it names, and is what a batch's expert takes so that a prompt and a
+   --  token keep the same stack resident rather than one each.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the stack lies in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the stack begins.
+   --  @param Packing How each row is packed.
+   --  @param Stack Rows the whole stack holds.
+   --  @param Each Rows one expert's slice holds.
+   --  @param Columns Number of columns.
+   --  @param Members Which slices to read, in the order their answers are
+   --    wanted; one to Max_Gather of them.
+   --  @param Count How many of Members are meant.
+   --  @param Added False when the sequence is full, when there are no
+   --    members or too many, when a member is past the stack, or when a
+   --    chained gather has nothing to chain to.
+   --  @param Key Identifies the stack so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   --  @param Chained Whether this reads a step's result rather than the
+   --    caller's activation.
+   --  @param From_Step Which step's result to read when chained, or zero
+   --    for the one before.
+   --  @param Apart How far apart the members' own vectors begin, or zero.
+   --  @param Routed A routing step whose choice replaces Members, so that
+   --    the experts a token reads are decided where the router ran; or
+   --    zero for Members. Count is then how many that step chose.
+   procedure Add_Gathered_Product
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Stack     : Natural;
+      Each      : Natural;
+      Columns   : Natural;
+      Members   : Member_List;
+      Count     : Positive;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      Chained   : Boolean := False;
+      From_Step : Natural := 0;
+      Apart     : Natural := 0;
+      Routed    : Natural := 0);
+
+   --  Name a mixture's routing for a sequence to perform.
+   --
+   --  Reads the step it names -- a router's product, Experts scores a
+   --  position -- and writes, for each position, the Used experts chosen
+   --  and their shares: a softmax over every expert, the largest Used in
+   --  order, the shares put back on a scale where they sum to one, which
+   --  is what every mixture this program runs does on the host. The words
+   --  it writes are what a gathered product routed on it and the mixing
+   --  step after read.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Experts Scores a position holds.
+   --  @param Used How many to choose.
+   --  @param Added False when the sequence is full, when there is nothing
+   --    to read, or when Used is more than a gather may take.
+   --  @param From_Step Which step's result to read, or zero for the one
+   --    before.
+   --  @param Kept False when nothing on the host reads the choice.
+   --  @param Bias Where a bias added before the choosing begins, or null.
+   --  @param Bias_Span Bytes the storage the bias lies in holds.
+   --  @param Bias_At Where in that storage the bias begins.
+   procedure Add_Route
+     (Steps     : in out Sequence;
+      Experts   : Natural;
+      Used      : Natural;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True;
+      Bias      : System.Address := System.Null_Address;
+      Bias_Span : Model_Runner.Bytes.Byte_Count := 0;
+      Bias_At   : Model_Runner.Bytes.Byte_Count := 0);
+
+   --  Name a mixture's weighted sum for a sequence to perform.
+   --
+   --  Reads the gathered projection down in Downs_Step -- Used slices of
+   --  Width a position -- and the shares the routing step in Route_Step
+   --  wrote, and writes each position's sum, best expert first, with the
+   --  residual in Residual_Step added after: the layer's second join,
+   --  folded in.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Width Components a position's answer holds.
+   --  @param Used How many slices are summed.
+   --  @param Downs_Step The gathered projection down.
+   --  @param Route_Step The routing step.
+   --  @param Added False when the sequence is full or a step named is not
+   --    there or not what it should be.
+   --  @param Residual_Step The step whose result is added, or zero for
+   --    none.
+   --  @param Kept False when nothing on the host reads the answer.
+   procedure Add_Mix
+     (Steps         : in out Sequence;
+      Width         : Natural;
+      Used          : Natural;
+      Downs_Step    : Positive;
+      Route_Step    : Positive;
+      Added         : out Boolean;
+      Residual_Step : Natural := 0;
+      Kept          : Boolean := True);
 
    --  Name one product that reads what the product before it produced.
    --
@@ -581,6 +720,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param Width Components a position holds.
    --  @param Epsilon The floor under the mean square.
    --  @param Added False when the sequence is full.
+   --  @param Groups How many stretches of Width / Groups a position is
+   --    normalized as, each over its own mean square and by the same
+   --    weight of that length. One is the whole position, which is what a
+   --    layer's two normalizations want; a head at a time is what an
+   --    architecture that normalizes its queries and keys wants, and the
+   --    weight it carries is one head wide.
    --  @param From_Step Step whose result to normalize, or zero for the step
    --    before this one.
    --  @param Lifted True where the weight is lifted by one first.
@@ -597,7 +742,8 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Lifted    : Boolean := False;
       Key       : System.Address := System.Null_Address;
-      Kept      : Boolean := True);
+      Kept      : Boolean := True;
+      Groups    : Positive := 1);
 
    --  Name an attention step for a sequence to perform.
    --
@@ -1042,6 +1188,13 @@ private
    Budget_Share : constant := 3;
    Budget_Whole : constant := 4;
 
+   --  The heaps the weights may be held in: the one the upload kind draws
+   --  from, and a second the device may offer, as Context.Second_Kind
+   --  describes it. Each has its own share of its own heap, and a matrix
+   --  is taken out of the first that has room for it.
+   type Tier_Index is range 1 .. 2;
+   type Tier_Bytes_Array is array (Tier_Index) of Interfaces.Unsigned_64;
+
    type Held_Matrix is record
       Key    : System.Address := System.Null_Address;
       Buffer : System.Address := System.Null_Address;
@@ -1079,6 +1232,11 @@ private
       --  of the two this is rather than the number.
       Base    : Interfaces.Unsigned_64 := 0;
       Own     : Boolean := False;
+
+      --  Which of the two heaps the memory came out of, one or two, so
+      --  that giving it back returns the bytes to the heap that lent them.
+      --  Meaningless for an imported matrix, which took neither.
+      Tier    : Tier_Index := 1;
 
       --  Where the host may write it, kept rather than asked for.
       --
@@ -1130,6 +1288,7 @@ private
       Memory : System.Address := System.Null_Address;
       Bytes  : Interfaces.Unsigned_64 := 0;
       Mapped : System.Address := System.Null_Address;
+      Tier   : Tier_Index := 1;
    end record;
 
    type Spare_Array is array (1 .. Max_Spare) of Spare_Buffer;
@@ -1256,6 +1415,12 @@ private
       Turner     : System.Address := System.Null_Address;
       Placer     : System.Address := System.Null_Address;
 
+      --  A mixture's routing and its weighted sum, the two steps that let
+      --  a mixture layer be one submission: without them the host chose
+      --  the experts between two and summed them after a third.
+      Router     : System.Address := System.Null_Address;
+      Mixer      : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -1282,6 +1447,8 @@ private
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;
+      Route_Line  : System.Address := System.Null_Address;
+      Mix_Line    : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
       --  is what the device said when it was opened.
@@ -1336,9 +1503,21 @@ private
       Fence_Two  : System.Address := System.Null_Address;
 
       --  What the device says its largest heap is, and the share of it these
-      --  matrices may take.
+      --  matrices may take -- the sum over both tiers, where there are two.
       Heap       : Interfaces.Unsigned_64 := 0;
       Budget     : Interfaces.Unsigned_64 := 0;
+
+      --  The second heap's memory kind, or -1 for a device with one heap,
+      --  and per tier: what each may hold, what the matrices kept in it
+      --  take, and what the buffers kept back for reuse in it take. The
+      --  sums over the tiers are Kept_Bytes and Spare_Bytes, and each is
+      --  moved wherever its sum is; the tiers exist so that a matrix is
+      --  taken from a heap that has room rather than from one that only
+      --  the total says has.
+      Second     : Integer := -1;
+      Tier_Limit : Tier_Bytes_Array := [others => 0];
+      Tier_Kept  : Tier_Bytes_Array := [others => 0];
+      Tier_Spare : Tier_Bytes_Array := [others => 0];
 
       --  And what it says one buffer may hold, which is the bound on a
       --  single matrix rather than on all of them.
@@ -1546,6 +1725,11 @@ private
       --  is what gemma states and no other architecture here does.
       Lifted  : Boolean := False;
 
+      --  How many stretches a position is normalized as, each its own
+      --  Rows / Groups wide, as Add_Norm describes it. One for a whole
+      --  position.
+      Groups  : Positive := 1;
+
       --  The floor under the mean square, as the architecture states it.
       Epsilon : Model_Runner.Numerics.Real := 0.0;
 
@@ -1610,6 +1794,35 @@ private
       --  A round: where in the cache the per-row table begins, in
       --  elements. Zero for a batch, which needs no table.
       Table      : Natural := 0;
+
+      --  A gathered product, as Add_Gathered_Product describes it: how
+      --  many members, which slices they are, the rows of the whole stack
+      --  and of one slice, and how far apart the members' vectors begin.
+      --  Zero members is a plain product. Rows is then the answer's rows,
+      --  Members' worth of Each, and Stack is what is uploaded.
+      Gathers : Natural := 0;
+      Members : Member_List := [others => 0];
+      Stack   : Natural := 0;
+      Each    : Natural := 0;
+      Apart   : Natural := 0;
+
+      --  Which routing step a gathered product takes its members from,
+      --  or zero for the Members above.
+      Routed  : Natural := 0;
+
+      --  A routing step rather than a product: it reads a router's scores
+      --  for every position, Columns an expert, and writes Rows words a
+      --  position -- Used expert numbers and Used shares. A bias to add
+      --  before choosing is named by Base, Span, At_Byte and Key, and
+      --  Joins says whether there is one.
+      Routes  : Boolean := False;
+      Used    : Natural := 0;
+
+      --  A mixing step rather than a product: it reads a gathered
+      --  projection down, Used slices of Rows a position, weights each by
+      --  the share the routing step it names in Reads_Two wrote, sums
+      --  them best first, and adds the residual the step in Joined made.
+      Mixes   : Boolean := False;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

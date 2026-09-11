@@ -556,8 +556,10 @@ package body Model_Runner.Platform.Device.Products is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
    Attention_Bytes : constant := 68;
-   Shape_Bytes     : constant := Attention_Bytes;
-   Product_Bytes   : constant := 32;
+   Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
+   Shape_Bytes     : constant :=
+     (if Product_Bytes > Attention_Bytes then Product_Bytes
+      else Attention_Bytes);
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
@@ -714,6 +716,9 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
+   type Member_Words is array (0 .. Max_Gather - 1) of C.unsigned
+     with Convention => C;
+
    type Shape_Constants is record
       Rows    : C.unsigned := 0;
       Columns : C.unsigned := 0;
@@ -730,6 +735,18 @@ package body Model_Runner.Platform.Device.Products is
       --  that writes the cache. Zero for a batch and for every other kind
       --  of step, which do not read it.
       Table   : C.unsigned := 0;
+
+      --  A gather: which expert each workgroup of the third dispatch
+      --  dimension reads, the bytes one expert's slice takes, and how far
+      --  into the activation each member's own vector begins. All zero for
+      --  a plain product, which is a gather of one member at slice zero.
+      Members : Member_Words := [others => 0];
+      Stride  : C.unsigned := 0;
+      Apart   : C.unsigned := 0;
+
+      --  Whether a gather takes its members from the routing step bound
+      --  at three rather than from Members.
+      Routed  : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -937,7 +954,8 @@ package body Model_Runner.Platform.Device.Products is
       Buffer : out Address;
       Memory : out Address;
       Ok     : out Boolean;
-      Read   : Boolean := False)
+      Read   : Boolean := False;
+      Kind   : Integer := -1)
    is
       Create : constant Create_Call := To_Create (Point ("vkCreateBuffer"));
       Wants  : constant Requirements_Call :=
@@ -976,8 +994,11 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Wants (Item.Logical, Buffer, Needed'Address);
          Request.Size := Needed.Size;
+         --  A kind named outright, where the caller chose a heap; else the
+         --  one the purpose decides.
          Request.Which :=
-           C.unsigned (if Read then Item.Download else Item.Upload);
+           (if Kind >= 0 then C.unsigned (Kind)
+            else C.unsigned (if Read then Item.Download else Item.Upload));
 
          if Allocate (Item.Logical, Request'Address, Null_Handle,
                       Made'Access) /= 0
@@ -1358,9 +1379,55 @@ package body Model_Runner.Platform.Device.Products is
       Item.Storage := Storage_Limit (On);
       Item.Plain := Plain_Memory_Kinds (On);
       Item.Share := Share_Host;
-      Item.Budget :=
-        (if Budget > 0 then Budget
-         else Item.Heap / Budget_Whole * Budget_Share);
+      --  The budget, by heap. Unasked, it is what it always was: the share
+      --  of the largest heap, and the second heap holds nothing. A budget
+      --  named by the caller fills the first tier to that share and puts
+      --  the rest in the second, so a test that names a few kilobytes
+      --  still evicts, and a caller who names more than the first heap's
+      --  share gets the second heap rather than the driver's refusal.
+      --
+      --  The second heap is NOT taken by default, and the reason is the
+      --  host's memory rather than the device's. On the integrated part
+      --  this was built on, the two heaps together hold 11.8 GB of an
+      --  11.26 GB mixture, and holding it cost about twenty-five gigabytes
+      --  of a thirty-gigabyte host -- the kernel reports the buffers as
+      --  shmem and pool pages both, at about two bytes of system memory
+      --  for every byte on the device -- and the desktop was killed for
+      --  want of memory, twice. The share of one heap is what this machine
+      --  can afford, and a caller who knows theirs can afford more says so
+      --  with the budget.
+      Item.Second := Second_Kind (On);
+
+      declare
+         First_Share  : constant Interfaces.Unsigned_64 :=
+           Item.Heap / Budget_Whole * Budget_Share;
+         Second_Share : constant Interfaces.Unsigned_64 :=
+           (if Item.Second >= 0
+            then Second_Memory_Bytes (On) / Budget_Whole * Budget_Share
+            else 0);
+      begin
+         if Budget = 0 then
+            Item.Tier_Limit := [First_Share, 0];
+         elsif Item.Second < 0 then
+            Item.Tier_Limit := [Budget, 0];
+         else
+            --  The second heap takes what the first's share does not
+            --  cover, up to its own share; past both, the first is asked
+            --  for the rest and the driver's answer is the bound, as it
+            --  always was for a budget past the heap.
+            Item.Tier_Limit (1) :=
+              Interfaces.Unsigned_64'Min (Budget, First_Share);
+            Item.Tier_Limit (2) :=
+              Interfaces.Unsigned_64'Min
+                (Budget - Item.Tier_Limit (1), Second_Share);
+            Item.Tier_Limit (1) := Budget - Item.Tier_Limit (2);
+         end if;
+
+         Item.Budget := Item.Tier_Limit (1) + Item.Tier_Limit (2);
+      end;
+
+      Item.Tier_Kept := [others => 0];
+      Item.Tier_Spare := [others => 0];
 
       Item.Logical := On.Logical;
       Item.Queue := On.Queue;
@@ -1431,6 +1498,34 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Normer := Made;
+            end if;
+         end;
+
+         --  And a mixture's routing and its weighted sum, the same story
+         --  again: a device that refuses either runs its mixtures a
+         --  submission at a time, as every device did before.
+         declare
+            Routed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Route;
+            Mixed  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Mix;
+         begin
+            Request.Size := Interfaces.C.size_t (Routed'Length * 4);
+            Request.Code := Routed'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Router := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Mixed'Length * 4);
+            Request.Code := Mixed'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Mixer := Made;
             end if;
          end;
 
@@ -1862,6 +1957,26 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Norm_Line := Made;
+            end if;
+         end if;
+
+         if Item.Router /= Null_Handle then
+            Request.Stage.Module := Item.Router;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Route_Line := Made;
+            end if;
+         end if;
+
+         if Item.Mixer /= Null_Handle then
+            Request.Stage.Module := Item.Mixer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Mix_Line := Made;
             end if;
          end if;
 
@@ -2334,6 +2449,8 @@ package body Model_Runner.Platform.Device.Products is
       Item.Oldest := 0;
       Item.Index_Of := [others => 0];
       Item.Kept_Bytes := 0;
+      Item.Tier_Kept := [others => 0];
+      Item.Tier_Spare := [others => 0];
    end Forget_Matrices;
 
    --  Declared here because Close needs it and it is written below, with
@@ -2393,6 +2510,10 @@ package body Model_Runner.Platform.Device.Products is
       Item.Oldest := 0;
       Item.Index_Of := [others => 0];
       Item.Kept_Bytes := 0;
+      Item.Tier_Kept := [others => 0];
+      Item.Tier_Spare := [others => 0];
+      Item.Tier_Limit := [others => 0];
+      Item.Second := -1;
       Item.Clock := 0;
       Item.Released := 0;
       Item.Taken := 0;
@@ -2504,9 +2625,13 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
+      Give_Back (Item.Route_Line, "vkDestroyPipeline");
+      Give_Back (Item.Mix_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
+      Give_Back (Item.Router, "vkDestroyShaderModule");
+      Give_Back (Item.Mixer, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
@@ -2802,11 +2927,13 @@ package body Model_Runner.Platform.Device.Products is
       Buffer : out Address;
       Memory : out Address;
       Mapped : out Address;
+      Tier   : out Tier_Index;
       Found  : out Boolean) is
    begin
       Buffer := Null_Handle;
       Memory := Null_Handle;
       Mapped := Null_Handle;
+      Tier := 1;
       Found := False;
 
       for Index in reverse 1 .. Item.Spare_Used loop
@@ -2814,12 +2941,14 @@ package body Model_Runner.Platform.Device.Products is
             Buffer := Item.Spare (Index).Buffer;
             Memory := Item.Spare (Index).Memory;
             Mapped := Item.Spare (Index).Mapped;
+            Tier := Item.Spare (Index).Tier;
             Found := True;
 
             Item.Spare (Index) := Item.Spare (Item.Spare_Used);
             Item.Spare (Item.Spare_Used) := (others => <>);
             Item.Spare_Used := Item.Spare_Used - 1;
             Item.Spare_Bytes := Item.Spare_Bytes - Bytes;
+            Item.Tier_Spare (Tier) := Item.Tier_Spare (Tier) - Bytes;
             return;
          end if;
       end loop;
@@ -2833,6 +2962,7 @@ package body Model_Runner.Platform.Device.Products is
       Memory : Address;
       Mapped : Address;
       Bytes  : Interfaces.Unsigned_64;
+      Tier   : Tier_Index;
       Kept   : out Boolean) is
    begin
       Kept := False;
@@ -2845,8 +2975,9 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       Item.Spare_Used := Item.Spare_Used + 1;
-      Item.Spare (Item.Spare_Used) := (Buffer, Memory, Bytes, Mapped);
+      Item.Spare (Item.Spare_Used) := (Buffer, Memory, Bytes, Mapped, Tier);
       Item.Spare_Bytes := Item.Spare_Bytes + Bytes;
+      Item.Tier_Spare (Tier) := Item.Tier_Spare (Tier) + Bytes;
       Kept := True;
    end Keep_Spare;
 
@@ -2867,6 +2998,9 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Item.Spare_Bytes :=
            Item.Spare_Bytes - Item.Spare (Item.Spare_Used).Bytes;
+         Item.Tier_Spare (Item.Spare (Item.Spare_Used).Tier) :=
+           Item.Tier_Spare (Item.Spare (Item.Spare_Used).Tier)
+           - Item.Spare (Item.Spare_Used).Bytes;
          Item.Spare (Item.Spare_Used) := (others => <>);
          Item.Spare_Used := Item.Spare_Used - 1;
 
@@ -2947,7 +3081,8 @@ package body Model_Runner.Platform.Device.Products is
          if not Item.Kept (Oldest).Own then
             Keep_Spare
               (Item, Item.Kept (Oldest).Buffer, Item.Kept (Oldest).Memory,
-               Item.Kept (Oldest).Mapped, Item.Kept (Oldest).Bytes, Spared);
+               Item.Kept (Oldest).Mapped, Item.Kept (Oldest).Bytes,
+               Item.Kept (Oldest).Tier, Spared);
          end if;
 
          if not Spared then
@@ -2966,6 +3101,9 @@ package body Model_Runner.Platform.Device.Products is
          Item.Taken := Item.Taken - 1;
       else
          Item.Kept_Bytes := Item.Kept_Bytes - Item.Kept (Oldest).Bytes;
+         Item.Tier_Kept (Item.Kept (Oldest).Tier) :=
+           Item.Tier_Kept (Item.Kept (Oldest).Tier)
+           - Item.Kept (Oldest).Bytes;
       end if;
 
       --  Out of the order, out of the index, and the slot goes back on the
@@ -3118,7 +3256,22 @@ package body Model_Runner.Platform.Device.Products is
       Weight_Base   : Interfaces.Unsigned_64 renames Base;
       Weight_Own    : Boolean := False;
       Weight_Mapped : Address := Null_Handle;
+      Weight_Tier   : Tier_Index := 1;
       Good          : Boolean;
+
+      --  Whether a tier has room for this matrix beside what it holds,
+      --  the buffers kept back for reuse counted with the matrices, as
+      --  the one budget counted them before there were two.
+      function Fits (Tier : Tier_Index) return Boolean
+      is (Item.Tier_Kept (Tier) + Item.Tier_Spare (Tier) + Weight_Bytes
+          <= Item.Tier_Limit (Tier));
+
+      --  The first tier with room, or the first tier: a caller that named
+      --  a budget past what the device holds is run rather than refused,
+      --  and the driver's own answer is the only bound left.
+      function Roomy_Tier return Tier_Index
+      is (if Fits (1) or else Item.Second < 0 or else not Fits (2)
+          then 1 else 2);
    begin
       Weight_Buffer := Null_Handle;
       Weight_Memory := Null_Handle;
@@ -3199,7 +3352,7 @@ package body Model_Runner.Platform.Device.Products is
             begin
                Take_Spare
                  (Item, Weight_Bytes, Weight_Buffer, Weight_Memory,
-                  Weight_Mapped, Found);
+                  Weight_Mapped, Weight_Tier, Found);
                Good := Found;
             end;
 
@@ -3208,31 +3361,32 @@ package body Model_Runner.Platform.Device.Products is
             then
                declare
                   Gone : Boolean := True;
+
+                  --  Room in some heap, rather than room in the total: two
+                  --  heaps each a little short of a matrix add up to a
+                  --  matrix and hold none.
+                  function Room return Boolean
+                  is (Fits (1) or else (Item.Second >= 0 and then Fits (2)));
                begin
                   --  The kept buffers first, because giving one of those up
                   --  costs nothing but the driver call, and a matrix given
                   --  back has to be uploaded again.
-                  while Gone
-                    and then Item.Kept_Bytes + Item.Spare_Bytes + Weight_Bytes
-                             > Item.Budget
-                  loop
+                  while Gone and then not Room loop
                      Drop_Spare (Item, Gone);
                   end loop;
 
                   Gone := True;
 
-                  while Gone
-                    and then Item.Used > 0
-                    and then Item.Kept_Bytes + Item.Spare_Bytes + Weight_Bytes
-                             > Item.Budget
-                  loop
+                  while Gone and then Item.Used > 0 and then not Room loop
                      Give_Back_Least (Item, Gone, Pinned);
                   end loop;
                end;
             end if;
 
             if Weight_Buffer = Null_Handle then
-               Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good);
+               Weight_Tier := Roomy_Tier;
+               Take (Item, Weight_Bytes, Weight_Buffer, Weight_Memory, Good,
+                     Kind => (if Weight_Tier = 2 then Item.Second else -1));
 
                --  Mapped once, here, and kept for as long as the memory
                --  is: the copy below and every copy into this buffer after
@@ -3274,7 +3428,8 @@ package body Model_Runner.Platform.Device.Products is
            and then Item.Used < Max_Resident
            and then (Weight_Own
                      or else Item.Budget = 0
-                     or else Item.Kept_Bytes + Weight_Bytes <= Item.Budget)
+                     or else Item.Tier_Kept (Weight_Tier) + Weight_Bytes
+                             <= Item.Tier_Limit (Weight_Tier))
          then
             declare
                Where : Natural;
@@ -3288,7 +3443,7 @@ package body Model_Runner.Platform.Device.Products is
                   Bytes => Weight_Bytes, Used_At => Item.Clock,
                   Packing => Packing, Rows => Rows, Columns => Columns,
                   Base => Weight_Base, Own => Weight_Own,
-                  Mapped => Weight_Mapped,
+                  Tier => Weight_Tier, Mapped => Weight_Mapped,
                   Newer => 0, Older => 0, Next_Free => 0);
 
                Index_Put (Item, Key, Where);
@@ -3299,6 +3454,8 @@ package body Model_Runner.Platform.Device.Products is
                Item.Taken := Item.Taken + 1;
             else
                Item.Kept_Bytes := Item.Kept_Bytes + Weight_Bytes;
+               Item.Tier_Kept (Weight_Tier) :=
+                 Item.Tier_Kept (Weight_Tier) + Weight_Bytes;
             end if;
          else
             Borrowed := True;
@@ -3652,7 +3809,7 @@ package body Model_Runner.Platform.Device.Products is
             Shape : aliased Shape_Constants :=
               (Rows    => C.unsigned (Held),
                Columns => C.unsigned (Made),
-               others  => 0);
+               others  => <>);
          begin
             Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                   Product_Bytes, Shape'Address);
@@ -3682,7 +3839,7 @@ package body Model_Runner.Platform.Device.Products is
             First   => C.unsigned (Into),
             Packing => C.unsigned (Weight_Packing'Pos (Packing)),
             Base    => C.unsigned (Base),
-            Joins   => (if Joins then 1 else 0), Table => 0);
+            Joins   => (if Joins then 1 else 0), Table => 0, others => <>);
       begin
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Product_Bytes, Shape'Address);
@@ -4030,7 +4187,7 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (Packing)),
                         Base    => C.unsigned (Weight_Base),
-                        Joins   => 0, Table => 0);
+                        Joins   => 0, Table => 0, others => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -4860,6 +5017,172 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Chained_Product;
 
+   --------------------------
+   -- Add_Gathered_Product --
+   --------------------------
+
+   procedure Add_Gathered_Product
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Stack     : Natural;
+      Each      : Natural;
+      Columns   : Natural;
+      Members   : Member_List;
+      Count     : Positive;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      Chained   : Boolean := False;
+      From_Step : Natural := 0;
+      Apart     : Natural := 0;
+      Routed    : Natural := 0)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      --  What a chained gather reads: each member its own stretch of the
+      --  source, or all of them the whole of it.
+      Wanted : constant Natural :=
+        (if Apart > 0 then Columns * Count else Columns);
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Count > Max_Gather
+        or else Each = 0
+        or else Stack < Each
+        or else (Apart > 0 and then Apart /= Columns)
+        or else (Chained
+                 and then (Steps.Held = 0
+                           or else Source not in 1 .. Steps.Held
+                           or else Steps.Items (Source).Rows /= Wanted))
+
+        --  Routed, the step it names has to be a routing step that chose
+        --  exactly this many, and the members it wrote are what is read.
+        or else (Routed /= 0
+                 and then (Routed > Steps.Held
+                           or else not Steps.Items (Routed).Routes
+                           or else Steps.Items (Routed).Used /= Count))
+      then
+         return;
+      end if;
+
+      if Routed = 0 then
+         for Index in 1 .. Count loop
+            if (Members (Index) + 1) * Each > Stack then
+               return;
+            end if;
+         end loop;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
+         Rows => Each * Count, Columns => Columns, Key => Key,
+         Chained => Chained,
+         Reads => (if Chained and then From_Step /= 0 then From_Step else 0),
+         Kept => Kept,
+         Blends => False, Unit => 0, Attends => False,
+         Gathers => Count, Members => Members, Stack => Stack,
+         Each => Each, Apart => Apart, Routed => Routed,
+         others => <>);
+      Added := True;
+   end Add_Gathered_Product;
+
+   ---------------
+   -- Add_Route --
+   ---------------
+
+   procedure Add_Route
+     (Steps     : in out Sequence;
+      Experts   : Natural;
+      Used      : Natural;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True;
+      Bias      : System.Address := System.Null_Address;
+      Bias_Span : Model_Runner.Bytes.Byte_Count := 0;
+      Bias_At   : Model_Runner.Bytes.Byte_Count := 0)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      Added := False;
+
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Source not in 1 .. Steps.Held
+        or else Used = 0
+        or else Used > Max_Gather
+        or else Experts < Used
+        or else Steps.Items (Source).Rows /= Experts
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Bias, Span => Bias_Span, At_Byte => Bias_At,
+         Packing => Weight_Packing'First,
+         Rows => 2 * Used, Columns => Experts,
+         Key => Bias,
+         Chained => True, Reads => Source,
+         Kept => Kept, Routes => True, Used => Used,
+         Joins => Bias /= System.Null_Address,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Route;
+
+   -------------
+   -- Add_Mix --
+   -------------
+
+   procedure Add_Mix
+     (Steps         : in out Sequence;
+      Width         : Natural;
+      Used          : Natural;
+      Downs_Step    : Positive;
+      Route_Step    : Positive;
+      Added         : out Boolean;
+      Residual_Step : Natural := 0;
+      Kept          : Boolean := True) is
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Width = 0
+        or else Used = 0
+        or else Downs_Step > Steps.Held
+        or else Route_Step > Steps.Held
+        or else Residual_Step > Steps.Held
+        or else not Steps.Items (Route_Step).Routes
+        or else Steps.Items (Route_Step).Used /= Used
+        or else Steps.Items (Downs_Step).Gathers /= Used
+        or else Steps.Items (Downs_Step).Rows /= Used * Width
+        or else (Residual_Step /= 0
+                 and then Steps.Items (Residual_Step).Rows /= Width)
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => Width,
+         Chained => True, Reads => Downs_Step, Reads_Two => Route_Step,
+         Joins => Residual_Step /= 0, Joined => Residual_Step,
+         Kept => Kept, Mixes => True, Used => Used,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Mix;
+
    ---------------------
    -- Add_Combination --
    ---------------------
@@ -5062,7 +5385,8 @@ package body Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Lifted    : Boolean := False;
       Key       : System.Address := System.Null_Address;
-      Kept      : Boolean := True)
+      Kept      : Boolean := True;
+      Groups    : Positive := 1)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -5073,6 +5397,7 @@ package body Model_Runner.Platform.Device.Products is
       --  its first half normalizes what it was handed.
       if Steps.Held = Sequence_Limit
         or else Width = 0
+        or else Width mod Groups /= 0
         or else Source > Steps.Held
       then
          Added := False;
@@ -5085,7 +5410,7 @@ package body Model_Runner.Platform.Device.Products is
          Packing => Weight_Packing'First,
          Rows => Width, Columns => Width, Key => Key,
          Chained => Source /= 0, Reads => Source,
-         Kept => Kept, Norms => True, Lifted => Lifted,
+         Kept => Kept, Norms => True, Lifted => Lifted, Groups => Groups,
          Epsilon => Epsilon, Attends => False, Blends => False,
          others => <>);
       Added := True;
@@ -5242,6 +5567,30 @@ package body Model_Runner.Platform.Device.Products is
       Vector_Room  : constant Model_Runner.Numerics.Element_Count :=
         Vector_Elements;
 
+      --  Whether a step goes to the tile kernel. A gather of more than one
+      --  member never does: the tile kernel reads one matrix at one base,
+      --  and a gather of one is that, at the base of the slice it names.
+      function Tiled (Which : Positive) return Boolean
+      is (Steps.Items (Which).Gathers <= 1
+          and then Uses_Matrix
+                     (Item, Steps.Items (Which).Packing,
+                      Steps.Items (Which).Rows,
+                      Steps.Items (Which).Columns, Count));
+
+      --  Bytes one member's slice of a gathered step takes, and where a
+      --  gather of one begins: the tile kernel and the single-member row
+      --  product both read that slice as a matrix of its own.
+      function Slice_Bytes (Which : Positive) return Interfaces.Unsigned_64
+      is (Interfaces.Unsigned_64 (Steps.Items (Which).Each)
+          * Row_Bytes (Steps.Items (Which).Packing,
+                       Steps.Items (Which).Columns));
+
+      function Slice_Base (Which : Positive) return Interfaces.Unsigned_64
+      is (if Steps.Items (Which).Gathers = 1
+          then Interfaces.Unsigned_64 (Steps.Items (Which).Members (1))
+               * Slice_Bytes (Which)
+          else 0);
+
       Vector_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Vector_Room) * 4;
 
@@ -5321,17 +5670,13 @@ package body Model_Runner.Platform.Device.Products is
             --  the kernel writes and nothing reads; the read-back below
             --  takes the batch's own share from the front of it.
             Room : constant Natural :=
-              (if Uses_Matrix (Item, This.Packing, This.Rows,
-                               This.Columns, Count)
-               then Whole_Tiles (Count) else Count);
+              (if Tiled (Index) then Whole_Tiles (Count) else Count);
 
             Mine : constant Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (This.Rows)
               * Interfaces.Unsigned_64 (Room) * 4;
          begin
-            if Uses_Matrix (Item, This.Packing, This.Rows,
-                            This.Columns, Count)
-            then
+            if Tiled (Index) then
                --  What it reads, and what it may be asked to write: a
                --  product whose answer is wanted only in half precision
                --  writes it here rather than into the result buffer.
@@ -5387,13 +5732,16 @@ package body Model_Runner.Platform.Device.Products is
                  or else This.Reads > Steps.Held
                  or else Interfaces.Unsigned_64 (This.Span)
                            < Interfaces.Unsigned_64 (This.At_Byte)
-                             + Interfaces.Unsigned_64 (This.Rows) * 4
+                             + Interfaces.Unsigned_64
+                                 (This.Rows / This.Groups) * 4
                then
                   return;
                end if;
 
+               --  The weight is one stretch wide, however many stretches
+               --  a position is normalized as.
                Places (Index).Weight :=
-                 Interfaces.Unsigned_64 (This.Rows) * 4;
+                 Interfaces.Unsigned_64 (This.Rows / This.Groups) * 4;
             elsif This.Attends then
                --  An attention step carries no matrix either, and reads a
                --  cache rather than a weight. What it needs that the shape
@@ -5409,6 +5757,39 @@ package body Model_Runner.Platform.Device.Products is
                                    * Model_Runner.Numerics.Element_Count
                                        (Count)
                                    > Vectors'Length)
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
+            elsif This.Routes then
+               --  A routing step reads the router's scores in the step it
+               --  names and carries a bias or nothing: with a bias it is
+               --  kept like a normalization's weight, one row of Columns.
+               if This.Rows = 0
+                 or else This.Reads not in 1 .. Index - 1
+                 or else Item.Route_Line = Null_Handle
+                 or else (This.Base /= System.Null_Address
+                          and then Interfaces.Unsigned_64 (This.Span)
+                                   < Interfaces.Unsigned_64 (This.At_Byte)
+                                     + Interfaces.Unsigned_64 (This.Columns)
+                                       * 4)
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight :=
+                 (if This.Base = System.Null_Address then 0
+                  else Interfaces.Unsigned_64 (This.Columns) * 4);
+            elsif This.Mixes then
+               --  A mixing step reads the gathered projection down and
+               --  the routing step it names, and a residual where it has
+               --  one; it carries no weight.
+               if This.Rows = 0
+                 or else This.Reads not in 1 .. Index - 1
+                 or else This.Reads_Two not in 1 .. Index - 1
+                 or else This.Joined > Index - 1
+                 or else Item.Mix_Line = Null_Handle
                then
                   return;
                end if;
@@ -5444,25 +5825,38 @@ package body Model_Runner.Platform.Device.Products is
             elsif This.Rows = 0
               or else (not This.Chained
                        and then This.Columns /= Steps.Items (1).Columns)
+
+              --  A chained step reads the rows the step it names made,
+              --  or -- a gather laid apart -- one stretch of them a
+              --  member, which is what Add_Gathered_Product checked.
               or else (This.Chained
                        and then This.Columns
+                                  * (if This.Apart > 0 then This.Gathers
+                                     else 1)
                                   /= Steps.Items
                                        ((if This.Reads = 0 then Index - 1
                                          else This.Reads)).Rows)
               or else Wide = 0
-              or else Interfaces.Unsigned_64 (This.Rows)
+              or else Interfaces.Unsigned_64
+                        (if This.Gathers > 0 then This.Stack else This.Rows)
                         * Interfaces.Unsigned_64 (This.Columns) > Max_Elements
               or else Interfaces.Unsigned_64 (This.Columns)
                         * Interfaces.Unsigned_64 (Count) > Max_Elements
               or else This.Base = System.Null_Address
               or else Interfaces.Unsigned_64 (This.Span)
                         < Interfaces.Unsigned_64 (This.At_Byte)
-                          + Interfaces.Unsigned_64 (This.Rows) * Wide
+                          + Interfaces.Unsigned_64
+                              (if This.Gathers > 0 then This.Stack
+                               else This.Rows) * Wide
             then
                return;
             else
+               --  A gather uploads and keeps the whole stack, whatever
+               --  few of its slices this step reads.
                Places (Index).Weight :=
-                 Interfaces.Unsigned_64 (This.Rows) * Wide;
+                 Interfaces.Unsigned_64
+                   (if This.Gathers > 0 then This.Stack else This.Rows)
+                 * Wide;
             end if;
             if This.Folded then
                --  A join folded into the product before it writes nothing
@@ -5553,7 +5947,8 @@ package body Model_Runner.Platform.Device.Products is
             --  matrix: one reads the two results before it, the other reads
             --  the cache the device holds.
             if This.Blends or else This.Attends or else This.Places
-              or else This.Rotates
+              or else This.Rotates or else This.Mixes
+              or else (This.Routes and then This.Base = System.Null_Address)
             then
                goto Next_Step;
             end if;
@@ -5566,8 +5961,11 @@ package body Model_Runner.Platform.Device.Products is
             --  driver rather than anywhere this program can see.
             Acquire_Weights
               (Item, Held, This.At_Byte, This.Packing,
-               (if This.Norms or else This.Rotates then 1 else This.Rows),
-               (if This.Norms then This.Rows
+               (if This.Norms or else This.Rotates or else This.Routes then 1
+                elsif This.Gathers > 0 then This.Stack
+                else This.Rows),
+               (if This.Norms then This.Rows / This.Groups
+                elsif This.Routes then This.Columns
                 elsif This.Rotates
                 then This.Turns / 2 * Natural (Count) * 4
                 else This.Columns),
@@ -5828,6 +6226,67 @@ package body Model_Runner.Platform.Device.Products is
                goto Next_Set;
             end if;
 
+            if Steps.Items (Index).Routes then
+               --  The bias where there is one -- and where there is not,
+               --  the step's own room, bound and never read -- the scores
+               --  it reads, and its own room out.
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (1) :=
+                 (if Steps.Items (Index).Base = System.Null_Address
+                  then Told (3)
+                  else (Buffer => Places (Index).Buffer, Offset => 0,
+                        Extent =>
+                          Places (Index).Base + Places (Index).Weight));
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Mixes then
+               --  The routing step's choice, the gathered projection
+               --  down, its own room out, and the residual where there
+               --  is one.
+               Told (1) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Steps.Items (Index).Reads_Two).At_Byte,
+                  Extent => Places (Steps.Items (Index).Reads_Two).Bytes);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) :=
+                 (if Steps.Items (Index).Joined /= 0
+                  then (Buffer => Item.Result_Buffer,
+                        Offset =>
+                          Places (Steps.Items (Index).Joined).At_Byte,
+                        Extent =>
+                          Places (Steps.Items (Index).Joined).Bytes)
+                  else Told (3));
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
             if Steps.Items (Index).Norms then
                --  The weight, what it normalizes, and its own room out.
                Told (1) :=
@@ -5900,7 +6359,16 @@ package body Model_Runner.Platform.Device.Products is
               (Buffer => Item.Result_Buffer,
                Offset => Places (Index).At_Byte,
                Extent => Places (Index).Bytes);
-            Told (4) := Half_Descriptor (Item);
+
+            --  The half-precision copy, or -- for a gather routed on the
+            --  device -- the routing step's choice, bound where the row
+            --  kernel reads its members from.
+            Told (4) :=
+              (if Steps.Items (Index).Routed /= 0
+               then (Buffer => Item.Result_Buffer,
+                     Offset => Places (Steps.Items (Index).Routed).At_Byte,
+                     Extent => Places (Steps.Items (Index).Routed).Bytes)
+               else Half_Descriptor (Item));
 
             --  And the residual, where a join was folded into this product:
             --  what the join would have read as its first arm, bound where
@@ -6067,9 +6535,7 @@ package body Model_Runner.Platform.Device.Products is
                      if Reads_It then
                         Asked := Asked + 1;
 
-                        if not Uses_Matrix (Item, That.Packing, That.Rows,
-                                            That.Columns, Count)
-                        then
+                        if not Tiled (Later) then
                            return False;
                         end if;
                      end if;
@@ -6113,9 +6579,7 @@ package body Model_Runner.Platform.Device.Products is
             for Which in 1 .. Steps.Held loop
                if not Halved (Which)
                  and then not Steps.Items (Which).Kept
-                 and then Uses_Matrix (Item, Steps.Items (Which).Packing,
-                                       Steps.Items (Which).Rows,
-                                       Steps.Items (Which).Columns, Count)
+                 and then Tiled (Which)
                then
                   declare
                      Only : Integer := -1;
@@ -6216,9 +6680,12 @@ package body Model_Runner.Platform.Device.Products is
                     (if This.Joins
                      then Steps.Items (This.Joined).Reads else 0);
 
+                  --  A gather routed on the device reads the routing
+                  --  step's choice as well, which no other field of the
+                  --  step says.
                   Source : constant Natural :=
                     Natural'Max
-                      (Joined,
+                      (Natural'Max (Joined, This.Routed),
                        Natural'Max
                          (Natural'Max
                             (This.Reads,
@@ -6378,7 +6845,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  goes into its own member's block at its own
                         --  position, and neither follows from the first
                         --  row's place.
-                        Table   => C.unsigned (This.Table));
+                        Table   => C.unsigned (This.Table),
+                        others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -6406,7 +6874,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  The table begins where the buffer does: it is
                         --  written for this call and nothing else is in it.
                         Base    => 0,
-                        Joins   => 0, Table => 0);
+                        Joins   => 0, Table => 0, others => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -6423,6 +6891,60 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
+               if This.Routes then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Route_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Columns),
+                        Columns => C.unsigned (This.Used),
+                        Count   => C.unsigned (Count),
+                        Base    => C.unsigned (Places (Index).Base / 4),
+                        Joins   =>
+                          (if This.Base /= System.Null_Address then 1
+                           else 0),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+
+                     --  An invocation a position, each choosing alone.
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Mixes then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Mix_Line);
+
+                  declare
+                     Whole : constant Natural := This.Rows * Count;
+
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Used),
+                        Count   => C.unsigned (Count),
+                        Joins   => (if This.Joined /= 0 then 1 else 0),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer, C.unsigned ((Whole + 255) / 256), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
                if This.Norms then
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute, Item.Norm_Line);
@@ -6431,24 +6953,29 @@ package body Model_Runner.Platform.Device.Products is
                      function Bits is new Ada.Unchecked_Conversion
                        (Model_Runner.Numerics.Real, C.unsigned);
 
+                     --  A stretch to a workgroup: a position, or each of
+                     --  the Groups a position is normalized as, which lie
+                     --  one after another exactly as positions do.
                      Shape : aliased Shape_Constants :=
-                       (Rows    => C.unsigned (This.Rows),
+                       (Rows    => C.unsigned (This.Rows / This.Groups),
                         Columns => (if This.Lifted then 1 else 0),
-                        Count   => C.unsigned (Count),
+                        Count   => C.unsigned (Count * This.Groups),
                         First   => Bits (This.Epsilon),
 
                         --  Positions the half-precision copy is to hold,
                         --  and zero where there is none to write.
                         Packing =>
                           (if Halved (Index)
-                           then C.unsigned (Whole_Tiles (Count)) else 0),
+                           then C.unsigned
+                                  (Whole_Tiles (Count) * This.Groups)
+                           else 0),
 
                         --  Where the weight begins in the buffer it shares
                         --  with whatever else the device kept, in elements
                         --  rather than bytes because this one reads floats.
                         Base    =>
                           C.unsigned (Places (Index).Base / 4),
-                          Joins   => 0, Table => 0);
+                          Joins   => 0, Table => 0, others => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -6460,8 +6987,9 @@ package body Model_Runner.Platform.Device.Products is
                      --  past the batch write the zeros it needs.
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned (if Halved (Index)
-                                    then Whole_Tiles (Count) else Count),
+                        C.unsigned ((if Halved (Index)
+                                     then Whole_Tiles (Count) else Count)
+                                    * This.Groups),
                         1, 1);
                   end;
 
@@ -6528,7 +7056,7 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           (if Arms then C.unsigned (Sits (Up_Step))
                            else 0),
-                        others  => 0);
+                        others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -6549,9 +7077,7 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
-               if Uses_Matrix (Item, This.Packing, This.Rows,
-                               This.Columns, Count)
-               then
+               if Tiled (Index) then
                   declare
                      Done : Boolean;
 
@@ -6565,7 +7091,8 @@ package body Model_Runner.Platform.Device.Products is
                      Tile_Product
                        (Item, This.Rows, This.Columns, Count,
                         Whole_Tiles (Count), This.Packing,
-                        Places (Index).Base, Fresh => not Again,
+                        Places (Index).Base + Slice_Base (Index),
+                        Fresh => not Again,
                         Into =>
                           (if Halved (Index)
                            then Interfaces.Unsigned_64 (Region (Index))
@@ -6596,25 +7123,55 @@ package body Model_Runner.Platform.Device.Products is
 
                while First < Count loop
                   declare
+                     --  A gather's members ride in the push block and its
+                     --  count is the third dispatch dimension; the rows
+                     --  the shader is told are one slice's. A gather of
+                     --  one is pushed as the plain product on that slice,
+                     --  which is the same words the tile kernel is given.
+                     Sliced : constant Boolean := This.Gathers = 1;
+                     Spread : constant Boolean := This.Gathers > 1;
+
                      Shape : aliased Shape_Constants :=
-                       (Rows    => C.unsigned (This.Rows),
+                       (Rows    =>
+                          C.unsigned
+                            (if This.Gathers > 0 then This.Each
+                             else This.Rows),
                         Columns => C.unsigned (This.Columns),
                         Count   => C.unsigned (Count),
                         First   => C.unsigned (First),
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
-                        Base    => C.unsigned (Places (Index).Base),
+                        Base    =>
+                          C.unsigned
+                            (Places (Index).Base
+                             + (if Sliced then Slice_Base (Index) else 0)),
                         Joins   => (if This.Joins then 1 else 0),
-                        Table   => 0);
+                        Table   => 0,
+                        Members => [others => 0],
+                        Stride  =>
+                          (if Spread then C.unsigned (Slice_Bytes (Index))
+                           else 0),
+                        Apart   =>
+                          (if Spread then C.unsigned (This.Apart) else 0),
+                        Routed  => (if This.Routed /= 0 then 1 else 0));
                   begin
+                     if Spread then
+                        for Member in 1 .. This.Gathers loop
+                           Shape.Members (Member - 1) :=
+                             C.unsigned (This.Members (Member));
+                        end loop;
+                     end if;
+
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((This.Rows * Row_Lanes
+                          ((Natural (Shape.Rows) * Row_Lanes
                             + Row_Width (Item, This.Packing, Count) - 1)
-                           / Row_Width (Item, This.Packing, Count)), 1, 1);
+                           / Row_Width (Item, This.Packing, Count)),
+                        1,
+                        C.unsigned (if Spread then This.Gathers else 1));
                   end;
 
                   First := First + Row_Group (Item, Count);

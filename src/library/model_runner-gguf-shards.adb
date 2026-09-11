@@ -2,7 +2,6 @@ with Ada.Unchecked_Deallocation;
 
 with Model_Runner.GGUF.Containers.Reader;
 
-
 package body Model_Runner.GGUF.Shards is
 
    package B renames Model_Runner.Bytes;

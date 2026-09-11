@@ -7,11 +7,46 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture layer is taken whole on the device.** Where the whole model
+  fits the device's budget, a mixture's expert matrices go over as the three
+  stacks the file stores and are kept once; a token's chosen experts are
+  read out of them in one dispatch a kind (the third dispatch dimension is
+  the member), the router's choosing runs on the device (`route.comp`), the
+  sum by shares with the residual folded in runs there too (`mix.comp`),
+  and the queries' and keys' head normalizations join the whole layer. A
+  Qwen3-30B-A3B token is forty-eight chained submissions with nothing on the
+  host between the router and the experts: **14.1 -> 18.1 tokens a second**
+  generating, alternated; Qwen3-8B, whose head normalizations had kept it
+  off the whole layer, 10.4 -> 11.5; TinyLlama unchanged to the digest. A
+  prompt reads its experts as one sequence each out of the same stacks,
+  routed through the same kernel, so a batch of one and a batch of six agree
+  to the bit. Two direct tests name every new operation.
+
 - **A batch's mixture is gathered by expert on the processor as well.**
   Qwen3-30B-A3B's 110-token prompt on the pool, `--repack rows`: 36 -> 71
   tokens a second, the same text.
 
+### Changed
+
+- **The two-bit decode on the device factors the minimum out of the sum**
+  and takes four quants out of a word with `unpack8`, as llama.cpp's kernel
+  does: TinyLlama Q2_K 67.7 -> 72.5 tokens a second generating. The
+  association differs, so the last bits differ; conformance is at zero
+  outside tolerance.
+
+- **The second device heap can hold weights**, opt-in through a
+  `--device-memory` past the first heap's share and capped by its own. On
+  this part a buffer there reads at the same rate, and it was measured as a
+  wash for the mixture at 8.47 GB against 11.5, because a re-upload into a
+  kept spare buffer is a memcpy here; it is what lets a model that fits
+  neither heap alone fit both.
+
 ### Fixed
+
+- **A gather routed on the device read the routing step's choice before it
+  was published.** The fence logic knew every other thing a step reads; the
+  first whole mixture layer answered garbage and then a not-a-number.
+  `This.Routed` is in the barrier's source set.
 
 - **A model is refused for not fitting the device on what a token reads, not
   on what it holds.** The refusal exists because a model larger than the

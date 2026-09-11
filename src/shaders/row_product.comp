@@ -72,12 +72,26 @@ layout(constant_id = 1) const uint GROUP = 8u;
 
 layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
+
+//  The same vectors four at a time, for a decode that takes four weights
+//  out of a word and wants their activations in one load rather than
+//  four. The same binding under a second name is how combine.comp reads
+//  its arms two ways, and a run of eight columns starts on a multiple of
+//  four wherever it is read this way.
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4 x4[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
 
 //  The residual, where this product is one a join followed: the sum is
 //  stored rather than the product, and the join's own dispatch and the
 //  buffer between it and the normalization after it both stop existing.
 layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
+
+//  A gather routed on the device: the expert numbers come out of what the
+//  routing step wrote rather than out of the push block, so that nothing
+//  between the router and the experts has to leave the device. Bound at
+//  three, which the tile kernel uses for its half-precision copy and this
+//  kernel never read.
+layout(std430, binding = 3) readonly buffer Routing { uint route[]; };
 
 layout(push_constant) uniform Shape {
     uint rows;
@@ -106,6 +120,34 @@ layout(push_constant) uniform Shape {
 
     //  Whether the residual above is added before the answer is stored.
     uint joins;
+
+    //  A round's table, which this kernel never reads: the word is here so
+    //  that what follows lies where the host's push block puts it.
+    uint table;
+
+    //  A mixture's chosen experts, gathered into one dispatch.
+    //
+    //  An expert's matrices are one slice of a stack the file stores
+    //  whole, and a token reads a few of the stack's many. Bound as one
+    //  buffer, the stack is uploaded once and kept once, and which slice a
+    //  workgroup reads is the third dispatch dimension: members names the
+    //  expert for each, stride is the bytes one expert's slice takes, and
+    //  apart is how far into the activation each member's own vector
+    //  begins -- zero where they all read the same one, as a gate and an
+    //  up projection do, and the expert's width where each reads its own,
+    //  as a projection down does. A member's answer lands rows * count
+    //  values after the one before it, which is where the host reads it.
+    //
+    //  A plain product is a gather of one: members[0] is zero, stride is
+    //  zero, and the third dimension is one, so nothing here moves.
+    uint members[16];
+    uint stride;
+    uint apart;
+
+    //  Whether the member numbers are read from the routing buffer
+    //  instead: the first Used words of what a routing step wrote for the
+    //  one position a token is.
+    uint routed;
 } shape;
 
 const uint FMT_F32    = 0u;
@@ -354,12 +396,20 @@ void main() {
     //  than reading nothing: the loops below have to have a constant trip
     //  count to unroll, and a result nobody writes out is cheaper than a
     //  branch every element.
+    //  Which member of a gather this workgroup computes, and the slice
+    //  and the vector that member reads. Zero, and nothing, for a plain
+    //  product.
+    uint member = gl_WorkGroupID.z;
+    uint which = shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+
     for (uint k = 0u; k < GROUP; ++k) {
-        from[k] = min(shape.first + k, shape.count - 1u) * shape.columns;
+        from[k] = min(shape.first + k, shape.count - 1u) * shape.columns
+                  + member * shape.apart;
         sum[k] = 0.0;
     }
 
-    uint base = shape.base + row * row_bytes();
+    uint base = shape.base + slice + row * row_bytes();
 
     if (shape.format == FMT_F32) {
         //  Words rather than bytes, which the base allows because both the
@@ -531,9 +581,25 @@ void main() {
         for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 84u;
             uint quants = at + 16u;
-            float d = half_at(at + 80u);
-            float dmin = half_at(at + 82u);
             uint col0 = b * 256u;
+
+            //  Five loads a block where there were ten. The two factors
+            //  are one word, unpacked as the pair of halves they are; the
+            //  four scale bytes this lane reads lie within eight bytes,
+            //  two words; the quants were two words already. Reading a
+            //  byte through byte_at is a word load each, and on this part
+            //  the eight-bit and the two-bit format both ran at about the
+            //  same loads a second -- which for the eight-bit one was the
+            //  memory's rate and for this one was half of it.
+            uint dm_at = at + 80u;
+            vec2 dm = unpackHalf2x16(word_of(dm_at >> 2u, (dm_at & 3u) * 8u));
+            float d = dm.x;
+            float dmin = dm.y;
+
+            uint scales_at = at + side * 8u + upper;
+            uint scales_shift = (scales_at & 3u) * 8u;
+            uint s0 = word_of(scales_at >> 2u, scales_shift);
+            uint s1 = word_of((scales_at >> 2u) + 1u, scales_shift);
 
             uint at_byte = quants + side * 32u + upper * 16u + whole * 8u;
             uint shift_at = (at_byte & 3u) * 8u;
@@ -543,25 +609,52 @@ void main() {
 
             for (uint group = 0u; group < 4u; ++group) {
                 //  The scales are consumed in the order the sub-blocks are
-                //  written, which is why this is a running index rather
-                //  than an offset computed from the element number.
-                uint which = side * 8u + group * 2u + upper;
-                uint packed = byte_at(at + which);
+                //  written: this lane's four are two bytes apart, at
+                //  side * 8 + upper and after.
+                uint packed = group < 2u
+                              ? (s0 >> (16u * group)) & 255u
+                              : (s1 >> (16u * (group - 2u))) & 255u;
 
                 float factor = d * float(packed & 15u);
                 float lowest = dmin * float(packed >> 4u);
 
-                uint into = col0 + side * 128u + group * 32u + upper * 16u;
+                uint into = col0 + side * 128u + group * 32u + upper * 16u
+                            + whole * 8u;
                 uint shift = 2u * group;
 
-                for (uint n = 0u; n < 4u; ++n) {
-                    uint q0 = ((w0 >> (n * 8u)) >> shift) & 3u;
-                    uint q1 = ((w1 >> (n * 8u)) >> shift) & 3u;
-                    uint L = whole * 8u + n;
+                //  The minimum factored out of the sum, and four quants
+                //  taken out of a word at once.
+                //
+                //  Every weight of a sub-block is factor * q - lowest, so
+                //  its eight terms against the activation are
+                //  factor * (sum of q * x) - lowest * (sum of x): one
+                //  multiply-add a weight for the first sum and one add for
+                //  the second, and the two factors applied once for the
+                //  eight. Applied a weight at a time it was a multiply, a
+                //  subtract and a multiply-add each, and the quant itself
+                //  was two shifts, a mask and a convert; unpack8 turns the
+                //  four bytes of a masked word into four numbers in one
+                //  step. This format decodes a byte into four weights, so
+                //  the decode is what a two-bit product spends its time on
+                //  -- it streamed at half the eight-bit format's rate on
+                //  this part -- and llama.cpp's own kernel factors the same
+                //  way for the same reason.
+                //
+                //  The association differs from a weight at a time, so the
+                //  last bits differ; nothing holds this kernel to the bit
+                //  against anything but itself.
+                vec4 q0 = vec4(unpack8((w0 >> shift) & 0x03030303u));
+                vec4 q1 = vec4(unpack8((w1 >> shift) & 0x03030303u));
 
-                    accumulate(into + L, factor * float(q0) - lowest);
-                    accumulate(into + L + 4u,
-                               factor * float(q1) - lowest);
+                for (uint k = 0u; k < GROUP; ++k) {
+                    uint at_x = (from[k] + into) >> 2u;
+                    vec4 x0 = x4[at_x];
+                    vec4 x1 = x4[at_x + 1u];
+
+                    float quants_x = dot(q0, x0) + dot(q1, x1);
+                    float all_x = dot(x0, vec4(1.0)) + dot(x1, vec4(1.0));
+
+                    sum[k] += factor * quants_x - lowest * all_x;
                 }
             }
         }
@@ -900,7 +993,8 @@ void main() {
             for (uint lane = 0u; lane < LANES; ++lane) {
                 whole += shares[(gl_LocalInvocationID.x + lane) * GROUP + k];
             }
-            uint out_at = (shape.first + k) * shape.rows + row;
+            uint out_at = member * shape.rows * shape.count
+                          + (shape.first + k) * shape.rows + row;
 
             y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }

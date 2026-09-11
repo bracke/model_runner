@@ -656,6 +656,26 @@ package Model_Runner.Backend.Device is
    --    rather than counting from the first row's, so the bases above are
    --    the layer's offset alone. Zero for a batch, whose rows are one
    --    session's own run of positions.
+   --  @param Query_Norm A normalization of every query head after it is
+   --    projected and before it is turned, each head over its own mean
+   --    square and by this weight, one head wide -- what Qwen3 states.
+   --    Null for an architecture without one.
+   --  @param Key_Norm The same for every key head, or null.
+   --  @param Router A mixture of experts in place of the gated block: the
+   --    router's matrix, Experts rows of the width. Present, the router
+   --    runs, the routing step chooses, the gathered products read the
+   --    chosen slices and the mixing step sums them by their shares and
+   --    adds the residual -- the whole of it on the device, for a token --
+   --    and Gate, Up and Down are not read. Absent, the gated block as
+   --    before.
+   --  @param Router_Bias A bias added to the router's scores before the
+   --    choosing, or null.
+   --  @param Gate_Stack Every expert's gate matrix, one after another.
+   --  @param Up_Stack Every expert's up matrix, the same shape.
+   --  @param Down_Stack Every expert's down matrix, one after another.
+   --  @param Feed One expert's feed width: the rows of a gate or up slice.
+   --  @param Used How many experts a position reads.
+   --  @param Experts How many experts there are.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -703,7 +723,21 @@ package Model_Runner.Backend.Device is
       Carry_In       : Boolean := False;
       Carry_Out      : Boolean := False;
       Mirror         : Boolean := True;
-      Table_At       : Natural := 0);
+      Table_At       : Natural := 0;
+      Query_Norm     : Model_Runner.Tensors.Real_Array_Access := null;
+      Key_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
+      Router         : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Router_Bias    : Model_Runner.Tensors.Real_Array_Access := null;
+      Gate_Stack     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Up_Stack       : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Down_Stack     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Feed           : Natural := 0;
+      Used           : Natural := 0;
+      Experts        : Natural := 0);
 
    --  A gated feed-forward block, whole, in one submission.
    --
@@ -762,6 +796,146 @@ package Model_Runner.Backend.Device is
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  How many experts one gathered mixture may read at once.
+   Max_Members : constant := 16;
+
+   type Member_List is array (1 .. Max_Members) of Natural;
+
+   --  A batch's choices, position by position.
+   type Choice_Array is array (Natural range <>) of Natural;
+
+   --  One expert's product over a batch, read out of the stack it is a
+   --  slice of.
+   --
+   --  The same answer Dispatch_Batch gives for the slice's own view, and a
+   --  different thing to the device: the stack is what is uploaded and
+   --  kept, once, and the slice is an offset into it. A prompt that reads
+   --  its experts this way and a token that reads them gathered share one
+   --  resident copy of each stack rather than holding a slice beside it.
+   --
+   --  @param Stack The whole stack, every expert's rows one after another.
+   --  @param Each Rows one expert's slice holds.
+   --  @param Member Which expert, counting from zero.
+   --  @param Vectors Count vectors of the stack's column count.
+   --  @param Count How many.
+   --  @param Target Receives Count results of Each rows.
+   --  @param Status Success, or what one product would have said.
+   --  @param Cancel Stop request to watch, or null for none.
+   procedure Dispatch_Slice
+     (Stack   : Model_Runner.Tensors.View;
+      Each    : Model_Runner.Numerics.Element_Count;
+      Member  : Natural;
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count   : Model_Runner.Numerics.Element_Count;
+      Target  : Model_Runner.Tensors.Real_Array_Access;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  A token's mixture, as one submission: the chosen experts' gate and
+   --  up projections gathered into one dispatch each, the gate's unit and
+   --  the multiply on the device, and the projections down gathered into
+   --  one more, each reading its own expert's gated vector.
+   --
+   --  What comes back is one vector of the width a projection down makes
+   --  for each member, in the order the members were given, unweighted:
+   --  the shares and the sum stay with the caller, in the order it has
+   --  always added them. Biases the experts carry are not applied here;
+   --  a caller whose architecture has them takes the slice-at-a-time road.
+   --
+   --  @param Gates The gate stack: Members' slices of Feed rows.
+   --  @param Ups The up stack, the same shape.
+   --  @param Downs The down stack: slices of Width rows of Feed columns.
+   --  @param Feed Rows one gate or up slice holds.
+   --  @param Width Rows one down slice holds.
+   --  @param Members Which experts, counting from zero.
+   --  @param Count How many of Members are meant.
+   --  @param Unit Which unit the gate applies, as Add_Combination takes it.
+   --  @param Vector The normalized activation every gate and up reads.
+   --  @param Target Receives Count vectors of Width.
+   --  @param Status Success, or the first refusal.
+   --  @param Cancel Stop request to watch, or null for none.
+   procedure Dispatch_Mixture
+     (Gates   : Model_Runner.Tensors.View;
+      Ups     : Model_Runner.Tensors.View;
+      Downs   : Model_Runner.Tensors.View;
+      Feed    : Model_Runner.Numerics.Element_Count;
+      Width   : Model_Runner.Numerics.Element_Count;
+      Members : Member_List;
+      Count   : Positive;
+      Unit    : Natural;
+      Vector  : Model_Runner.Tensors.Real_Array_Access;
+      Target  : Model_Runner.Tensors.Real_Array_Access;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  One expert's whole feed-forward over a batch, as one submission:
+   --  its gate and up slices over every vector, the unit and the multiply
+   --  on the device, and its slice down over what that made. The same
+   --  four steps Dispatch_Mixture records for a token's several experts,
+   --  for one expert and a batch's several positions -- so a prompt and a
+   --  token put the gate through the same kernel and agree to the bit.
+   --
+   --  @param Gates The gate stack, as in Dispatch_Mixture.
+   --  @param Ups The up stack.
+   --  @param Downs The down stack.
+   --  @param Feed Rows one gate or up slice holds.
+   --  @param Width Rows one down slice holds.
+   --  @param Member Which expert.
+   --  @param Unit Which unit the gate applies.
+   --  @param Vectors Count vectors of Width.
+   --  @param Count How many.
+   --  @param Target Receives Count vectors of Width.
+   --  @param Status Success, or the first refusal.
+   --  @param Cancel Stop request to watch, or null for none.
+   procedure Dispatch_Expert
+     (Gates   : Model_Runner.Tensors.View;
+      Ups     : Model_Runner.Tensors.View;
+      Downs   : Model_Runner.Tensors.View;
+      Feed    : Model_Runner.Numerics.Element_Count;
+      Width   : Model_Runner.Numerics.Element_Count;
+      Member  : Natural;
+      Unit    : Natural;
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count   : Model_Runner.Numerics.Element_Count;
+      Target  : Model_Runner.Tensors.Real_Array_Access;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  A batch's routing, decided on the device: the router's product over
+   --  every position and the choosing after it, as one submission, with
+   --  the choice read back -- Used expert numbers and Used shares a
+   --  position, the shares as the bits of a binary32.
+   --
+   --  Here so that a prompt chooses its experts through the same kernel a
+   --  token does. The host's softmax sums in binary64 and the device's in
+   --  binary32, and the two can differ in the last bit of a share -- or,
+   --  on a near tie, in which expert is chosen -- and a batch and a token
+   --  that chose differently would answer differently.
+   --
+   --  @param Router The router's matrix, Experts rows of the width.
+   --  @param Router_Bias A bias added before the choosing, or null.
+   --  @param Experts How many experts there are.
+   --  @param Used How many a position chooses.
+   --  @param Vectors Count normalized positions of the width.
+   --  @param Count How many.
+   --  @param Choice Receives Count * Used expert numbers, position by
+   --    position, best first.
+   --  @param Shares Receives Count * Used shares in the same order, each
+   --    position's summing to one.
+   --  @param Status Success, or the first refusal.
+   --  @param Cancel Stop request to watch, or null for none.
+   procedure Dispatch_Route
+     (Router      : Model_Runner.Tensors.View;
+      Router_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Experts     : Natural;
+      Used        : Natural;
+      Vectors     : Model_Runner.Tensors.Real_Array_Access;
+      Count       : Model_Runner.Numerics.Element_Count;
+      Choice      : out Choice_Array;
+      Shares      : out Model_Runner.Numerics.Real_Array;
+      Status      : out Model_Runner.Errors.Error_Info;
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null);
 
 private
 

@@ -490,8 +490,11 @@ cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                              [SOURCE.comp OUT.spv ...] [ROOT]
                                            # after recompiling a shader, and
-                                           # naming every one of the nine:
-                                           # the package is written whole.
+                                           # naming every one of the eighteen
+                                           # compilations: the package is
+                                           # written whole. route.comp and
+                                           # mix.comp compile with -V as
+                                           # norm, rotate and place do.
                                            # Five compile with
                                            # `glslangValidator -V`; the
                                            # matrix product needs
@@ -18921,6 +18924,108 @@ development build is ten times slower -- 1.08 tokens a second on TinyLlama
 Q2_K where the release build reads 11.4. Every published figure comes from
 `tests speed`, which the tests crate builds at release, so none was affected;
 a reading taken from `bin/` is a reading to check the profile of first.
+
+### A mixture layer taken whole on the device
+
+A generated token on the mixture was fourteen tokens a second where llama.cpp
+read thirty-four, and the whole of the difference sat between the router and
+the experts. A layer was five calls: the queries, keys and values as a
+group, attention and its projection, the router, the sixteen gate and up
+slices as a group, the eight slices down as a group -- each a submission, a
+wait, and a copy across, with the softmax, the choosing, the unit and the sum
+on the host between them. Twenty-four dispatches for the experts alone, at
+the log's own 12.5 microseconds each.
+
+**What was built, in layers.**
+
+*Stacks.* The file stores every expert's gate matrices as one tensor with the
+expert axis outermost, and the same for up and down; the loader had been
+cutting per-expert views out of them and the device had been keeping each
+slice as a matrix of its own. Where the whole model fits the device's budget
+-- `Model.Stacked`, decided once at `Prepare` -- the three stacks go over as
+three matrices and are kept once. A prompt reads its experts as slices out
+of them (`Dispatch_Expert`: gate, up, the unit, down, one submission an
+expert); a token reads them gathered.
+
+*A gathered product.* One dispatch over N slices of a stack: the third
+dispatch dimension is the member, and the slice each workgroup reads is
+named in the push block -- or, routed on the device, read out of what a
+routing step wrote. `row_product.comp` gained sixteen member words, a
+stride and an `apart` for the projections down, each of which reads its
+own expert's gated vector out of one activation. A gather of one member at
+any batch is the plain product on that slice, which is what keeps a prompt
+and a token on one resident copy of each stack.
+
+*Two kernels.* `route.comp` is the router's choosing, one invocation a
+position: a softmax over every expert, the largest few in order, the shares
+over their sum, written as words the gathered products and the sum after
+them read. `mix.comp` is the sum by shares in rank order -- `precise`, so a
+term is a product rounded and then a sum rounded, as the host's two
+instructions are -- with the layer's second residual join folded in.
+
+*Heads.* `Add_Norm` takes `Groups`: a position normalized as thirty-two
+stretches of a hundred and twenty-eight, each over its own mean square and
+by a weight one head wide, which is what Qwen3 states for its queries and
+keys and what had kept every Qwen3 layer, dense or not, off the whole-layer
+path.
+
+*The whole layer.* `Whole_Layer` takes the head normalizations and a mixture
+in place of the gated block, and its seventeen fixed step numbers are
+counted as they go. A Qwen3-30B-A3B token is forty-eight chained submissions
+with nothing on the host between the router and the experts; a Qwen3-8B
+token takes the whole layer for the first time.
+
+**The first run answered garbage and then a not-a-number.** A gather routed
+on the device reads the routing step's choice through no field the fence
+logic knew about, so nothing published it before the gate read stale words.
+`This.Routed` is in the barrier's source set now, and the reason the fixture
+did not say so is that the fixture's routing happened to be zero.
+
+**Measured**, alternated, warm, `--context-size 4096`, on the device:
+
+| | before | after |
+| --- | ---: | ---: |
+| Qwen3-30B-A3B Q2_K generating, 1302-token prompt, `--device-memory 11.5e9` | 13.59, 14.07, 14.43 t/s | **18.24, 17.90, 18.07** |
+| Qwen3-8B Q4_K_M generating | 10.42, 10.49 | **11.13, 11.47, 11.53** |
+| TinyLlama Q8_0 generating / 110-token prompt | 51.02-51.84 / 366-369 | 51.38-51.71 / 362-370 |
+
+The dense digest is unchanged -- `5abff916f9d83ca6` on the device,
+`33f48397f89839f6` on the processor -- and the seven measured-figure groups
+were re-measured in one sitting and are inside the spread of the sitting
+before. The mixture's prompt is not readable on this host: with 11.26 GB
+pinned on the device the page cache cannot hold the file beside it, and a
+run reads 2.6 GB back from disk (15,896 major faults against 501 at the
+8.47 GB budget), which is the thirty-gigabyte machine and not the code.
+
+**What holds it.** A batch of one and a batch of six through the batched
+evaluator agree to the bit, both routed on the device and gated there; the
+whole layer is held within 1e-4 of them, its normalizations summing in
+binary32 where the host's sum in binary64. A direct test records the seven
+steps against the host's own reading of the same layer and checks the
+routing step chose the same experts in the same order; another holds the
+four ways the backend reads a stack -- a slice, an expert over a batch, a
+token's experts gathered, and the routing -- against each other.
+
+**Where the rest of the 1.9 is.** Not the host: sixty samples of the main
+thread during generation, forty-five waiting on the fence, none recording.
+Not the gather: the whole layer with one expert instead of eight reads 27.7
+against 18.1, so seven experts' worth is 523 MB a token in 19 ms, 27 GB/s --
+which is what a plain Q2_K product streams at inside a token on this part
+(TinyLlama Q2_K, 420 MB in 14.8 ms) against Q4_K's 59. Not the barriers:
+two more a step, nineteen hundred a token, cost 0.9 ms. `tests device-bench`
+says where the two-bit format loses: at one vector its kernel streams at
+57 GB/s once the 64 µs call is taken off, the same as Q8_0, so it loses in
+the token and not in the kernel -- a third the bytes a matrix, so each
+dispatch is shorter and the fixed part of a dispatch a larger share of it.
+The lever is fewer, larger dispatches.
+
+**The two-bit decode, factored anyway.** The Q2_K branch sums
+`factor * (sum of q * x) - lowest * (sum of x)` a sub-block instead of
+`factor * q - lowest` a weight, takes four quants out of a word with
+`unpack8`, and reads five words a block where it read ten. TinyLlama Q2_K
+on the device 67.7 -> 72.5 t/s; the loads alone moved nothing; the mixture
+18.1 -> 18.4, inside the spread. The association differs, so the last bits
+differ, and conformance is at zero outside tolerance.
 
 ## License
 

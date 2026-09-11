@@ -5429,6 +5429,45 @@ package body Checks is
          end if;
       end;
 
+      --  A mixture's routing and its weighted sum, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/route.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/route.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Route_Digest then
+            Fail ("src/shaders/route.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/mix.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/mix.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Mix_Digest then
+            Fail ("src/shaders/mix.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  And the sixth, asked the same way.
       declare
          Found : Boolean;

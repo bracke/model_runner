@@ -73,6 +73,8 @@ package body Model_Runner.Platform.Device is
       Item.Fast := 0;
       Item.Shared := False;
       Item.Heap := 0;
+      Item.Second := -1;
+      Item.Second_Heap := 0;
    end Close;
 
    function Is_Open (Item : Context) return Boolean is (False);
@@ -125,6 +127,11 @@ package body Model_Runner.Platform.Device is
 
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
+
+   function Second_Kind (Item : Context) return Integer is (Item.Second);
+
+   function Second_Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Second_Heap);
 
    function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
    is (Item.Storage);

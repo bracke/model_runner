@@ -881,13 +881,60 @@ package body Model_Runner.Platform.Device is
 
          Item.Fast := Natural (Fast);
 
-         for Which in 1 .. Natural'Min (Natural (Room.Heap_Count),
-                                        Max_Memory_Heaps)
-         loop
-            if Room.Heaps (Which).Size > Item.Heap then
-               Item.Heap := Room.Heaps (Which).Size;
-            end if;
-         end loop;
+         declare
+            Largest : Natural := 0;
+         begin
+            for Which in 1 .. Natural'Min (Natural (Room.Heap_Count),
+                                           Max_Memory_Heaps)
+            loop
+               if Room.Heaps (Which).Size > Item.Heap then
+                  Item.Heap := Room.Heaps (Which).Size;
+                  Largest := Which;
+               end if;
+            end loop;
+
+            --  A second heap for the weights: a kind the processor writes,
+            --  out of a heap that is neither the one Upload draws from nor
+            --  the largest -- the budget is a share of the largest, and a
+            --  second share of the same heap would count it twice. The
+            --  cached one where there is a choice, taken in two passes for
+            --  the same reason Upload was: the kind wanted is further down
+            --  the list than one that would do.
+            for Pass in 1 .. 2 loop
+               exit when Item.Second >= 0;
+
+               for Which in 1 .. Natural'Min (Natural (Room.Kind_Count),
+                                              Max_Memory_Kinds)
+               loop
+                  declare
+                     Flags : constant C.unsigned := Room.Kinds (Which).Flags;
+                     Heap  : constant Natural :=
+                       Natural (Room.Kinds (Which).Heap) + 1;
+
+                     Writable : constant Boolean :=
+                       (Flags and Memory_Host_Visible) /= 0
+                       and then (Flags and Memory_Host_Coherent) /= 0;
+
+                     Cached : constant Boolean :=
+                       (Flags and Memory_Host_Cached) /= 0;
+                  begin
+                     if Item.Second < 0
+                       and then Writable
+                       and then (Cached or else Pass = 2)
+                       and then Heap /= Largest
+                       and then Heap
+                                /= Natural
+                                     (Room.Kinds (Natural (Upload) + 1).Heap)
+                                   + 1
+                       and then Heap <= Max_Memory_Heaps
+                     then
+                        Item.Second := Which - 1;
+                        Item.Second_Heap := Room.Heaps (Heap).Size;
+                     end if;
+                  end;
+               end loop;
+            end loop;
+         end;
       end;
 
       --  What one storage buffer may hold, which is what bounds one
@@ -1209,6 +1256,8 @@ package body Model_Runner.Platform.Device is
       Item.Fast := 0;
       Item.Shared := False;
       Item.Heap := 0;
+      Item.Second := -1;
+      Item.Second_Heap := 0;
       Item.Storage := 0;
    end Close;
 
@@ -1261,6 +1310,11 @@ package body Model_Runner.Platform.Device is
 
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
+
+   function Second_Kind (Item : Context) return Integer is (Item.Second);
+
+   function Second_Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Second_Heap);
 
    -------------------
    -- Storage_Limit --
