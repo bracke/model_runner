@@ -19402,6 +19402,31 @@ ramp. Seventy microseconds a layer, 3.4 ms of a 29 ms token, and no decode
 reaches it; fewer products a layer or more bytes in flight at the start of
 one would, and that is a different change.
 
+### What a token spends off the device, measured at the seams
+
+A clock at each seam of the token path, Qwen3-30B-A3B at the release
+profile: the forty-eight layers 23.4 ms against the timeline's 22.85, the
+output head 3.95 against 3.85, and **0.9 ms outside `Evaluate`, of which the
+sampler is 0.85**. At temperature zero with the default repetition penalty
+the sampler walked a hundred and fifty thousand logits twice a token, the
+second walk asking of every one whether it was in the repetition window by a
+binary search -- nine nanoseconds a token of the vocabulary on one thread.
+The window is a mask over the vocabulary now, kept in step with the sorted
+window as tokens enter and leave it, so the question is a byte read; the
+walk names its arrays once, applies the penalty in the loop, and looks for a
+logit that is not a number as it goes rather than in a pass of its own.
+1.32 -> 0.60 ms on one thread, 0.85 -> 0.50 with the pool, whose wake and
+join is most of what remains. **34.7 -> 35.6 tokens a second** after a short
+prompt and 30.2 -> 31.0 after 1302, the CLI alternated.
+
+The token's attention out of the half-precision copy was tried four ways and
+stays at 66 microseconds: the exact bundle's words over the copy -- keys
+across the lanes, values as vectors, four halves a load -- read the same;
+eight loads in flight, shorter slices and narrower bundles all read worse;
+the merge is 8 of the 66. Twenty-four workgroups each read a quarter of
+every position's kilobyte, and a copy laid out group-major is the one thing
+left untried, recorded rather than built.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

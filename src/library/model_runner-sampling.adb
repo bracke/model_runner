@@ -330,6 +330,8 @@ package body Model_Runner.Sampling is
            new History_Array (0 .. Natural'Max (Config.Repeat_Window, 1) - 1);
          Item.Ordered :=
            new History_Array (0 .. Natural'Max (Config.Repeat_Window, 1) - 1);
+         Item.Recent := new Mask_Array (0 .. Vocabulary - 1);
+         Item.Recent.all := [others => False];
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
       exception
          when Storage_Error =>
@@ -360,6 +362,9 @@ package body Model_Runner.Sampling is
       if Item.History /= null then
          Free_History (Item.History);
          Free_History (Item.Ordered);
+      end if;
+      if Item.Recent /= null then
+         Free_Mask (Item.Recent);
       end if;
       if Item.Chosen /= null then
          Free_Candidates (Item.Chosen);
@@ -399,10 +404,13 @@ package body Model_Runner.Sampling is
    --  something the run accumulated.
    --  Mirostat starts each run with its target at twice tau, which is the
    --  value the algorithm is defined to start from.
+   procedure Forget_Recent (Item : in out Sampler);
+
    procedure Reset (Item : in out Sampler) is
    begin
       Item.Used := 0;
       Item.Next_Slot := 0;
+      Forget_Recent (Item);
       Item.Ordered_Held := 0;
       Item.Mu := 2.0 * Item.Settings.Mirostat_Tau;
       Seed_Generator (Item.State, Item.Seed);
@@ -505,9 +513,24 @@ package body Model_Runner.Sampling is
    --  and never large: what it costs is bounded by the window and what it
    --  saves is bounded by the vocabulary, and the vocabulary is five
    --  hundred times the window.
+   --  The window's mask cleared of what the window held, entry by entry:
+   --  a window's worth of writes, never the vocabulary's.
+   procedure Forget_Recent (Item : in out Sampler) is
+   begin
+      if Item.Recent = null or else Item.Ordered = null then
+         return;
+      end if;
+
+      for Index in 0 .. Item.Ordered_Held - 1 loop
+         Item.Recent.all (Natural (Item.Ordered.all (Index))) := False;
+      end loop;
+   end Forget_Recent;
+
    procedure Order_History (Item : in out Sampler) is
       Held : Natural := 0;
    begin
+      Forget_Recent (Item);
+
       if Item.Ordered = null then
          Item.Ordered_Held := 0;
          return;
@@ -540,6 +563,12 @@ package body Model_Runner.Sampling is
       end loop;
 
       Item.Ordered_Held := Held;
+
+      if Item.Recent /= null then
+         for Index in 0 .. Held - 1 loop
+            Item.Recent.all (Natural (Item.Ordered.all (Index))) := True;
+         end loop;
+      end if;
    end Order_History;
 
    function In_History (Item : Sampler; Token : Token_Id) return Boolean is
@@ -548,6 +577,14 @@ package body Model_Runner.Sampling is
    begin
       if Item.Ordered = null or else Item.Ordered_Held = 0 then
          return False;
+      end if;
+
+      --  The mask answers where there is one, and the search below is
+      --  what it answers for.
+      if Item.Recent /= null
+        and then Natural (Token) in Item.Recent.all'Range
+      then
+         return Item.Recent.all (Natural (Token));
       end if;
 
       while Low <= High loop
@@ -781,6 +818,12 @@ package body Model_Runner.Sampling is
          Found : Found_Slots := [others => False];
          Where : Index_Slots := [others => 0];
          Value : Value_Slots := [others => 0.0];
+
+         --  A logit that is not a number, and the first such of the
+         --  block: the finite pass folded into this walk, so a greedy
+         --  token reads the vocabulary once rather than twice.
+         Broken : Found_Slots := [others => False];
+         Broke  : Index_Slots := [others => 0];
       end record;
 
       overriding procedure Run
@@ -795,6 +838,34 @@ package body Model_Runner.Sampling is
          --  the arithmetic can leave a value the check would fire on before
          --  anything can ask whether it did.
          pragma Suppress (Validity_Check);
+         pragma Suppress (Index_Check);
+         pragma Suppress (Range_Check);
+
+         --  What the walk has to do to a logit beyond reading it, asked
+         --  once. The repetition penalty on its own is the common case --
+         --  it is on by default -- and is applied in the loop below from
+         --  the window's mask; the rest go through Adjusted as before.
+         General : constant Boolean :=
+           Item.Bias_Used > 0
+           or else Item.Settings.DRY_Multiplier > 0.0
+           or else Item.Settings.Frequency_Penalty /= 0.0
+           or else Item.Settings.Presence_Penalty /= 0.0;
+
+         Penalty : constant Real := Item.Settings.Repeat_Penalty;
+         Recent  : constant Boolean :=
+           Penalty /= 1.0
+           and then Item.Recent /= null
+           and then Item.Ordered_Held > 0;
+
+         --  The masks, named once: an access dereference and a bounds
+         --  check a token of the vocabulary were most of what the walk
+         --  spent, and the walk was the largest thing a generated token
+         --  spent off the device -- 1.4 ms of 29 for a hundred and fifty
+         --  thousand tokens, nine nanoseconds each.
+         Masked  : Mask_Array renames Item.Masked.all;
+         Stepped : Mask_Array renames Item.Stepped.all;
+         Window  : constant Mask_Array_Access :=
+           (if Item.Recent /= null then Item.Recent else Item.Masked);
       begin
          if First > Last then
             return;
@@ -809,19 +880,36 @@ package body Model_Runner.Sampling is
                for Index in Block_First (Block, Over)
                             .. Block_Last (Block, Over)
                loop
-                  if not Item.Masked.all (Natural (Index))
-                    and then not Item.Stepped.all (Natural (Index))
-                  then
-                     declare
-                        Here : constant Real := Adjusted (Item, Logits, Index);
-                     begin
+                  declare
+                     Here : Real := Logits (Logits'First + Index);
+                  begin
+                     --  A logit that is not a number is what the finite
+                     --  pass looked for over the whole vocabulary before
+                     --  this walk began; it is found here instead, masked
+                     --  or not, and reported ahead of any answer.
+                     if not N.Is_Finite (Here) then
+                        if not Work.Broken (Block) then
+                           Work.Broken (Block) := True;
+                           Work.Broke (Block) := Index;
+                        end if;
+                     elsif not Masked (Natural (Index))
+                       and then not Stepped (Natural (Index))
+                     then
+                        if General then
+                           Here := Adjusted (Item, Logits, Index);
+                        elsif Recent and then Window.all (Natural (Index))
+                        then
+                           Here := (if Here > 0.0 then Here / Penalty
+                                    else Here * Penalty);
+                        end if;
+
                         if not Seen or else Here > Top then
                            Seen := True;
                            Best := Index;
                            Top := Here;
                         end if;
-                     end;
-                  end if;
+                     end if;
+                  end;
                end loop;
 
                Work.Found (Block) := Seen;
@@ -850,6 +938,18 @@ package body Model_Runner.Sampling is
       if not Whole then
          Work.Run (0, Blocks - 1);
       end if;
+
+      --  A logit that is not a number anywhere, reported first and in
+      --  block order, as the finite pass reported it.
+      for Block in 0 .. Blocks - 1 loop
+         if Work.Broken (Block) then
+            Token := Model_Runner.Tokenizer.No_Token;
+            Status := E.Make (E.Sampling_Non_Finite_Logit);
+            E.Add_Integer
+              (Status, "token", Long_Long_Integer (Work.Broke (Block)));
+            return;
+         end if;
+      end loop;
 
       --  Combined in block order, and only a strictly higher value takes
       --  the answer, so a tie goes to the lowest token identifier exactly
@@ -1103,6 +1203,15 @@ package body Model_Runner.Sampling is
       end if;
 
       --  2  non-finite logits, in blocks so that a team can take them.
+      --  Greedy mode short-circuits the whole probabilistic pipeline and
+      --  does not consume random state. Its walk looks for a logit that
+      --  is not a number as it goes, so the pass below is not made for
+      --  it: the vocabulary is read once a token, not twice.
+      if Is_Greedy (Item.Settings) then
+         Select_Greedy (Item, Logits, Token, Status, Across);
+         return;
+      end if;
+
       if Across /= null then
          Across.all.Divide
            (Blocks, Finite'Unchecked_Access, Whole, Cost => Over);
@@ -1122,13 +1231,6 @@ package body Model_Runner.Sampling is
             return;
          end if;
       end loop;
-
-      --  Greedy mode short-circuits the whole probabilistic pipeline and does
-      --  not consume random state.
-      if Is_Greedy (Item.Settings) then
-         Select_Greedy (Item, Logits, Token, Status, Across);
-         return;
-      end if;
 
       --  3  forbidden-token masks, and 4  repetition penalty. Both act on the
       --  logits in token order, before any reordering, so that the history

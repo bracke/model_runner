@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The sampler's repetition window is a mask over the vocabulary**, so
+  asking whether a token is in it is a byte read rather than a binary
+  search, and the greedy walk applies the penalty in its loop and finds
+  a non-finite logit as it goes rather than in a pass of its own: 0.85
+  -> 0.5 ms a token, Qwen3-30B-A3B on the device 34.7 -> 35.6 tokens a
+  second after a short prompt. A token's attention out of the
+  half-precision copy was tried four ways at 66 microseconds and left.
+
 - **The three-bit row product is dealt across the lanes as the two-bit
   one is** -- four loads a block a lane where there were twenty -- and
   measured no faster: a token's products read at the memory's rate plus

@@ -457,6 +457,16 @@ private
       --  couple of thousand operations once a token.
       Ordered    : History_Array_Access := null;
       Ordered_Held : Natural := 0;
+
+      --  And the same window as a mask over the vocabulary, so that the
+      --  question is a byte read, as the forbidden mask's is. The binary
+      --  search was seven unpredictable branches a token of the
+      --  vocabulary, and the greedy walk over a hundred and fifty
+      --  thousand of them measured 1.5 ms of a 29 ms token on the device
+      --  -- the largest thing a generated token spent off it. Kept in
+      --  step with Ordered: what leaves the window is cleared and what
+      --  enters it is set, a window's worth of writes a token.
+      Recent     : Mask_Array_Access := null;
       Masked     : Mask_Array_Access := null;
 
       --  The masks that belong to one step, kept apart from the permanent

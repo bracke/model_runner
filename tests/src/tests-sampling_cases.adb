@@ -461,6 +461,69 @@ package body Tests.Sampling_Cases is
       S.Close (Sampler);
    end Repetition_Penalty_Applies;
 
+   --  A token that has left the window is penalized no longer, and a reset
+   --  empties the window whole.
+   --
+   --  The window is asked about through a mask over the vocabulary now,
+   --  kept in step with the sorted window as tokens enter and leave it,
+   --  and a mask that was set and never cleared would go on penalizing a
+   --  token the window forgot. Two entries wide, so that the third token
+   --  recorded pushes the first out; greedy, so the answer is the logit
+   --  and nothing else.
+   procedure A_Token_Leaving_The_Window_Is_Penalized_No_Longer
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Config : S.Configuration := S.Greedy_Configuration;
+      Logits : constant Logit_Vector :=
+        [0 => 4.0, 1 => 3.0, 2 => 2.0, 3 => 1.0, others => -10.0];
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+   begin
+      Config.Repeat_Penalty := 10.0;
+      Config.Repeat_Window := 2;
+
+      S.Open (Sampler, Config, Vocabulary, 11, Status);
+      Assert (E.Is_Ok (Status), "sampler did not open");
+
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 0,
+              "the highest logit was not selected first");
+
+      --  Token 0 in the window: token 1 wins.
+      S.Record_Token (Sampler, 0);
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 1,
+              "the repeated token was not demoted");
+
+      --  Tokens 1 and 2 recorded after it: the window is two wide, so
+      --  token 0 has left it and wins again, while 1 and 2 are held down.
+      S.Record_Token (Sampler, 1);
+      S.Record_Token (Sampler, 2);
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 0,
+              "a token that left the window was still penalized: chose"
+              & Vocab.Token_Id'Image (Token));
+
+      --  And with 0 back in the window beside 2, token 3 is the best of
+      --  what is not: 1 left when 0 came back.
+      S.Record_Token (Sampler, 0);
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 1,
+              "the window did not move on: chose"
+              & Vocab.Token_Id'Image (Token));
+
+      --  A reset forgets everything at once.
+      S.Reset (Sampler);
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 0,
+              "a reset did not empty the window: chose"
+              & Vocab.Token_Id'Image (Token));
+
+      S.Close (Sampler);
+   end A_Token_Leaving_The_Window_Is_Penalized_No_Longer;
+
    --  Presence subtracts once however often; frequency subtracts every time.
    --
    --  The two are told apart by counting. A token said twice must be pushed
@@ -2763,6 +2826,10 @@ package body Tests.Sampling_Cases is
         (T, Mirostat_Steers_Towards_Its_Target'Access,
          "mirostat moves its target by how surprising each choice was, and "
          & "settles near the surprise it was asked for");
+      Register_Routine
+        (T, A_Token_Leaving_The_Window_Is_Penalized_No_Longer'Access,
+         "a token that has left the repetition window is penalized no "
+         & "longer, and a reset empties the window whole");
       Register_Routine
         (T, Penalties_Reach_The_Greedy_Path'Access,
          "the penalties act at temperature zero, which is where a caller "
