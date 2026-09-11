@@ -216,8 +216,10 @@ package Model_Runner.Backend.Device is
    --  A heading a shape -- how many runs, how many steps, how many
    --  positions or what range of them, and the mean microseconds a run
    --  cost the device from its first dispatch to its last -- then a line
-   --  a step with the mean microseconds and the share of the run it was.
-   --  See Products.Timeline for what a step's interval means where steps
+   --  a step with the mean microseconds and the share of the run it was,
+   --  and last the whole: the milliseconds the device was busy across
+   --  every run, which against a wall clock is the host's share. See
+   --  Products.Timeline for what a step's interval means where steps
    --  overlap.
    --
    --  @return The report, or a line saying nothing was kept.

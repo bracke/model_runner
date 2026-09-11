@@ -276,8 +276,35 @@ package body Model_Runner.Backend.Device is
                  & Ada.Characters.Latin_1.LF);
       end if;
 
+      --  And the whole of it: what the device was busy for across every
+      --  run summed, against which a wall clock says what the host's
+      --  share was.
+      declare
+         Busy : Float := 0.0;
+         Runs : Natural := 0;
+      begin
+         for Shape in 1 .. Shapes_Held loop
+            Busy := Busy + Shapes (Shape).Whole;
+            Runs := Runs + Shapes (Shape).Runs;
+         end loop;
+
+         Append (Text, "device busy " & Micro (Busy / 1000.0) & " ms in "
+                 & Plain (Runs) & " runs" & Ada.Characters.Latin_1.LF);
+      end;
+
       return To_String (Text);
    end Timeline_Report;
+
+   --  A sequence run on the engine, its answer left in Landing. Declared
+   --  here because the single product below is one of these.
+   procedure Run_Sequence
+     (Steps  : Products.Sequence;
+      Vector : T.Real_Array_Access;
+      Count  : Positive;
+      Wanted : Model_Runner.Numerics.Element_Count;
+      Asked  : Interfaces.Unsigned_64;
+      Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference);
 
    function Describe return Capabilities is
       Result : Capabilities;
@@ -618,8 +645,6 @@ package body Model_Runner.Backend.Device is
    is
       Packing   : Products.Weight_Packing;
       Known     : Boolean;
-      Ok        : Boolean;
-      Cancelled : Boolean := False;
 
       --  The largest buffer this product asks the device for, which is what
       --  a refusal has to be able to name.
@@ -688,40 +713,53 @@ package body Model_Runner.Backend.Device is
          --  matrix alone: a device reading the weights where they lie is
          --  handed a page-aligned range, and a range described by the matrix
          --  alone would be one nobody could check the ends of.
+         --  As a sequence of one, which computes what the single call
+         --  computes to the bit and is what the timeline sees: a model's
+         --  output head is the one product a token runs outside its
+         --  layers, and a token's device time was read without it.
          declare
             Storage : Model_Runner.Bytes.Byte_Array (1 .. Weight.Span)
               with Import, Address => Weight.Base;
+
+            Steps  : Products.Sequence;
+            Added  : Boolean;
+            Wanted : constant Model_Runner.Numerics.Element_Count :=
+              Count * Weight.Rows;
          begin
-            Products.Multiply
-              (Engine, Storage, Weight.Offset, Packing,
-               Natural (Weight.Rows), Natural (Weight.Columns),
-               Vectors.all, Positive (Count), Target.all, Ok, Cancelled,
-               Key => Storage (Storage'First + Weight.Offset)'Address,
-               Cancel => Cancel);
+            --  A stop already standing costs the device nothing, and it
+            --  is answered before anything is uploaded or recorded, as
+            --  the single call answered it; one that arrives during the
+            --  wait is answered between its slices.
+            if Model_Runner.Cancellation."/=" (Cancel, null)
+              and then Cancel.all.Is_Requested
+            then
+               Status := E.Make (E.Generation_Cancelled);
+               return;
+            end if;
+
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => Storage (Storage'First + Weight.Offset)'Address);
+
+            if not Added then
+               Declined (Status, Asked);
+               return;
+            end if;
+
+            Run_Sequence
+              (Steps, Vectors, Positive (Count), Wanted, Asked, Status,
+               Cancel);
+
+            if E.Is_Ok (Status) then
+               Target.all (Target.all'First .. Target.all'First + Wanted - 1)
+                 := Landing.all
+                      (Landing.all'First .. Landing.all'First + Wanted - 1);
+            end if;
+
          end;
       end;
-
-      --  Asked to stop comes before could not compute, because it is the
-      --  truer answer: the product did reach the device and did run there.
-      if Cancelled then
-         Status := E.Make (E.Generation_Cancelled);
-      elsif Products.Is_Stalled (Engine) then
-         --  The device did not finish inside the whole bound. Its own code
-         --  rather than the one for a machine with no device, which is what
-         --  this used to borrow: there is a device, nothing about this model
-         --  or this request was wrong, and what a caller can do about it --
-         --  wait for whatever else is using the device, or say they are
-         --  willing to wait longer -- is not what the other message
-         --  suggests. A diagnostic that sends a reader the wrong way is
-         --  worse than a vague one.
-         Status := E.Make (E.Backend_Device_Stalled);
-         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
-                     E.Param_Identifier);
-         E.Add_Integer
-           (Status, "limit", Long_Long_Integer (Opened_Patience));
-      elsif not Ok then
-         Declined (Status, Asked);
-      end if;
    end Compute;
 
    --------------

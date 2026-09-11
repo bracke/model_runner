@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The timeline reports the device's busy time**, summed over every run,
+  and the output head runs as a sequence of one so the timeline sees it:
+  a Qwen3-30B-A3B token is 26.5 ms of device in a 28.5 ms wall, the host's
+  share 7 per cent. A batch no longer copies a whole layer's keys and
+  values into a host copy that is owed anyway: the 1302-token prompt 5.68
+  -> 5.15 s. A token's cache rows are owed rather than read back a layer
+  at a time, as a batch's are.
+
 - **A batch's mixture on the device is one sequence.** `invert.comp`
   turns the routing inside out into each expert's run of positions; the
   row and matrix kernels have a listed mode whose third dispatch axis is

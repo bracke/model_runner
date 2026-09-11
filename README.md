@@ -19272,6 +19272,23 @@ device's own time is 4.2 of the 5.5 seconds now, and the host's share --
 the rotary table computed a layer a batch, and the reading out -- is the
 next question.
 
+### The host's share, priced
+
+The timeline read a token as 23 ms of device time against 29 of wall, and
+the section before called the rest the host's. Mostly it was the output
+head -- 151936 rows at Q6_K, 255 MB -- which ran as a single call outside
+every sequence and so outside the timeline. It goes as a sequence of one
+now, the same bits, and the report ends with the whole: **device busy 26.5
+ms of a 28.5 ms token** (48 layers at 472 µs, the head at 3.85 ms), the
+host's share 7 per cent. A prompt is 88 per cent the device's; the batched
+path was copying keys and values that had not come back into a host copy
+that was owed anyway, 0.83 s of a 1302-token prompt, gone: 5.68 → 5.15 s.
+
+What is left is the device's, and on a prompt it is one thing: the
+listed expert products decode each expert's rows into the matrix
+instruction's operand at 29 G weights a second, the rate the dense products
+decode at too. That decode is the lever now, on both kinds of model.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -9364,37 +9364,64 @@ package body Model_Runner.Llama is
       --  The host's own copy of the cache, brought up to date out of the
       --  device's for the layers that did not send it back one at a time.
       --  One position apiece, which is what a token writes.
-      for Index in Source.Layers.all'Range loop
-         if Deferred (Index) then
-            declare
-               At_Key : constant Element_Count :=
-                 Keys_At (Item, Natural (Index))
-                 + Cell_Of (Item, Natural (Index), Reserved) * KV_Width;
-
-               At_Val : constant Element_Count :=
-                 Values_At (Item, Natural (Index))
-                 + Cell_Of (Item, Natural (Index), Reserved) * V_Width;
-
-               Read : Boolean;
-            begin
-               Model_Runner.Backend.Device.Get_Cache
-                 (Block_Base (Item) + At_Key,
-                  Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
-
-               if Read then
-                  Model_Runner.Backend.Device.Get_Cache
-                    (Block_Base (Item) + Item.Keys.all'Length + At_Val,
-                     Item.Values.all (At_Val .. At_Val + V_Width - 1), Read);
-               end if;
-
-               if not Read then
-                  Item.Current := Failed;
-                  Status := E.Make (E.Backend_Closed);
-                  return;
-               end if;
-            end;
+      --  The host's copy of what the device wrote, owed rather than read:
+      --  where every layer went whole, the position is recorded as owed
+      --  and fetched when something is about to read it, as a batch's
+      --  are. Reading it here was two reads a layer through a mapping the
+      --  device's memory answers a word at a time -- five milliseconds of
+      --  a twenty-nine millisecond token, the device's own clock said, for
+      --  bytes nothing read in a run that neither saves its context nor
+      --  rolls it. A layer that did not go whole wrote the host's copy
+      --  itself, so a mix of the two is read as it was.
+      declare
+         Owing : constant Boolean :=
+           (for all Index in Source.Layers.all'Range => Deferred (Index));
+      begin
+         if Owing then
+            if Item.Owed_Count = 0 then
+               Item.Owed_At := Natural (Reserved);
+               Item.Owed_Count := 1;
+            else
+               Item.Owed_Count :=
+                 Natural'Max (Item.Owed_At + Item.Owed_Count,
+                              Natural (Reserved) + 1)
+                 - Item.Owed_At;
+            end if;
          end if;
-      end loop;
+
+         for Index in Source.Layers.all'Range loop
+            if Deferred (Index) and then not Owing then
+               declare
+                  At_Key : constant Element_Count :=
+                    Keys_At (Item, Natural (Index))
+                    + Cell_Of (Item, Natural (Index), Reserved) * KV_Width;
+
+                  At_Val : constant Element_Count :=
+                    Values_At (Item, Natural (Index))
+                    + Cell_Of (Item, Natural (Index), Reserved) * V_Width;
+
+                  Read : Boolean;
+               begin
+                  Model_Runner.Backend.Device.Get_Cache
+                    (Block_Base (Item) + At_Key,
+                     Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
+
+                  if Read then
+                     Model_Runner.Backend.Device.Get_Cache
+                       (Block_Base (Item) + Item.Keys.all'Length + At_Val,
+                        Item.Values.all (At_Val .. At_Val + V_Width - 1),
+                        Read);
+                  end if;
+
+                  if not Read then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Closed);
+                     return;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end;
 
       if E.Is_Error (Status) then
          Item.Current := Failed;
@@ -10563,7 +10590,14 @@ package body Model_Runner.Llama is
             --  Rotate at each token's own position, then publish every key
             --  and value before any attention reads them: token K of the
             --  batch attends to the earlier tokens of the same batch.
-            for Which in 0 .. Count - 1 loop
+            --
+            --  Not for a layer the device took whole and whose rows are
+            --  owed: the device turned them and holds them, nothing came
+            --  back to copy, and a copy of what did not come back is a
+            --  copy of nothing -- eleven microseconds a position a layer,
+            --  which was a seventh of a long prompt.
+            for Which in 0 .. (if Deferred (Index) then -1 else Count - 1)
+            loop
                declare
                   Q_At : constant Element_Count := Slot (Which, Wide);
                   KV_At : constant Element_Count := Slot (Which, KV_Width);
