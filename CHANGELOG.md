@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The three-bit row product shares a super-block across the row's
+  lanes**, as the four- and two-bit ones do, reading words rather than a
+  byte a quant and a byte a mask bit: `q3_K` products 26-33 -> 46-51 GB/s
+  on the device, the same bits on every published row. Qwen3-30B-A3B
+  21.0 -> 24.6 tokens a second at 1302 positions and 26.0 -> 32.2 from a
+  short prompt, against llama.cpp's 34.4.
+
 - **A device timeline.** `tests speed --device-timeline` has the device
   stamp every step of every sequence with its own clock -- a timestamp
   query before the first dispatch and after each step's last -- and sums

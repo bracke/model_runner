@@ -19185,6 +19185,34 @@ What the timeline says next: at 1302 positions attention is 221 µs of an
 read 26-33 GB/s where the four-, six- and eight-bit ones read 55-62. Those
 two steps are 39 per cent of the layer after the router.
 
+### The three-bit row product shared across the lanes
+
+The timeline's second finding: the `q3_K` products read 26-33 GB/s where
+`q4_K` read 56, and they were 39 per cent of a mixture layer after the
+router. The branch was a lane a super-block, every quant and every mask bit
+a byte load -- about seventy loads for thirty-two elements, from eight
+addresses a hundred and ten bytes apart. It shares a super-block across the
+row's eight lanes now, as the four- and two-bit branches do: a lane takes a
+half and a group, its quants and mask bits are sixteen consecutive words,
+the scales are three words read once, and the weight is formed four at a
+time out of a quant word and a mask word. The same bits on every published
+device row; conformance clean at the same tolerances.
+
+| | before | after |
+| --- | ---: | ---: |
+| down gather 2048x768 q3_K, a layer | 211 µs | 106 µs (51 GB/s) |
+| out projection 2048x4096 q3_K | 107 | 77 |
+| a Qwen3-30B-A3B layer, one position | 672 | 517 |
+| 1302-token prompt | 21.04, 21.12, 20.96 t/s | 24.70, 24.60, 24.59 |
+| short prompt | 26.12, 25.97, 26.07 | 32.16, 32.13, 32.35 |
+
+llama-bench's tg64 for this file is 34.4, so the gap is 1.07 where it was
+1.55 this morning. The two-bit branch was to be next and is not: its two
+gathers together read 57 GB/s, which is the four-bit rate. At 1302 positions
+attention is 31 per cent of the layer now, at 24 GB/s over the keys and
+values, and the router's binary32 product is 8 per cent on too few
+workgroups; those are the next two.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

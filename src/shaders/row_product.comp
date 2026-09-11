@@ -365,20 +365,6 @@ void sub_block_scale(uint at, uint index, out uint factor, out uint lowest) {
     }
 }
 
-//  A Q3_K sub-block scale: four low bits in one of the first eight bytes and
-//  two high bits in one of the last four, made signed by subtracting
-//  thirty-two.
-int q3k_scale(uint at, uint which) {
-    uint group = which / 4u;
-    uint place = which % 4u;
-
-    uint low_byte = byte_at(at + (group % 2u == 0u ? place : place + 4u));
-    uint low = group < 2u ? (low_byte & 15u) : (low_byte >> 4u);
-    uint top = (byte_at(at + place + 8u) >> (2u * group)) & 3u;
-
-    return int(low) + 16 * int(top) - 32;
-}
-
 void main() {
     //  Every lane of a cluster takes the same row, so what follows is
     //  uniform across a cluster.
@@ -665,39 +651,79 @@ void main() {
         //  absence that lowers the value: set leaves the two low bits alone,
         //  clear takes four away, which is what makes the range minus four
         //  to three rather than zero to seven.
+        //
+        //  Every lane of the row takes a slice of the same super-block, as
+        //  the two- and four-bit formats do: a lane a block read the
+        //  quants and the mask a byte at a time from eight addresses a
+        //  hundred and ten bytes apart, and the device's own clock read
+        //  this format at 26 to 33 GB/s where the four-bit one read 56.
+        //  Eight lanes take a half and a group each -- thirty-two elements,
+        //  two sub-blocks -- so a lane's quants are eight consecutive words
+        //  and the mask's are eight more, and the four lanes of a half read
+        //  the same words. The scales are three words a block, read once.
+        //
+        //  The weight is factor * (q + 4 * lifted - 4), formed four at a
+        //  time out of a quant word and a mask word by unpack8; the
+        //  association differs from a weight at a time, and nothing holds
+        //  this kernel to the bit against anything but itself.
         uint blocks = shape.columns / 256u;
 
-        for (uint b = part; b < blocks; b += LANES) {
+        uint side = part >> 2u;
+        uint group = part & 3u;
+        uint shift = 2u * group;
+        uint bit = side * 4u + group;
+
+        for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 110u;
-            uint quants = at + 32u;
-            uint scales = at + 96u;
-            float d = half_at(at + 108u);
             uint col0 = b * 256u;
 
-            for (uint side = 0u; side < 2u; ++side) {
-                for (uint group = 0u; group < 4u; ++group) {
-                    for (uint upper = 0u; upper < 2u; ++upper) {
-                        uint which = side * 8u + group * 2u + upper;
-                        float factor = d * float(q3k_scale(scales, which));
+            //  A hundred and ten bytes is not a whole number of words, so
+            //  every other block begins half way into one; word_of takes
+            //  the shift once a run.
+            uint d_at = at + 108u;
+            float d = unpackHalf2x16(word_of(d_at >> 2u, (d_at & 3u) * 8u)).x;
 
-                        uint at_byte = quants + side * 32u + upper * 16u;
-                        uint mask_at = at + upper * 16u;
-                        uint into = col0 + side * 128u + group * 32u
-                                    + upper * 16u;
-                        uint shift = 2u * group;
+            uint scales_at = at + 96u;
+            uint scales_shift = (scales_at & 3u) * 8u;
+            uint sw0 = word_of(scales_at >> 2u, scales_shift);
+            uint sw1 = word_of((scales_at >> 2u) + 1u, scales_shift);
+            uint sw2 = word_of((scales_at >> 2u) + 2u, scales_shift);
 
-                        //  One bit of the mask serves one sub-block group,
-                        //  and the bit advances across the whole block
-                        //  rather than restarting at its middle.
-                        uint bit = 1u << (side * 4u + group);
+            uint quants_at = at + 32u + side * 32u;
+            uint quants_shift = (quants_at & 3u) * 8u;
+            uint mask_shift = (at & 3u) * 8u;
 
-                        for (uint L = 0u; L < 16u; ++L) {
-                            int low =
-                              int((byte_at(at_byte + L) >> shift) & 3u);
-                            bool lifted = (byte_at(mask_at + L) & bit) != 0u;
-                            accumulate(into + L,
-                                       factor * float(lifted ? low : low - 4));
-                        }
+            for (uint upper = 0u; upper < 2u; ++upper) {
+                //  This sub-block's scale: four low bits in one of the
+                //  first eight bytes and two high bits in one of the last
+                //  four, made signed by subtracting thirty-two, out of
+                //  the three words above.
+                uint sub = side * 8u + group * 2u + upper;
+                uint s_group = sub >> 2u;
+                uint place = sub & 3u;
+                uint low_index = (s_group & 1u) == 0u ? place : place + 4u;
+                uint low_byte = low_index < 4u
+                                ? (sw0 >> (8u * low_index)) & 255u
+                                : (sw1 >> (8u * (low_index - 4u))) & 255u;
+                uint low = s_group < 2u ? (low_byte & 15u) : (low_byte >> 4u);
+                uint top = ((sw2 >> (8u * place)) >> (2u * s_group)) & 3u;
+                float factor = d * float(int(low) + 16 * int(top) - 32);
+
+                uint into = col0 + side * 128u + group * 32u + upper * 16u;
+
+                for (uint j = 0u; j < 4u; ++j) {
+                    uint q_word = word_of((quants_at >> 2u) + upper * 4u + j,
+                                          quants_shift);
+                    uint m_word = word_of((at >> 2u) + upper * 4u + j,
+                                          mask_shift);
+
+                    vec4 q = vec4(unpack8((q_word >> shift) & 0x03030303u))
+                             + 4.0 * vec4(unpack8((m_word >> bit) & 0x01010101u))
+                             - 4.0;
+
+                    for (uint k = 0u; k < GROUP; ++k) {
+                        uint at_x = (from[k] + into + j * 4u) >> 2u;
+                        sum[k] += factor * dot(q, x4[at_x]);
                     }
                 }
             }
