@@ -7063,20 +7063,32 @@ package body Model_Runner.Llama is
         (Item.Accounting, Mem.Template_Buffers,
          Item.Plan.Rendering_Bytes + Item.Plan.Stop_Bytes);
 
-      if Session_Bounds.Max_Session_Bytes /= 0
-        and then Item.Plan.Total_Resident > Session_Bounds.Max_Session_Bytes
-      then
-         Status := E.Make (E.Memory_Limit_Exceeded);
-         E.Add_Text (Status, "category", "kv_cache", E.Param_Identifier);
-         E.Add_Integer
-           (Status, "requested",
-            Long_Long_Integer (Item.Plan.Total_Resident), E.Param_Bytes);
-         E.Add_Integer
-           (Status, "limit",
-            Long_Long_Integer (Session_Bounds.Max_Session_Bytes),
-            E.Param_Bytes);
-         return;
-      end if;
+      --  What the session holds, counting the cache twice on a device:
+      --  the device keeps its own copy of the cache beside the host's,
+      --  and the host's memory is what both come out of on an integrated
+      --  part.
+      declare
+         Needed : constant Interfaces.Unsigned_64 :=
+           Item.Plan.Total_Resident
+           + (if Model_Runner.Backend."="
+                   (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+              then Item.Plan.KV_Cache_Bytes else 0);
+      begin
+         if Session_Bounds.Max_Session_Bytes /= 0
+           and then Needed > Session_Bounds.Max_Session_Bytes
+         then
+            Status := E.Make (E.Memory_Limit_Exceeded);
+            E.Add_Text (Status, "category", "kv_cache", E.Param_Identifier);
+            E.Add_Integer
+              (Status, "requested", Long_Long_Integer (Needed),
+               E.Param_Bytes);
+            E.Add_Integer
+              (Status, "limit",
+               Long_Long_Integer (Session_Bounds.Max_Session_Bytes),
+               E.Param_Bytes);
+            return;
+         end if;
+      end;
 
       --  How the cache is cut up, before anything is allocated.
       --

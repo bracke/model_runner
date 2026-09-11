@@ -236,6 +236,18 @@ package body Model_Runner.Platform is
          return False;
    end Byte_Products;
 
+   ---------------------
+   -- Physical_Memory --
+   ---------------------
+
+   function Physical_Memory return Interfaces.Unsigned_64 is
+   begin
+      return Model_Runner.Platform.Topology.Physical_Memory;
+   exception
+      when others =>
+         return 0;
+   end Physical_Memory;
+
    ----------------
    -- Core_Count --
    ----------------

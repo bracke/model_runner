@@ -65,4 +65,34 @@ package body Model_Runner.Platform.Topology is
          return 0;
    end Physical_Cores;
 
+   ---------------------
+   -- Physical_Memory --
+   ---------------------
+
+   --  hw.memsize, asked the way the cores are.
+   function Physical_Memory return Interfaces.Unsigned_64 is
+      Name   : constant Interfaces.C.char_array :=
+        Interfaces.C.To_C ("hw.memsize");
+      Value  : aliased Interfaces.Unsigned_64 := 0;
+      Length : aliased Interfaces.C.size_t := Value'Size / 8;
+      Result : Interfaces.C.int;
+   begin
+      Result :=
+        Sysctl_By_Name
+          (Name    => Name,
+           Old_P   => Value'Address,
+           Old_Len => Length'Access,
+           New_P   => System.Null_Address,
+           New_Len => 0);
+
+      if Result /= 0 or else Length /= Value'Size / 8 then
+         return 0;
+      end if;
+
+      return Value;
+   exception
+      when others =>
+         return 0;
+   end Physical_Memory;
+
 end Model_Runner.Platform.Topology;

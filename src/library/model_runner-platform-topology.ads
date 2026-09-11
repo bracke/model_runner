@@ -1,3 +1,5 @@
+with Interfaces;
+
 --  How the host's processors map onto physical cores.
 --
 --  Only the answer differs between hosts, and only the way of asking is
@@ -19,5 +21,15 @@ private package Model_Runner.Platform.Topology is
    --  @param Processors Processors the host reports, as an upper bound.
    --  @return Core count in 1 .. Processors, or 0 when unknown.
    function Physical_Cores (Processors : Positive) return Natural;
+
+   --  Bytes of memory the host has, where the host will say.
+   --
+   --  Zero means the host was not asked, could not be asked, or answered
+   --  something this did not understand, exactly as for the cores: the
+   --  caller bounds nothing by it then, which is what it did before any of
+   --  this was here.
+   --
+   --  @return Bytes of physical memory, or 0 when unknown.
+   function Physical_Memory return Interfaces.Unsigned_64;
 
 end Model_Runner.Platform.Topology;

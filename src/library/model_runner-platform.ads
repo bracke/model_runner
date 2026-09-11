@@ -1,3 +1,4 @@
+with Interfaces;
 --  Host services used by the presentation layer and the model loader.
 --
 --  This is the only part of the crate that talks to the operating system
@@ -72,6 +73,18 @@ package Model_Runner.Platform is
    --
    --  @return Core count, at least 1 and never above Processor_Count.
    function Core_Count return Positive;
+
+   --  Bytes of memory the host has, or zero where it will not say.
+   --
+   --  What the command bounds a session by when the caller names no
+   --  limit: a model's declared context is a training fact and not a
+   --  sizing one -- a forty-thousand-token context is eight gigabytes of
+   --  cache on a thirty-billion-parameter mixture, held on the host and
+   --  again on a device -- and a session that would take most of the
+   --  machine is better refused with both numbers than started.
+   --
+   --  @return Bytes, or 0 when the host cannot be asked.
+   function Physical_Memory return Interfaces.Unsigned_64;
 
    --  Whether this processor offers the wider vector instructions -- the
    --  per-lane variable shift and the gather -- that four of the fifteen

@@ -26,6 +26,13 @@ Keep a Changelog and the project uses semantic versioning.
   Qwen3-30B-A3B's 110-token prompt on the pool, `--repack rows`: 36 -> 71
   tokens a second, the same text.
 
+- **A session is bounded by half the host's memory** where no
+  `--memory-limit` is named, the device's copy of the cache counted with the
+  host's. A run at a mixture's declared 40,960-token context, which had
+  killed the desktop twice, is refused with both numbers before a token.
+  `Platform.Physical_Memory` reads `MemTotal` on Linux and `hw.memsize` on
+  macOS.
+
 ### Changed
 
 - **The two-bit decode on the device factors the minimum out of the sum**

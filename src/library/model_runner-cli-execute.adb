@@ -355,6 +355,15 @@ package body Model_Runner.CLI.Execute is
    --  KV cache, which grows with the context and is the largest thing it
    --  allocates, so a caller asking for a hundred megabytes could be given a
    --  model inside it and then a session of any size at all.
+   --
+   --  Where the caller names no limit, half of what the host has. A
+   --  model's declared context is a training fact and not a sizing one:
+   --  Qwen3-30B-A3B declares 40,960 tokens, which is 8.5 GB of cache, held
+   --  on the host and again on a device, on a machine with 30 GB -- and
+   --  the file's own pages and the weights on the device beside it. Twice
+   --  that was the desktop killed for want of memory before anything was
+   --  generated. Refused with both numbers, the answer is --context-size
+   --  or --memory-limit, which is a decision rather than an accident.
    function Session_Bounds
      (Item : Opt.Command) return Model_Runner.Limits.Session_Limits
    is
@@ -363,6 +372,8 @@ package body Model_Runner.CLI.Execute is
    begin
       if Item.Memory_Limit /= 0 then
          Result.Max_Session_Bytes := Item.Memory_Limit;
+      elsif Model_Runner.Platform.Physical_Memory > 0 then
+         Result.Max_Session_Bytes := Model_Runner.Platform.Physical_Memory / 2;
       end if;
       return Result;
    end Session_Bounds;

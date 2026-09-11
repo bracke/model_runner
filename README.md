@@ -19027,6 +19027,32 @@ on the device 67.7 -> 72.5 t/s; the loads alone moved nothing; the mixture
 18.1 -> 18.4, inside the spread. The association differs, so the last bits
 differ, and conformance is at zero outside tolerance.
 
+### A session bounded by the host
+
+A model's declared context is a training fact and not a sizing one.
+Qwen3-30B-A3B declares 40,960 tokens, which is 8.5 GB of cache, held on the
+host and again on a device, on a machine with 30 GB -- with the file's own
+pages and the weights on the device beside it. Twice on one day that was the
+desktop killed for want of memory before a token was generated, both times by
+a run that named no `--context-size`.
+
+Where the caller names no `--memory-limit`, a session is now bounded by half
+of what the host has -- `MemTotal` out of `/proc/meminfo` on Linux, read the
+way the cores are read; `hw.memsize` on macOS; nothing where the host cannot
+be asked -- and the device's own copy of the cache is counted with the
+host's, because on an integrated part both come out of the same memory:
+
+```
+model_runner run qwen3moe.gguf --backend device
+MR-MEM-0001: kv_cache needs 16510291801 bytes, above the limit of 16407179264
+```
+
+The same model on the processor at the same context is 8.5 GB of 16 and
+runs. `--context-size` keeps its default, the model's own, so nothing about
+the option changed; what changed is that a session that would take most of
+the machine is refused with both numbers, and the answer is a decision --
+`--context-size` or `--memory-limit` -- rather than an accident.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

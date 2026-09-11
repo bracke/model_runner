@@ -75,4 +75,55 @@ package body Model_Runner.Platform.Topology is
          return 0;
    end Physical_Cores;
 
+   ---------------------
+   -- Physical_Memory --
+   ---------------------
+
+   --  MemTotal out of /proc/meminfo, which is in kilobytes and is the
+   --  first line. Read the way the cores are read: through the file the
+   --  kernel publishes, and zero for anything unexpected.
+   function Physical_Memory return Interfaces.Unsigned_64 is
+      use type Interfaces.Unsigned_64;
+
+      Path : constant String := "/proc/meminfo";
+      File : Ada.Text_IO.File_Type;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         return 0;
+      end if;
+
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+
+      declare
+         Line : String (1 .. 512);
+         Last : Natural;
+      begin
+         while not Ada.Text_IO.End_Of_File (File) loop
+            Ada.Text_IO.Get_Line (File, Line, Last);
+
+            if Last > 9 and then Line (1 .. 9) = "MemTotal:" then
+               declare
+                  Named : constant Integer :=
+                    Model_Runner.Text.Leading_Number
+                      (Model_Runner.Text.Trim (Line (10 .. Last)));
+               begin
+                  Ada.Text_IO.Close (File);
+                  return (if Named > 0
+                          then Interfaces.Unsigned_64 (Named) * 1024
+                          else 0);
+               end;
+            end if;
+         end loop;
+      end;
+
+      Ada.Text_IO.Close (File);
+      return 0;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+         return 0;
+   end Physical_Memory;
+
 end Model_Runner.Platform.Topology;
