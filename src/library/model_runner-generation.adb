@@ -157,8 +157,14 @@ package body Model_Runner.Generation is
       By_Model : constant Boolean :=
         Draft /= null and then Draft_Session /= null;
 
+      --  The model's own block past its stack, where the file carries
+      --  one and the caller asked for it and gave no model.
+      By_Next : constant Boolean :=
+        not By_Model and then Item.Draft_From_Next
+        and then L.Drafts_Next (Session);
+
       Drafting : constant Boolean :=
-        (By_Model or else Item.Draft_From_Context)
+        (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
         and then S.Is_Greedy (Item.Sampling)
         and then Rules = null;
@@ -166,8 +172,10 @@ package body Model_Runner.Generation is
       --  Drafting with nothing to draft from but the text. Everything below
       --  that reaches for the draft session is skipped: there is no second
       --  context to keep alongside this one, nothing to prefill, nothing to
-      --  shift and nothing to rewind.
-      By_Context : constant Boolean := Drafting and then not By_Model;
+      --  shift and nothing to rewind. The next block is the same in that:
+      --  its context is this session's own.
+      By_Context : constant Boolean :=
+        Drafting and then not By_Model and then not By_Next;
 
       Largest_Draft : constant Natural :=
         (if Drafting
@@ -210,6 +218,18 @@ package body Model_Runner.Generation is
       --  model drafting for itself, which is what the first test used --
       --  cannot tell the two apart.
       Aside : T.Real_Array_Access := null;
+      Next_In     : T.Real_Array_Access := null;
+
+      --  What a position run through the next block only for its cache
+      --  is handed for logits: nothing, which is how the head is skipped.
+      No_Logits : N.Real_Array (1 .. 0);
+
+      --  Whether Next_In holds the state a round left for the next, which
+      --  a single-token round does not: that one's state is the session's
+      --  own last.
+      Next_Chained : Boolean := False;
+      Next_Out    : T.Real_Array_Access := null;
+      Next_States : T.Real_Array_Access := null;
       Status       : E.Error_Info := E.Success;
       Closed       : Boolean := False;
       Started      : Model_Runner.Clocks.Nanoseconds := 0;
@@ -223,6 +243,9 @@ package body Model_Runner.Generation is
          T.Free (Every);
          T.Free (Opened);
          T.Free (Aside);
+         T.Free (Next_In);
+         T.Free (Next_Out);
+         T.Free (Next_States);
          B.Free (Pending);
          if Tokens /= null then
             Free_Tokens (Tokens);
@@ -432,6 +455,17 @@ package body Model_Runner.Generation is
 
          T.Allocate (N.Element_Count (Settings.Vocabulary), Aside);
 
+         --  The next block's chain: the state it is given and the one it
+         --  hands back, and every position's state of a checked round,
+         --  which is what its cache is refilled from.
+         if By_Next then
+            T.Allocate (N.Element_Count (Settings.Embedding), Next_In);
+            T.Allocate (N.Element_Count (Settings.Embedding), Next_Out);
+            T.Allocate
+              (N.Element_Count (Settings.Embedding)
+               * N.Element_Count (Largest_Draft + 1), Next_States);
+         end if;
+
          if Item.Logprobs > 0 then
             T.Allocate (N.Element_Count (Settings.Vocabulary), Opened);
          end if;
@@ -439,11 +473,33 @@ package body Model_Runner.Generation is
          if Proposed = null or else Verified = null or else Every = null
            or else Aside = null
            or else (Item.Logprobs > 0 and then Opened = null)
+           or else (By_Next
+                    and then (Next_In = null or else Next_Out = null
+                              or else Next_States = null))
          then
             Conclude (Runtime_Error, E.Make (E.Memory_Allocation_Failed));
             Cleanup;
             return;
          end if;
+
+         --  A round checks a draft's proposals and rewinds to the last one
+         --  agreed, which a session of a hybrid architecture can do only
+         --  as far back as it kept its states: a draft's worth and one.
+         declare
+            Kept : E.Error_Info;
+         begin
+            L.Keep_States (Session, Largest_Draft + 1, Kept);
+
+            if E.Is_Ok (Kept) and then By_Model then
+               L.Keep_States (Draft_Session.all, Largest_Draft + 1, Kept);
+            end if;
+
+            if E.Is_Error (Kept) then
+               Conclude (Runtime_Error, Kept);
+               Cleanup;
+               return;
+            end if;
+         end;
       end if;
       B.Allocate (B.Byte_Count (Longest + Fragment_Reserve) * 2, Pending);
       --  Sized for the worst case the tokenizer can produce -- byte fallback
@@ -616,9 +672,58 @@ package body Model_Runner.Generation is
                Last : constant Natural :=
                  Natural'Min (Index + Span - 1, Prompt_Count);
             begin
-               L.Evaluate_Batch
-                 (Session, Source, Tokens.all (Index .. Last), Logits.all,
-                  Cancel => Cancel, Status => Status);
+               --  With every position's state where the next block will
+               --  be run over the prompt behind it.
+               if By_Next then
+                  declare
+                     Rows : T.Real_Array_Access := null;
+                  begin
+                     T.Allocate
+                       (N.Element_Count (Last - Index + 1)
+                        * N.Element_Count (Settings.Embedding), Rows);
+
+                     if Rows = null then
+                        Conclude
+                          (Runtime_Error,
+                           E.Make (E.Memory_Allocation_Failed));
+                        exit Prefill_Loop;
+                     end if;
+
+                     L.Evaluate_Batch
+                       (Session, Source, Tokens.all (Index .. Last),
+                        Logits.all, States => Rows, Cancel => Cancel,
+                        Status => Status);
+
+                     --  The block sees every position of the prompt but
+                     --  the last: at position p it takes the token at
+                     --  p + 1 beside the state at p, and the last token's
+                     --  successor is what a round will draft.
+                     if E.Is_Ok (Status) then
+                        for Step in Index .. Last - 1 loop
+                           declare
+                              At_Row : constant N.Element_Count :=
+                                N.Element_Count (Step - Index)
+                                * N.Element_Count (Settings.Embedding);
+                           begin
+                              L.Draft_Next
+                                (Session, Source, Tokens.all (Step + 1),
+                                 Rows.all (At_Row
+                                           .. At_Row
+                                              + N.Element_Count
+                                                  (Settings.Embedding) - 1),
+                                 Step - 1, No_Logits, Next_Out.all, Status);
+                              exit when E.Is_Error (Status);
+                           end;
+                        end loop;
+                     end if;
+
+                     T.Free (Rows);
+                  end;
+               else
+                  L.Evaluate_Batch
+                    (Session, Source, Tokens.all (Index .. Last), Logits.all,
+                     Cancel => Cancel, Status => Status);
+               end if;
 
                if E.Is_Error (Status) then
                   if Status.Code = E.Generation_Cancelled then
@@ -632,7 +737,7 @@ package body Model_Runner.Generation is
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
-               if Drafting and then not By_Context then
+               if Drafting and then By_Model then
                   declare
                      Local : E.Error_Info;
                   begin
@@ -725,7 +830,7 @@ package body Model_Runner.Generation is
                   return;
                end if;
 
-               if not By_Context then
+               if By_Model then
                   L.Shift
                     (Draft_Session.all, Draft.all, Item.Context_Keep,
                      Item.Context_Shift, Moved);
@@ -760,7 +865,40 @@ package body Model_Runner.Generation is
             Count := 1;
             Proposed.all (1) := Guess;
 
-            if By_Context then
+            if By_Next then
+               --  The block past the stack, once a proposal: given the
+               --  token just guessed beside the stack's state at the
+               --  position before it, it says what follows; given that
+               --  beside its own answer's state, what follows that.
+               if not Next_Chained then
+                  Next_In.all := L.Last_State (Session);
+               end if;
+
+               for Step in 1 .. Largest_Draft loop
+                  exit when Before + Step - 2 >= L.Capacity (Session);
+
+                  L.Draft_Next
+                    (Session, Source, Proposed.all (Count),
+                     Next_In.all, Before + Step - 2,
+                     Aside.all, Next_Out.all, Local);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+
+                  S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+
+                  Count := Count + 1;
+                  Proposed.all (Count) := Guess;
+                  Next_In.all := Next_Out.all;
+               end loop;
+            elsif By_Context then
                --  What followed this phrase the last time it was said. One
                --  search rather than a pass a proposal, over the tokens
                --  this run has committed -- the target's own, so a proposal
@@ -843,6 +981,7 @@ package body Model_Runner.Generation is
             else
                L.Evaluate_Batch
                  (Session, Source, Proposed.all (1 .. Count), Logits.all,
+                  States => (if By_Next then Next_States else null),
                   Every => Every, Cancel => Cancel, Status => Local);
             end if;
 
@@ -946,7 +1085,7 @@ package body Model_Runner.Generation is
                return;
             end if;
 
-            if not By_Context then
+            if By_Model then
                L.Rewind
                  (Draft_Session.all,
                   Natural'Min (L.Position (Draft_Session.all),
@@ -971,7 +1110,7 @@ package body Model_Runner.Generation is
             --  drafting for itself and agreeing with only four of six
             --  proposals, which is four more than a disagreement and two
             --  fewer than the truth.
-            while not By_Context
+            while By_Model
               and then L.Position (Draft_Session.all)
                        < Before + Verified_Count
             loop
@@ -1005,6 +1144,47 @@ package body Model_Runner.Generation is
                                .. Every.all'First + Row
                                   + N.Element_Count (Settings.Vocabulary) - 1);
                end;
+            end if;
+
+            --  The next block's cache, put right: what it holds for the
+            --  round's positions came from its own guesses at the states,
+            --  and the stack has now said what they were. Every accepted
+            --  position but the last is given its successor beside the
+            --  stack's state; the last is the next round's first step,
+            --  from the state kept here for it.
+            if By_Next and then Count > 1 then
+               declare
+                  Width : constant N.Element_Count :=
+                    N.Element_Count (Settings.Embedding);
+               begin
+                  for Step in 1 .. Verified_Count - 1 loop
+                     declare
+                        At_Row : constant N.Element_Count :=
+                          N.Element_Count (Step - 1) * Width;
+                     begin
+                        L.Draft_Next
+                          (Session, Source, Verified.all (Step + 1),
+                           Next_States.all (At_Row .. At_Row + Width - 1),
+                           Before + Step - 1, No_Logits, Next_Out.all, Local);
+                        if E.Is_Error (Local) then
+                           Conclude (Runtime_Error, Local);
+                           Failed := True;
+                           return;
+                        end if;
+                     end;
+                  end loop;
+
+                  declare
+                     At_Row : constant N.Element_Count :=
+                       N.Element_Count (Verified_Count - 1) * Width;
+                  begin
+                     Next_In.all :=
+                       Next_States.all (At_Row .. At_Row + Width - 1);
+                     Next_Chained := True;
+                  end;
+               end;
+            elsif By_Next then
+               Next_Chained := False;
             end if;
 
             Outcome.Accepted := Outcome.Accepted + Verified_Count - 1;

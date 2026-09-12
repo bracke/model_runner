@@ -838,6 +838,366 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Batch_Matches_Sequence;
 
+   --  A hybrid's linear layers keep a state instead of keys and values,
+   --  and everything a session does with its context has to hold for it:
+   --  a batch says what the tokens one at a time say, a snapshot carries
+   --  the state and comes back saying the same, a rewind restores the
+   --  state it kept and refuses where it kept none, and a shift is refused
+   --  by name. The fixture is Tiny_Model's Qwen35: one linear layer and
+   --  one full attention layer with a gate beside each head.
+   procedure A_Hybrid_Keeps_Its_State_Through_Everything
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type L.Architecture;
+
+      Image  : B.Byte_Array_Access;
+      Prompt : constant Vocab.Token_Array (1 .. 5) := [4, 7, 2, 9, 5];
+
+      Step_By_Step : Logit_Vector := [others => 0.0];
+      Batched      : Logit_Vector := [others => 0.0];
+      After_One    : Logit_Vector := [others => 0.0];
+      After_Many   : Logit_Vector := [others => 0.0];
+      Kept         : B.Byte_Array_Access;
+      Direct       : Logit_Vector := [others => 0.0];
+      Restored     : Logit_Vector := [others => 0.0];
+      Rewound      : Logit_Vector := [others => 0.0];
+
+      --  Not the bit: the linear layer runs the same words in both paths,
+      --  but a batch's products are a batch's and a token's a token's.
+      Near : constant N.Real := 1.0e-4;
+
+      function Worst (A, B : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in A'Range loop
+            Most := N.Real'Max (Most, abs (A (Index) - B (Index)));
+         end loop;
+         return Most;
+      end Worst;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+         begin
+            Assert (Settings.Kind = L.Qwen35, "the fixture is not read as qwen35");
+            Assert (L.Hybrid (Settings.Kind), "qwen35 is not a hybrid");
+            Assert (L.Linear (Settings, 0) and then not L.Linear (Settings, 1),
+                    "the first block is not linear or the second is");
+            Assert (L.Key_Width (Settings) = Tiny_Model.Linear_Heads * Tiny_Model.Linear_State
+                    and then L.Value_Width (Settings) = L.Key_Width (Settings)
+                    and then L.Mix_Width (Settings) = 3 * L.Key_Width (Settings),
+                    "the linear layer's widths are not what the fixture wrote");
+         end;
+
+         --  One token at a time, then the same tokens in one batch.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the sequential session did not open");
+            Assert (L.States_Kept (Live) = 0,
+                    "a hybrid session keeps states it was not asked to");
+
+            for Index in Prompt'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Step_By_Step,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "sequential evaluation failed");
+            end loop;
+            L.Evaluate (Live, Under.Ready, 3, After_One, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+
+            --  A shift is refused by name: the state has no middle to
+            --  take out.
+            L.Shift (Live, Under.Ready, Keep => 1, Drop => 2, Status => Status);
+            Assert (Status.Code = E.Arch_Unsupported_Feature,
+                    "a hybrid session took a shift: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  And a rewind past what it kept, which is nothing, is
+            --  refused; to the front it is not, since the front is nought.
+            L.Rewind (Live, 3, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind into an unkept state was taken: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Rewind (Live, 0, Status);
+            Assert (E.Is_Ok (Status), "a rewind to the front was refused");
+
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the batched session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Batched, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the batch failed: " & E.Error_Code'Image (Status.Code));
+            L.Evaluate (Live, Under.Ready, 3, After_Many, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation after the batch failed");
+
+            --  A snapshot from here, read back below.
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the hybrid session did not snapshot");
+            L.Evaluate (Live, Under.Ready, 6, Direct, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation after the snapshot failed");
+            L.Close (Live);
+         end;
+
+         Assert (Worst (Step_By_Step, Batched) <= Near,
+                 "a batch says something else than the tokens one at a time:"
+                 & N.Real'Image (Worst (Step_By_Step, Batched)));
+         Assert (Worst (After_One, After_Many) <= Near,
+                 "the state a batch leaves differs from the one the tokens "
+                 & "leave:" & N.Real'Image (Worst (After_One, After_Many)));
+
+         --  The snapshot back into a fresh session: the same next answer,
+         --  exactly, since the state came back as it was.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the adopting session did not open");
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status),
+                    "the hybrid snapshot was not adopted: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Evaluate (Live, Under.Ready, 6, Restored, Status => Status);
+            Assert (E.Is_Ok (Status), "evaluation after adopting failed");
+            L.Close (Live);
+         end;
+
+         Assert (Worst (Direct, Restored) = 0.0,
+                 "a hybrid's state did not survive its snapshot; the "
+                 & "logits moved by" & N.Real'Image (Worst (Direct, Restored)));
+
+         --  Kept states: five tokens, back two, forward two again, and
+         --  the answer is the one the straight run gave.
+         declare
+            Live : L.Session;
+            Straight : Logit_Vector := [others => 0.0];
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the rewinding session did not open");
+            L.Keep_States (Live, 3, Status);
+            Assert (E.Is_Ok (Status), "the session would not keep states");
+            Assert (L.States_Kept (Live) = 3, "the session keeps another count");
+
+            for Index in Prompt'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Straight,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation with kept states failed");
+            end loop;
+
+            L.Rewind (Live, 3, Status);
+            Assert (E.Is_Ok (Status),
+                    "a rewind into the kept states was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Rewind (Live, 1, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind past the kept states was taken");
+
+            for Index in 4 .. 5 loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Rewound,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation after the rewind failed");
+            end loop;
+
+            Assert (Worst (Straight, Rewound) = 0.0,
+                    "the state a rewind restored is not the state that "
+                    & "was there; the logits moved by"
+                    & N.Real'Image (Worst (Straight, Rewound)));
+
+            L.Close (Live);
+         end;
+      end;
+
+      B.Free (Kept);
+      B.Free (Image);
+   end A_Hybrid_Keeps_Its_State_Through_Everything;
+
+   --  The block past a hybrid's stack drafts the next token, and a run
+   --  drafting from it says exactly what it says without.
+   --
+   --  The block is asked directly first: it answers only once the stack
+   --  has a state to hand it, with a distribution and a state of its own
+   --  that it takes back for one more draft, and it refuses a row of the
+   --  wrong width by name. Then the run: at temperature zero a proposal
+   --  is either what the stack would have chosen or it is not, and only
+   --  the ones that match are kept, so the text is the same text -- and
+   --  the round proposed rather than quietly falling back.
+   procedure A_Hybrid_Drafts_From_Its_Next_Block
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Room : constant := 64;
+
+      Image  : B.Byte_Array_Access;
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+            Width    : constant N.Element_Count :=
+              N.Element_Count (Settings.Embedding);
+            Live     : L.Session;
+            Logits   : Logit_Vector := [others => 0.0];
+            Drafted  : Logit_Vector := [others => 0.0];
+            Chained  : Logit_Vector := [others => 0.0];
+            Nothing  : N.Real_Array (1 .. 0);
+            State    : N.Real_Array (0 .. Width - 1);
+            Again    : N.Real_Array (0 .. Width - 1);
+            Narrow   : constant N.Real_Array (0 .. Width - 2) := [others => 0.0];
+         begin
+            Assert (Settings.Next_Layers = 1,
+                    "the fixture's block past the stack was not counted");
+            Assert (Settings.Layers = Tiny_Model.Layers,
+                    "the block past the stack was counted as the stack's");
+
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            Assert (L.Drafts_Next (Live), "the session does not draft");
+            Assert (L.Last_State (Live)'Length = 0,
+                    "a session that has evaluated nothing has a last state");
+
+            for Index in Prompt'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Logits, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+            Assert (L.Last_State (Live)'Length = Width,
+                    "the last state is not Embedding wide");
+
+            L.Draft_Next
+              (Live, Under.Ready, 3, L.Last_State (Live), Prompt'Length - 1,
+               Drafted, State, Status);
+            Assert (E.Is_Ok (Status),
+                    "the block did not draft: "
+                    & E.Error_Code'Image (Status.Code));
+            for Index in Drafted'Range loop
+               Assert (Drafted (Index)'Valid, "a drafted logit is not a number");
+            end loop;
+
+            --  Chained on its own answer, one position further; and
+            --  without a distribution asked for, which is a cache written
+            --  and a state handed on.
+            L.Draft_Next
+              (Live, Under.Ready, 5, State, Prompt'Length, Chained, Again,
+               Status);
+            Assert (E.Is_Ok (Status), "the block did not draft on its draft");
+            L.Draft_Next
+              (Live, Under.Ready, 5, State, Prompt'Length, Nothing, Again,
+               Status);
+            Assert (E.Is_Ok (Status), "a draft without logits was refused");
+
+            L.Draft_Next
+              (Live, Under.Ready, 5, Narrow, Prompt'Length, Chained, Again,
+               Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a state of the wrong width was taken");
+            L.Draft_Next
+              (Live, Under.Ready, 5, State, Room, Chained, Again, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a position past the context was taken");
+
+            L.Close (Live);
+            Assert (not L.Drafts_Next (Live), "a closed session drafts");
+         end;
+
+         declare
+            procedure Turn
+              (From_Next : Boolean;
+               Text      : out Model_Runner.Bytes.Byte_Array_Access;
+               Length    : out Natural;
+               Proposed  : out Natural)
+            is
+               Live    : L.Session;
+               Request : Gen.Request;
+               Stop    : Model_Runner.Stops.Set;
+               Outcome : Gen.Result;
+               Local   : E.Error_Info;
+            begin
+               L.Open (Live, Under.Ready, Context => Room, Status => Local);
+               Assert (E.Is_Ok (Local), "the session did not open");
+
+               Model_Runner.Stops.Open (Stop);
+               Request.Max_Tokens := 12;
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+               Request.Seed := 7;
+               Request.Has_Seed := True;
+               Request.Add_Beginning := True;
+               Request.Retain_Text := True;
+               Request.Draft_Tokens := (if From_Next then 3 else 0);
+               Request.Draft_From_Next := From_Next;
+
+               Gen.Generate
+                 (Under.Ready, Live, "abab", Request, Stop, null, null,
+                  null, null, null, null, Outcome => Outcome);
+               Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                       "the run failed: "
+                       & E.Error_Code'Image (Outcome.Error.Code));
+
+               Text := Outcome.Text;
+               Length := Outcome.Text_Length;
+               Proposed := Outcome.Drafted;
+
+               Model_Runner.Stops.Close (Stop);
+               L.Close (Live);
+            end Turn;
+
+            Plain_Text, Next_Text : Model_Runner.Bytes.Byte_Array_Access;
+            Plain_Last, Next_Last : Natural;
+            Ignored, Proposed     : Natural;
+         begin
+            Turn (False, Plain_Text, Plain_Last, Ignored);
+            Turn (True, Next_Text, Next_Last, Proposed);
+
+            Assert (Plain_Last > 0, "the plain run produced nothing");
+            Assert (Next_Last = Plain_Last,
+                    "the drafted run produced" & Natural'Image (Next_Last)
+                    & " bytes against" & Natural'Image (Plain_Last));
+            Assert (B."/=" (Plain_Text, null)
+                      and then B."/=" (Next_Text, null),
+                    "a run retained no text");
+            Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                           Next_Text.all (1 .. B.Byte_Index (Next_Last))),
+                    "drafting from the next block produced different text");
+            Assert (Proposed > 0,
+                    "the run proposed nothing from its next block, so this "
+                    & "compares two runs of the same path");
+
+            B.Free (Plain_Text);
+            B.Free (Next_Text);
+         end;
+      end;
+
+      B.Free (Image);
+   end A_Hybrid_Drafts_From_Its_Next_Block;
+
    --  The same token sequence produces bit-identical logits on every run.
    procedure Evaluation_Is_Deterministic
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -8937,6 +9297,15 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Advances'Access,
          "evaluation produces finite logits and commits one position each");
+      Register_Routine
+        (T, A_Hybrid_Keeps_Its_State_Through_Everything'Access,
+         "a hybrid's linear state holds through a batch, a snapshot, a "
+         & "kept rewind and a refused shift");
+      Register_Routine
+        (T, A_Hybrid_Drafts_From_Its_Next_Block'Access,
+         "the block past a hybrid's stack drafts, chains on its draft, "
+         & "refuses a wrong width, and a run drafting from it says the "
+         & "same text");
       Register_Routine
         (T, Batch_Matches_Sequence'Access,
          "a batch produces the same bits as the tokens evaluated one by one");

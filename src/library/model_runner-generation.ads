@@ -143,6 +143,15 @@ package Model_Runner.Generation is
       --  one, so the command refuses that pair rather than choosing for it.
       Draft_From_Context : Boolean := False;
 
+      --  Propose those tokens from the model's own block past its stack,
+      --  where the file carries one: a model trained to draft the token
+      --  after the next, run once a proposal from the stack's last state
+      --  and chained on its own answer for the ones after. No second
+      --  model and no search; the same round of checking as the other
+      --  two, and the same text as without. A draft model given as well
+      --  wins this, as it wins the context.
+      Draft_From_Next : Boolean := False;
+
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
       Seed     : Seed_Value := 0;

@@ -4048,6 +4048,19 @@ package body Tests.CLI_Cases is
          Fixtures.Add_U32 (Builder, Named & ".attention.head_count_kv", 2);
          Fixtures.Add_F32
            (Builder, Named & ".attention.layer_norm_rms_epsilon", 1.0e-5);
+
+         --  And what a hybrid states of its linear layers, which it is
+         --  refused without: two key heads and two value heads of a state
+         --  eight wide, a convolution four long.
+         if Named in "qwen35" | "qwen35moe" then
+            Fixtures.Add_U32 (Builder, Named & ".ssm.state_size", 8);
+            Fixtures.Add_U32 (Builder, Named & ".ssm.group_count", 2);
+            Fixtures.Add_U32 (Builder, Named & ".ssm.time_step_rank", 2);
+            Fixtures.Add_U32 (Builder, Named & ".ssm.conv_kernel", 4);
+            Fixtures.Add_U32 (Builder, Named & ".ssm.inner_size", 16);
+            Fixtures.Add_U32 (Builder, Named & ".full_attention_interval", 4);
+         end if;
+
          Fixtures.Build (Builder, Image);
 
          declare

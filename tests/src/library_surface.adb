@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 33) of Text_Access :=
+   Held : constant array (1 .. 34) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -78,7 +78,14 @@ package body Library_Surface is
       --  engine asks.
       new String'("Keep_Timeline"),
       new String'("Timeline_Report"),
-      new String'("Timed")];
+      new String'("Timed"),
+
+      --  How far back a hybrid session may be rewound. The round that
+      --  needs the answer asks for the count itself and knows it; a
+      --  caller handed a session by somebody else does not, and a rewind
+      --  refused after the fact is a poorer answer than a count asked
+      --  first.
+      new String'("States_Kept")];
 
    ---------------
    -- Is_Listed --

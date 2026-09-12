@@ -147,7 +147,12 @@ package body Tiny_Model is
       --  that attends to the whole context, and the rotation base it turns
       --  on, were described in the engine, described again in the
       --  independent implementation, and compared by nothing.
-      Blocks : constant Natural := (if Kind = Gemma3 then 6 else Layers);
+      --  And the hybrid needs three: two of the stack, and past it the
+      --  block that drafts the next token, which the file counts among
+      --  its blocks and names apart with nextn_predict_layers.
+      Blocks : constant Natural :=
+        (if Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
+         else Layers);
 
       Score_Amplitude : constant N.Real :=
         0.5 * N.Real
@@ -362,7 +367,15 @@ package body Tiny_Model is
            when GPT2      => "gpt2",
            when Bert      => "bert",
            when Nomic_Bert => "nomic-bert",
-           when Jina_Bert_V2 => "jina-bert-v2");
+           when Jina_Bert_V2 => "jina-bert-v2",
+           when Qwen35    => "qwen35");
+
+      --  Whether a block of the hybrid is a linear one: every second block
+      --  attends in full, counting from one, as the file counts.
+      --  The block past the stack attends in full, whatever its number.
+      function Linear_Block (Index : Natural) return Boolean
+      is (Kind = Qwen35 and then Index < Layers
+          and then (Index + 1) mod 2 /= 0);
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Digit : constant String := [1 => Hex (Index + 1)];
@@ -411,6 +424,24 @@ package body Tiny_Model is
             (if Kind in GPT2 | Bert
              then 0
              else Interfaces.Unsigned_32 (Head_Size)));
+      end if;
+
+      --  The hybrid's linear layers: every second block attends in full;
+      --  the rest keep a state of Linear_State by Linear_State a value
+      --  head over Linear_Heads key heads and as many value heads, after
+      --  a convolution Linear_Taps long. The inner size is the value
+      --  heads times the state, which the reader checks.
+      if Kind = Qwen35 then
+         Fixtures.Add_U32 (Builder, Prefix & ".full_attention_interval", 2);
+         Fixtures.Add_U32 (Builder, Prefix & ".ssm.state_size", Linear_State);
+         Fixtures.Add_U32 (Builder, Prefix & ".ssm.group_count", Linear_Heads);
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.time_step_rank", Linear_Heads);
+         Fixtures.Add_U32 (Builder, Prefix & ".ssm.conv_kernel", Linear_Taps);
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.inner_size",
+            Interfaces.Unsigned_32 (Linear_Heads * Linear_State));
+         Fixtures.Add_U32 (Builder, Prefix & ".nextn_predict_layers", 1);
       end if;
 
       --  Which pooling the model was trained for, which is a thing a bert
@@ -825,6 +856,49 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
+         elsif Linear_Block (Index) then
+            --  The linear layer's own: the three projections in one, the
+            --  gate, the decay and the rate a value head, the decay's
+            --  shape -- negative, as a file stores minus the exponential
+            --  of what was trained -- the rate's bias, the taps, the
+            --  blend's gain and the way back.
+            declare
+               Mix : constant Natural :=
+                 (2 * Linear_Heads + Linear_Heads) * Linear_State;
+               Val : constant Natural := Linear_Heads * Linear_State;
+               Shape_Of_Decay : N.Real_Array (0 .. Linear_Heads - 1);
+            begin
+               Weight (Layer_Name (Index, "attn_qkv.weight"),
+                       [G.U64 (Embedding), G.U64 (Mix)]);
+               Weight (Layer_Name (Index, "attn_gate.weight"),
+                       [G.U64 (Embedding), G.U64 (Val)]);
+               Weight (Layer_Name (Index, "ssm_alpha.weight"),
+                       [G.U64 (Embedding), G.U64 (Linear_Heads)]);
+               Weight (Layer_Name (Index, "ssm_beta.weight"),
+                       [G.U64 (Embedding), G.U64 (Linear_Heads)]);
+
+               for H in Shape_Of_Decay'Range loop
+                  Shape_Of_Decay (H) := -0.5 - 0.25 * N.Real (H);
+               end loop;
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_a"),
+                  [G.U64 (Linear_Heads)], G.Type_F32,
+                  Fixtures.Encode_F32 (Shape_Of_Decay));
+
+               Norm_Of (Layer_Name (Index, "ssm_dt.bias"), Linear_Heads);
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_conv1d.weight"),
+                  [G.U64 (Linear_Taps), G.U64 (Mix)], G.Type_F32,
+                  Fixtures.Encode_F32
+                    (Next_Score (N.Element_Count (Linear_Taps * Mix))));
+               Gain_Of (Layer_Name (Index, "ssm_norm.weight"), Linear_State);
+               Weight (Layer_Name (Index, "ssm_out.weight"),
+                       [G.U64 (Val), G.U64 (Embedding)]);
+            end;
+         elsif Kind = Qwen35 then
+            --  Twice as wide: each head's queries and then its gate.
+            Weight (Layer_Name (Index, "attn_q.weight"),
+                    [G.U64 (Embedding), G.U64 (2 * Heads * Key_Size)]);
          elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
@@ -857,7 +931,9 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
+           and then not Linear_Block (Index)
+         then
             Weight (Layer_Name (Index, "attn_k.weight"),
                     [G.U64 (Embedding), G.U64 (KV_Heads * Key_Size)]);
             Weight (Layer_Name (Index, "attn_v.weight"),
@@ -917,15 +993,29 @@ package body Tiny_Model is
             end;
          end if;
 
-         if Kind in Qwen3 | Qwen3_MoE | Gemma3
+         if (Kind in Qwen3 | Qwen3_MoE | Gemma3
+             or else (Kind = Qwen35 and then not Linear_Block (Index)))
            and then not Omit_Biases
          then
             Gain_Of (Layer_Name (Index, "attn_q_norm.weight"), Key_Size);
             Gain_Of (Layer_Name (Index, "attn_k_norm.weight"), Key_Size);
          end if;
 
-         Weight (Layer_Name (Index, "attn_output.weight"),
-                 [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
+         if not Linear_Block (Index) then
+            Weight (Layer_Name (Index, "attn_output.weight"),
+                    [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
+         end if;
+
+         --  What makes the block past the stack a draft: the projection
+         --  from the next token's embedding beside the stack's state,
+         --  the normalization of each, and the one ahead of the head.
+         if Kind = Qwen35 and then Index >= Layers then
+            Weight (Layer_Name (Index, "nextn.eh_proj.weight"),
+                    [G.U64 (2 * Embedding), G.U64 (Embedding)]);
+            Norm (Layer_Name (Index, "nextn.enorm.weight"));
+            Norm (Layer_Name (Index, "nextn.hnorm.weight"));
+            Norm (Layer_Name (Index, "nextn.shared_head_norm.weight"));
+         end if;
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
          if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS then
@@ -956,7 +1046,12 @@ package body Tiny_Model is
 
          if Kind not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
          then
-            Norm (Layer_Name (Index, "ffn_norm.weight"));
+            --  Named for what it follows by the hybrid, for what it
+            --  precedes by the rest; the same normalization.
+            Norm (Layer_Name (Index,
+                              (if Kind = Qwen35
+                               then "post_attention_norm.weight"
+                               else "ffn_norm.weight")));
 
             --  The shift beside it, which a centring architecture carries
             --  and this fixture did not write. Every published gpt2 has

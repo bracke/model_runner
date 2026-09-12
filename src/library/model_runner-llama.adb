@@ -90,6 +90,65 @@ package body Model_Runner.Llama is
    package T renames Model_Runner.Tensors;
    package Workers_CPU renames Model_Runner.Backend.CPU;
 
+   --  Which linear layer of the stack a layer is: how many linear layers
+   --  come before it, which is where its state and its convolution's
+   --  memory lie among the session's.
+   function Linear_Ordinal
+     (Settings : Configuration; Layer : Natural) return Natural
+   is
+      Count : Natural := 0;
+   begin
+      for Which in 0 .. Layer - 1 loop
+         if Linear (Settings, Which) then
+            Count := Count + 1;
+         end if;
+      end loop;
+
+      return Count;
+   end Linear_Ordinal;
+
+   --  Where a linear layer's convolution memory begins: Conv_Kernel - 1
+   --  positions' mixed projections, oldest first, Mix_Width apiece.
+   function Conv_At
+     (Settings : Configuration; Layer : Natural) return Element_Count
+   is (Element_Count (Linear_Ordinal (Settings, Layer))
+       * Element_Count (Settings.Conv_Kernel - 1)
+       * Element_Count (Mix_Width (Settings)));
+
+   --  Where a linear layer's state begins: State_Size by State_Size a
+   --  value head, the heads one after another, and within a head the
+   --  state kept turned round -- row j holds S (i, j) for every i,
+   --  contiguously -- so that what the rule wants of a row, a dot product
+   --  against the key or the query, walks memory in order.
+   function State_At
+     (Settings : Configuration; Layer : Natural) return Element_Count
+   is (Element_Count (Linear_Ordinal (Settings, Layer))
+       * Element_Count (Settings.Value_Heads)
+       * Element_Count (Settings.State_Size)
+       * Element_Count (Settings.State_Size));
+
+   --  How many numbers all of a session's linear states take, and all of
+   --  its convolution memories.
+   function State_Room (Settings : Configuration) return Element_Count
+   is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
+       * Element_Count (Settings.Value_Heads)
+       * Element_Count (Settings.State_Size)
+       * Element_Count (Settings.State_Size));
+
+   function Conv_Room (Settings : Configuration) return Element_Count
+   is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
+       * Element_Count (Settings.Conv_Kernel - 1)
+       * Element_Count (Mix_Width (Settings)));
+
+   --  The three that shape a linear layer's numbers, in binary32 as the
+   --  other runtime computes them.
+   function Sigmoid (Value : Real) return Real
+   is (Real (1.0 / (1.0 + N.Exp (N.Wide_Real (-Value)))));
+
+   function Softplus (Value : Real) return Real
+   is (if Value > 20.0 then Value
+       else Real (N.Log (1.0 + N.Exp (N.Wide_Real (Value)))));
+
    --  Which matrix a view is, for a watcher. Declared here because the
    --  product wrappers below are above its body.
    function Named_As (Item : Model'Class; Which : T.View) return String;
@@ -322,7 +381,7 @@ package body Model_Runner.Llama is
                     when Llama => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
-                       | Nomic_Bert | Jina_Bert_V2 =>
+                       | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -395,11 +454,21 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Required (Model_Key (Settings.Kind, "feed_forward_length"),
-                Long_Long_Integer (Bounds.Max_Embedding) * 64,
-                Settings.Feed_Forward);
-      if E.Is_Error (Status) then
-         return;
+      --  A hybrid mixture states no dense width at all -- its experts'
+      --  and its shared expert's widths are stated under their own keys
+      --  below -- so the key is required of every architecture but that.
+      if Settings.Kind = Qwen35_MoE
+        and then not Containers.Has
+                       (Source, Model_Key (Settings.Kind, "feed_forward_length"))
+      then
+         Settings.Feed_Forward := 0;
+      else
+         Required (Model_Key (Settings.Kind, "feed_forward_length"),
+                   Long_Long_Integer (Bounds.Max_Embedding) * 64,
+                   Settings.Feed_Forward);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       Required (Model_Key (Settings.Kind, "attention.head_count"),
@@ -640,6 +709,97 @@ package body Model_Runner.Llama is
 
          if Settings.Experts = 0 then
             Settings.Experts_Used := 0;
+         end if;
+      end if;
+
+      --  The hybrid architectures' shape: how often a layer attends in
+      --  full, and the linear layers' heads, state and convolution, all
+      --  required, since a file without them describes no model of this
+      --  kind. And how many blocks past the stack the file carries, which
+      --  the stack does not run and the count of layers does not include.
+      if Hybrid (Settings.Kind) then
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "full_attention_interval"),
+            1, Long_Long_Integer (Bounds.Max_Layers), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Linear_Every :=
+           (if E.Is_Ok (Local) then Natural (Number) else 4);
+
+         Required (Model_Key (Settings.Kind, "ssm.state_size"),
+                   Long_Long_Integer (Bounds.Max_Embedding),
+                   Settings.State_Size);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Required (Model_Key (Settings.Kind, "ssm.group_count"),
+                   Long_Long_Integer (Bounds.Max_Heads), Settings.Key_Heads);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Required (Model_Key (Settings.Kind, "ssm.time_step_rank"),
+                   Long_Long_Integer (Bounds.Max_Heads), Settings.Value_Heads);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Required (Model_Key (Settings.Kind, "ssm.conv_kernel"),
+                   16, Settings.Conv_Kernel);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  The inner size is the value heads times the state, and a file
+         --  saying otherwise describes a shape this does not compute.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "ssm.inner_size"),
+            1, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number, Local);
+         if Present_And_Wrong (Local)
+           or else (E.Is_Ok (Local)
+                    and then Natural (Number) /= Value_Width (Settings))
+           or else Settings.Value_Heads mod Settings.Key_Heads /= 0
+         then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "value_heads", Long_Long_Integer (Settings.Value_Heads));
+            E.Add_Integer
+              (Status, "key_heads", Long_Long_Integer (Settings.Key_Heads));
+            return;
+         end if;
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "nextn_predict_layers"),
+            0, 4, Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Next_Layers := (if E.Is_Ok (Local) then Natural (Number) else 0);
+
+         if Settings.Next_Layers >= Settings.Layers then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "next_layers", Long_Long_Integer (Settings.Next_Layers));
+            return;
+         end if;
+         Settings.Layers := Settings.Layers - Settings.Next_Layers;
+
+         --  The shared expert's width, where the mixture has one.
+         if Settings.Experts > 0 then
+            Containers.Get_Integer
+              (Source,
+               Model_Key (Settings.Kind, "expert_shared_feed_forward_length"),
+               0, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number, Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+               return;
+            end if;
+            Settings.Shared_Feed :=
+              (if E.Is_Ok (Local) then Natural (Number) else 0);
          end if;
       end if;
 
@@ -992,10 +1152,15 @@ package body Model_Runner.Llama is
    function Matrices (Item : in out Model) return View_List is
       --  Seven a dense layer, and a mixture layer instead carries a router
       --  and three matrices an expert.
+      --  Nine more for a hybrid: a linear layer's five and a shared
+      --  expert's three and the next block's projection, counted for every
+      --  layer and left empty where a layer has none, since Add skips an
+      --  empty view.
       Per_Layer : constant Positive :=
         (if Item.Settings.Experts = 0
          then 7
-         else 4 + 1 + 3 * Item.Settings.Experts);
+         else 4 + 1 + 3 * Item.Settings.Experts)
+        + (if Hybrid (Item.Settings.Kind) then 9 else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -1003,7 +1168,8 @@ package body Model_Runner.Llama is
       --  projection. Sized for four anyway, because "three is enough" is
       --  true by a coincidence between two architectures rather than by
       --  anything holding it, and the cost of the fourth is a pointer.
-      Room  : View_List (1 .. 4 + Per_Layer * Item.Settings.Layers);
+      Room  : View_List
+        (1 .. 4 + Per_Layer * (Item.Settings.Layers + Item.Settings.Next_Layers));
       Count : Natural := 0;
 
       procedure Add (Where : View_Access) is
@@ -1013,43 +1179,52 @@ package body Model_Runner.Llama is
             Room (Count) := Where;
          end if;
       end Add;
+
+      --  A layer's matrices, of the stack or past it.
+      procedure Add_Layer (Which : in out Layer) is
+      begin
+         Add (Which.Query'Unchecked_Access);
+         Add (Which.Key'Unchecked_Access);
+         Add (Which.Value'Unchecked_Access);
+         Add (Which.Attention_Out'Unchecked_Access);
+         Add (Which.Gate'Unchecked_Access);
+         Add (Which.Up'Unchecked_Access);
+         Add (Which.Down'Unchecked_Access);
+         Add (Which.Router'Unchecked_Access);
+
+         Add (Which.Mix'Unchecked_Access);
+         Add (Which.Z_Gate'Unchecked_Access);
+         Add (Which.Alpha'Unchecked_Access);
+         Add (Which.Beta'Unchecked_Access);
+         Add (Which.Linear_Out'Unchecked_Access);
+         Add (Which.Shared_Gate'Unchecked_Access);
+         Add (Which.Shared_Up'Unchecked_Access);
+         Add (Which.Shared_Down'Unchecked_Access);
+         Add (Which.Next_Proj'Unchecked_Access);
+
+         if Which.Experts /= null then
+            for Expert in Which.Experts.all'Range loop
+               Add (Which.Experts.all (Expert).Gate'Unchecked_Access);
+               Add (Which.Experts.all (Expert).Up'Unchecked_Access);
+               Add (Which.Experts.all (Expert).Down'Unchecked_Access);
+            end loop;
+         end if;
+      end Add_Layer;
    begin
       Add (Item.Embeddings'Unchecked_Access);
       Add (Item.Output'Unchecked_Access);
-
-      --  And the table of positions, which is a matrix like any other and
-      --  has to be rewritten when the weights are: a view left pointing at
-      --  the file's bytes while everything around it moved into the
-      --  repacked buffer reads a row that is not there. Empty for every
-      --  architecture that rotates, and Add ignores an empty view.
       Add (Item.Positions'Unchecked_Access);
-
-      --  And the segment table beside it, for the same reason and with the
-      --  same consequence. It was left out, and the sweep found it: with
-      --  the weights repacked, everything around this moved into the new
-      --  buffer and this went on reading the file's -- which is a row of
-      --  something, so what came back was an embedding rather than a
-      --  refusal. Empty for every architecture that has no segments.
       Add (Item.Segments'Unchecked_Access);
 
       for Index in Item.Layers'Range loop
-         Add (Item.Layers (Index).Query'Unchecked_Access);
-         Add (Item.Layers (Index).Key'Unchecked_Access);
-         Add (Item.Layers (Index).Value'Unchecked_Access);
-         Add (Item.Layers (Index).Attention_Out'Unchecked_Access);
-         Add (Item.Layers (Index).Gate'Unchecked_Access);
-         Add (Item.Layers (Index).Up'Unchecked_Access);
-         Add (Item.Layers (Index).Down'Unchecked_Access);
-         Add (Item.Layers (Index).Router'Unchecked_Access);
-
-         if Item.Layers (Index).Experts /= null then
-            for Which in Item.Layers (Index).Experts.all'Range loop
-               Add (Item.Layers (Index).Experts.all (Which).Gate'Unchecked_Access);
-               Add (Item.Layers (Index).Experts.all (Which).Up'Unchecked_Access);
-               Add (Item.Layers (Index).Experts.all (Which).Down'Unchecked_Access);
-            end loop;
-         end if;
+         Add_Layer (Item.Layers (Index));
       end loop;
+
+      if Item.Next /= null then
+         for Index in Item.Next'Range loop
+            Add_Layer (Item.Next (Index));
+         end loop;
+      end if;
 
       return Room (1 .. Count);
    end Matrices;
@@ -1325,6 +1500,65 @@ package body Model_Runner.Llama is
    --  @param Whole Elements the whole vector holds.
    --  @param First Element the part starts at.
    --  @param Count Elements the part holds.
+   --  A small table of numbers -- Rows of Columns -- read whole into one
+   --  array, row after row; or column after column, where the reader
+   --  wants it the other way. The convolution's taps are one: the file
+   --  keeps a row a component of the mixed projection with the taps along
+   --  it, and the convolution wants a tap over every component, so that
+   --  a tap is a run of the row it multiplies.
+   procedure Resolve_Table
+     (Item    : in out Model;
+      Source  : Containers.Container;
+      Name    : String;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Result  : out T.Real_Array_Access;
+      Status  : out E.Error_Info;
+      Turned  : Boolean := False)
+   is
+      Weight : T.View;
+   begin
+      Result := null;
+      Resolve (Item, Source, Name, Rows, Columns, Weight, Status,
+               Reaches => False);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      T.Allocate (Rows * Columns, Result);
+      if Result = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+         return;
+      end if;
+
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Converted_Weights,
+         Interfaces.Unsigned_64 (Rows * Columns) * 4);
+      Mem.Record_Conversion
+        (Item.Accounting, Interfaces.Unsigned_64 (Rows * Columns) * 4);
+
+      declare
+         Line : Real_Array (0 .. Columns - 1);
+      begin
+         for Row in 0 .. Rows - 1 loop
+            T.Dequantize_Row (Weight, Row, Line, Status);
+            if E.Is_Error (Status) then
+               E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+               return;
+            end if;
+
+            if Turned then
+               for Column in 0 .. Columns - 1 loop
+                  Result.all (Column * Rows + Row) := Line (Column);
+               end loop;
+            else
+               Result.all (Row * Columns .. (Row + 1) * Columns - 1) := Line;
+            end if;
+         end loop;
+      end;
+   end Resolve_Table;
+
    procedure Resolve_Norm_Part
      (Item   : in out Model;
       Source : Containers.Container;
@@ -2094,6 +2328,624 @@ package body Model_Runner.Llama is
            Element_Count (Item.Settings.KV_Heads * Item.Settings.Value_Size);
          Blend  : constant Element_Count :=
            Element_Count (Item.Settings.Heads * Item.Settings.Value_Size);
+         --  One block resolved, of the stack or past it. A procedure
+         --  rather than the loop's body so that the blocks past the stack
+         --  are resolved by the same words: they are full attention layers
+         --  with a projection in front and a normalization behind.
+         procedure Resolve_Block
+           (Index   : Natural;
+            Beyond  : Boolean;
+            Current : in out Layer)
+         is
+            --  Whether this is a linear attention layer, which keeps no
+            --  keys and values and has projections of its own.
+            Is_Linear : constant Boolean :=
+              not Beyond and then Linear (Item.Settings, Index);
+         begin
+            --  The normalization a block is given on the way in. Every
+            --  architecture here has one except Bert, which normalizes
+            --  on the way out of each sublayer instead and carries no
+            --  tensor for this at all.
+            if not Normalizes_After (Item.Settings.Kind) then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm.weight"),
+                  Width, Current.Attention_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Bert's two, which are the whole of its normalization: one
+            --  over the residual after attention has been added to it,
+            --  one over the residual after the feed-forward has. Both
+            --  centre and both carry a shift, so both take a bias where
+            --  Gemma2's post-normalizations take none.
+            --
+            --  They are read into the same two fields Gemma2 uses and
+            --  applied in a different place, which is the whole
+            --  difference between the two arrangements: Gemma2
+            --  normalizes what the sublayer produced and adds that,
+            --  and Bert adds what the sublayer produced and normalizes
+            --  the sum.
+            if Normalizes_After (Item.Settings.Kind) then
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "attn_output_norm.weight"), Width,
+                  Current.Post_Attention_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "attn_output_norm.bias"), Width,
+                  Current.Post_Attention_Norm_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "layer_output_norm.weight"), Width,
+                  Current.Post_Feed_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "layer_output_norm.bias"), Width,
+                  Current.Post_Feed_Norm_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  What the code variant of this architecture carries and
+            --  the text one does not: a third normalization inside the
+            --  attention sublayer, and one over the queries and one over
+            --  the keys. None of the three is computed here, and a file
+            --  carrying any of them is refused by name rather than read
+            --  as a model with three normalizations missing -- which is
+            --  an embedding, and a plausible one.
+            if Item.Settings.Kind = Jina_Bert_V2 then
+               for Name of Unread_Jina_Norms loop
+                  if Containers.Find_Tensor
+                       (Source, Layer_Key (Index, Name.all)) /= 0
+                  then
+                     Status := E.Make (E.Arch_Unsupported_Feature);
+                     E.Add_Text
+                       (Status, "feature", Name.all, E.Param_Identifier);
+                     exit;
+                  end if;
+               end loop;
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Gemma2 normalizes what each sublayer produced as well as
+            --  what it was given. Required rather than optional: a
+            --  gemma2 file without them is not one this build can
+            --  compute, and taking them if present would read such a
+            --  file as a model with two normalizations missing.
+            if Item.Settings.Kind in Gemma2 | Gemma3 then
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "post_attention_norm.weight"), Width,
+                  Current.Post_Attention_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "post_ffw_norm.weight"), Width,
+                  Current.Post_Feed_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Three projections out of one tensor where the
+            --  architecture fuses them, and three tensors where it does
+            --  not. The order inside the fused one is queries, then
+            --  keys, then values, which is the order the rows are
+            --  written in.
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm.bias"),
+                  Width, Current.Attention_Norm_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            if Is_Linear then
+               --  The linear layer's projections: the queries, keys and
+               --  values in one tensor, the gate, the decay and the
+               --  rate a value head, the taps, the decay's shape, the
+               --  blend's normalization and the way back. The decay's
+               --  shape is the one tensor here without a suffix, which
+               --  is how the file spells it.
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                  Element_Count (Mix_Width (Item.Settings)), Width,
+                  Current.Mix, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_gate.weight"),
+                  Element_Count (Value_Width (Item.Settings)), Width,
+                  Current.Z_Gate, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ssm_alpha.weight"),
+                  Element_Count (Item.Settings.Value_Heads), Width,
+                  Current.Alpha, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ssm_beta.weight"),
+                  Element_Count (Item.Settings.Value_Heads), Width,
+                  Current.Beta, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "ssm_a"),
+                  Element_Count (Item.Settings.Value_Heads),
+                  Current.A_Log, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "ssm_dt.bias"),
+                  Element_Count (Item.Settings.Value_Heads),
+                  Current.DT_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Table
+                 (Item, Source, Layer_Key (Index, "ssm_conv1d.weight"),
+                  Element_Count (Mix_Width (Item.Settings)),
+                  Element_Count (Item.Settings.Conv_Kernel),
+                  Current.Conv, Status, Turned => True);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "ssm_norm.weight"),
+                  Element_Count (Item.Settings.State_Size),
+                  Current.State_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ssm_out.weight"),
+                  Width, Element_Count (Value_Width (Item.Settings)),
+                  Current.Linear_Out, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            elsif Item.Settings.Kind
+               in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
+            then
+               Resolve_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                  Wide + KV + KV_Out, Width, 0, Wide,
+                  Current.Query, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                  Wide + KV + KV_Out, Width, Wide, KV,
+                  Current.Key, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
+                  Wide + KV + KV_Out, Width, Wide + KV, KV_Out,
+                  Current.Value, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            else
+               --  Twice as wide where the query projection carries a
+               --  gate beside each head, as the hybrids' does.
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_q.weight"),
+                  (if Hybrid (Item.Settings.Kind) then 2 * Wide else Wide),
+                  Width, Current.Query, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_k.weight"),
+                  KV, Width, Current.Key, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_v.weight"),
+                  KV_Out, Width, Current.Value, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Qwen2 adds a bias to each projection; Llama and Qwen3
+            --  have none. Required when the architecture says so rather
+            --  than taken if present: a qwen2 file without them is a file
+            --  this cannot evaluate, and reading it as though the biases
+            --  were zero would produce plausible text that is not what
+            --  the model says.
+            --  Phi2 biases the same three projections, and writes the
+            --  three biases in one vector as it writes the three matrices
+            --  in one tensor. Each part is taken from the same offset its
+            --  matrix is taken from, so a reader that splits the matrices
+            --  correctly and the biases some other way would be wrong
+            --  only in what it adds -- which reads as a model that has
+            --  drifted rather than one that has broken.
+            if Item.Settings.Kind in Phi2 | GPT2 then
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, Wide, KV, Current.Key_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, Wide + KV, KV_Out,
+                  Current.Value_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Bert biases the same three and writes them as Qwen2
+            --  does, one vector a projection rather than three in one,
+            --  and jina-bert-v2 does the same.
+            if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q.bias"),
+                  Wide, Current.Query_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k.bias"),
+                  KV, Current.Key_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_v.bias"),
+                  KV_Out, Current.Value_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Qwen3 normalizes each query head and each key head before
+            --  the rotation, with one gain per element of a head shared
+            --  across the heads. Required for the architectures that have
+            --  it, for the same reason the biases are.
+            if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Gemma3
+              or else (Hybrid (Item.Settings.Kind) and then not Is_Linear)
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+                  Element_Count (Item.Settings.Head_Size),
+                  Current.Query_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  Element_Count (Item.Settings.Head_Size),
+                  Current.Key_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            if not Is_Linear then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_output.weight"),
+                  Width, Blend, Current.Attention_Out, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  And the bias on the way out of attention, which Phi2,
+            --  GPT2, Bert and jina-bert-v2 have and the rest have not.
+            if Item.Settings.Kind in
+                 Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_output.bias"),
+                  Width, Current.Out_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  One score a head that joins the softmax's denominator and
+            --  has nothing behind it, which is what lets a head of this
+            --  architecture attend to nothing at all. Named by head
+            --  count rather than by width: there is one of these for
+            --  each head, not one for each component.
+            if Item.Settings.Kind = GPT_OSS then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_sinks.weight"),
+                  Element_Count (Item.Settings.Heads), Current.Sinks,
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  Falcon has one normalization a block, not two: attention
+            --  and the feed-forward read the same normalized input. The
+            --  feed norm stays null and the block below reads that.
+            if Item.Settings.Kind not in Falcon | Phi2
+              and then not Normalizes_After (Item.Settings.Kind)
+            then
+               --  The hybrids name the normalization before the
+               --  feed-forward for what it follows rather than what it
+               --  precedes; it is the same normalization in the same
+               --  place.
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index,
+                             (if Hybrid (Item.Settings.Kind)
+                              then "post_attention_norm.weight"
+                              else "ffn_norm.weight")),
+                  Width, Current.Feed_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  The shift beside it, where the architecture centres.
+               --  Falcon and phi2 never reach here -- they have one
+               --  normalization a block -- so this is gpt2's, and it was
+               --  missing: the file carries it, the engine read every
+               --  other layer-norm shift, and the feed-forward ran off a
+               --  normalization that was neither centred nor shifted.
+               --  Optional, and deliberately so. Requiring it would
+               --  refuse a file that does not carry one, which is the
+               --  trap this architecture's output bias already fell
+               --  into: the loader asked for a tensor because the
+               --  fixture wrote it, and a published model was refused.
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2
+                 and then Containers.Find_Tensor
+                            (Source, Layer_Key (Index, "ffn_norm.bias"))
+                          /= 0
+               then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_norm.bias"),
+                     Width, Current.Feed_Norm_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+            end if;
+
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert then
+               --  No gate: one projection up, a Gaussian unit, one down.
+               --  The gate stays null, and the block below reads that
+               --  rather than the architecture.
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                  Feed, Width, Current.Up, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                  Width, Feed, Current.Down, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  A bias on each side of the block, which Phi2 has and
+               --  Falcon does not, so the arrangement they share is not
+               --  what decides this.
+               if Item.Settings.Kind in Phi2 | GPT2 | Bert then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_up.bias"),
+                     Feed, Current.Up_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_down.bias"),
+                     Width, Current.Down_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+
+            elsif Item.Settings.Experts = 0
+              and then Item.Settings.Kind = Phi3
+            then
+               --  The gate and the up projection in one tensor, gate
+               --  first. Taking them the other way round is a model that
+               --  gates on what it should be scaling, which reads as
+               --  fluent nonsense rather than as a refusal.
+               Resolve_Part
+                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                  Feed * 2, Width, 0, Feed,
+                  Current.Gate, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Part
+                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                  Feed * 2, Width, Feed, Feed,
+                  Current.Up, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                  Width, Feed, Current.Down, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+            elsif Item.Settings.Experts = 0 then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
+                  Feed, Width, Current.Gate, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                  Feed, Width, Current.Up, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                  Width, Feed, Current.Down, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  The one gated architecture here that shifts what it
+               --  projects down. Every other one carries no bias
+               --  anywhere in its feed-forward, which is why this is
+               --  asked for by architecture and not taken if present.
+               if Item.Settings.Kind = Jina_Bert_V2 then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_down.bias"),
+                     Width, Current.Down_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+            else
+               Resolve_Experts
+                 (Item, Source, Index, Current, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               --  And the expert every position goes through as well,
+               --  where the mixture has one, with the row that gates
+               --  it.
+               if Item.Settings.Shared_Feed > 0 then
+                  Resolve
+                    (Item, Source,
+                     Layer_Key (Index, "ffn_gate_shexp.weight"),
+                     Element_Count (Item.Settings.Shared_Feed), Width,
+                     Current.Shared_Gate, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source,
+                     Layer_Key (Index, "ffn_up_shexp.weight"),
+                     Element_Count (Item.Settings.Shared_Feed), Width,
+                     Current.Shared_Up, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source,
+                     Layer_Key (Index, "ffn_down_shexp.weight"),
+                     Width, Element_Count (Item.Settings.Shared_Feed),
+                     Current.Shared_Down, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source,
+                     Layer_Key (Index, "ffn_gate_inp_shexp.weight"),
+                     Width, Current.Shared_Router, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+            end if;
+
+            --  What makes a block past the stack a draft of the next
+            --  token: the projection from the stack's last state
+            --  beside the next token's embedding, each normalized
+            --  first, and the normalization ahead of the shared head.
+            if Beyond then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "nextn.eh_proj.weight"),
+                  Width, 2 * Width, Current.Next_Proj, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "nextn.enorm.weight"),
+                  Width, Current.Next_ENorm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "nextn.hnorm.weight"),
+                  Width, Current.Next_HNorm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source,
+                  Layer_Key (Index, "nextn.shared_head_norm.weight"),
+                  Width, Current.Next_Head_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end Resolve_Block;
       begin
          Resolve
            (Item, Source, "token_embd.weight", Vocab, Width,
@@ -2246,370 +3098,28 @@ package body Model_Runner.Llama is
 
          Item.Layers := new Layer_Array (0 .. Item.Settings.Layers - 1);
 
-         for Index in Item.Layers.all'Range loop
+         --  And the blocks past the stack, which are resolved as the
+         --  stack's full attention layers are, under the indices the file
+         --  gives them, plus what makes them a draft of the next token.
+         if Item.Settings.Next_Layers > 0 then
+            Item.Next := new Layer_Array (0 .. Item.Settings.Next_Layers - 1);
+         end if;
+
+         for Index in 0 .. Item.Settings.Layers + Item.Settings.Next_Layers - 1
+         loop
             if C.Is_Cancelled (Cancel) then
                Fail (E.Make (E.Generation_Cancelled));
                return;
             end if;
 
-            declare
-               Current : Layer renames Item.Layers.all (Index);
-            begin
-               --  The normalization a block is given on the way in. Every
-               --  architecture here has one except Bert, which normalizes
-               --  on the way out of each sublayer instead and carries no
-               --  tensor for this at all.
-               if not Normalizes_After (Item.Settings.Kind) then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_norm.weight"),
-                     Width, Current.Attention_Norm, Status);
-                  exit when E.Is_Error (Status);
-               end if;
+            if Index < Item.Settings.Layers then
+               Resolve_Block (Index, False, Item.Layers.all (Index));
+            else
+               Resolve_Block
+                 (Index, True, Item.Next.all (Index - Item.Settings.Layers));
+            end if;
 
-               --  Bert's two, which are the whole of its normalization: one
-               --  over the residual after attention has been added to it,
-               --  one over the residual after the feed-forward has. Both
-               --  centre and both carry a shift, so both take a bias where
-               --  Gemma2's post-normalizations take none.
-               --
-               --  They are read into the same two fields Gemma2 uses and
-               --  applied in a different place, which is the whole
-               --  difference between the two arrangements: Gemma2
-               --  normalizes what the sublayer produced and adds that,
-               --  and Bert adds what the sublayer produced and normalizes
-               --  the sum.
-               if Normalizes_After (Item.Settings.Kind) then
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "attn_output_norm.weight"), Width,
-                     Current.Post_Attention_Norm, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "attn_output_norm.bias"), Width,
-                     Current.Post_Attention_Norm_Bias, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "layer_output_norm.weight"), Width,
-                     Current.Post_Feed_Norm, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "layer_output_norm.bias"), Width,
-                     Current.Post_Feed_Norm_Bias, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  What the code variant of this architecture carries and
-               --  the text one does not: a third normalization inside the
-               --  attention sublayer, and one over the queries and one over
-               --  the keys. None of the three is computed here, and a file
-               --  carrying any of them is refused by name rather than read
-               --  as a model with three normalizations missing -- which is
-               --  an embedding, and a plausible one.
-               if Item.Settings.Kind = Jina_Bert_V2 then
-                  for Name of Unread_Jina_Norms loop
-                     if Containers.Find_Tensor
-                          (Source, Layer_Key (Index, Name.all)) /= 0
-                     then
-                        Status := E.Make (E.Arch_Unsupported_Feature);
-                        E.Add_Text
-                          (Status, "feature", Name.all, E.Param_Identifier);
-                        exit;
-                     end if;
-                  end loop;
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Gemma2 normalizes what each sublayer produced as well as
-               --  what it was given. Required rather than optional: a
-               --  gemma2 file without them is not one this build can
-               --  compute, and taking them if present would read such a
-               --  file as a model with two normalizations missing.
-               if Item.Settings.Kind in Gemma2 | Gemma3 then
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "post_attention_norm.weight"), Width,
-                     Current.Post_Attention_Norm, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "post_ffw_norm.weight"), Width,
-                     Current.Post_Feed_Norm, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Three projections out of one tensor where the
-               --  architecture fuses them, and three tensors where it does
-               --  not. The order inside the fused one is queries, then
-               --  keys, then values, which is the order the rows are
-               --  written in.
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_norm.bias"),
-                     Width, Current.Attention_Norm_Bias, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               if Item.Settings.Kind
-                  in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
-               then
-                  Resolve_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
-                     Wide + KV + KV_Out, Width, 0, Wide,
-                     Current.Query, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
-                     Wide + KV + KV_Out, Width, Wide, KV,
-                     Current.Key, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
-                     Wide + KV + KV_Out, Width, Wide + KV, KV_Out,
-                     Current.Value, Status, Repack);
-                  exit when E.Is_Error (Status);
-               else
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "attn_q.weight"),
-                     Wide, Width, Current.Query, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "attn_k.weight"),
-                     KV, Width, Current.Key, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "attn_v.weight"),
-                     KV_Out, Width, Current.Value, Status, Repack);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Qwen2 adds a bias to each projection; Llama and Qwen3
-               --  have none. Required when the architecture says so rather
-               --  than taken if present: a qwen2 file without them is a file
-               --  this cannot evaluate, and reading it as though the biases
-               --  were zero would produce plausible text that is not what
-               --  the model says.
-               --  Phi2 biases the same three projections, and writes the
-               --  three biases in one vector as it writes the three matrices
-               --  in one tensor. Each part is taken from the same offset its
-               --  matrix is taken from, so a reader that splits the matrices
-               --  correctly and the biases some other way would be wrong
-               --  only in what it adds -- which reads as a model that has
-               --  drifted rather than one that has broken.
-               if Item.Settings.Kind in Phi2 | GPT2 then
-                  Resolve_Norm_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
-                     Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
-                     Wide + KV + KV_Out, Wide, KV, Current.Key_Bias, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm_Part
-                    (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
-                     Wide + KV + KV_Out, Wide + KV, KV_Out,
-                     Current.Value_Bias, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Bert biases the same three and writes them as Qwen2
-               --  does, one vector a projection rather than three in one,
-               --  and jina-bert-v2 does the same.
-               if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_q.bias"),
-                     Wide, Current.Query_Bias, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_k.bias"),
-                     KV, Current.Key_Bias, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_v.bias"),
-                     KV_Out, Current.Value_Bias, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Qwen3 normalizes each query head and each key head before
-               --  the rotation, with one gain per element of a head shared
-               --  across the heads. Required for the architectures that have
-               --  it, for the same reason the biases are.
-               if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Gemma3 then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
-                     Element_Count (Item.Settings.Head_Size),
-                     Current.Query_Norm, Status);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
-                     Element_Count (Item.Settings.Head_Size),
-                     Current.Key_Norm, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               Resolve
-                 (Item, Source, Layer_Key (Index, "attn_output.weight"),
-                  Width, Blend, Current.Attention_Out, Status, Repack);
-               exit when E.Is_Error (Status);
-
-               --  And the bias on the way out of attention, which Phi2,
-               --  GPT2, Bert and jina-bert-v2 have and the rest have not.
-               if Item.Settings.Kind in
-                    Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
-               then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_output.bias"),
-                     Width, Current.Out_Bias, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  One score a head that joins the softmax's denominator and
-               --  has nothing behind it, which is what lets a head of this
-               --  architecture attend to nothing at all. Named by head
-               --  count rather than by width: there is one of these for
-               --  each head, not one for each component.
-               if Item.Settings.Kind = GPT_OSS then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "attn_sinks.weight"),
-                     Element_Count (Item.Settings.Heads), Current.Sinks,
-                     Status);
-                  exit when E.Is_Error (Status);
-               end if;
-
-               --  Falcon has one normalization a block, not two: attention
-               --  and the feed-forward read the same normalized input. The
-               --  feed norm stays null and the block below reads that.
-               if Item.Settings.Kind not in Falcon | Phi2
-                 and then not Normalizes_After (Item.Settings.Kind)
-               then
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "ffn_norm.weight"),
-                     Width, Current.Feed_Norm, Status);
-                  exit when E.Is_Error (Status);
-
-                  --  The shift beside it, where the architecture centres.
-                  --  Falcon and phi2 never reach here -- they have one
-                  --  normalization a block -- so this is gpt2's, and it was
-                  --  missing: the file carries it, the engine read every
-                  --  other layer-norm shift, and the feed-forward ran off a
-                  --  normalization that was neither centred nor shifted.
-                  --  Optional, and deliberately so. Requiring it would
-                  --  refuse a file that does not carry one, which is the
-                  --  trap this architecture's output bias already fell
-                  --  into: the loader asked for a tensor because the
-                  --  fixture wrote it, and a published model was refused.
-                  if Item.Settings.Kind in Falcon | Phi2 | GPT2
-                    and then Containers.Find_Tensor
-                               (Source, Layer_Key (Index, "ffn_norm.bias"))
-                             /= 0
-                  then
-                     Resolve_Norm
-                       (Item, Source, Layer_Key (Index, "ffn_norm.bias"),
-                        Width, Current.Feed_Norm_Bias, Status);
-                     exit when E.Is_Error (Status);
-                  end if;
-               end if;
-
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert then
-                  --  No gate: one projection up, a Gaussian unit, one down.
-                  --  The gate stays null, and the block below reads that
-                  --  rather than the architecture.
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                     Feed, Width, Current.Up, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
-                     Width, Feed, Current.Down, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  --  A bias on each side of the block, which Phi2 has and
-                  --  Falcon does not, so the arrangement they share is not
-                  --  what decides this.
-                  if Item.Settings.Kind in Phi2 | GPT2 | Bert then
-                     Resolve_Norm
-                       (Item, Source, Layer_Key (Index, "ffn_up.bias"),
-                        Feed, Current.Up_Bias, Status);
-                     exit when E.Is_Error (Status);
-
-                     Resolve_Norm
-                       (Item, Source, Layer_Key (Index, "ffn_down.bias"),
-                        Width, Current.Down_Bias, Status);
-                     exit when E.Is_Error (Status);
-                  end if;
-
-               elsif Item.Settings.Experts = 0
-                 and then Item.Settings.Kind = Phi3
-               then
-                  --  The gate and the up projection in one tensor, gate
-                  --  first. Taking them the other way round is a model that
-                  --  gates on what it should be scaling, which reads as
-                  --  fluent nonsense rather than as a refusal.
-                  Resolve_Part
-                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                     Feed * 2, Width, 0, Feed,
-                     Current.Gate, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve_Part
-                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                     Feed * 2, Width, Feed, Feed,
-                     Current.Up, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
-                     Width, Feed, Current.Down, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-               elsif Item.Settings.Experts = 0 then
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
-                     Feed, Width, Current.Gate, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
-                     Feed, Width, Current.Up, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
-                     Width, Feed, Current.Down, Status, Repack);
-                  exit when E.Is_Error (Status);
-
-                  --  The one gated architecture here that shifts what it
-                  --  projects down. Every other one carries no bias
-                  --  anywhere in its feed-forward, which is why this is
-                  --  asked for by architecture and not taken if present.
-                  if Item.Settings.Kind = Jina_Bert_V2 then
-                     Resolve_Norm
-                       (Item, Source, Layer_Key (Index, "ffn_down.bias"),
-                        Width, Current.Down_Bias, Status);
-                     exit when E.Is_Error (Status);
-                  end if;
-               else
-                  Resolve_Experts
-                    (Item, Source, Index, Current, Status, Repack);
-                  exit when E.Is_Error (Status);
-               end if;
-            end;
+            exit when E.Is_Error (Status);
          end loop;
 
          if E.Is_Error (Status) then
@@ -4784,6 +5294,53 @@ package body Model_Runner.Llama is
    --
    --  Input and Result must not be the same buffer: every expert reads the
    --  input after the sum has started being written.
+   --  The expert every position of a mixture goes through as well, where
+   --  the mixture has one: the same gated block an expert is, over the
+   --  whole feed width the file states for it, scaled by the sigmoid of
+   --  its own router row against the input, and added to what the chosen
+   --  experts said. One position here, a batch below.
+   procedure Shared_Expert
+     (Item    : in out Session;
+      Current : Layer;
+      Input   : T.Real_Array_Access;
+      Result  : in out Real_Array;
+      Status  : out E.Error_Info)
+   is
+      Gate : N.Wide_Real := 0.0;
+   begin
+      Product_Group
+        (Item, [Current.Shared_Gate, Current.Shared_Up], Input,
+         [Item.Shared_Row, Item.Shared_Up_Row], Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      K.SiLU (Item.Shared_Row.all);
+      K.Multiply (Item.Shared_Row.all, Item.Shared_Up_Row.all);
+
+      Product
+        (Item, Current.Shared_Down, Item.Shared_Row, Item.Shared_Out_Row,
+         Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      for Index in Input.all'Range loop
+         Gate := Gate
+           + N.Wide_Real (Input.all (Index))
+             * N.Wide_Real (Current.Shared_Router.all (Index));
+      end loop;
+
+      declare
+         Scale : constant Real := Sigmoid (Real (Gate));
+      begin
+         for Index in Result'Range loop
+            Result (Index) :=
+              Result (Index) + Scale * Item.Shared_Out_Row.all (Index);
+         end loop;
+      end;
+   end Shared_Expert;
+
    procedure Mixture
      (Item    : in out Session;
       Current : Layer;
@@ -5191,6 +5748,10 @@ package body Model_Runner.Llama is
             end loop;
          end;
       end if;
+
+      if T.Is_Present (Current.Shared_Gate) then
+         Shared_Expert (Item, Current, Input, Result.all, Status);
+      end if;
    end Mixture;
 
    -------------------
@@ -5295,6 +5856,70 @@ package body Model_Runner.Llama is
          --  Not an error: the caller runs the positions one at a time,
          --  which is what it did before any of this existed.
          return;
+      end if;
+
+      --  The shared expert over the whole batch, while the rows are still
+      --  the input: its answer and its gate a row, added in at the end
+      --  once the chosen experts have been summed into the rows.
+      if T.Is_Present (Current.Shared_Gate) then
+         declare
+            Shared : constant Element_Count :=
+              Element_Count (Settings.Shared_Feed);
+         begin
+            Ensure (Item.Shared_Rows_A, Count * Shared);
+            Ensure (Item.Shared_Rows_B, Count * Shared);
+            Ensure (Item.Shared_Rows_Out, Wide + Count);
+
+            if Item.Shared_Rows_A = null or else Item.Shared_Rows_B = null
+              or else Item.Shared_Rows_Out = null
+            then
+               return;
+            end if;
+
+            --  The gates first, after the answer's room: one number a
+            --  row, the sigmoid of the router row against the input.
+            for Which in 0 .. Count - 1 loop
+               declare
+                  At_Row : constant Element_Count :=
+                    Rows.all'First + Which * Width;
+                  Gate : N.Wide_Real := 0.0;
+               begin
+                  for C in 0 .. Width - 1 loop
+                     Gate := Gate
+                       + N.Wide_Real (Rows.all (At_Row + C))
+                         * N.Wide_Real (Current.Shared_Router.all (C));
+                  end loop;
+
+                  Item.Shared_Rows_Out.all (Wide + Which) :=
+                    Sigmoid (Real (Gate));
+               end;
+            end loop;
+
+            Product_Batch
+              (Item, Current.Shared_Gate, Rows, Count, Item.Shared_Rows_A,
+               Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Product_Batch
+              (Item, Current.Shared_Up, Rows, Count, Item.Shared_Rows_B,
+               Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            K.SiLU (Item.Shared_Rows_A.all (0 .. Count * Shared - 1));
+            K.Multiply
+              (Item.Shared_Rows_A.all (0 .. Count * Shared - 1),
+               Item.Shared_Rows_B.all (0 .. Count * Shared - 1));
+
+            Product_Batch
+              (Item, Current.Shared_Down, Item.Shared_Rows_A, Count,
+               Item.Shared_Rows_Out, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
       end if;
 
       --  Routed on the device where the device holds the stacks, through
@@ -6125,6 +6750,20 @@ package body Model_Runner.Llama is
                   K.Add (Into, Mine);
                end;
             end loop;
+
+            --  And the shared expert's answer for this row, at its gate.
+            if T.Is_Present (Current.Shared_Gate) then
+               declare
+                  Scale : constant Real :=
+                    Item.Shared_Rows_Out.all (Wide + Where);
+               begin
+                  for C in 0 .. Width - 1 loop
+                     Into (Into'First + C) :=
+                       Into (Into'First + C)
+                       + Scale * Item.Shared_Rows_Out.all (Where * Width + C);
+                  end loop;
+               end;
+            end if;
          end;
       end loop;
 
@@ -6161,34 +6800,60 @@ package body Model_Runner.Llama is
 
       Item.Ready := False;
 
-      if Item.Layers /= null then
-         for Index in Item.Layers.all'Range loop
-            T.Free (Item.Layers.all (Index).Attention_Norm);
-            T.Free (Item.Layers.all (Index).Post_Attention_Norm);
-            T.Free (Item.Layers.all (Index).Attention_Norm_Bias);
-            T.Free (Item.Layers.all (Index).Post_Feed_Norm);
-            T.Free (Item.Layers.all (Index).Feed_Norm);
-            T.Free (Item.Layers.all (Index).Feed_Norm_Bias);
+      declare
+         --  A layer's vectors, of the stack or past it.
+         procedure Free_Layer (Which : in out Layer) is
+         begin
+            T.Free (Which.Attention_Norm);
+            T.Free (Which.Post_Attention_Norm);
+            T.Free (Which.Attention_Norm_Bias);
+            T.Free (Which.Post_Feed_Norm);
+            T.Free (Which.Feed_Norm);
+            T.Free (Which.Feed_Norm_Bias);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
             --  that architecture has them, which is why closing a llama
             --  model looked clean.
-            T.Free (Item.Layers.all (Index).Query_Norm);
-            T.Free (Item.Layers.all (Index).Key_Norm);
-            T.Free (Item.Layers.all (Index).Query_Bias);
-            T.Free (Item.Layers.all (Index).Key_Bias);
-            T.Free (Item.Layers.all (Index).Value_Bias);
-            T.Free (Item.Layers.all (Index).Out_Bias);
-            T.Free (Item.Layers.all (Index).Up_Bias);
-            T.Free (Item.Layers.all (Index).Down_Bias);
+            T.Free (Which.Query_Norm);
+            T.Free (Which.Key_Norm);
+            T.Free (Which.Query_Bias);
+            T.Free (Which.Key_Bias);
+            T.Free (Which.Value_Bias);
+            T.Free (Which.Out_Bias);
+            T.Free (Which.Up_Bias);
+            T.Free (Which.Down_Bias);
 
-            if Item.Layers.all (Index).Experts /= null then
-               Deallocate_Experts (Item.Layers.all (Index).Experts);
+            --  The linear layer's, the shared expert's and the next
+            --  block's, null for a layer without them.
+            T.Free (Which.A_Log);
+            T.Free (Which.DT_Bias);
+            T.Free (Which.Conv);
+            T.Free (Which.State_Norm);
+            T.Free (Which.Shared_Router);
+            T.Free (Which.Next_ENorm);
+            T.Free (Which.Next_HNorm);
+            T.Free (Which.Next_Head_Norm);
+
+            if Which.Experts /= null then
+               Deallocate_Experts (Which.Experts);
             end if;
-         end loop;
-         Deallocate_Layers (Item.Layers);
-      end if;
+         end Free_Layer;
+      begin
+         if Item.Layers /= null then
+            for Index in Item.Layers.all'Range loop
+               Free_Layer (Item.Layers.all (Index));
+            end loop;
+            Deallocate_Layers (Item.Layers);
+         end if;
+
+         if Item.Next /= null then
+            for Index in Item.Next.all'Range loop
+               Free_Layer (Item.Next.all (Index));
+            end loop;
+            Deallocate_Layers (Item.Next);
+         end if;
+      end;
 
       T.Free (Item.Output_Norm);
       T.Free (Item.Output_Norm_Bias);
@@ -6943,8 +7608,18 @@ package body Model_Runner.Llama is
       is (if Item.Origin = null then 0
           else B.Byte_Count (Item.Origin.all (Natural (Layer))));
 
+      --  A linear layer holds no keys and values: nothing of it is a run.
       function Run_Of (Layer : B.Byte_Count) return B.Byte_Count
-      is (if Origin_Of (Layer) >= Held then 0 else Held - Origin_Of (Layer));
+      is (if Linear (Settings, Natural (Layer)) or else Origin_Of (Layer) >= Held
+          then 0 else Held - Origin_Of (Layer));
+
+      --  And what it holds instead, written after every layer's values:
+      --  every linear layer's convolution memory and state, as they are.
+      States : constant B.Byte_Count :=
+        (if Hybrid (Settings.Kind)
+         then B.Byte_Count (Conv_Room (Settings))
+              + B.Byte_Count (State_Room (Settings))
+         else 0);
 
       function Runs return B.Byte_Count;
 
@@ -6966,7 +7641,8 @@ package body Model_Runner.Llama is
       Length : constant B.Byte_Count :=
         10 * 8 + Held * 8 + 2 * Layers * 8
         + Spans * KV_Width * 4
-        + Spans * V_Width * 4;
+        + Spans * V_Width * 4
+        + States * 4;
 
       At_Byte : B.Byte_Count := 0;
 
@@ -7088,6 +7764,19 @@ package body Model_Runner.Llama is
             end loop;
          end;
       end loop;
+
+      --  The linear layers' memories and states, whole.
+      if Item.Conv_State /= null then
+         for Value of Item.Conv_State.all loop
+            Put_Bits (N.Bits (Value));
+         end loop;
+      end if;
+
+      if Item.Delta_State /= null then
+         for Value of Item.Delta_State.all loop
+            Put_Bits (N.Bits (Value));
+         end loop;
+      end if;
    end Snapshot;
 
    -----------
@@ -7379,7 +8068,8 @@ package body Model_Runner.Llama is
          for Layer_Index in 0 .. Settings.Layers - 1 loop
             Get_Run
               (True, Keys_At (Item, Layer_Index),
-               (Held - Item.Origin.all (Layer_Index)) * KV_Width);
+               (if Linear (Settings, Layer_Index) then 0
+                else (Held - Item.Origin.all (Layer_Index)) * KV_Width));
             exit when Trouble;
          end loop;
       end if;
@@ -7388,8 +8078,33 @@ package body Model_Runner.Llama is
          for Layer_Index in 0 .. Settings.Layers - 1 loop
             Get_Run
               (False, Values_At (Item, Layer_Index),
-               (Held - Item.Origin.all (Layer_Index)) * V_Width);
+               (if Linear (Settings, Layer_Index) then 0
+                else (Held - Item.Origin.all (Layer_Index)) * V_Width));
             exit when Trouble;
+         end loop;
+      end if;
+
+      --  And the linear layers' memories and states, whole, where the
+      --  session has them; a snapshot without them is one of another
+      --  model's shape and was refused above by its fingerprint.
+      if not Trouble and then Item.Conv_State /= null then
+         for Value of Item.Conv_State.all loop
+            declare
+               Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+            begin
+               exit when Trouble;
+               Value := N.From_Bits (Bits);
+            end;
+         end loop;
+      end if;
+      if not Trouble and then Item.Delta_State /= null then
+         for Value of Item.Delta_State.all loop
+            declare
+               Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+            begin
+               exit when Trouble;
+               Value := N.From_Bits (Bits);
+            end;
          end loop;
       end if;
 
@@ -7443,8 +8158,12 @@ package body Model_Runner.Llama is
       --  against what this said.
       Margin : constant Natural := Max_Batch;
 
+      --  A linear layer keeps no cells: its state is counted below. The
+      --  block past the stack keeps a layer's worth, as Open gives it.
       function Cells_Of (Layer : Natural) return Natural
-      is (if Slides (Settings, Layer)
+      is (if Linear (Settings, Layer) and then Layer < Settings.Layers
+          then 0
+          elsif Slides (Settings, Layer)
           then Natural'Min (Capacity, Settings.Window + Margin)
           else Capacity);
 
@@ -7453,11 +8172,30 @@ package body Model_Runner.Llama is
       function Positions return Interfaces.Unsigned_64 is
          Total : Interfaces.Unsigned_64 := 0;
       begin
-         for Layer in 0 .. Settings.Layers - 1 loop
+         for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
             Total := Total + Interfaces.Unsigned_64 (Cells_Of (Layer));
          end loop;
          return Total;
       end Positions;
+
+      --  What the linear layers hold instead: a state a value head and
+      --  the convolution's memory, each layer, in binary32.
+      function Linear_Bytes return Interfaces.Unsigned_64 is
+         Count : Natural := 0;
+      begin
+         for Layer in 0 .. Settings.Layers - 1 loop
+            if Linear (Settings, Layer) then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Interfaces.Unsigned_64 (Count)
+           * (Interfaces.Unsigned_64 (Settings.Value_Heads)
+              * Interfaces.Unsigned_64 (Settings.State_Size)
+              * Interfaces.Unsigned_64 (Settings.State_Size)
+              + Interfaces.Unsigned_64 (Natural'Max (Settings.Conv_Kernel, 1) - 1)
+                * Interfaces.Unsigned_64 (Mix_Width (Settings)))
+           * 4;
+      end Linear_Bytes;
 
       --  positions * kv heads * head size * bytes * 2, entirely in checked
       --  arithmetic so that an implausible request is reported as an
@@ -7476,7 +8214,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Plan.KV_Cache_Bytes := A.Value (Room);
+      Plan.KV_Cache_Bytes := A.Value (Room) + Linear_Bytes;
       Plan.Activation_Bytes :=
         Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 4;
       Plan.Batch_Bytes :=
@@ -7632,15 +8370,22 @@ package body Model_Runner.Llama is
 
          Windowed : constant Boolean := Settings.Window > 0;
       begin
-         Item.Cells := new Cell_Counts (0 .. Layers - 1);
-         Item.At_Keys := new Cell_Counts (0 .. Layers - 1);
-         Item.At_Values := new Cell_Counts (0 .. Layers - 1);
-         Item.At_Rows := new Cell_Counts (0 .. Layers - 1);
-         Item.Origin := new Cell_Counts (0 .. Layers - 1);
+         --  One entry a layer of the stack, and one more for each block
+         --  past it, which attends in full over the same context and
+         --  keeps its keys and values here like a layer of the stack.
+         Item.Cells := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
+         Item.At_Keys := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
+         Item.At_Values := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
+         Item.At_Rows := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
+         Item.Origin := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
 
-         for Layer in 0 .. Layers - 1 loop
+         for Layer in 0 .. Layers + Settings.Next_Layers - 1 loop
             Item.Cells.all (Layer) :=
-              (if Windowed and then Slides (Settings, Layer)
+              (if Layer < Layers and then Linear (Settings, Layer)
+               --  A linear layer keeps a state instead, below.
+               then 0
+               elsif Layer < Layers and then Windowed
+                 and then Slides (Settings, Layer)
                then Element_Count'Min
                       (Element_Count (Capacity),
                        Element_Count (Settings.Window) + Margin)
@@ -7678,8 +8423,8 @@ package body Model_Runner.Llama is
          --  holds between them, which is the whole context a layer only
          --  where no layer slides a window.
          Rows  : constant Element_Count :=
-           Item.At_Rows.all (Settings.Layers - 1)
-           + Item.Cells.all (Settings.Layers - 1);
+           Item.At_Rows.all (Item.At_Rows.all'Last)
+           + Item.Cells.all (Item.Cells.all'Last);
       begin
          --  One storage or the other, never both.
          --
@@ -7792,11 +8537,83 @@ package body Model_Runner.Llama is
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
          Item.History := new Token_History (0 .. Capacity - 1);
 
+         --  What a hybrid's layers keep and pass through: the gate beside
+         --  the heads, a linear layer's rows on the way through, its
+         --  convolution's memory and its state, and a mixture's shared
+         --  expert's arms.
+         if Hybrid (Settings.Kind) then
+            declare
+               Linears : Natural := 0;
+            begin
+               for Layer in 0 .. Settings.Layers - 1 loop
+                  if Linear (Settings, Layer) then
+                     Linears := Linears + 1;
+                  end if;
+               end loop;
+
+               --  The query projection's whole answer, twice as wide as
+               --  the queries: each head's queries and then its gate,
+               --  split out from here into the two rows the rest reads.
+               T.Allocate (2 * Wide, Item.Query_Full);
+
+               --  And what the block past the stack takes in and what
+               --  it is given: the last position's final state, and the
+               --  two normalized halves side by side.
+               if Settings.Next_Layers > 0 then
+                  T.Allocate (Width, Item.Last_Final);
+                  T.Allocate (2 * Width, Item.Next_Input);
+               end if;
+               T.Allocate (Wide, Item.Head_Gate);
+               T.Allocate (Element_Count (Mix_Width (Settings)), Item.Mix_Row);
+               T.Allocate (Element_Count (Value_Width (Settings)), Item.Z_Row);
+               T.Allocate (Element_Count (Settings.Value_Heads), Item.Alpha_Row);
+               T.Allocate (Element_Count (Settings.Value_Heads), Item.Beta_Row);
+               T.Allocate
+                 (Element_Count (Value_Width (Settings)), Item.Blend_Row);
+               T.Allocate
+                 (Element_Count (Linears)
+                  * Element_Count (Settings.Conv_Kernel - 1)
+                  * Element_Count (Mix_Width (Settings)),
+                  Item.Conv_State);
+               T.Allocate
+                 (Element_Count (Linears)
+                  * Element_Count (Settings.Value_Heads)
+                  * Element_Count (Settings.State_Size)
+                  * Element_Count (Settings.State_Size),
+                  Item.Delta_State);
+
+               if Settings.Shared_Feed > 0 then
+                  T.Allocate
+                    (Element_Count (Settings.Shared_Feed), Item.Shared_Row);
+                  T.Allocate
+                    (Element_Count (Settings.Shared_Feed), Item.Shared_Up_Row);
+                  T.Allocate (Width, Item.Shared_Out_Row);
+               end if;
+
+               if Item.Head_Gate = null or else Item.Query_Full = null
+                 or else Item.Mix_Row = null
+                 or else Item.Z_Row = null or else Item.Alpha_Row = null
+                 or else Item.Beta_Row = null or else Item.Blend_Row = null
+                 or else Item.Conv_State = null or else Item.Delta_State = null
+                 or else (Settings.Shared_Feed > 0
+                          and then (Item.Shared_Row = null
+                                    or else Item.Shared_Up_Row = null
+                                    or else Item.Shared_Out_Row = null))
+               then
+                  Close (Item);
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+
+               Item.Conv_State.all := [others => 0.0];
+               Item.Delta_State.all := [others => 0.0];
+            end;
+         end if;
+
          --  An architecture that normalizes its heads needs room for one.
          if Settings.Head_Size > 0
            and then Source.Layers /= null
-           and then Source.Layers.all (Source.Layers.all'First).Query_Norm
-                    /= null
+           and then (for some L of Source.Layers.all => L.Query_Norm /= null)
          then
             T.Allocate (Element_Count (Settings.Head_Size), Item.Head_Row);
             if Item.Head_Row = null then
@@ -7907,6 +8724,25 @@ package body Model_Runner.Llama is
       T.Free (Item.Gate);
       T.Free (Item.Up);
       T.Free (Item.Head_Row);
+      T.Free (Item.Query_Full);
+      T.Free (Item.Last_Final);
+      T.Free (Item.Next_Input);
+      T.Free (Item.Head_Gate);
+      T.Free (Item.Mix_Row);
+      T.Free (Item.Z_Row);
+      T.Free (Item.Alpha_Row);
+      T.Free (Item.Beta_Row);
+      T.Free (Item.Blend_Row);
+      T.Free (Item.Shared_Row);
+      T.Free (Item.Shared_Up_Row);
+      T.Free (Item.Shared_Out_Row);
+      T.Free (Item.Shared_Rows_A);
+      T.Free (Item.Shared_Rows_B);
+      T.Free (Item.Shared_Rows_Out);
+      T.Free (Item.Conv_State);
+      T.Free (Item.Delta_State);
+      T.Free (Item.Past_States);
+      T.Free (Item.Past_Convs);
       T.Free (Item.Routing);
       T.Free (Item.Mixture);
       T.Free (Item.Expert_Row);
@@ -8139,6 +8975,16 @@ package body Model_Runner.Llama is
 
       Status := E.Success;
 
+      --  A hybrid's linear layers hold no positions to move: their state
+      --  is everything before it at once, and a context with the middle
+      --  taken out is a context they never saw. Refused by name, and the
+      --  caller re-evaluates what it keeps.
+      if Hybrid (Settings.Kind) then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "shift", E.Param_Identifier);
+         return;
+      end if;
+
       if Item.Current = Closed or else Item.Current = Failed then
          Status := E.Make (E.Lifecycle_Invalid_State);
          E.Add_Text
@@ -8354,11 +9200,88 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A linear layer's state is what it is now and cannot be walked
+      --  back: it is restored from the ring where the ring reaches, nought
+      --  again at the front, and refused past that.
+      if Item.Delta_State /= null and then Position < Item.Committed then
+         if Position = 0 then
+            Item.Delta_State.all := [others => 0.0];
+            Item.Conv_State.all := [others => 0.0];
+         elsif Item.Kept_States > 0
+           and then Position <= Item.Kept_Newest
+           and then Position + Item.Kept_States > Item.Kept_Newest
+         then
+            declare
+               Settings : Configuration renames Item.Owner.Settings;
+               Slot : constant Element_Count :=
+                 Element_Count ((Position - 1) mod Item.Kept_States);
+               Every_State : constant Element_Count := State_Room (Settings);
+               Every_Conv  : constant Element_Count := Conv_Room (Settings);
+            begin
+               Item.Delta_State.all :=
+                 Item.Past_States.all
+                   (Slot * Every_State .. (Slot + 1) * Every_State - 1);
+               Item.Conv_State.all :=
+                 Item.Past_Convs.all
+                   (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1);
+            end;
+         else
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Integer (Status, "input", Long_Long_Integer (Position));
+            E.Add_Integer
+              (Status, "expected",
+               Long_Long_Integer
+                 (Natural'Max (0, Item.Kept_Newest - Item.Kept_States + 1)));
+            return;
+         end if;
+      end if;
+
       --  Nothing is cleared. What is past the position is not read: every
       --  attention reads the committed length and every write past it is a
       --  write to a slot that will be written again before it is read.
       Item.Committed := Position;
    end Rewind;
+
+   procedure Keep_States
+     (Item   : in out Session;
+      Count  : Natural;
+      Status : out E.Error_Info) is
+   begin
+      Status := E.Success;
+
+      if Item.Current = Closed or else Item.Owner = null then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         return;
+      end if;
+
+      T.Free (Item.Past_States);
+      T.Free (Item.Past_Convs);
+      Item.Kept_States := 0;
+
+      if Count = 0 or else Item.Delta_State = null then
+         return;
+      end if;
+
+      T.Allocate
+        (Element_Count (Count) * State_Room (Item.Owner.Settings),
+         Item.Past_States);
+      T.Allocate
+        (Element_Count (Count) * Conv_Room (Item.Owner.Settings),
+         Item.Past_Convs);
+
+      if Item.Past_States = null or else Item.Past_Convs = null then
+         T.Free (Item.Past_States);
+         T.Free (Item.Past_Convs);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      Item.Kept_States := Count;
+      Item.Kept_Newest := 0;
+   end Keep_States;
+
+   function States_Kept (Item : Session) return Natural
+   is (if Item.Delta_State = null then Natural'Last else Item.Kept_States);
 
    procedure Reset (Item : in out Session) is
    begin
@@ -8384,6 +9307,20 @@ package body Model_Runner.Llama is
       if Item.Origin /= null then
          Item.Origin.all := [others => 0];
       end if;
+
+      --  A linear layer's memory of the context is its state and its
+      --  convolution's last positions, and a context that is over is a
+      --  state that is nought again.
+      if Item.Conv_State /= null then
+         Item.Conv_State.all := [others => 0.0];
+      end if;
+      if Item.Delta_State /= null then
+         Item.Delta_State.all := [others => 0.0];
+      end if;
+      Item.Kept_Newest := 0;
+
+      --  And the last state was the last of a context that is over.
+      Item.Has_Final := False;
 
       Item.Committed := 0;
       if Item.Current /= Closed then
@@ -8428,6 +9365,670 @@ package body Model_Runner.Llama is
          return Position - Width + 1;
       end if;
    end Earliest;
+
+   ------------------------
+   -- The linear layers --
+   ------------------------
+
+   --  One position through one linear layer, on the host, from the
+   --  normalized activation in Item.Normalized to the layer's answer in
+   --  Item.Normalized, ready to be joined to the residual. The four
+   --  projections go to whichever backend the session runs on; the
+   --  convolution, the rule and the gated normalization are here.
+   --
+   --  The convolution: each component of the mixed projection is a
+   --  weighted sum of its last Conv_Kernel positions' values, the taps
+   --  laid one component at a time in the file, the newest position
+   --  under the last tap; then a sigmoid-linear unit. The memory of the
+   --  earlier positions is the session's, and moves up by one.
+   --
+   --  The rule, a value head at a time, its key head being its number
+   --  modulo the key heads -- the file lays the value heads out for that
+   --  -- with the queries and keys normalized to unit length first: the
+   --  state decays by exp (g), the value's error against what the state
+   --  already says of the key is taken at the rate beta, the key times
+   --  that error is added to the state, and the query reads the state
+   --  out, scaled by one over the root of the width. g is minus the
+   --  exponential of A_Log times the softplus of the decay projection
+   --  plus its bias; beta the sigmoid of the rate projection.
+   --
+   --  The blend is normalized a head at a time by root mean square with
+   --  the layer's gain, and scaled by the sigmoid-linear unit of the
+   --  gate projection, component by component, before the projection
+   --  back.
+   --  Where a linear layer's rows for one position are: a session's own
+   --  for one token, a batch buffer's slice for one of many. Each is an
+   --  array and the origin of the row in it.
+   type Linear_Rows is record
+      Mixed  : T.Real_Array_Access := null;
+      Z_Gate : T.Real_Array_Access := null;
+      Alpha  : T.Real_Array_Access := null;
+      Beta   : T.Real_Array_Access := null;
+      Blend  : T.Real_Array_Access := null;
+      M0, Z0, A0, B0, O0 : Element_Count := 0;
+   end record;
+
+   --  The rule for a share of the value heads: each head's state decayed,
+   --  corrected by what it would have said of the value against the value,
+   --  and read at the query; then normalized and gated. Heads are
+   --  independent, so the team takes them in shares.
+   --
+   --  A head's state is kept key-major: row I holds what key dimension I
+   --  contributes to every value dimension. Every step is then a row
+   --  scaled and added to a running row -- contiguous, and no sum to wait
+   --  on. The other way round, value-major, each of the two readings is a
+   --  dot product a row, and a chain of dependent additions a hundred and
+   --  twenty-eight long is what a head's worth of rows spent its time on.
+   type Rule_Share is limited new Workers_CPU.Task_Item with record
+      State      : T.Real_Array_Access := null;
+      States     : Element_Count := 0;
+      Head       : Element_Count := 0;
+      Keys_Wide  : Element_Count := 0;
+      Key_Heads  : Element_Count := 0;
+      A_Log      : T.Real_Array_Access := null;
+      DT_Bias    : T.Real_Array_Access := null;
+      State_Norm : T.Real_Array_Access := null;
+      Epsilon    : Real := 0.0;
+      Scale      : Real := 0.0;
+      Rows       : Linear_Rows;
+
+      --  False where a share found a row out of its array's reach and
+      --  wrote nothing.
+      Ok         : Boolean := True;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Rule_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Rule_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      Head   : constant Element_Count := Share.Head;
+      State  : Real_Array renames Share.State.all;
+      Mixed  : Real_Array renames Share.Rows.Mixed.all;
+      Z_Gate : Real_Array renames Share.Rows.Z_Gate.all;
+      Blend  : Real_Array renames Share.Rows.Blend.all;
+      M0     : constant Element_Count := Share.Rows.M0;
+      Error  : Real_Array (0 .. Head - 1);
+      Read   : Real_Array (0 .. Head - 1);
+
+      --  The reach proved once for the last head of the share and the
+      --  checks left out of the loops, which is what lets them run as
+      --  rows rather than as an index check an element: with the checks
+      --  in, a position's eighteen layers of this read 2.7 ms.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      if From > To then
+         return;
+      end if;
+
+      if Share.Key_Heads = 0
+        or else Share.States + (To + 1) * Head * Head - 1 > State'Last
+        or else M0 + 2 * Share.Keys_Wide + (To + 1) * Head - 1 > Mixed'Last
+        or else Share.Rows.O0 + (To + 1) * Head - 1 > Blend'Last
+        or else Share.Rows.Z0 + (To + 1) * Head - 1 > Z_Gate'Last
+        or else Share.Rows.A0 + To > Share.Rows.Alpha.all'Last
+        or else Share.Rows.B0 + To > Share.Rows.Beta.all'Last
+        or else To > Share.A_Log.all'Last
+        or else To > Share.DT_Bias.all'Last
+        or else Head - 1 > Share.State_Norm.all'Last
+      then
+         Share.Ok := False;
+         return;
+      end if;
+
+      for H in From .. To loop
+         declare
+            KH : constant Element_Count := H mod Share.Key_Heads;
+            Q_At : constant Element_Count := M0 + KH * Head;
+            K_At : constant Element_Count := M0 + Share.Keys_Wide + KH * Head;
+            V_At : constant Element_Count :=
+              M0 + 2 * Share.Keys_Wide + H * Head;
+            O_At : constant Element_Count := Share.Rows.O0 + H * Head;
+            S_At : constant Element_Count := Share.States + H * Head * Head;
+
+            --  The file keeps minus the exponential of the decay's
+            --  shape, not the shape: what is stored is what multiplies.
+            Decay : constant Real :=
+              Real (N.Exp (N.Wide_Real
+                (Share.A_Log.all (H)
+                 * Softplus (Share.Rows.Alpha.all (Share.Rows.A0 + H)
+                             + Share.DT_Bias.all (H)))));
+            Rate  : constant Real :=
+              Sigmoid (Share.Rows.Beta.all (Share.Rows.B0 + H));
+         begin
+            --  What the state says of the value, a key row at a time,
+            --  read without being written: the decay is one factor over
+            --  the whole of it and is taken on the sum. The value less
+            --  that, at the rate. Eighteen layers' states are eighteen
+            --  megabytes, past any cache, so a position pays for every
+            --  pass over them in memory; this leaves it three, not four.
+            Error := [others => 0.0];
+            for I in 0 .. Head - 1 loop
+               declare
+                  Row : constant Element_Count := S_At + I * Head;
+                  Key : constant Real := Mixed (K_At + I);
+               begin
+                  for J in 0 .. Head - 1 loop
+                     Error (J) := Error (J) + State (Row + J) * Key;
+                  end loop;
+               end;
+            end loop;
+
+            for J in 0 .. Head - 1 loop
+               Error (J) := (Mixed (V_At + J) - Error (J) * Decay) * Rate;
+            end loop;
+
+            --  The decay and the correction written in, and the query
+            --  read out of the corrected state, in one pass.
+            Read := [others => 0.0];
+            for I in 0 .. Head - 1 loop
+               declare
+                  Row   : constant Element_Count := S_At + I * Head;
+                  Key   : constant Real := Mixed (K_At + I);
+                  Query : constant Real := Mixed (Q_At + I);
+               begin
+                  for J in 0 .. Head - 1 loop
+                     State (Row + J) :=
+                       State (Row + J) * Decay + Key * Error (J);
+                     Read (J) := Read (J) + State (Row + J) * Query;
+                  end loop;
+               end;
+            end loop;
+
+            --  Normalized and gated, into the blend.
+            declare
+               Sum : N.Wide_Real := 0.0;
+            begin
+               for J in 0 .. Head - 1 loop
+                  Read (J) := Read (J) * Share.Scale;
+                  Sum := Sum + N.Wide_Real (Read (J)) * N.Wide_Real (Read (J));
+               end loop;
+
+               declare
+                  Root : constant Real :=
+                    Real (1.0 / N.Sqrt (Sum / N.Wide_Real (Head)
+                                        + N.Wide_Real (Share.Epsilon)));
+               begin
+                  for J in 0 .. Head - 1 loop
+                     declare
+                        Z : constant Real :=
+                          Z_Gate (Share.Rows.Z0 + H * Head + J);
+                     begin
+                        Blend (O_At + J) :=
+                          Read (J) * Root
+                          * Share.State_Norm.all (J)
+                          * (Z / (1.0 + Real (N.Exp (N.Wide_Real (-Z)))));
+                     end;
+                  end loop;
+               end;
+            end;
+         end;
+      end loop;
+   end Run;
+
+   --  One position of a linear layer past its projections: the
+   --  convolution over the mixed row and the ones remembered, the queries
+   --  and keys to unit length, the rule a value head at a time, and the
+   --  blend normalized and gated -- reading the state the position before
+   --  left and leaving its own.
+   procedure Linear_Core
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Position    : Natural;
+      Rows        : Linear_Rows;
+      Status      : out E.Error_Info)
+   is
+      Settings : Configuration renames Source.Settings;
+
+      Keys_Wide : constant Element_Count :=
+        Element_Count (Key_Width (Settings));
+      Head      : constant Element_Count :=
+        Element_Count (Settings.State_Size);
+      Mix       : constant Element_Count :=
+        Element_Count (Mix_Width (Settings));
+      Taps      : constant Element_Count :=
+        Element_Count (Settings.Conv_Kernel);
+      Memory    : constant Element_Count := Conv_At (Settings, Layer_Index);
+      States    : constant Element_Count := State_At (Settings, Layer_Index);
+      Value_Heads : constant Element_Count :=
+        Element_Count (Settings.Value_Heads);
+
+      --  The reach proved once below and the checks left out of the
+      --  loops, as in the rule: with them in, a layer's convolution over
+      --  six thousand components read 50 microseconds a position.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      Status := E.Success;
+
+      if Rows.Mixed = null or else Rows.Blend = null
+        or else Rows.M0 + Mix - 1 > Rows.Mixed.all'Last
+        or else Current.Conv = null
+        or else Current.Conv.all'Length /= Taps * Mix
+        or else Item.Conv_State = null
+        or else Memory + (Taps - 1) * Mix - 1 > Item.Conv_State.all'Last
+        or else Taps < 2
+        or else 2 * Keys_Wide > Mix
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Text (Status, "tensor", "ssm_conv1d", E.Param_Identifier);
+         return;
+      end if;
+
+      --  The convolution over this position and the ones remembered, a
+      --  tap over the whole row at a time, the memory moved up, and the
+      --  unit -- which is the row times its own logistic, and the kernel
+      --  for that takes the exponential in binary32 rather than through
+      --  the library's: six thousand of the library's a layer read as
+      --  most of what a position cost.
+      declare
+         Conv  : Real_Array renames Current.Conv.all;
+         Kept  : Real_Array renames Item.Conv_State.all;
+         Mixed : Real_Array renames Rows.Mixed.all;
+         M0    : constant Element_Count := Rows.M0;
+         Fresh : constant Real_Array (0 .. Mix - 1) :=
+           Mixed (M0 .. M0 + Mix - 1);
+         Last  : constant Element_Count := (Taps - 1) * Mix;
+      begin
+         for C in 0 .. Mix - 1 loop
+            Mixed (M0 + C) := Fresh (C) * Conv (Last + C);
+         end loop;
+
+         for K in 0 .. Taps - 2 loop
+            declare
+               Slot : constant Element_Count := Memory + K * Mix;
+               Tap  : constant Element_Count := K * Mix;
+            begin
+               for C in 0 .. Mix - 1 loop
+                  Mixed (M0 + C) :=
+                    Mixed (M0 + C) + Kept (Slot + C) * Conv (Tap + C);
+               end loop;
+            end;
+         end loop;
+
+         for K in 0 .. Taps - 3 loop
+            Kept (Memory + K * Mix .. Memory + (K + 1) * Mix - 1) :=
+              Kept (Memory + (K + 1) * Mix .. Memory + (K + 2) * Mix - 1);
+         end loop;
+         Kept (Memory + (Taps - 2) * Mix .. Memory + (Taps - 1) * Mix - 1) :=
+           Fresh;
+
+         K.SiLU (Mixed (M0 .. M0 + Mix - 1));
+
+         --  The queries and keys to unit length, a head at a time.
+         for Which in 0 .. 2 * Element_Count (Settings.Key_Heads) - 1 loop
+            declare
+               From : constant Element_Count := M0 + Which * Head;
+               Sum  : Real := 0.0;
+            begin
+               for C in From .. From + Head - 1 loop
+                  Sum := Sum + Mixed (C) * Mixed (C);
+               end loop;
+
+               declare
+                  Unit : constant Real :=
+                    1.0 / Real'Max (Real (N.Sqrt (N.Wide_Real (Sum))),
+                                    Settings.Epsilon);
+               begin
+                  for C in From .. From + Head - 1 loop
+                     Mixed (C) := Mixed (C) * Unit;
+                  end loop;
+               end;
+            end;
+         end loop;
+      end;
+
+      --  The rule, the heads shared out.
+      declare
+         Share : aliased Rule_Share :=
+           (State      => Item.Delta_State,
+            States     => States,
+            Head       => Head,
+            Keys_Wide  => Keys_Wide,
+            Key_Heads  => Element_Count (Settings.Key_Heads),
+            A_Log      => Current.A_Log,
+            DT_Bias    => Current.DT_Bias,
+            State_Norm => Current.State_Norm,
+            Epsilon    => Settings.Epsilon,
+            Scale      => Real (1.0 / N.Sqrt (N.Wide_Real (Settings.State_Size))),
+            Rows       => Rows,
+            Ok         => True);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Value_Heads, Share'Unchecked_Access, Status,
+            Cost => Value_Heads * Head * Head * 4);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         if not Share.Ok then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Text (Status, "tensor", "ssm_state", E.Param_Identifier);
+            return;
+         end if;
+      end;
+
+      --  The state and the memory as this position left them, kept for
+      --  a rewind to this position, in the ring's slot for it.
+      if Item.Kept_States > 0 then
+         declare
+            Slot : constant Element_Count :=
+              Element_Count (Position mod Item.Kept_States);
+            Every_State : constant Element_Count := State_Room (Settings);
+            Every_Conv  : constant Element_Count := Conv_Room (Settings);
+            Span_State  : constant Element_Count :=
+              Value_Heads * Head * Head;
+            Span_Conv   : constant Element_Count :=
+              Element_Count (Settings.Conv_Kernel - 1) * Mix;
+         begin
+            Item.Past_States.all
+              (Slot * Every_State + States
+               .. Slot * Every_State + States + Span_State - 1) :=
+              Item.Delta_State.all (States .. States + Span_State - 1);
+            Item.Past_Convs.all
+              (Slot * Every_Conv + Memory
+               .. Slot * Every_Conv + Memory + Span_Conv - 1) :=
+              Item.Conv_State.all (Memory .. Memory + Span_Conv - 1);
+
+            --  A position written over an older one's slot: the ring
+            --  now reaches from this one back, and no further.
+            Item.Kept_Newest :=
+              (if Position + 1 > Item.Kept_Newest
+                 or else Position + 1 <= Item.Kept_Newest - Item.Kept_States
+               then Position + 1
+               else Item.Kept_Newest);
+         end;
+      end if;
+   end Linear_Core;
+
+   procedure Linear_Position
+     (Item    : in out Session;
+      Source  : Model'Class;
+      Current : Layer;
+      Layer_Index : Natural;
+      Position : Natural;
+      Status  : out E.Error_Info) is
+   begin
+      Product_Group
+        (Item,
+         [Current.Mix, Current.Z_Gate, Current.Alpha, Current.Beta],
+         Item.Normalized,
+         [Item.Mix_Row, Item.Z_Row, Item.Alpha_Row, Item.Beta_Row],
+         Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Linear_Core
+        (Item, Source, Current, Layer_Index, Position,
+         (Mixed => Item.Mix_Row, Z_Gate => Item.Z_Row,
+          Alpha => Item.Alpha_Row, Beta => Item.Beta_Row,
+          Blend => Item.Blend_Row, others => 0),
+         Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Product (Item, Current.Linear_Out, Item.Blend_Row, Item.Normalized, Status);
+   end Linear_Position;
+
+   --  The gate beside each head of a hybrid's full attention: the query
+   --  projection wrote each head's query and then its gate, and this
+   --  takes the gates out into Item.Head_Gate and closes the queries up.
+   procedure Split_Head_Gates (Item : in out Session; Settings : Configuration)
+   is
+      Head : constant Element_Count := Element_Count (Settings.Head_Size);
+      Full : Real_Array renames Item.Query_Full.all;
+   begin
+      for H in 0 .. Element_Count (Settings.Heads) - 1 loop
+         for C in 0 .. Head - 1 loop
+            Item.Query.all (H * Head + C) := Full (H * 2 * Head + C);
+            Item.Head_Gate.all (H * Head + C) := Full (H * 2 * Head + Head + C);
+         end loop;
+      end loop;
+   end Split_Head_Gates;
+
+   --  And the blend scaled by the sigmoid of each gate, before the
+   --  projection out.
+   procedure Gate_Heads (Item : in out Session) is
+   begin
+      for C in Item.Attention.all'Range loop
+         Item.Attention.all (C) :=
+           Item.Attention.all (C) * Sigmoid (Item.Head_Gate.all (C));
+      end loop;
+   end Gate_Heads;
+
+   function Drafts_Next (Item : Session) return Boolean
+   is (Item.Current not in Closed | Failed
+       and then Item.Owner /= null
+       and then Item.Owner.Next /= null
+       and then Item.Next_Input /= null
+       and then Item.Held = Exact);
+
+   function Last_State (Item : Session) return N.Real_Array
+   is (if Item.Has_Final and then Item.Last_Final /= null
+       then Item.Last_Final.all
+       else N.Real_Array'(1 .. 0 => 0.0));
+
+   ----------------
+   -- Draft_Next --
+   ----------------
+
+   procedure Draft_Next
+     (Item       : in out Session;
+      Source     : Model'Class;
+      Token      : Model_Runner.Tokenizer.Token_Id;
+      State      : N.Real_Array;
+      Position   : Natural;
+      Logits     : out N.Real_Array;
+      Next_State : out N.Real_Array;
+      Status     : out E.Error_Info)
+   is
+      Settings : Configuration renames Source.Settings;
+      Width    : constant Element_Count := Element_Count (Settings.Embedding);
+      Heads    : constant Element_Count := Element_Count (Settings.Heads);
+      KV_Heads : constant Element_Count := Element_Count (Settings.KV_Heads);
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Value_Size : constant Element_Count :=
+        Element_Count (Settings.Value_Size);
+      KV_Width : constant Element_Count := KV_Heads * Head_Size;
+      V_Width  : constant Element_Count := KV_Heads * Value_Size;
+      Layer_Index : constant Natural := Settings.Layers;
+      Scale : constant Real :=
+        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+   begin
+      Status := E.Success;
+      Logits := [others => 0.0];
+      Next_State := [others => 0.0];
+
+      if not Drafts_Next (Item) then
+         Status := E.Make (E.Lifecycle_Invalid_State);
+         return;
+      end if;
+
+      --  The position may run past what the stack has committed: the block
+      --  chains from its own answers, one position further each time, and
+      --  its cache is its own. What bounds it is the room in that cache.
+      if State'Length /= Width or else Next_State'Length /= Width
+        or else (Logits'Length /= Element_Count (Settings.Vocabulary)
+                 and then Logits'Length /= 0)
+        or else Position >= Item.Context
+        or else Natural (Token) >= Settings.Vocabulary
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         E.Add_Integer (Status, "input", Long_Long_Integer (Position));
+         E.Add_Integer (Status, "expected", Long_Long_Integer (Item.Context));
+         return;
+      end if;
+
+      declare
+         Current : Layer renames Source.Next.all (0);
+         Base    : constant Element_Count := Keys_At (Item, Layer_Index);
+         V_Base  : constant Element_Count := Values_At (Item, Layer_Index);
+         Cell    : constant Element_Count := Element_Count (Position);
+         Slot    : constant Element_Count := Base + Cell * KV_Width;
+         V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
+         Usable  : Boolean := True;
+      begin
+         --  The block's input: the next token's embedding and the state,
+         --  each normalized by its own gain, side by side, projected.
+         T.Dequantize_Row
+           (Source.Embeddings, Element_Count (Token), Item.Activation.all,
+            Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         if Embedding_Scale (Source) /= 1.0 then
+            for Value of Item.Activation.all loop
+               Value := Value * Embedding_Scale (Source);
+            end loop;
+         end if;
+
+         K.RMS_Norm
+           (Item.Activation.all, Current.Next_ENorm.all, Settings.Epsilon,
+            Item.Next_Input.all (0 .. Width - 1));
+         K.RMS_Norm
+           (State, Current.Next_HNorm.all, Settings.Epsilon,
+            Item.Next_Input.all (Width .. 2 * Width - 1));
+
+         Product (Item, Current.Next_Proj, Item.Next_Input, Item.Activation,
+                  Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  The attention half: normalized, projected, the gates taken
+         --  out, the heads normalized and turned, the keys and values
+         --  written to the block's own cache at this position, and the
+         --  blend over every position up to it, gated, projected back and
+         --  joined.
+         Normalize
+           (Source, Item.Activation.all, Current.Attention_Norm.all,
+            Current.Attention_Norm_Bias, Item.Normalized.all);
+
+         Product_Group
+           (Item, [Current.Query, Current.Key, Current.Value],
+            Item.Normalized,
+            [Item.Query_Full, Item.Key_Row, Item.Value_Row], Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Split_Head_Gates (Item, Settings);
+
+         Normalize_Heads
+           (Item.Query.all, Heads, Head_Size, Current.Query_Norm.all,
+            Settings.Epsilon, Item.Head_Row.all);
+         Normalize_Heads
+           (Item.Key_Row.all, KV_Heads, Head_Size, Current.Key_Norm.all,
+            Settings.Epsilon, Item.Head_Row.all);
+
+         K.Apply_Rotary_Pair
+           (Item.Query.all, Heads, Item.Key_Row.all, KV_Heads, Head_Size,
+            Element_Count (Settings.Rotary), Position,
+            Turn_Base (Settings, Layer_Index), Settings.Scaling,
+            Turns (Source), Settings.Pairing);
+
+         for Offset in 0 .. KV_Width - 1 loop
+            Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
+         end loop;
+         for Offset in 0 .. V_Width - 1 loop
+            Item.Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
+         end loop;
+
+         Blend_Exact
+           (Item.Query.all, Item.Keys.all, Item.Values.all,
+            Base, V_Base, KV_Width, V_Width, Heads, Head_Size, Value_Size,
+            Element_Count (Settings.Group_Size),
+            First => 0, Last => Cell, Scale => Scale,
+            Cap => Settings.Attention_Cap, Max_Bias => Settings.Max_Bias,
+            Query_At => Cell, Sinks => null,
+            From_Head => 0, To_Head => Heads - 1,
+            Score_Room => Item.Score_Room, Scores => Item.Scores.all,
+            Target => Item.Attention.all, Ok => Usable);
+
+         if not Usable then
+            Status := E.Make (E.Tensor_Non_Finite_Value);
+            E.Add_Integer (Status, "layer", Long_Long_Integer (Layer_Index));
+            return;
+         end if;
+
+         Gate_Heads (Item);
+
+         Product
+           (Item, Current.Attention_Out, Item.Attention, Item.Normalized,
+            Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         K.Add (Item.Activation.all, Item.Normalized.all);
+
+         --  The feed-forward half: the mixture with its shared expert
+         --  where the block is one, the gated block where it is not.
+         Normalize
+           (Source, Item.Activation.all, Current.Feed_Norm.all,
+            Current.Feed_Norm_Bias, Item.Normalized.all);
+
+         if Settings.Experts > 0 then
+            Mixture (Item, Current, Item.Normalized, Item.Mixture, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            K.Add (Item.Activation.all, Item.Mixture.all);
+         else
+            Product_Group
+              (Item, [Current.Gate, Current.Up], Item.Normalized,
+               [Item.Gate, Item.Up], Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            Gate_Activation (Source, Item.Gate.all);
+            K.Multiply (Item.Gate.all, Item.Up.all);
+
+            Product (Item, Current.Down, Item.Gate, Item.Normalized, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            K.Add (Item.Activation.all, Item.Normalized.all);
+         end if;
+
+         --  Its answer: normalized ahead of the shared head, kept for
+         --  the next draft, and read by the head.
+         K.RMS_Norm
+           (Item.Activation.all, Current.Next_Head_Norm.all,
+            Settings.Epsilon, Item.Normalized.all);
+         Next_State := Item.Normalized.all;
+
+         --  The head only where a distribution was asked for: a position
+         --  run through again to put the cache right wants the cache and
+         --  the state, and the head is most of what the block costs.
+         if Logits'Length = 0 then
+            return;
+         end if;
+
+         Product
+           (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Logits := Item.Logit_Row.all;
+         Finish_Logits (Source, Logits);
+      end;
+   end Draft_Next;
 
    --------------
    -- Evaluate --
@@ -8489,6 +10090,11 @@ package body Model_Runner.Llama is
 
       function Whole_Layer_Fits (L : Layer) return Boolean
       is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
+
+          --  A hybrid's head gates and shared expert are not in the
+          --  device's sequence; its full attention layers go a step at a
+          --  time.
+          and then not Hybrid (Settings.Kind)
 
           --  The device's attention has no sinks. A mixture with them
           --  went whole for a day and the fixture check said its sinks
@@ -8880,385 +10486,430 @@ package body Model_Runner.Llama is
 
             Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
             Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+
+            --  Whether this layer is one of a hybrid's linear ones, which
+            --  keeps a state instead of keys and values and takes the
+            --  path of its own below; its feed-forward is every layer's.
+            Is_Linear : constant Boolean :=
+              Linear (Settings, Natural (Index));
          begin
-            --  The whole layer as one submission. A generated token made
-            --  two of them a layer and makes one.
-            if Item.Held = Exact
-              and then Settings.Rotary > 0
-              and then Element_Count (Settings.Rotary) <= Head_Size
-              and then (Settings.Experts = 0 or else Mixture_Whole (Current))
-              and then Whole_Layer_Fits (Current)
-              and then Source.Settings.Kind not in Falcon | Phi2
-              and then Model_Runner.Backend."="
-                         (Item.Owner.Able.Kind,
-                          Model_Runner.Backend.Backend_Device)
-            then
-               Take_Block (Item'Unchecked_Access, Resident);
+            if Is_Linear then
+               Normalize
+                 (Source, Item.Activation.all, Current.Attention_Norm.all,
+                  Current.Attention_Norm_Bias, Item.Normalized.all);
+               Charge (Item, Normalizing, Mark);
 
-               if Resident then
-                  K.Rotary_Table
-                    (Element_Count (Settings.Rotary), Item.Committed,
-                     Turn_Base (Settings, Natural (Index)),
-                     Settings.Scaling, Turns (Source),
-                     Cosines => Cosines, Sines => Sines);
+               Linear_Position
+                 (Item, Source, Current, Natural (Index),
+                  Natural (Reserved), Status);
+               exit when E.Is_Error (Status);
+               Charge (Item, Attending, Mark);
 
-                  for Pair in 0 .. Pairs - 1 loop
-                     Angles (Pair * 2) := Cosines (Pair);
-                     Angles (Pair * 2 + 1) := Sines (Pair);
-                  end loop;
+               Joined
+                 (Item.Normalized, Current.Post_Attention_Norm,
+                  Current.Post_Attention_Norm_Bias, Status);
+               exit when E.Is_Error (Status);
+               Charge (Item, Joining, Mark);
+            else
 
-                  Model_Runner.Backend.Device.Whole_Layer
-                    (Item.Activation.all,
-                     Current.Attention_Norm.all, Current.Feed_Norm.all,
-                     Settings.Epsilon,
-                     Current.Query, Current.Key, Current.Value,
-                     Angles, Natural (Head_Size), Settings.Rotary,
-                     K."=" (Settings.Pairing, K.Split),
-                     Natural (Block_Base (Item) + Slot),
-                     Natural (Block_Base (Item)
-                              + Item.Keys.all'Length + V_Slot),
-                     Natural (Heads), Natural (Value_Size),
-                     Settings.Group_Size,
-                     Natural (Cell_Of (Item, Natural (Index),
-                                       Earliest (Settings, Reserved,
-                                                 Natural (Index)))),
-                     Natural (Cell),
-                     Natural (Block_Base (Item) + Base),
-                     Natural (Block_Base (Item)
-                              + Item.Keys.all'Length + V_Base),
-                     Natural (KV_Width), Natural (V_Width),
-                     Scale, Settings.Attention_Cap,
-                     Current.Attention_Out,
-                     Current.Gate, Current.Up, Current.Down,
-                     Gate_Unit (Source),
-                     Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
+               --  The whole layer as one submission. A generated token made
+               --  two of them a layer and makes one.
+               if Item.Held = Exact
+                 and then Settings.Rotary > 0
+                 and then Element_Count (Settings.Rotary) <= Head_Size
+                 and then (Settings.Experts = 0 or else Mixture_Whole (Current))
+                 and then Whole_Layer_Fits (Current)
+                 and then Source.Settings.Kind not in Falcon | Phi2
+                 and then Model_Runner.Backend."="
+                            (Item.Owner.Able.Kind,
+                             Model_Runner.Backend.Backend_Device)
+               then
+                  Take_Block (Item'Unchecked_Access, Resident);
 
-                     --  As a batch does: the first layer reads what the
-                     --  host has and the last writes what it reads, and
-                     --  the ones between hand the activation on where it
-                     --  lies and leave their keys and values in the
-                     --  device's own cache. A token is twenty-two layers
-                     --  and each of them waited on its own fence.
-                     Carry_In  => Carried,
-                     Carry_Out =>
-                       Chaining
-                       and then Index < Source.Layers.all'Last
-                       and then Whole_Layer_Fits
-                                  (Source.Layers.all (Index + 1)),
-                     Mirror    => not Chaining,
-                     Window   =>
-                       (if Settings.Window > 0
-                          and then Earliest (Settings,
-                                             Element_Count (Settings.Window),
-                                             Natural (Index)) > 0
-                        then Settings.Window
-                        else 0),
-                     Lifted   => Lifted_Norms (Source),
-                     Max_Bias => Settings.Max_Bias,
-                     Cancel   => Item.Stopping,
+                  if Resident then
+                     K.Rotary_Table
+                       (Element_Count (Settings.Rotary), Item.Committed,
+                        Turn_Base (Settings, Natural (Index)),
+                        Settings.Scaling, Turns (Source),
+                        Cosines => Cosines, Sines => Sines);
 
-                     --  The head normalizations, where the layer has
-                     --  them, and the mixture where the layer is one.
-                     Query_Norm => Current.Query_Norm,
-                     Key_Norm   => Current.Key_Norm,
-                     Router     =>
-                       (if Settings.Experts > 0 then Current.Router
-                        else T.Empty_View),
-                     Router_Bias => Current.Router_Bias,
-                     Gate_Stack  => Current.Gate_Stack,
-                     Up_Stack    => Current.Up_Stack,
-                     Down_Stack  => Current.Down_Stack,
-                     Feed        => Settings.Expert_Feed,
-                     Used        => Settings.Experts_Used,
-                     Experts     => Settings.Experts);
+                     for Pair in 0 .. Pairs - 1 loop
+                        Angles (Pair * 2) := Cosines (Pair);
+                        Angles (Pair * 2 + 1) := Sines (Pair);
+                     end loop;
+
+                     Model_Runner.Backend.Device.Whole_Layer
+                       (Item.Activation.all,
+                        Current.Attention_Norm.all, Current.Feed_Norm.all,
+                        Settings.Epsilon,
+                        Current.Query, Current.Key, Current.Value,
+                        Angles, Natural (Head_Size), Settings.Rotary,
+                        K."=" (Settings.Pairing, K.Split),
+                        Natural (Block_Base (Item) + Slot),
+                        Natural (Block_Base (Item)
+                                 + Item.Keys.all'Length + V_Slot),
+                        Natural (Heads), Natural (Value_Size),
+                        Settings.Group_Size,
+                        Natural (Cell_Of (Item, Natural (Index),
+                                          Earliest (Settings, Reserved,
+                                                    Natural (Index)))),
+                        Natural (Cell),
+                        Natural (Block_Base (Item) + Base),
+                        Natural (Block_Base (Item)
+                                 + Item.Keys.all'Length + V_Base),
+                        Natural (KV_Width), Natural (V_Width),
+                        Scale, Settings.Attention_Cap,
+                        Current.Attention_Out,
+                        Current.Gate, Current.Up, Current.Down,
+                        Gate_Unit (Source),
+                        Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
+
+                        --  As a batch does: the first layer reads what the
+                        --  host has and the last writes what it reads, and
+                        --  the ones between hand the activation on where it
+                        --  lies and leave their keys and values in the
+                        --  device's own cache. A token is twenty-two layers
+                        --  and each of them waited on its own fence.
+                        Carry_In  => Carried,
+                        Carry_Out =>
+                          Chaining
+                          and then Index < Source.Layers.all'Last
+                          and then Whole_Layer_Fits
+                                     (Source.Layers.all (Index + 1)),
+                        Mirror    => not Chaining,
+                        Window   =>
+                          (if Settings.Window > 0
+                             and then Earliest (Settings,
+                                                Element_Count (Settings.Window),
+                                                Natural (Index)) > 0
+                           then Settings.Window
+                           else 0),
+                        Lifted   => Lifted_Norms (Source),
+                        Max_Bias => Settings.Max_Bias,
+                        Cancel   => Item.Stopping,
+
+                        --  The head normalizations, where the layer has
+                        --  them, and the mixture where the layer is one.
+                        Query_Norm => Current.Query_Norm,
+                        Key_Norm   => Current.Key_Norm,
+                        Router     =>
+                          (if Settings.Experts > 0 then Current.Router
+                           else T.Empty_View),
+                        Router_Bias => Current.Router_Bias,
+                        Gate_Stack  => Current.Gate_Stack,
+                        Up_Stack    => Current.Up_Stack,
+                        Down_Stack  => Current.Down_Stack,
+                        Feed        => Settings.Expert_Feed,
+                        Used        => Settings.Experts_Used,
+                        Experts     => Settings.Experts);
+                  end if;
                end if;
-            end if;
 
-            Carried :=
-              Chaining
-              and then Fused
-              and then Index < Source.Layers.all'Last
-              and then Whole_Layer_Fits (Source.Layers.all (Index + 1));
+               Carried :=
+                 Chaining
+                 and then Fused
+                 and then Index < Source.Layers.all'Last
+                 and then Whole_Layer_Fits (Source.Layers.all (Index + 1));
 
-            if Fused then
-               --  The host keeps its own copy of the cache -- the
-               --  snapshot, the eviction and the other two precisions all
-               --  read it -- and reads it out of the device's own once the
-               --  token is done rather than a layer at a time, which is
-               --  what lets a layer be handed over without waiting.
-               if Chaining then
-                  Deferred (Index) := True;
-               else
+               if Fused then
+                  --  The host keeps its own copy of the cache -- the
+                  --  snapshot, the eviction and the other two precisions all
+                  --  read it -- and reads it out of the device's own once the
+                  --  token is done rather than a layer at a time, which is
+                  --  what lets a layer be handed over without waiting.
+                  if Chaining then
+                     Deferred (Index) := True;
+                  else
+                     for Offset in 0 .. KV_Width - 1 loop
+                        Item.Keys.all (Slot + Offset) :=
+                          Item.Key_Row.all (Offset);
+                     end loop;
+                     for Offset in 0 .. V_Width - 1 loop
+                        Item.Values.all (V_Slot + Offset) :=
+                          Item.Value_Row.all (Offset);
+                     end loop;
+                  end if;
+
+                  --  The whole layer, not the attending in it: nothing
+                  --  between the normalization at its front and the join at
+                  --  its back came back to the host, so this one reading is
+                  --  all there is and it is charged where it belongs.
+                  Charge (Item, Fusing, Mark);
+                  goto Layer_Done;
+               end if;
+
+               --  Attention block.
+               Normalize
+                 (Source, Item.Activation.all, Current.Attention_Norm.all,
+                  Current.Attention_Norm_Bias, Item.Normalized.all);
+
+               --  Falcon runs the feed-forward from this same normalized input
+               --  rather than from what attention produced, so it is kept
+               --  before attention overwrites the buffer it shares.
+               if Current.Feed_Norm = null then
+                  Item.Post_Room.all := Item.Normalized.all;
+               end if;
+
+               Charge (Item, Normalizing, Mark);
+
+               --  The query projection's whole answer goes to its own room
+               --  where it carries a gate beside each head, and the queries
+               --  and the gates are taken out of it before anything reads
+               --  them.
+               Product_Group
+                 (Item,
+                  [Current.Query, Current.Key, Current.Value],
+                  Item.Normalized,
+                  [(if Hybrid (Settings.Kind) then Item.Query_Full else Item.Query),
+                   Item.Key_Row, Item.Value_Row],
+                  Status);
+               exit when E.Is_Error (Status);
+
+               Charge (Item, Projecting, Mark);
+
+               if Hybrid (Settings.Kind) then
+                  Split_Head_Gates (Item, Settings);
+               end if;
+
+               --  The projection bias, before the rotary encoding, because the
+               --  bias is part of the projection and the encoding acts on what
+               --  the projection produced.
+               if Current.Query_Bias /= null then
+                  K.Add (Item.Query.all, Current.Query_Bias.all);
+                  K.Add (Item.Key_Row.all, Current.Key_Bias.all);
+                  K.Add (Item.Value_Row.all, Current.Value_Bias.all);
+               end if;
+
+               --  And the per-head normalization, where the architecture has
+               --  one. Before the rotation, as the projection's bias is: both
+               --  act on what the projection produced.
+               if Current.Query_Norm /= null then
+                  Normalize_Heads
+                    (Item.Query.all, Heads, Head_Size,
+                     Current.Query_Norm.all, Settings.Epsilon,
+                     Item.Head_Row.all);
+                  Normalize_Heads
+                    (Item.Key_Row.all, KV_Heads, Head_Size,
+                     Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
+               end if;
+
+               K.Apply_Rotary
+                 (Item.Query.all, Heads, Head_Size,
+                  Element_Count (Settings.Rotary), Item.Committed,
+                  Turn_Base (Settings, Natural (Index)),
+                  Settings.Scaling, Turns (Source),
+                  Settings.Pairing);
+               K.Apply_Rotary
+                 (Item.Key_Row.all, KV_Heads, Head_Size,
+                  Element_Count (Settings.Rotary), Item.Committed,
+                  Turn_Base (Settings, Natural (Index)),
+                  Settings.Scaling, Turns (Source),
+                  Settings.Pairing);
+
+               --  Write into the reserved slot. The slot is only readable as
+               --  context once Committed is advanced, at the end of this call.
+               if Item.Held = Eighth then
+                  Pack_Row
+                    (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
+                     B.Byte_Count (Slot),
+                     Item.Key_Scales.all (Rows_Base + Cell));
+                  Pack_Row
+                    (Item.Value_Row.all (0 .. V_Width - 1), Item.Byte_Values.all,
+                     B.Byte_Count (V_Slot),
+                     Item.Value_Scales.all (Rows_Base + Cell));
+               elsif Item.Held = Exact then
                   for Offset in 0 .. KV_Width - 1 loop
-                     Item.Keys.all (Slot + Offset) :=
-                       Item.Key_Row.all (Offset);
+                     Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
                   end loop;
                   for Offset in 0 .. V_Width - 1 loop
                      Item.Values.all (V_Slot + Offset) :=
                        Item.Value_Row.all (Offset);
                   end loop;
+
+                  --  And into the device's own copy, where attention reads it.
+                  --  The host copy stays in step because everything else reads
+                  --  it: the snapshot, the eviction, the other two precisions.
+                  Put_Position
+                    (Item'Unchecked_Access,
+                     Slot, Item.Key_Row.all (0 .. KV_Width - 1),
+                     V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
+               else
+                  for Offset in 0 .. KV_Width - 1 loop
+                     Item.Half_Keys.all (Slot + Offset) :=
+                       N.To_Half (Item.Key_Row.all (Offset));
+                  end loop;
+                  for Offset in 0 .. V_Width - 1 loop
+                     Item.Half_Values.all (V_Slot + Offset) :=
+                       N.To_Half (Item.Value_Row.all (Offset));
+                  end loop;
                end if;
 
-               --  The whole layer, not the attending in it: nothing
-               --  between the normalization at its front and the join at
-               --  its back came back to the host, so this one reading is
-               --  all there is and it is charged where it belongs.
-               Charge (Item, Fusing, Mark);
-               goto Layer_Done;
-            end if;
+               --  Rotating covers the cache write, as it does in the batched
+               --  path and for the same reason.
+               Charge (Item, Rotating, Mark);
 
-            --  Attention block.
-            Normalize
-              (Source, Item.Activation.all, Current.Attention_Norm.all,
-               Current.Attention_Norm_Bias, Item.Normalized.all);
+               --  Causal attention over the committed positions and this one.
+               --  Grouped-query attention maps each query head to its key-value
+               --  head by division; no key or value head is ever duplicated.
+               --
+               --  A model with a sliding window sees the window's worth of
+               --  positions ending at this one and no more, and the positions
+               --  before that are no longer in the cache: a layer that slides
+               --  holds the window and a batch rather than the whole context.
+               --  What that changes here is nothing -- Cell_Of says where a
+               --  position sits and the blend is given cells rather than
+               --  positions -- and what it changes elsewhere is a gemma3
+               --  session at its own context, from 1.83 GB to 0.33.
+               declare
+                  First : constant Element_Count :=
+                    Earliest (Settings, Reserved, Natural (Index));
+                  Usable : Boolean;
 
-            --  Falcon runs the feed-forward from this same normalized input
-            --  rather than from what attention produced, so it is kept
-            --  before attention overwrites the buffer it shares.
-            if Current.Feed_Norm = null then
-               Item.Post_Room.all := Item.Normalized.all;
-            end if;
+                  Share  : aliased Blend_Share :=
+                    (Base     => Base,
+                     V_Base   => V_Base,
+                     Rows_Base => Rows_Base,
+                     Earliest => Cell_Of (Item, Natural (Index), First),
+                     Upto     => Cell,
+                     Sinks    => Current.Sinks,
+                     Ok       => True);
+                  Shared : E.Error_Info;
+               begin
+                  --  A layer with sinks attends on the host: the device's
+                  --  attention has none, and the pair below took every
+                  --  mixture with them as if it had none -- the fixture check
+                  --  said their sinks moved no logit.
+                  if Item.Held /= Exact or else not Resident
+                    or else Current.Sinks /= null
+                    or else Hybrid (Settings.Kind)
+                  then
+                     --  How much arithmetic the heads are between them: every
+                     --  head reads the positions the cache holds, a head's
+                     --  worth of each. A generated token early in a
+                     --  conversation is a few hundred thousand elements and
+                     --  the pool is not woken for it.
+                     Workers_CPU.Dispatch_Shares
+                       (Item.Team, Heads, Share'Unchecked_Access, Shared,
+                        Cost => Heads * Reserved * Head_Size);
+                     Usable := Share.Ok and then E.Is_Ok (Shared);
+                  elsif Item.Held = Exact and then Resident
+                    and then Settings.Experts = 0
+                    and then T.Is_Present (Current.Gate)
+                    and then Current.Feed_Norm /= null
+                    and then Current.Out_Bias = null
+                    and then Current.Up_Bias = null
+                    and then Current.Down_Bias = null
+                    and then Current.Feed_Norm_Bias = null
+                    and then Current.Post_Attention_Norm = null
+                    and then Current.Post_Feed_Norm = null
+                  then
+                     --  The whole of the layer's second half as one sequence.
+                     --  Everything the host used to do between its two
+                     --  submissions -- the residual join and the
+                     --  normalization -- is a step of it, so the two become
+                     --  one and the fence between them is not paid.
+                     Model_Runner.Backend.Device.Attend_And_Feed
+                       (Item.Query.all, Item.Activation.all,
+                        Natural (Heads), Natural (Head_Size),
+                        Natural (Value_Size), Settings.Group_Size,
+                        Natural (Cell_Of (Item, Natural (Index), First)),
+                        Natural (Cell),
+                        Natural (Block_Base (Item) + Base),
+                        Natural (Block_Base (Item)
+                                 + Item.Keys.all'Length + V_Base),
+                        Natural (KV_Width), Natural (V_Width), Scale,
+                        Settings.Attention_Cap, Current.Attention_Out,
+                        Current.Feed_Norm.all, Settings.Epsilon,
+                        Current.Gate, Current.Up, Current.Down,
+                        Gate_Unit (Source), Item.Activation, Fused,
+                        Lifted   => Lifted_Norms (Source),
+                        Max_Bias => Settings.Max_Bias);
 
-            Charge (Item, Normalizing, Mark);
+                     if Fused then
+                        Usable := True;
+                        Projected := True;
+                     else
+                        Attend_There
+                          (Item, Source, Item.Query.all, Heads, Head_Size,
+                           Value_Size,
+                           Cell_Of (Item, Natural (Index), First), Cell,
+                           Base, V_Base, KV_Width,
+                           V_Width, Scale, Item.Attention.all, Usable,
+                           Sinks => Current.Sinks);
+                     end if;
+                  elsif Item.Held = Exact and then Resident then
+                     --  Attention and the matrix that reads its result, named
+                     --  together so they go over as one command buffer and the
+                     --  blend never comes back. Where the device will not take
+                     --  the pair, Attend_There does the attention alone and the
+                     --  projection follows as it always did.
+                     Model_Runner.Backend.Device.Attend_And_Project
+                       (Item.Query.all, Natural (Heads), Natural (Head_Size),
+                        Natural (Value_Size), Settings.Group_Size,
+                        Natural (Cell_Of (Item, Natural (Index), First)),
+                        Natural (Cell), Natural (Base),
+                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (KV_Width), Natural (V_Width), Scale,
+                        Settings.Attention_Cap, Current.Attention_Out,
+                        Item.Normalized, Projected,
+                        Max_Bias => Settings.Max_Bias);
 
-            Product_Group
-              (Item,
-               [Current.Query, Current.Key, Current.Value],
-               Item.Normalized,
-               [Item.Query, Item.Key_Row, Item.Value_Row],
-               Status);
-            exit when E.Is_Error (Status);
-
-            Charge (Item, Projecting, Mark);
-
-            --  The projection bias, before the rotary encoding, because the
-            --  bias is part of the projection and the encoding acts on what
-            --  the projection produced.
-            if Current.Query_Bias /= null then
-               K.Add (Item.Query.all, Current.Query_Bias.all);
-               K.Add (Item.Key_Row.all, Current.Key_Bias.all);
-               K.Add (Item.Value_Row.all, Current.Value_Bias.all);
-            end if;
-
-            --  And the per-head normalization, where the architecture has
-            --  one. Before the rotation, as the projection's bias is: both
-            --  act on what the projection produced.
-            if Current.Query_Norm /= null then
-               Normalize_Heads
-                 (Item.Query.all, Heads, Head_Size,
-                  Current.Query_Norm.all, Settings.Epsilon,
-                  Item.Head_Row.all);
-               Normalize_Heads
-                 (Item.Key_Row.all, KV_Heads, Head_Size,
-                  Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
-            end if;
-
-            K.Apply_Rotary
-              (Item.Query.all, Heads, Head_Size,
-               Element_Count (Settings.Rotary), Item.Committed,
-               Turn_Base (Settings, Natural (Index)),
-               Settings.Scaling, Turns (Source),
-               Settings.Pairing);
-            K.Apply_Rotary
-              (Item.Key_Row.all, KV_Heads, Head_Size,
-               Element_Count (Settings.Rotary), Item.Committed,
-               Turn_Base (Settings, Natural (Index)),
-               Settings.Scaling, Turns (Source),
-               Settings.Pairing);
-
-            --  Write into the reserved slot. The slot is only readable as
-            --  context once Committed is advanced, at the end of this call.
-            if Item.Held = Eighth then
-               Pack_Row
-                 (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
-                  B.Byte_Count (Slot),
-                  Item.Key_Scales.all (Rows_Base + Cell));
-               Pack_Row
-                 (Item.Value_Row.all (0 .. V_Width - 1), Item.Byte_Values.all,
-                  B.Byte_Count (V_Slot),
-                  Item.Value_Scales.all (Rows_Base + Cell));
-            elsif Item.Held = Exact then
-               for Offset in 0 .. KV_Width - 1 loop
-                  Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
-               end loop;
-               for Offset in 0 .. V_Width - 1 loop
-                  Item.Values.all (V_Slot + Offset) :=
-                    Item.Value_Row.all (Offset);
-               end loop;
-
-               --  And into the device's own copy, where attention reads it.
-               --  The host copy stays in step because everything else reads
-               --  it: the snapshot, the eviction, the other two precisions.
-               Put_Position
-                 (Item'Unchecked_Access,
-                  Slot, Item.Key_Row.all (0 .. KV_Width - 1),
-                  V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
-            else
-               for Offset in 0 .. KV_Width - 1 loop
-                  Item.Half_Keys.all (Slot + Offset) :=
-                    N.To_Half (Item.Key_Row.all (Offset));
-               end loop;
-               for Offset in 0 .. V_Width - 1 loop
-                  Item.Half_Values.all (V_Slot + Offset) :=
-                    N.To_Half (Item.Value_Row.all (Offset));
-               end loop;
-            end if;
-
-            --  Rotating covers the cache write, as it does in the batched
-            --  path and for the same reason.
-            Charge (Item, Rotating, Mark);
-
-            --  Causal attention over the committed positions and this one.
-            --  Grouped-query attention maps each query head to its key-value
-            --  head by division; no key or value head is ever duplicated.
-            --
-            --  A model with a sliding window sees the window's worth of
-            --  positions ending at this one and no more, and the positions
-            --  before that are no longer in the cache: a layer that slides
-            --  holds the window and a batch rather than the whole context.
-            --  What that changes here is nothing -- Cell_Of says where a
-            --  position sits and the blend is given cells rather than
-            --  positions -- and what it changes elsewhere is a gemma3
-            --  session at its own context, from 1.83 GB to 0.33.
-            declare
-               First : constant Element_Count :=
-                 Earliest (Settings, Reserved, Natural (Index));
-               Usable : Boolean;
-
-               Share  : aliased Blend_Share :=
-                 (Base     => Base,
-                  V_Base   => V_Base,
-                  Rows_Base => Rows_Base,
-                  Earliest => Cell_Of (Item, Natural (Index), First),
-                  Upto     => Cell,
-                  Sinks    => Current.Sinks,
-                  Ok       => True);
-               Shared : E.Error_Info;
-            begin
-               --  A layer with sinks attends on the host: the device's
-               --  attention has none, and the pair below took every
-               --  mixture with them as if it had none -- the fixture check
-               --  said their sinks moved no logit.
-               if Item.Held /= Exact or else not Resident
-                 or else Current.Sinks /= null
-               then
-                  --  How much arithmetic the heads are between them: every
-                  --  head reads the positions the cache holds, a head's
-                  --  worth of each. A generated token early in a
-                  --  conversation is a few hundred thousand elements and
-                  --  the pool is not woken for it.
-                  Workers_CPU.Dispatch_Shares
-                    (Item.Team, Heads, Share'Unchecked_Access, Shared,
-                     Cost => Heads * Reserved * Head_Size);
-                  Usable := Share.Ok and then E.Is_Ok (Shared);
-               elsif Item.Held = Exact and then Resident
-                 and then Settings.Experts = 0
-                 and then T.Is_Present (Current.Gate)
-                 and then Current.Feed_Norm /= null
-                 and then Current.Out_Bias = null
-                 and then Current.Up_Bias = null
-                 and then Current.Down_Bias = null
-                 and then Current.Feed_Norm_Bias = null
-                 and then Current.Post_Attention_Norm = null
-                 and then Current.Post_Feed_Norm = null
-               then
-                  --  The whole of the layer's second half as one sequence.
-                  --  Everything the host used to do between its two
-                  --  submissions -- the residual join and the
-                  --  normalization -- is a step of it, so the two become
-                  --  one and the fence between them is not paid.
-                  Model_Runner.Backend.Device.Attend_And_Feed
-                    (Item.Query.all, Item.Activation.all,
-                     Natural (Heads), Natural (Head_Size),
-                     Natural (Value_Size), Settings.Group_Size,
-                     Natural (Cell_Of (Item, Natural (Index), First)),
-                     Natural (Cell),
-                     Natural (Block_Base (Item) + Base),
-                     Natural (Block_Base (Item)
-                              + Item.Keys.all'Length + V_Base),
-                     Natural (KV_Width), Natural (V_Width), Scale,
-                     Settings.Attention_Cap, Current.Attention_Out,
-                     Current.Feed_Norm.all, Settings.Epsilon,
-                     Current.Gate, Current.Up, Current.Down,
-                     Gate_Unit (Source), Item.Activation, Fused,
-                     Lifted   => Lifted_Norms (Source),
-                     Max_Bias => Settings.Max_Bias);
-
-                  if Fused then
-                     Usable := True;
-                     Projected := True;
-                  else
-                     Attend_There
-                       (Item, Source, Item.Query.all, Heads, Head_Size,
-                        Value_Size,
-                        Cell_Of (Item, Natural (Index), First), Cell,
-                        Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable,
-                        Sinks => Current.Sinks);
+                     if Projected then
+                        Usable := True;
+                     else
+                        Attend_There
+                          (Item, Source, Item.Query.all, Heads, Head_Size,
+                           Value_Size,
+                           Cell_Of (Item, Natural (Index), First), Cell,
+                           Base, V_Base, KV_Width,
+                           V_Width, Scale, Item.Attention.all, Usable,
+                           Sinks => Current.Sinks);
+                     end if;
                   end if;
-               elsif Item.Held = Exact and then Resident then
-                  --  Attention and the matrix that reads its result, named
-                  --  together so they go over as one command buffer and the
-                  --  blend never comes back. Where the device will not take
-                  --  the pair, Attend_There does the attention alone and the
-                  --  projection follows as it always did.
-                  Model_Runner.Backend.Device.Attend_And_Project
-                    (Item.Query.all, Natural (Heads), Natural (Head_Size),
-                     Natural (Value_Size), Settings.Group_Size,
-                     Natural (Cell_Of (Item, Natural (Index), First)),
-                     Natural (Cell), Natural (Base),
-                     Natural (Item.Keys.all'Length + V_Base),
-                     Natural (KV_Width), Natural (V_Width), Scale,
-                     Settings.Attention_Cap, Current.Attention_Out,
-                     Item.Normalized, Projected,
-                     Max_Bias => Settings.Max_Bias);
 
-                  if Projected then
-                     Usable := True;
-                  else
-                     Attend_There
-                       (Item, Source, Item.Query.all, Heads, Head_Size,
-                        Value_Size,
-                        Cell_Of (Item, Natural (Index), First), Cell,
-                        Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable,
-                        Sinks => Current.Sinks);
+                  if not Usable then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Tensor_Non_Finite_Value);
+                     E.Add_Integer (Status, "layer", Long_Long_Integer (Index));
+                     return;
                   end if;
-               end if;
+               end;
 
-               if not Usable then
-                  Item.Current := Failed;
-                  Status := E.Make (E.Tensor_Non_Finite_Value);
-                  E.Add_Integer (Status, "layer", Long_Long_Integer (Index));
-                  return;
-               end if;
-            end;
-
-            Charge (Item, Attending, Mark);
+               Charge (Item, Attending, Mark);
+            end if;
 
             --  Every step of this is a step of the sequence where the
             --  layer's second half went over as one, so there is nothing
             --  left here to do.
             if not Fused then
-               --  Done already where the pair went over together.
-               if not Projected then
-                  Product
-                    (Item, Current.Attention_Out, Item.Attention,
-                     Item.Normalized, Status);
+               --  Done already where the pair went over together, and
+               --  where the layer is linear and joined its answer above.
+               if not Is_Linear then
+                  if not Projected then
+                              --  Each head's blend through the sigmoid of its gate
+                     --  first, where the query projection carried one.
+                     if Hybrid (Settings.Kind) then
+                        Gate_Heads (Item);
+                     end if;
+
+                     Product
+                       (Item, Current.Attention_Out, Item.Attention,
+                        Item.Normalized, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
+
+                  Charge (Item, Projecting, Mark);
+
+                  if Current.Out_Bias /= null then
+                     K.Add (Item.Normalized.all, Current.Out_Bias.all);
+                  end if;
+                  Joined
+                    (Item.Normalized, Current.Post_Attention_Norm,
+                     Current.Post_Attention_Norm_Bias, Status);
                   exit when E.Is_Error (Status);
+
+                  Charge (Item, Joining, Mark);
                end if;
-
-               Charge (Item, Projecting, Mark);
-
-               if Current.Out_Bias /= null then
-                  K.Add (Item.Normalized.all, Current.Out_Bias.all);
-               end if;
-               Joined
-                 (Item.Normalized, Current.Post_Attention_Norm,
-                  Current.Post_Attention_Norm_Bias, Status);
-               exit when E.Is_Error (Status);
-
-               Charge (Item, Joining, Mark);
 
                --  Feed-forward block. It reads what the layer normalized on
                --  the way in where the architecture runs the two in parallel,
@@ -9451,6 +11102,12 @@ package body Model_Runner.Llama is
 
       Final_State (Source, Item.Activation.all, Item.Normalized.all);
 
+      --  Kept for the block past the stack, where there is one.
+      if Item.Last_Final /= null then
+         Item.Last_Final.all := Item.Normalized.all;
+         Item.Has_Final := True;
+      end if;
+
       --  The output projection is the widest product of the token, so it is
       --  the one that most benefits from the pool. It writes into a
       --  session-owned row that is then copied into the caller's vector.
@@ -9599,8 +11256,25 @@ package body Model_Runner.Llama is
       Keys   : T.Real_Array_Access := null;
       Values : T.Real_Array_Access := null;
       Attend : T.Real_Array_Access := null;
+      Query_Full : T.Real_Array_Access := null;
+      Gates  : T.Real_Array_Access := null;
       Gate   : T.Real_Array_Access := null;
       Up     : T.Real_Array_Access := null;
+
+      --  A linear layer's projections over the batch, where the
+      --  architecture has such layers: what its rule reads and what it
+      --  leaves for the projection out.
+      Mix_Rows   : T.Real_Array_Access := null;
+      Z_Rows     : T.Real_Array_Access := null;
+      Alpha_Rows : T.Real_Array_Access := null;
+      Beta_Rows  : T.Real_Array_Access := null;
+      Blend_Rows : T.Real_Array_Access := null;
+      Mix_Wide    : constant Element_Count :=
+        Element_Count (Mix_Width (Source.Settings));
+      Value_Wide  : constant Element_Count :=
+        Element_Count (Value_Width (Source.Settings));
+      Value_Heads : constant Element_Count :=
+        Element_Count (Source.Settings.Value_Heads);
 
       --  The angles this batch turns by, where a device does the turning: a
       --  cosine and the sine after it for each pair of each position, in
@@ -9664,6 +11338,11 @@ package body Model_Runner.Llama is
 
       function Whole_Layer_Fits (L : Layer) return Boolean
       is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
+
+          --  A hybrid's head gates and shared expert are not in the
+          --  device's sequence; its full attention layers go a step at a
+          --  time.
+          and then not Hybrid (Settings.Kind)
           and then L.Sinks = null
           and then L.Out_Bias = null
           and then L.Up_Bias = null
@@ -9696,8 +11375,15 @@ package body Model_Runner.Llama is
          T.Free (Keys);
          T.Free (Values);
          T.Free (Attend);
+         T.Free (Query_Full);
+         T.Free (Gates);
          T.Free (Gate);
          T.Free (Up);
+         T.Free (Mix_Rows);
+         T.Free (Z_Rows);
+         T.Free (Alpha_Rows);
+         T.Free (Beta_Rows);
+         T.Free (Blend_Rows);
          Forget (Angles);
       end Release;
 
@@ -9893,6 +11579,15 @@ package body Model_Runner.Llama is
          T.Allocate (Count * Width, Kept_Norm);
       end if;
       T.Allocate (Count * Wide, Query);
+      if Hybrid (Settings.Kind) then
+         T.Allocate (Count * 2 * Wide, Query_Full);
+         T.Allocate (Count * Wide, Gates);
+         T.Allocate (Count * Mix_Wide, Mix_Rows);
+         T.Allocate (Count * Value_Wide, Z_Rows);
+         T.Allocate (Count * Value_Heads, Alpha_Rows);
+         T.Allocate (Count * Value_Heads, Beta_Rows);
+         T.Allocate (Count * Value_Wide, Blend_Rows);
+      end if;
       T.Allocate (Count * KV_Width, Keys);
       T.Allocate (Count * V_Width, Values);
       T.Allocate (Count * Blend, Attend);
@@ -10105,6 +11800,12 @@ package body Model_Runner.Llama is
             --  projection down included, so that the common tail does not
             --  project it a second time.
             Whole_Block : Boolean := False;
+
+            --  Whether this layer is one of a hybrid's linear ones, which
+            --  attends through its state a position at a time below and
+            --  takes the batch's feed-forward as every layer does.
+            Is_Linear : constant Boolean :=
+              Linear (Settings, Natural (Index));
 
             --  Five of this block's loops over the batch go to the worker
             --  pool. They are elementwise: a position's normalization and
@@ -10326,6 +12027,7 @@ package body Model_Runner.Llama is
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
+              and then not Is_Linear
               and then Current.Attention_Norm /= null
               and then Current.Attention_Norm_Bias = null
               and then Current.Feed_Norm /= null
@@ -10591,434 +12293,526 @@ package body Model_Runner.Llama is
                  Norm.all (0 .. Count * Width - 1);
             end if;
 
-            --  One pass over each weight for the whole batch.
-            if not Projected then
+            if Is_Linear then
+               --  The linear layer's projections once over the whole batch,
+               --  then its positions one after another, since each reads
+               --  the state the one before it left; then the projection
+               --  out, once again over the batch, into the normalized rows
+               --  in their place, and the join below takes it from there.
                Charge (Item, Normalizing, Mark);
 
                Product_Batch
-                 (Item, Current.Query, Norm, Count, Query, Status);
+                 (Item, Current.Mix, Norm, Count, Mix_Rows, Status);
                exit when E.Is_Error (Status);
                Product_Batch
-                 (Item, Current.Key, Norm, Count, Keys, Status);
+                 (Item, Current.Z_Gate, Norm, Count, Z_Rows, Status);
                exit when E.Is_Error (Status);
                Product_Batch
-                 (Item, Current.Value, Norm, Count, Values, Status);
+                 (Item, Current.Alpha, Norm, Count, Alpha_Rows, Status);
                exit when E.Is_Error (Status);
-            end if;
+               Product_Batch
+                 (Item, Current.Beta, Norm, Count, Beta_Rows, Status);
+               exit when E.Is_Error (Status);
 
-            Charge (Item, Projecting, Mark);
+               Charge (Item, Attending, Mark);
 
-            --  Rotate at each token's own position, then publish every key
-            --  and value before any attention reads them: token K of the
-            --  batch attends to the earlier tokens of the same batch.
-            --
-            --  Not for a layer the device took whole and whose rows are
-            --  owed: the device turned them and holds them, nothing came
-            --  back to copy, and a copy of what did not come back is a
-            --  copy of nothing -- eleven microseconds a position a layer,
-            --  which was a seventh of a long prompt.
-            for Which in 0 .. (if Deferred (Index) then -1 else Count - 1)
-            loop
-               declare
-                  Q_At : constant Element_Count := Slot (Which, Wide);
-                  KV_At : constant Element_Count := Slot (Which, KV_Width);
-                  V_At  : constant Element_Count := Slot (Which, V_Width);
-                  Place : constant Element_Count :=
-                    Base
-                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
-                      * KV_Width;
-                  V_Place : constant Element_Count :=
-                    V_Base
-                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
-                      * V_Width;
-               begin
-                  --  The same bias as the single-token path adds, on each
-                  --  token of the batch. A batch that skipped it would
-                  --  answer a prompt differently from the way it answers
-                  --  the same text one token at a time.
-                  if Current.Query_Bias /= null then
-                     K.Add (Query.all (Q_At .. Q_At + Wide - 1),
-                            Current.Query_Bias.all);
-                     K.Add (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                            Current.Key_Bias.all);
-                     K.Add (Values.all (V_At .. V_At + V_Width - 1),
-                            Current.Value_Bias.all);
-                  end if;
+               for Which in 0 .. Count - 1 loop
+                  Linear_Core
+                    (Item, Source, Current, Natural (Index),
+                     Natural (Sits_At (Which)),
+                     (Mixed => Mix_Rows, Z_Gate => Z_Rows,
+                      Alpha => Alpha_Rows, Beta => Beta_Rows,
+                      Blend => Blend_Rows,
+                      M0 => Which * Mix_Wide,
+                      Z0 => Which * Value_Wide,
+                      A0 => Which * Value_Heads,
+                      B0 => Which * Value_Heads,
+                      O0 => Which * Value_Wide),
+                     Status);
+                  exit when E.Is_Error (Status);
+               end loop;
+               exit when E.Is_Error (Status);
 
-                  if Current.Query_Norm /= null then
-                     Normalize_Heads
-                       (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
-                        Current.Query_Norm.all, Settings.Epsilon,
-                        Item.Head_Row.all);
-                     Normalize_Heads
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        KV_Heads, Head_Size, Current.Key_Norm.all,
-                        Settings.Epsilon, Item.Head_Row.all);
-                  end if;
+               Charge (Item, Projecting, Mark);
 
-                  --  The queries and the keys of this position turn by
-                  --  the same angles, so the table is computed once for
-                  --  both. Two calls computed it twice, and the table is
-                  --  a power, a cosine and a sine a pair.
-                  --
-                  --  Done already where the device turned them as it
-                  --  projected: the table it was given is this one.
-                  if not Rotated then
-                     K.Apply_Rotary_Pair
-                       (Query.all (Q_At .. Q_At + Wide - 1), Heads,
-                        Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
-                        Head_Size, Element_Count (Settings.Rotary),
-                        Natural (Sits_At (Which)),
-                        Turn_Base (Settings, Natural (Index)),
-                        Settings.Scaling, Turns (Source),
-                        Settings.Pairing);
-                  end if;
+               Product_Batch
+                 (Item, Current.Linear_Out, Blend_Rows, Count, Norm, Status);
+               exit when E.Is_Error (Status);
+            else
 
-                  if Item.Held = Eighth then
-                     Pack_Row
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        Held_By (Which).Byte_Keys.all, B.Byte_Count (Place),
-                        Held_By (Which).Key_Scales.all
-                          (Rows_Base
-                           + Cell_Of (Item, Natural (Index),
-                                      Sits_At (Which))));
-                     Pack_Row
-                       (Values.all (V_At .. V_At + V_Width - 1),
-                        Held_By (Which).Byte_Values.all,
-                        B.Byte_Count (V_Place),
-                        Held_By (Which).Value_Scales.all
-                          (Rows_Base
-                           + Cell_Of (Item, Natural (Index),
-                                      Sits_At (Which))));
-                  elsif Item.Held = Exact then
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Held_By (Which).Keys.all (Place + Offset) :=
-                          Keys.all (KV_At + Offset);
-                     end loop;
-                     for Offset in 0 .. V_Width - 1 loop
-                        Held_By (Which).Values.all (V_Place + Offset) :=
-                          Values.all (V_At + Offset);
-                     end loop;
+               --  One pass over each weight for the whole batch.
+               if not Projected then
+                  Charge (Item, Normalizing, Mark);
 
-                     --  And the device's copy, as the single-token path
-                     --  does. Both evaluators must attend the same way: a
-                     --  model that computes attention one way when it
-                     --  generates and another when a draft's proposals are
-                     --  checked says two different things, and the suite
-                     --  says so.
-                     --
-                     --  Written already where the layer went over whole:
-                     --  the sequence put them there before it attended.
-                     --
-                     --  A round writes each row into the row's own block of
-                     --  that cache, which is what the kernel below reads
-                     --  and is why a member's position does not land on
-                     --  another member's.
-                     if not Cached then
-                        declare
-                           Placed : Boolean;
-                        begin
-                           Put_Position
-                             (Held_By (Which),
-                              Place,
-                              Keys.all (KV_At .. KV_At + KV_Width - 1),
-                              V_Place,
-                              Values.all (V_At .. V_At + V_Width - 1),
-                              Placed);
-
-                           Resident :=
-                             (if Rounding
-                              then Resident and Placed
-                              else Placed);
-                        end;
-                     end if;
-                  else
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Held_By (Which).Half_Keys.all (Place + Offset) :=
-                          N.To_Half (Keys.all (KV_At + Offset));
-                     end loop;
-                     for Offset in 0 .. V_Width - 1 loop
-                        Held_By (Which).Half_Values.all (V_Place + Offset) :=
-                          N.To_Half (Values.all (V_At + Offset));
-                     end loop;
-                  end if;
-               end;
-            end loop;
-
-            --  Rotating covers the cache writes too: they are the same loop
-            --  over the batch, and separating them would read the clock
-            --  twice a position rather than once a layer -- which is the
-            --  instrument measuring itself rather than the work.
-            Charge (Item, Rotating, Mark);
-
-            --  The whole batch in one call where a device holds the cache.
-            --  Every position of a batch reads the same cache and writes its
-            --  own blend, so nothing makes them wait for each other -- and a
-            --  call costs 83 microseconds before it computes anything, which
-            --  a position at a time pays 2420 times over a 110-token prompt.
-            --
-            --  Done already where the whole layer went over as one: this is
-            --  a step of it.
-            if Item.Held = Exact and then Resident and then not Fused then
-               declare
-                  --  What Earliest would return for the batch's first
-                  --  position, and the width it would slide for the rest.
-                  --  Taken from Earliest rather than restated, so a layer
-                  --  that windows nothing says zero here as it does there.
-                  Window_Here : constant Natural :=
-                    (if Settings.Window > 0
-                       and then Earliest (Settings,
-                                          Element_Count (Settings.Window),
-                                          Natural (Index)) > 0
-                     then Settings.Window
-                     else 0);
-
-                  --  The last position the batch may look at. Causally
-                  --  that is the batch's first, and each position after it
-                  --  moves its own end along; attending both ways it is the
-                  --  batch's last, and every position shares it.
-                  First_Step : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
-                             Earliest (Settings, Reserved, Natural (Index)));
-                  Last_Step  : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
-                             (if Settings.Causal
-                              then Reserved
-                              else Reserved + Count - 1));
-
-                  --  A round reads its per-row table out of the cache: a
-                  --  row's last position and the block it reads, neither of
-                  --  which follows from the batch's first position, because
-                  --  a round's rows do not sit one after another in one
-                  --  sequence.
-                  Table : constant Natural :=
-                    (if Rounding
-                     then Natural (Table_At
-                                   + 2 * Element_Count (Index) * Count)
-                     else 0);
-
-                  --  Where this session's own block begins, for a batch. A
-                  --  round says nothing here: the kernel adds each row's
-                  --  own block out of the table, and a base added twice
-                  --  would read past the cache.
-                  Seat_At : constant Element_Count :=
-                    (if Rounding then 0 else Block_Base (Item));
-
-                  Usable : Boolean;
-               begin
-                  --  The whole of the layer's second half as one sequence,
-                  --  for a batch as for a single position.
-                  --
-                  --  A batch already paid three submissions a layer and had
-                  --  the host joining and normalizing between them, which
-                  --  for a hundred and twenty-eight positions is a quarter
-                  --  of a million elements a layer crossing the bus twice
-                  --  to be added up. The steps are the same nine; only the
-                  --  position count differs, and every kernel in them was
-                  --  written to take one.
-                  if Settings.Experts = 0
-                    and then T.Is_Present (Current.Gate)
-                    and then Current.Feed_Norm /= null
-                    and then Current.Out_Bias = null
-                    and then Current.Up_Bias = null
-                    and then Current.Down_Bias = null
-                    and then Current.Feed_Norm_Bias = null
-                    and then Current.Post_Attention_Norm = null
-                    and then Current.Post_Feed_Norm = null
-                  then
-                     Model_Runner.Backend.Device.Attend_And_Feed
-                       (Query.all (0 .. Count * Wide - 1),
-                        Acts.all (0 .. Count * Width - 1),
-                        Natural (Heads), Natural (Head_Size),
-                        Natural (Value_Size), Settings.Group_Size,
-                        Natural (First_Step), Natural (Last_Step),
-                        Natural (Seat_At + Base),
-                        Natural (Seat_At + Item.Keys.all'Length + V_Base),
-                        Natural (KV_Width), Natural (V_Width), Scale,
-                        Settings.Attention_Cap, Current.Attention_Out,
-                        Current.Feed_Norm.all, Settings.Epsilon,
-                        Current.Gate, Current.Up, Current.Down,
-                        Gate_Unit (Source), Acts, Fused,
-                        Positions => Natural (Count),
-                        Window    => Window_Here,
-                        Causal    => Settings.Causal,
-                        Lifted    => Lifted_Norms (Source),
-                        Max_Bias  => Settings.Max_Bias,
-                        Table_At  => Table);
-                  end if;
-
-                  if Fused then
-                     Usable := True;
-                  else
-                     Attend_There
-                       (Item, Source, Query.all (0 .. Count * Wide - 1),
-                        Heads, Head_Size, Value_Size,
-                        First_Step, Last_Step,
-                        Base, V_Base, KV_Width, V_Width, Scale,
-                        Attend.all (0 .. Count * Blend - 1), Usable,
-                        Positions => Count, Window => Window_Here,
-                        Sinks => Current.Sinks);
-                  end if;
-
-                  if not Usable then
-                     Item.Current := Failed;
-                     Status := E.Make (E.Tensor_Non_Finite_Value);
-                     E.Add_Integer (Status, "layer",
-                                    Long_Long_Integer (Index));
-                     return;
-                  end if;
-               end;
-            end if;
-
-            --  Every position of the batch, in shares of the heads.
-            --
-            --  A head at a time down the positions rather than a position at
-            --  a time down the heads, which is the same work in the other
-            --  order and is what makes it one hand-off a layer instead of
-            --  one per position: a hundred and twenty-eight positions of
-            --  twenty-two layers would otherwise be nearly three thousand
-            --  rendezvous for a prompt. It also needs no score buffer beyond
-            --  the row a head already has, where sharing the positions out
-            --  would have needed a row per share per head.
-            if not Fused
-              and then not (Item.Held = Exact and then Resident)
-            then
-               declare
-                  type Batch_Share is limited new Workers_CPU.Task_Item with
-                     record
-                        Ok : Boolean := True;
-                     end record;
-
-                  overriding procedure Run
-                    (Share : in out Batch_Share;
-                     From  : Element_Count;
-                     To    : Element_Count);
-
-                  overriding procedure Run
-                    (Share : in out Batch_Share;
-                     From  : Element_Count;
-                     To    : Element_Count) is
-                  begin
-                     if From > To then
-                        return;
-                     end if;
+                  --  The query projection's whole answer goes to its own
+                  --  room where it carries a gate beside each head, and
+                  --  each row's queries and gates are taken out of it.
+                  if Hybrid (Settings.Kind) then
+                     Product_Batch
+                       (Item, Current.Query, Norm, Count, Query_Full, Status);
+                     exit when E.Is_Error (Status);
 
                      for Which in 0 .. Count - 1 loop
                         declare
-                           Last_Step : constant Element_Count :=
-                             (if Rounding or else Settings.Causal
-                              then Sits_At (Which)
-                              else Reserved + Count - 1);
-                           First_Step : constant Element_Count :=
-                             Earliest (Settings, Last_Step, Natural (Index));
-
-                           --  Said as cells of the row's own session,
-                           --  because a round's rows are different sessions
-                           --  and each holds its window somewhere of its
-                           --  own. Every distance the blend takes is a
-                           --  difference between two of these.
-                           First_Cell : constant Element_Count :=
-                             Cell_Of (Held_By (Which).all, Natural (Index),
-                                      First_Step);
-                           Last_Cell  : constant Element_Count :=
-                             Cell_Of (Held_By (Which).all, Natural (Index),
-                                      Last_Step);
-
-                           --  The query's own position, which is not the
-                           --  last one: a model that reads a whole text at
-                           --  once gives every slot of the batch the same
-                           --  last position, and the fall-off with distance
-                           --  is measured from where the query is.
-                           Query_Cell : constant Element_Count :=
-                             Cell_Of (Held_By (Which).all, Natural (Index),
-                                      Sits_At (Which));
-
-                           Q_At   : constant Element_Count :=
-                             Slot (Which, Wide);
-                           B_At   : constant Element_Count :=
-                             Slot (Which, Blend);
-                           Usable : Boolean := True;
+                           From : constant Element_Count := Which * 2 * Wide;
+                           Q_At : constant Element_Count := Which * Wide;
                         begin
-                           if Item.Held = Eighth then
-                              Blend_Eighth
-                                (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Held_By (Which).Byte_Keys.all,
-                                 Held_By (Which).Byte_Values.all,
-                                 Held_By (Which).Key_Scales.all,
-                                 Held_By (Which).Value_Scales.all,
-                                 Base, V_Base, Rows_Base, KV_Width, V_Width,
-                                 Heads, Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
-                                 First_Cell, Last_Cell, Scale,
-                                 Settings.Attention_Cap, Settings.Max_Bias,
-                                 Query_Cell, Current.Sinks,
-                                 From, To, Item.Score_Room, Item.Scores.all,
-                                 Attend.all (B_At .. B_At + Blend - 1),
-                                 Usable);
-                           elsif Item.Held = Exact then
-                              Blend_Exact
-                                (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Held_By (Which).Keys.all,
-                                 Held_By (Which).Values.all,
-                                 Base, V_Base, KV_Width, V_Width, Heads,
-                                 Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
-                                 First_Cell, Last_Cell, Scale,
-                                 Settings.Attention_Cap, Settings.Max_Bias,
-                                 Query_Cell, Current.Sinks,
-                                 From, To, Item.Score_Room, Item.Scores.all,
-                                 Attend.all (B_At .. B_At + Blend - 1),
-                                 Usable);
-                           else
-                              Blend_Halved
-                                (Query.all (Q_At .. Q_At + Wide - 1),
-                                 Held_By (Which).Half_Keys.all,
-                                 Held_By (Which).Half_Values.all,
-                                 Base, V_Base, KV_Width, V_Width, Heads,
-                                 Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
-                                 First_Cell, Last_Cell, Scale,
-                                 Settings.Attention_Cap, Settings.Max_Bias,
-                                 Query_Cell, Current.Sinks,
-                                 From, To, Item.Score_Room, Item.Scores.all,
-                                 Attend.all (B_At .. B_At + Blend - 1),
-                                 Usable);
-                           end if;
-
-                           if not Usable then
-                              Share.Ok := False;
-                           end if;
+                           for H in 0 .. Heads - 1 loop
+                              for C in 0 .. Head_Size - 1 loop
+                                 Query.all (Q_At + H * Head_Size + C) :=
+                                   Query_Full.all (From + H * 2 * Head_Size + C);
+                                 Gates.all (Q_At + H * Head_Size + C) :=
+                                   Query_Full.all
+                                     (From + H * 2 * Head_Size + Head_Size + C);
+                              end loop;
+                           end loop;
                         end;
                      end loop;
-                  end Run;
-
-                  Share  : aliased Batch_Share;
-                  Shared : E.Error_Info;
-               begin
-                  Workers_CPU.Dispatch_Shares
-                    (Item.Team, Heads, Share'Unchecked_Access, Shared);
-
-                  if not Share.Ok or else E.Is_Error (Shared) then
-                     Release;
-                     Item.Current := Failed;
-                     Status := E.Make (E.Tensor_Non_Finite_Value);
-                     E.Add_Integer
-                       (Status, "layer", Long_Long_Integer (Index));
-                     return;
+                  else
+                     Product_Batch
+                       (Item, Current.Query, Norm, Count, Query, Status);
+                     exit when E.Is_Error (Status);
                   end if;
-               end;
-            end if;
+                  Product_Batch
+                    (Item, Current.Key, Norm, Count, Keys, Status);
+                  exit when E.Is_Error (Status);
+                  Product_Batch
+                    (Item, Current.Value, Norm, Count, Values, Status);
+                  exit when E.Is_Error (Status);
+               end if;
 
-            Charge (Item, Attending, Mark);
+               Charge (Item, Projecting, Mark);
+
+               --  Rotate at each token's own position, then publish every key
+               --  and value before any attention reads them: token K of the
+               --  batch attends to the earlier tokens of the same batch.
+               --
+               --  Not for a layer the device took whole and whose rows are
+               --  owed: the device turned them and holds them, nothing came
+               --  back to copy, and a copy of what did not come back is a
+               --  copy of nothing -- eleven microseconds a position a layer,
+               --  which was a seventh of a long prompt.
+               for Which in 0 .. (if Deferred (Index) then -1 else Count - 1)
+               loop
+                  declare
+                     Q_At : constant Element_Count := Slot (Which, Wide);
+                     KV_At : constant Element_Count := Slot (Which, KV_Width);
+                     V_At  : constant Element_Count := Slot (Which, V_Width);
+                     Place : constant Element_Count :=
+                       Base
+                       + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                         * KV_Width;
+                     V_Place : constant Element_Count :=
+                       V_Base
+                       + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                         * V_Width;
+                  begin
+                     --  The same bias as the single-token path adds, on each
+                     --  token of the batch. A batch that skipped it would
+                     --  answer a prompt differently from the way it answers
+                     --  the same text one token at a time.
+                     if Current.Query_Bias /= null then
+                        K.Add (Query.all (Q_At .. Q_At + Wide - 1),
+                               Current.Query_Bias.all);
+                        K.Add (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                               Current.Key_Bias.all);
+                        K.Add (Values.all (V_At .. V_At + V_Width - 1),
+                               Current.Value_Bias.all);
+                     end if;
+
+                     if Current.Query_Norm /= null then
+                        Normalize_Heads
+                          (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
+                           Current.Query_Norm.all, Settings.Epsilon,
+                           Item.Head_Row.all);
+                        Normalize_Heads
+                          (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           KV_Heads, Head_Size, Current.Key_Norm.all,
+                           Settings.Epsilon, Item.Head_Row.all);
+                     end if;
+
+                     --  The queries and the keys of this position turn by
+                     --  the same angles, so the table is computed once for
+                     --  both. Two calls computed it twice, and the table is
+                     --  a power, a cosine and a sine a pair.
+                     --
+                     --  Done already where the device turned them as it
+                     --  projected: the table it was given is this one.
+                     if not Rotated then
+                        K.Apply_Rotary_Pair
+                          (Query.all (Q_At .. Q_At + Wide - 1), Heads,
+                           Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
+                           Head_Size, Element_Count (Settings.Rotary),
+                           Natural (Sits_At (Which)),
+                           Turn_Base (Settings, Natural (Index)),
+                           Settings.Scaling, Turns (Source),
+                           Settings.Pairing);
+                     end if;
+
+                     if Item.Held = Eighth then
+                        Pack_Row
+                          (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           Held_By (Which).Byte_Keys.all, B.Byte_Count (Place),
+                           Held_By (Which).Key_Scales.all
+                             (Rows_Base
+                              + Cell_Of (Item, Natural (Index),
+                                         Sits_At (Which))));
+                        Pack_Row
+                          (Values.all (V_At .. V_At + V_Width - 1),
+                           Held_By (Which).Byte_Values.all,
+                           B.Byte_Count (V_Place),
+                           Held_By (Which).Value_Scales.all
+                             (Rows_Base
+                              + Cell_Of (Item, Natural (Index),
+                                         Sits_At (Which))));
+                     elsif Item.Held = Exact then
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Held_By (Which).Keys.all (Place + Offset) :=
+                             Keys.all (KV_At + Offset);
+                        end loop;
+                        for Offset in 0 .. V_Width - 1 loop
+                           Held_By (Which).Values.all (V_Place + Offset) :=
+                             Values.all (V_At + Offset);
+                        end loop;
+
+                        --  And the device's copy, as the single-token path
+                        --  does. Both evaluators must attend the same way: a
+                        --  model that computes attention one way when it
+                        --  generates and another when a draft's proposals are
+                        --  checked says two different things, and the suite
+                        --  says so.
+                        --
+                        --  Written already where the layer went over whole:
+                        --  the sequence put them there before it attended.
+                        --
+                        --  A round writes each row into the row's own block of
+                        --  that cache, which is what the kernel below reads
+                        --  and is why a member's position does not land on
+                        --  another member's.
+                        if not Cached then
+                           declare
+                              Placed : Boolean;
+                           begin
+                              Put_Position
+                                (Held_By (Which),
+                                 Place,
+                                 Keys.all (KV_At .. KV_At + KV_Width - 1),
+                                 V_Place,
+                                 Values.all (V_At .. V_At + V_Width - 1),
+                                 Placed);
+
+                              Resident :=
+                                (if Rounding
+                                 then Resident and Placed
+                                 else Placed);
+                           end;
+                        end if;
+                     else
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Held_By (Which).Half_Keys.all (Place + Offset) :=
+                             N.To_Half (Keys.all (KV_At + Offset));
+                        end loop;
+                        for Offset in 0 .. V_Width - 1 loop
+                           Held_By (Which).Half_Values.all (V_Place + Offset) :=
+                             N.To_Half (Values.all (V_At + Offset));
+                        end loop;
+                     end if;
+                  end;
+               end loop;
+
+               --  Rotating covers the cache writes too: they are the same loop
+               --  over the batch, and separating them would read the clock
+               --  twice a position rather than once a layer -- which is the
+               --  instrument measuring itself rather than the work.
+               Charge (Item, Rotating, Mark);
+
+               --  The whole batch in one call where a device holds the cache.
+               --  Every position of a batch reads the same cache and writes its
+               --  own blend, so nothing makes them wait for each other -- and a
+               --  call costs 83 microseconds before it computes anything, which
+               --  a position at a time pays 2420 times over a 110-token prompt.
+               --
+               --  Done already where the whole layer went over as one: this is
+               --  a step of it.
+               --  A hybrid's heads are gated after they attend, which the
+               --  device's second half does not do: its full attention
+               --  layers attend on the host.
+               if Item.Held = Exact and then Resident and then not Fused
+                 and then not Hybrid (Settings.Kind)
+               then
+                  declare
+                     --  What Earliest would return for the batch's first
+                     --  position, and the width it would slide for the rest.
+                     --  Taken from Earliest rather than restated, so a layer
+                     --  that windows nothing says zero here as it does there.
+                     Window_Here : constant Natural :=
+                       (if Settings.Window > 0
+                          and then Earliest (Settings,
+                                             Element_Count (Settings.Window),
+                                             Natural (Index)) > 0
+                        then Settings.Window
+                        else 0);
+
+                     --  The last position the batch may look at. Causally
+                     --  that is the batch's first, and each position after it
+                     --  moves its own end along; attending both ways it is the
+                     --  batch's last, and every position shares it.
+                     First_Step : constant Element_Count :=
+                       Cell_Of (Item, Natural (Index),
+                                Earliest (Settings, Reserved, Natural (Index)));
+                     Last_Step  : constant Element_Count :=
+                       Cell_Of (Item, Natural (Index),
+                                (if Settings.Causal
+                                 then Reserved
+                                 else Reserved + Count - 1));
+
+                     --  A round reads its per-row table out of the cache: a
+                     --  row's last position and the block it reads, neither of
+                     --  which follows from the batch's first position, because
+                     --  a round's rows do not sit one after another in one
+                     --  sequence.
+                     Table : constant Natural :=
+                       (if Rounding
+                        then Natural (Table_At
+                                      + 2 * Element_Count (Index) * Count)
+                        else 0);
+
+                     --  Where this session's own block begins, for a batch. A
+                     --  round says nothing here: the kernel adds each row's
+                     --  own block out of the table, and a base added twice
+                     --  would read past the cache.
+                     Seat_At : constant Element_Count :=
+                       (if Rounding then 0 else Block_Base (Item));
+
+                     Usable : Boolean;
+                  begin
+                     --  The whole of the layer's second half as one sequence,
+                     --  for a batch as for a single position.
+                     --
+                     --  A batch already paid three submissions a layer and had
+                     --  the host joining and normalizing between them, which
+                     --  for a hundred and twenty-eight positions is a quarter
+                     --  of a million elements a layer crossing the bus twice
+                     --  to be added up. The steps are the same nine; only the
+                     --  position count differs, and every kernel in them was
+                     --  written to take one.
+                     if Settings.Experts = 0
+                       and then T.Is_Present (Current.Gate)
+                       and then Current.Feed_Norm /= null
+                       and then Current.Out_Bias = null
+                       and then Current.Up_Bias = null
+                       and then Current.Down_Bias = null
+                       and then Current.Feed_Norm_Bias = null
+                       and then Current.Post_Attention_Norm = null
+                       and then Current.Post_Feed_Norm = null
+                     then
+                        Model_Runner.Backend.Device.Attend_And_Feed
+                          (Query.all (0 .. Count * Wide - 1),
+                           Acts.all (0 .. Count * Width - 1),
+                           Natural (Heads), Natural (Head_Size),
+                           Natural (Value_Size), Settings.Group_Size,
+                           Natural (First_Step), Natural (Last_Step),
+                           Natural (Seat_At + Base),
+                           Natural (Seat_At + Item.Keys.all'Length + V_Base),
+                           Natural (KV_Width), Natural (V_Width), Scale,
+                           Settings.Attention_Cap, Current.Attention_Out,
+                           Current.Feed_Norm.all, Settings.Epsilon,
+                           Current.Gate, Current.Up, Current.Down,
+                           Gate_Unit (Source), Acts, Fused,
+                           Positions => Natural (Count),
+                           Window    => Window_Here,
+                           Causal    => Settings.Causal,
+                           Lifted    => Lifted_Norms (Source),
+                           Max_Bias  => Settings.Max_Bias,
+                           Table_At  => Table);
+                     end if;
+
+                     if Fused then
+                        Usable := True;
+                     else
+                        Attend_There
+                          (Item, Source, Query.all (0 .. Count * Wide - 1),
+                           Heads, Head_Size, Value_Size,
+                           First_Step, Last_Step,
+                           Base, V_Base, KV_Width, V_Width, Scale,
+                           Attend.all (0 .. Count * Blend - 1), Usable,
+                           Positions => Count, Window => Window_Here,
+                           Sinks => Current.Sinks);
+                     end if;
+
+                     if not Usable then
+                        Item.Current := Failed;
+                        Status := E.Make (E.Tensor_Non_Finite_Value);
+                        E.Add_Integer (Status, "layer",
+                                       Long_Long_Integer (Index));
+                        return;
+                     end if;
+                  end;
+               end if;
+
+               --  Every position of the batch, in shares of the heads.
+               --
+               --  A head at a time down the positions rather than a position at
+               --  a time down the heads, which is the same work in the other
+               --  order and is what makes it one hand-off a layer instead of
+               --  one per position: a hundred and twenty-eight positions of
+               --  twenty-two layers would otherwise be nearly three thousand
+               --  rendezvous for a prompt. It also needs no score buffer beyond
+               --  the row a head already has, where sharing the positions out
+               --  would have needed a row per share per head.
+               if not Fused
+                 and then (Hybrid (Settings.Kind)
+                           or else not (Item.Held = Exact and then Resident))
+               then
+                  declare
+                     type Batch_Share is limited new Workers_CPU.Task_Item with
+                        record
+                           Ok : Boolean := True;
+                        end record;
+
+                     overriding procedure Run
+                       (Share : in out Batch_Share;
+                        From  : Element_Count;
+                        To    : Element_Count);
+
+                     overriding procedure Run
+                       (Share : in out Batch_Share;
+                        From  : Element_Count;
+                        To    : Element_Count) is
+                     begin
+                        if From > To then
+                           return;
+                        end if;
+
+                        for Which in 0 .. Count - 1 loop
+                           declare
+                              Last_Step : constant Element_Count :=
+                                (if Rounding or else Settings.Causal
+                                 then Sits_At (Which)
+                                 else Reserved + Count - 1);
+                              First_Step : constant Element_Count :=
+                                Earliest (Settings, Last_Step, Natural (Index));
+
+                              --  Said as cells of the row's own session,
+                              --  because a round's rows are different sessions
+                              --  and each holds its window somewhere of its
+                              --  own. Every distance the blend takes is a
+                              --  difference between two of these.
+                              First_Cell : constant Element_Count :=
+                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                         First_Step);
+                              Last_Cell  : constant Element_Count :=
+                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                         Last_Step);
+
+                              --  The query's own position, which is not the
+                              --  last one: a model that reads a whole text at
+                              --  once gives every slot of the batch the same
+                              --  last position, and the fall-off with distance
+                              --  is measured from where the query is.
+                              Query_Cell : constant Element_Count :=
+                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                         Sits_At (Which));
+
+                              Q_At   : constant Element_Count :=
+                                Slot (Which, Wide);
+                              B_At   : constant Element_Count :=
+                                Slot (Which, Blend);
+                              Usable : Boolean := True;
+                           begin
+                              if Item.Held = Eighth then
+                                 Blend_Eighth
+                                   (Query.all (Q_At .. Q_At + Wide - 1),
+                                    Held_By (Which).Byte_Keys.all,
+                                    Held_By (Which).Byte_Values.all,
+                                    Held_By (Which).Key_Scales.all,
+                                    Held_By (Which).Value_Scales.all,
+                                    Base, V_Base, Rows_Base, KV_Width, V_Width,
+                                    Heads, Head_Size, Value_Size,
+                                    Element_Count (Settings.Group_Size),
+                                    First_Cell, Last_Cell, Scale,
+                                    Settings.Attention_Cap, Settings.Max_Bias,
+                                    Query_Cell, Current.Sinks,
+                                    From, To, Item.Score_Room, Item.Scores.all,
+                                    Attend.all (B_At .. B_At + Blend - 1),
+                                    Usable);
+                              elsif Item.Held = Exact then
+                                 Blend_Exact
+                                   (Query.all (Q_At .. Q_At + Wide - 1),
+                                    Held_By (Which).Keys.all,
+                                    Held_By (Which).Values.all,
+                                    Base, V_Base, KV_Width, V_Width, Heads,
+                                    Head_Size, Value_Size,
+                                    Element_Count (Settings.Group_Size),
+                                    First_Cell, Last_Cell, Scale,
+                                    Settings.Attention_Cap, Settings.Max_Bias,
+                                    Query_Cell, Current.Sinks,
+                                    From, To, Item.Score_Room, Item.Scores.all,
+                                    Attend.all (B_At .. B_At + Blend - 1),
+                                    Usable);
+                              else
+                                 Blend_Halved
+                                   (Query.all (Q_At .. Q_At + Wide - 1),
+                                    Held_By (Which).Half_Keys.all,
+                                    Held_By (Which).Half_Values.all,
+                                    Base, V_Base, KV_Width, V_Width, Heads,
+                                    Head_Size, Value_Size,
+                                    Element_Count (Settings.Group_Size),
+                                    First_Cell, Last_Cell, Scale,
+                                    Settings.Attention_Cap, Settings.Max_Bias,
+                                    Query_Cell, Current.Sinks,
+                                    From, To, Item.Score_Room, Item.Scores.all,
+                                    Attend.all (B_At .. B_At + Blend - 1),
+                                    Usable);
+                              end if;
+
+                              if not Usable then
+                                 Share.Ok := False;
+                              end if;
+                           end;
+                        end loop;
+                     end Run;
+
+                     Share  : aliased Batch_Share;
+                     Shared : E.Error_Info;
+                  begin
+                     Workers_CPU.Dispatch_Shares
+                       (Item.Team, Heads, Share'Unchecked_Access, Shared);
+
+                     if not Share.Ok or else E.Is_Error (Shared) then
+                        Release;
+                        Item.Current := Failed;
+                        Status := E.Make (E.Tensor_Non_Finite_Value);
+                        E.Add_Integer
+                          (Status, "layer", Long_Long_Integer (Index));
+                        return;
+                     end if;
+                  end;
+               end if;
+
+               Charge (Item, Attending, Mark);
+            end if;
 
             --  Every step of the rest is a step of the sequence where the
             --  layer's second half went over as one, so there is nothing
             --  left here to do.
             if not Fused then
 
-               Product_Batch
-                 (Item, Current.Attention_Out, Attend, Count, Norm, Status);
-               exit when E.Is_Error (Status);
+               --  A linear layer's answer is in Norm already.
+               if not Is_Linear then
+                        --  Each head's blend through the sigmoid of its gate,
+                  --  where the projection carried one.
+                  if Hybrid (Settings.Kind) then
+                     for C in 0 .. Count * Blend - 1 loop
+                        Attend.all (C) :=
+                          Attend.all (C) * Sigmoid (Gates.all (C));
+                     end loop;
+                  end if;
+
+                  Product_Batch
+                    (Item, Current.Attention_Out, Attend, Count, Norm, Status);
+                  exit when E.Is_Error (Status);
+               end if;
                Charge (Item, Projecting, Mark);
 
                if Current.Out_Bias /= null then
@@ -11509,6 +13303,12 @@ package body Model_Runner.Llama is
             Final_State
               (Source, Acts.all (Origin .. Origin + Width - 1),
                Item.Normalized.all);
+
+            --  Kept for the block past the stack, where there is one.
+            if Item.Last_Final /= null then
+               Item.Last_Final.all := Item.Normalized.all;
+               Item.Has_Final := True;
+            end if;
          end;
 
          Product

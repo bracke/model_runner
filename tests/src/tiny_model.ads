@@ -67,9 +67,19 @@ package Tiny_Model is
    --  after each residual add rather than before each sublayer, with a
    --  learned row for the position and another for the segment, and no
    --  projection to a distribution at all.
+   --  Qwen35 is the hybrid: with two blocks and a full attention layer in
+   --  every second, its first layer is linear -- a gated delta rule over
+   --  a state of Linear_State by Linear_State a value head, Linear_Heads
+   --  key heads and as many value heads, after a convolution Linear_Taps
+   --  long -- and its second attends in full with a gate beside each head
+   --  and a normalization of every query and key head, as Qwen3 does.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
-      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35);
+
+   Linear_State : constant := 4;
+   Linear_Heads : constant := 2;
+   Linear_Taps  : constant := 4;
 
    --  A quantized row is a whole number of thirty-two element blocks, so a
    --  model whose widths are eight and twelve cannot be quantized at all.

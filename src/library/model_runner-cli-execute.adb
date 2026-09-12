@@ -1565,6 +1565,18 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
+         --  An option that cannot do anything here says so rather than
+         --  being accepted and forgotten -- and whether it can is known only
+         --  now, once the model has said whether it carries a next-token
+         --  block that drafts on its own.
+         if Item.Draft_Tokens_Set
+           and then T.Is_Empty (Item.Draft_Path)
+           and then not Item.Draft_Lookup
+           and then not L.Drafts_Next (Session)
+         then
+            Pres.Put_Note (Screen, "cli.note.draft_tokens_unused");
+         end if;
+
          --  A draft model, when one was named: a second, smaller model that
          --  proposes what it would say next so that this one can check
          --  several tokens in a single pass over its weights.
@@ -2059,8 +2071,17 @@ package body Model_Runner.CLI.Execute is
                   Request.Logprobs := Item.Logprobs;
                   Request.Context_Shift := Item.Context_Shift;
                   Request.Context_Keep := Item.Context_Keep;
+                  --  Without a draft model or a lookup, a model that carries
+                  --  a next-token block drafts from that: the block exists
+                  --  for nothing else.
+                  Request.Draft_From_Next :=
+                    Item.Draft_Tokens_Set
+                    and then not Draft_Ready
+                    and then not Item.Draft_Lookup
+                    and then L.Drafts_Next (Session);
                   Request.Draft_Tokens :=
                     (if Draft_Ready or else Item.Draft_Lookup
+                       or else Request.Draft_From_Next
                      then Item.Draft_Tokens else 0);
                   Request.Draft_From_Context :=
                     Item.Draft_Lookup and then not Draft_Ready;
@@ -2286,13 +2307,6 @@ package body Model_Runner.CLI.Execute is
       --  arrive without the flag that selects it quietly doing nothing.
       --  Options that cannot do anything here say so rather than being
       --  accepted and forgotten.
-      if Item.Draft_Tokens_Set
-        and then T.Is_Empty (Item.Draft_Path)
-        and then not Item.Draft_Lookup
-      then
-         Pres.Put_Note (Screen, "cli.note.draft_tokens_unused");
-      end if;
-
       if Item.Device_Memory_Set
         and then Model_Runner.Backend."/=" (Item.Backend,
                                             Model_Runner.Backend.Backend_Device)

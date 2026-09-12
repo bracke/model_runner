@@ -186,7 +186,21 @@ package Model_Runner.Llama is
    --  than taken if present.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
-      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
+      Qwen35, Qwen35_MoE);
+
+   --  Whether an architecture mixes linear attention -- a gated delta
+   --  rule over a recurrent state -- into its stack, one full attention
+   --  layer in every few. Qwen3.5 and Qwen3.6 do: three of every four
+   --  layers keep no keys and values at all, only a state a position
+   --  updates and a few positions' worth of projections for a short
+   --  convolution. Named once because it decides what a session holds
+   --  for a layer, what a position writes, and what a rewind can undo.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True where some layers are linear rather than attending.
+   function Hybrid (Item : Architecture) return Boolean
+   is (Item in Qwen35 | Qwen35_MoE);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -222,7 +236,9 @@ package Model_Runner.Llama is
          when GPT2      => "gpt2",
          when Bert      => "bert",
          when Nomic_Bert => "nomic-bert",
-         when Jina_Bert_V2 => "jina-bert-v2");
+         when Jina_Bert_V2 => "jina-bert-v2",
+         when Qwen35     => "qwen35",
+         when Qwen35_MoE => "qwen35moe");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -397,7 +413,59 @@ package Model_Runner.Llama is
       --  the model would have had. Equal to Feed_Forward when the file does
       --  not say, and unused by a dense model.
       Expert_Feed     : Natural := 0;
+
+      --  The hybrid architectures' shape, all nought for the rest.
+      --
+      --  Every Linear_Every-th layer attends in full and the others are
+      --  linear: a state of State_Size by State_Size a value head, updated
+      --  by the gated delta rule from queries and keys over Key_Heads
+      --  heads and values over Value_Heads, each State_Size wide, after
+      --  a causal convolution Conv_Kernel positions long over the three
+      --  projections at once. A full attention layer's query projection
+      --  carries a gate beside each head, which scales the head's blend
+      --  through a sigmoid. Shared_Feed is the width of the one expert
+      --  every position of a mixture also goes through, gated by a
+      --  sigmoid of its own; Next_Layers how many blocks past the stack
+      --  the file carries for predicting the token after the next, which
+      --  the stack itself never runs.
+      Linear_Every    : Natural := 0;
+      Key_Heads       : Natural := 0;
+      Value_Heads     : Natural := 0;
+      State_Size      : Natural := 0;
+      Conv_Kernel     : Natural := 0;
+      Shared_Feed     : Natural := 0;
+      Next_Layers     : Natural := 0;
    end record;
+
+   --  Whether a layer of a hybrid architecture is a linear one. The
+   --  full attention layers are every Linear_Every-th, counting from one,
+   --  as the file counts them; an architecture with no interval has none.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Layer Layer index, counting from nought.
+   --  @return True where the layer keeps a state rather than a cache.
+   function Linear (Settings : Configuration; Layer : Natural) return Boolean
+   is (Settings.Linear_Every > 0
+       and then (Layer + 1) mod Settings.Linear_Every /= 0);
+
+   --  Widths the linear layers' projections have: the queries and keys
+   --  together, the values, and the three at once, which is what the
+   --  convolution runs over.
+   --
+   --  @param Settings The model's configuration.
+   --  @return Key heads times the state size.
+   function Key_Width (Settings : Configuration) return Natural
+   is (Settings.Key_Heads * Settings.State_Size);
+
+   --  @param Settings The model's configuration.
+   --  @return Value heads times the state size.
+   function Value_Width (Settings : Configuration) return Natural
+   is (Settings.Value_Heads * Settings.State_Size);
+
+   --  @param Settings The model's configuration.
+   --  @return Twice the key width and the value width.
+   function Mix_Width (Settings : Configuration) return Natural
+   is (2 * Key_Width (Settings) + Value_Width (Settings));
 
    --  The feed-forward width one activation buffer has to hold: an expert's
    --  when the model has experts, and the dense block's when it does not.
@@ -1383,6 +1451,92 @@ package Model_Runner.Llama is
       Position : Natural;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Keep the last few positions' states, so that a hybrid session can
+   --  be rewound.
+   --
+   --  A linear layer's state summarizes everything before it and cannot
+   --  be walked back, so a session of a hybrid architecture keeps the
+   --  states as they were after each of the last Count positions, in a
+   --  ring, and Rewind restores the one it is asked for -- which is what
+   --  checking a draft needs: a few positions back, never further. A
+   --  session keeping none refuses every rewind but to where it stands.
+   --  What it costs is a copy of every linear layer's state a position,
+   --  which is why it is asked for and not done. Nothing for an
+   --  architecture without linear layers, which rewinds as it always did.
+   --
+   --  @param Item Open session.
+   --  @param Count How many positions back a rewind may reach; nought to
+   --    keep none.
+   --  @param Status Success, Lifecycle_Invalid_State or
+   --    Memory_Allocation_Failed.
+   procedure Keep_States
+     (Item   : in out Session;
+      Count  : Natural;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  How many positions back this session may be rewound; every position
+   --  for an architecture without linear layers.
+   --
+   --  @param Item Open session.
+   --  @return The count Keep_States was given, or Natural'Last where a
+   --    rewind reaches anywhere.
+   function States_Kept (Item : Session) return Natural;
+
+   --  Whether the model carries a block past its stack for drafting the
+   --  token after the next, and the session can run it: a hybrid file's
+   --  nextn block, and a session holding its cache exactly.
+   --
+   --  @param Item Open session.
+   --  @return True where Draft_Next may be called.
+   function Drafts_Next (Item : Session) return Boolean;
+
+   --  The final state of the last position this session evaluated, as
+   --  the output head read it: what the block past the stack takes in
+   --  beside the next token's embedding.
+   --
+   --  @param Item Session that has evaluated something.
+   --  @return Embedding numbers, or an empty array before any evaluation.
+   function Last_State (Item : Session) return Model_Runner.Numerics.Real_Array;
+
+   --  Run the block past the stack once: a draft of the token after Token,
+   --  from the stack's state at the position before it.
+   --
+   --  The block is a full attention layer with its own keys and values,
+   --  kept in the session beside the stack's, at the position it is told:
+   --  what it attends over is what it was given at the positions before,
+   --  which is why a prompt is run through it position by position after
+   --  the stack has seen the prompt, and why a draft's positions are run
+   --  through it again with the stack's own states once the draft is
+   --  checked. Its input at a position is a projection of the next
+   --  token's embedding beside the state, each normalized; its answer is
+   --  a distribution over the token after that and the state it would
+   --  hand to itself for one more draft.
+   --
+   --  @param Item Open session on a model with a block past its stack.
+   --  @param Source Model it was opened on.
+   --  @param Token The token at Position + 1, whose successor is drafted.
+   --  @param State The stack's final state at Position, Embedding numbers
+   --    -- Last_State, or a row of Evaluate_Batch's States, or what this
+   --    handed back the time before for a draft chained on a draft.
+   --  @param Position Which position of the block's cache this writes and
+   --    attends up to; at most the session's committed count.
+   --  @param Logits Distribution over the token after Token; or empty,
+   --    for a position run through only to put the block's cache and
+   --    state right, which skips the head.
+   --  @param Next_State What the block made, Embedding numbers, for the
+   --    next draft's State.
+   --  @param Status Success, Lifecycle_Invalid_State where the session
+   --    cannot draft, Tensor_Shape_Mismatch on a wrong width or position.
+   procedure Draft_Next
+     (Item       : in out Session;
+      Source     : Model'Class;
+      Token      : Model_Runner.Tokenizer.Token_Id;
+      State      : Model_Runner.Numerics.Real_Array;
+      Position   : Natural;
+      Logits     : out Model_Runner.Numerics.Real_Array;
+      Next_State : out Model_Runner.Numerics.Real_Array;
+      Status     : out Model_Runner.Errors.Error_Info);
+
    --  Invalidate the cache and the history without releasing memory.
    --
    --  @param Item Session to reset.
@@ -1505,6 +1659,40 @@ private
       Gate_Stack : Model_Runner.Tensors.View;
       Up_Stack   : Model_Runner.Tensors.View;
       Down_Stack : Model_Runner.Tensors.View;
+
+      --  A linear attention layer's own tensors, null and absent for a
+      --  layer that attends in full. Mix projects the queries, keys and
+      --  values at once; Z_Gate the gate the normalized blend is scaled
+      --  by; Alpha and Beta the decay and the update rate, one number a
+      --  value head; A_Log and DT_Bias shape the decay; Conv the
+      --  convolution's taps, Conv_Kernel of them for every component of
+      --  the mix; State_Norm the gain of the blend's normalization, one
+      --  a component of a head; Linear_Out the projection back.
+      Mix        : aliased Model_Runner.Tensors.View;
+      Z_Gate     : aliased Model_Runner.Tensors.View;
+      Alpha      : aliased Model_Runner.Tensors.View;
+      Beta       : aliased Model_Runner.Tensors.View;
+      A_Log      : Model_Runner.Tensors.Real_Array_Access;
+      DT_Bias    : Model_Runner.Tensors.Real_Array_Access;
+      Conv       : Model_Runner.Tensors.Real_Array_Access;
+      State_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Linear_Out : aliased Model_Runner.Tensors.View;
+
+      --  The expert every position of a mixture goes through as well,
+      --  with the row that gates it; absent where the mixture has none.
+      Shared_Gate   : aliased Model_Runner.Tensors.View;
+      Shared_Up     : aliased Model_Runner.Tensors.View;
+      Shared_Down   : aliased Model_Runner.Tensors.View;
+      Shared_Router : Model_Runner.Tensors.Real_Array_Access;
+
+      --  And the block past the stack's: what turns the stack's last
+      --  state and the next token's embedding into this block's input,
+      --  with the two normalizations before the projection and the one
+      --  after the block, ahead of the shared output head.
+      Next_Proj  : aliased Model_Runner.Tensors.View;
+      Next_ENorm : Model_Runner.Tensors.Real_Array_Access;
+      Next_HNorm : Model_Runner.Tensors.Real_Array_Access;
+      Next_Head_Norm : Model_Runner.Tensors.Real_Array_Access;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -1560,6 +1748,10 @@ private
       Named_Up    : Natural := 0;
 
       Layers      : Layer_Array_Access := null;
+
+      --  The blocks past the stack, Next_Layers of them, which the stack
+      --  never runs: a draft of the token after the next, when asked.
+      Next        : Layer_Array_Access := null;
       Embeddings  : aliased Model_Runner.Tensors.View;
 
       --  One row a position, added to the token's row before the first
@@ -1843,6 +2035,55 @@ private
       --  Something being told what every product was given, or null.
       Seen      : Watcher_Access := null;
       Origin    : Cell_Counts_Access := null;
+
+      --  What a linear layer keeps instead of keys and values: the last
+      --  Conv_Kernel - 1 positions' mixed projections, Mix_Width each,
+      --  and the state, State_Size by State_Size a value head. One of
+      --  each a linear layer, laid one after another in layer order. A
+      --  full attention layer has no room here and a linear one has no
+      --  cells.
+      --
+      --  And the states as they were, Kept_States positions back, one
+      --  whole set a position: what a rewind restores, since a state
+      --  summarizes everything and cannot be walked back. Ring-indexed
+      --  by position; a rewind further back than the ring holds is
+      --  refused.
+      Conv_State  : Model_Runner.Tensors.Real_Array_Access := null;
+      Delta_State : Model_Runner.Tensors.Real_Array_Access := null;
+      Past_States : Model_Runner.Tensors.Real_Array_Access := null;
+      Past_Convs  : Model_Runner.Tensors.Real_Array_Access := null;
+      Kept_States : Natural := 0;
+
+      --  One past the newest position whose state the ring holds: the
+      --  ring reaches Kept_States positions back from there, whatever
+      --  a rewind since has made the committed count.
+      Kept_Newest : Natural := 0;
+
+      --  Room a linear layer's answers take on the way through: the
+      --  mixed projections, the gate, the decays and rates, the blend;
+      --  and a mixture's shared expert's arms.
+      Query_Full : Model_Runner.Tensors.Real_Array_Access := null;
+      Head_Gate  : Model_Runner.Tensors.Real_Array_Access := null;
+      Mix_Row    : Model_Runner.Tensors.Real_Array_Access := null;
+      Z_Row      : Model_Runner.Tensors.Real_Array_Access := null;
+      Alpha_Row  : Model_Runner.Tensors.Real_Array_Access := null;
+      Beta_Row   : Model_Runner.Tensors.Real_Array_Access := null;
+      Blend_Row  : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Row : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Up_Row : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Out_Row : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  And the same three for a batch, as wide as the batch that last
+      --  asked, taken when it asks.
+      Shared_Rows_A   : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Rows_B   : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Rows_Out : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  The last evaluated position's final state, and room for the
+      --  next block's input: the two normalized halves side by side.
+      Last_Final : Model_Runner.Tensors.Real_Array_Access := null;
+      Next_Input : Model_Runner.Tensors.Real_Array_Access := null;
+      Has_Final  : Boolean := False;
    end record;
 
    overriding procedure Finalize (Item : in out Session);

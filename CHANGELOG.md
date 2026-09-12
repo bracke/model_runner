@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The hybrid architectures `qwen35` and `qwen35moe`**: a gated delta
+  rule on three layers in four and gated full attention on the fourth,
+  a state a linear layer kept, snapshotted and ringed for a draft's
+  rewind, a context shift refused by name; checked against llama.cpp on
+  Qwen3.5-0.8B. The block past the stack drafts the next token, and
+  `--draft-tokens` with no draft model drafts from it: Qwen3.5-4B 9.76
+  -> 14.47 tokens a second on the processor, 10.33 -> 16.52 on the
+  device. The linear layers' cost was cut on the way -- the 0.8B's
+  prompt 84.6 -> 417 tokens a second, its generation 33.4 -> 49.0. A
+  whitespace run holding a line ending is cut at the last of them, as
+  the other runtime cuts it. `Keep_States`, `States_Kept`,
+  `Drafts_Next`, `Last_State` and `Draft_Next` are the library's new
+  operations.
+
 - **The sampler's repetition window is a mask over the vocabulary**, so
   asking whether a token is in it is a byte read rather than a binary
   search, and the greedy walk applies the penalty in its loop and finds

@@ -161,7 +161,7 @@ package body Reference_Tokenizer is
               or else Cutting = "deepseek-r1-qwen" or else Cutting = "kormo"
               or else Cutting = "f2llmv2" or else Cutting = "megrez"
               or else Cutting = "hunyuan" or else Cutting = "grok-2"
-              or else Cutting = "solar-open"
+              or else Cutting = "solar-open" or else Cutting = "qwen35"
             then
                Item.Cutting := Qwen2;
             else
