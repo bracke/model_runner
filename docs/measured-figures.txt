@@ -19106,3 +19106,65 @@ panels 861AEB9B3B2B88EF src/library/model_runner-quantization-interleave.ads src
 #
 # load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.3
 # model: Qwen3-8B Q4_K_M
+
+# 2026-09-12, the byte product, built and measured: the matrix
+# instruction over bytes runs at the half-precision shape's rate on the
+# Radeon 780M, and the scales it cannot carry cost half again. Not
+# kept.
+#
+#   THE LEAD: llama.cpp PR 27952, an int8 cooperative-matrix product
+#   for RDNA3 and RDNA4, +17 to +35 per cent a format on Strix Halo.
+#   The argument for it here was energy as much as rate: a prompt on
+#   this part is power-bound, and a byte multiply-add is half the
+#   energy of a half-precision one.
+#
+#   WHAT WAS BUILT, and is kept in the session's scratch and not in
+#   the tree: the device asked for the byte shape -- signed bytes into
+#   a thirty-two-bit whole number, sixteen by sixteen by sixteen, at
+#   subgroup scope -- beside the half one, with shaderInt8 and
+#   VK_KHR_8bit_storage enabled with it; probe_bytes.comp, run once at
+#   engine open, multiplying a matrix whose answer is sixteen times the
+#   row plus the column so that every lane writes which elements it
+#   holds -- on this part a lane's column is its number modulo sixteen
+#   and its four elements are rows four apart from its number over
+#   sixteen; quant_batch.comp, the batch quantized to bytes a block of
+#   thirty-two with a scale and two half-block sums beside it, laid
+#   out in the room the half-precision copy takes; matrix_bytes.comp,
+#   the wide tile's shape over bytes for Q8_0, Q2_K, Q3_K, Q4_K, Q5_K
+#   and Q6_K, each weight decoded only to the whole number its format
+#   keeps, the instruction's accumulator emptied every sixteen columns
+#   and each element multiplied by its row's scale and its vector's
+#   scale, less the minimum's share, into ordinary registers. The
+#   engine bound it for those six formats on the wide tile, quantized
+#   in place of halving, and had the sources of a byte product write
+#   binary32. The suite passed with it bound.
+#
+#   THE FIGURES, Qwen3-8B Q4_K_M, the 12288x4096 gate stack at 512
+#   positions, three runs each:
+#
+#     the half-precision tile                          11.7 ms   (18.0 Gcycles at 1.55 GHz)
+#     the byte tile                                    18.0      (36.2 Gcycles at 2.01 GHz)
+#     the byte tile with the scales left unapplied     11.5      (19.0 Gcycles at 1.66 GHz)
+#       -- wrong answers, the instruction's cost alone
+#
+#   The instruction over bytes is the instruction over halves here:
+#   the same eleven and a half milliseconds for the same tile of work,
+#   and the clock not much higher for it. RDNA3 issues its byte and
+#   half-precision matrix instructions at the same rate -- the
+#   doubling is RDNA4's -- and what this part spends on a tile is not
+#   the instruction. Then the scales: applied to every element of the
+#   accumulator every sixteen columns, two loads from shared memory
+#   and three multiply-adds each, they are six and a half milliseconds
+#   on top, more than half the tile, because the half-precision kernel
+#   folds them into the decode where they cost a multiply a weight and
+#   the byte kernel cannot. Applying them every thirty-two columns
+#   would halve that and still lose; nothing coarser is possible with
+#   a scale a block.
+#
+#   Not kept. What the lead's numbers are is a part that doubles the
+#   byte rate, which this one does not.
+#
+#   GROUPS. Nothing changed. Nothing to restamp.
+#
+# load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.3
+# model: Qwen3-8B Q4_K_M

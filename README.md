@@ -19448,6 +19448,23 @@ list leaves is the int8 cooperative-matrix path, twice the rate and half the
 energy a multiply-add, which on a power-bound part is the point; it is a
 kernel of its own and is not begun.
 
+### The byte product, built and measured
+
+The int8 cooperative-matrix path from llama.cpp's PR 27952 was built whole:
+the device asked for the byte shape beside the half one, a probe run once at
+open to learn which rows and columns of an accumulator each lane holds -- on
+this part a lane's column is its number modulo sixteen and its four elements
+are rows four apart -- the batch quantized to bytes a block of thirty-two,
+and the wide tile over bytes for the six formats that keep a whole number
+behind a scale, the scales applied to the accumulator's elements every
+sixteen columns. The suite passed with it bound. It reads **18.0 ms** where
+the half-precision tile reads 11.7 on Qwen3-8B's gate stack, and with the
+scales left unapplied -- wrong answers, the instruction's cost alone --
+**11.5**: the matrix instruction over bytes is the instruction over halves
+on RDNA3, and the scales the bytes cannot carry are half a tile again on
+top. The doubling the lead measured is RDNA4's. Not kept; the sources are
+in the session's scratch.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
