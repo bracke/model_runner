@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The four- and five-bit strips given the six-bit strip's rewrite,
+  measured level and not kept**: the minimum's term as a word product
+  inside the assembly and the factor tables read a panel at a time
+  saved the strip's prep and spent it again in the loop -- 0.61 -> 0.60
+  ms for four vectors. The assembly is the time there, at about 96
+  GMAC/s on one task, and a worker reads an expert from memory slower
+  than that anyway. The measurement is recorded.
+
 - **The shared expert is dealt with the experts**: on the pool, a
   batch's shared expert is chunks of the same job the experts are,
   rather than three products cut across the pool with a wake and a

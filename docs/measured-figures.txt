@@ -19656,3 +19656,48 @@ panels 0A580B617E8B8A56 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  ungated CLI runs, hot; the one-minute average 0.7 to 1.5
 # model: Qwen3.6-35B-A3B Q4_K_S, TinyLlama-1.1B-Chat Q8_0
+
+# 2026-09-12, the four- and five-bit strips given the six-bit
+# treatment, and not kept: the minimum's term as a word product inside
+# the assembly and the factor tables read a panel at a time, measured
+# level with what they replaced.
+#
+#   THE SHAPE was the six-bit strip's: skipping the four-bit strip's
+#   assembly left 0.25 ms of its 0.60 standing (4096 x 2048 Q4_K, four
+#   vectors, one task, in the caches), so the same rewrite was made --
+#   the sub-block factors and minimums laid a panel at a time by the
+#   tile's unpack, read by the assembly through a counter of its own;
+#   the minimum's term, sixty-four scalar multiply-adds a block, as one
+#   word product a vector against the vector's sub-block sums, taken
+#   off under a lane mask into the same accumulator; the floating-point
+#   tables of scaled factors and minimums gone. It was right -- against
+#   the single-vector kernel 2.4e-4 of 3.2e3, as before -- and it was
+#   not faster:
+#
+#     Q4_K, four vectors    0.61 -> 0.60 ms     Q5_K   0.64 -> 0.63
+#     Q4_K, eight           1.09 -> 1.09        Q5_K   1.13 -> 1.21
+#
+#   WHY NOT. The four-bit strip's 0.25 ms outside the assembly was 0.14
+#   of tile work that stayed -- the unpack of twelve six-bit fields a
+#   row and block, already lanes, seventeen cycles each -- and 0.11 of
+#   the strip's own prep, and what the prep saved the assembly spent
+#   again: the word product, its convert and its masked multiply-add
+#   are twenty-four instructions a block beside a hundred and forty.
+#   The six-bit strip's tables were three quarters of its time and the
+#   same trade paid three times over; here the assembly is the time.
+#   It runs about 96 GMAC/s on one task for the four vectors, one and a
+#   half instructions a cycle of a byte product and a word
+#   multiply-accumulate each with a load, which is near what the two
+#   load ports give; a faster four-bit strip is a different instruction
+#   mix, not less around it.
+#
+#   And on the model this was for, it could not have shown: a worker
+#   reads an expert of Qwen3.6-35B-A3B at 8.5 GB/s from memory, and
+#   the strip already does 7.9 in the caches.
+#
+#   Nothing changed, so no figure moves and no group is restamped. The
+#   tried source is in the session scratch (kernels_q4k_tried.adb).
+#
+# load:  ungated harness runs, one task, hot; the one-minute average
+#        under 1.0
+# model: none; a synthetic 4096 x 2048 matrix in each format
