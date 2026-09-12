@@ -19027,3 +19027,37 @@ panels 861AEB9B3B2B88EF src/library/model_runner-quantization-interleave.ads src
 #
 # load:  ungated CLI runs, hot, alternated; the one-minute average 0.8 to 1.3
 # model: Qwen3-30B-A3B Q2_K
+
+# 2026-09-12, the group-major copy, priced before it was built: 66 ->
+# 61 us a layer, and not built.
+#
+#   THE THESIS, from the entry before: a token's attention out of the
+#   half-precision copy is short of its access pattern -- twenty-four
+#   workgroups each reading their group's 256 bytes out of every
+#   position's kilobyte -- and a copy laid out group-major, each
+#   group's keys contiguous across positions, would read it at the
+#   memory's rate. THE PRICE, by the probe technique the matrix
+#   attention section records: the token's kernel addressed as if the
+#   copy were group-major -- group * (4096 * head_size) + position *
+#   head_size, the same bytes read in the layout that would be, and
+#   wrong answers -- so the instruction count, the workgroups and the
+#   bytes are all right and only the numbers are not:
+#
+#     the copy as it is                     66.1 66.3 66.2 us a layer at 1302 positions
+#     addressed group-major                 61.2 61.3
+#
+#   Five microseconds, 0.25 ms of a 28 ms token, for a layout that
+#   touches every writer and reader of the copy -- heads.comp,
+#   place.comp, Put_Cache, both matrix compilations, three halved
+#   compilations -- and needs the cache's whole geometry told to the
+#   engine so that a round's per-row bases map the same way. Not
+#   built. What the token's attention is short of is not the bytes,
+#   not the loads, not the access pattern and not the workgroups; it is
+#   ~50 us of a kernel that reads one tile a workgroup through five
+#   barriers and a merge, and the eight-bundle six-slice shape is the
+#   best of every shape tried.
+#
+#   GROUPS. Nothing changed. Nothing to restamp.
+#
+# load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.3
+# model: Qwen3-30B-A3B Q2_K

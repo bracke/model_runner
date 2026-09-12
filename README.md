@@ -19424,8 +19424,13 @@ stays at 66 microseconds: the exact bundle's words over the copy -- keys
 across the lanes, values as vectors, four halves a load -- read the same;
 eight loads in flight, shorter slices and narrower bundles all read worse;
 the merge is 8 of the 66. Twenty-four workgroups each read a quarter of
-every position's kilobyte, and a copy laid out group-major is the one thing
-left untried, recorded rather than built.
+every position's kilobyte, and a copy laid out group-major was the one thing
+left -- priced by the probe technique, the kernel addressed as if the copy
+already were, before anything was built: **66 -> 61 microseconds**, a
+quarter of a millisecond of a twenty-eight millisecond token, for a layout
+that touches every writer and reader of the copy. Not built. The eight-bundle
+six-slice shape is the best of every shape tried, and what it is short of is
+the kernel's own structure, not its bytes.
 
 ## License
 
