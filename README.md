@@ -19591,6 +19591,45 @@ beside: `--memory-limit` above sixteen gigabytes now raises the cap on one
 allocation with it, and the run that allowed was the host at 29 GB of its
 30, so it is a limit lifted and not a road opened.
 
+### The six-bit strip without its tables, and the whole team for a k-quant
+
+The last entry priced the drafted round's excess as the rule over a chunk
+and the head. Timers around the products said the rule was 9 ms a round
+-- 0.30 ms a layer for four positions against 0.20 for a prompt's five,
+the difference being the ring every position's state is written to -- and
+that the budget's PROJECTING phase had bundled it with the full-attention
+projections and the draft block's own passes. The head was real: the Q6_K
+output projection, 417 MB, read once by each of three drafts at 11 ms and
+once for the four rows at 26.4, is 59 ms of a 188 ms round.
+
+A harness on a 4096 by 2048 Q6_K matrix in the caches put the strip of
+four at 1.62 ms against 0.60 for one vector, and then said what it was
+not: skipping the assembly did not move the clock, and skipping the
+strip's own scale loop did not either. What cost was the table `Rows`
+built for every row tile -- every sub-block scale as a floating-point
+step and as a whole number, sixteen a block, scalar -- and the
+hundred-and-thirty-six-word table the strip built from it for every panel
+of every strip. The assembly sign-extends the sixteen scales out of the
+block itself now, parks them beside the answers and broadcasts each half's
+into its half of a register under a word mask; and the correction for the
+offset the format stores its quants at, which was sixty-four scalar
+multiply-adds a block, is one sixteen-bit product a vector taken off the
+whole numbers before they are converted. The strip of four reads **1.62 ->
+0.56 ms**, level with the four-bit strip, and the four-row head **26.4 ->
+15.2 ms**; against the single-vector kernel the answers differ in the order
+of the sum.
+
+The single read moved too, by the team: five shares were measured on an
+eight-bit token, where the byte path is answered by the memory, and a
+k-quant's single-vector kernel is not -- one share unpacks a six-bit block
+at 11 GB/s in the caches, so five of them are under the memory. Nine for
+the three k-quants: the 35B's head **11.0 -> 9.6 ms** a read, Qwen3-8B
+Q4_K_M **8.5 -> 9.2 tokens a second**. Qwen3.6-35B-A3B drafting from its own
+block reads **14.9 tokens a second** against 14.9 plain, from 13.3 against
+14.3 -- level, and level is where a mixture of two hundred and fifty-six
+experts stays on this processor, since a four-row batch reads what four
+tokens' experts would and each draft reads the head.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

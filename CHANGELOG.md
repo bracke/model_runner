@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The six-bit strip reads its scales out of the block**, and takes the
+  offset's correction as one sixteen-bit product a vector: a strip of
+  four 1.62 -> 0.56 ms on one task, the four-row head on
+  Qwen3.6-35B-A3B 26.4 -> 15.2 ms. Neither the byte product nor the
+  strip's scale loop was the cost -- skipping either did not move the
+  clock -- but the two tables built around them, for every row tile
+  and every panel. A k-quant's single product takes the whole team,
+  where five shares were under the memory: the 35B's head 11.0 -> 9.6
+  ms a read, Qwen3-8B Q4_K_M 8.5 -> 9.2 tokens a second. The 35B
+  drafting from its own block 13.3 -> 14.9 tokens a second, level with
+  plain; the rule over a chunk, timed alone, was 9 ms a round and not
+  the 26 the budget's phase had suggested.
+
 - **Qwen3.6-35B-A3B runs and agrees with llama.cpp**: the mixture with a
   shared expert checked on a real file for the first time, perplexity
   18.10 against llama.cpp's 17.93 over one chunk of 256 tokens and

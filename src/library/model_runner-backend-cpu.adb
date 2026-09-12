@@ -264,6 +264,16 @@ package body Model_Runner.Backend.CPU is
    --  tile beside it already does.
    Vector_Team : constant Share_Count := 5;
 
+   --  And the whole team for a k-quant, whose single-vector kernels are
+   --  not answered by the memory at five: unpacking a six-bit or a
+   --  four-bit block costs enough that one share reads it at four to
+   --  eight gigabytes a second, and five of those are under the memory
+   --  where five shares of the eight-bit kernel are at it. Measured on
+   --  Qwen3.6-35B-A3B's Q6_K head, 11.0 -> 9.6 ms a read, and on
+   --  Qwen3-8B Q4_K_M whole: 2.83 -> 2.62 s over twenty-four tokens,
+   --  alternated twice each way.
+   Quant_Team : constant Share_Count := 9;
+
    --  Rows a worker takes from the counter at a time.
    --
    --  A multiple of the kernel's row tile, because a share boundary has to
@@ -1209,6 +1219,7 @@ package body Model_Runner.Backend.CPU is
       Target : T.Real_Array_Access;
       Status : out E.Error_Info)
    is
+      use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1255,7 +1266,13 @@ package body Model_Runner.Backend.CPU is
          --  cutting its team measured twelve tokens at 1.806 s against
          --  1.365, a third slower, which is what said this test belongs
          --  here rather than above.
-         Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
+         Work.Team :=
+           Share_Count'Min
+             (Item.Workers + 1,
+              (if Weight.Format = Model_Runner.GGUF.Type_Q4_K
+                 or else Weight.Format = Model_Runner.GGUF.Type_Q5_K
+                 or else Weight.Format = Model_Runner.GGUF.Type_Q6_K
+               then Quant_Team else Vector_Team));
       end if;
 
       Item.Latest := Work.Team;
@@ -1329,6 +1346,7 @@ package body Model_Runner.Backend.CPU is
       Into    : T.Target_Group;
       Status  : out E.Error_Info)
    is
+      use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1375,8 +1393,16 @@ package body Model_Runner.Backend.CPU is
          Work.Halves := Item.Halves;
 
          --  The smaller team, as a single product asks for it and for the
-         --  same reason: the byte path is answered by the memory.
-         Work.Team := Share_Count'Min (Item.Workers + 1, Vector_Team);
+         --  same reason: the byte path is answered by the memory -- and
+         --  the whole team for a k-quant, for the same reason again. The
+         --  group agrees on a format, so the first matrix speaks for it.
+         Work.Team :=
+           Share_Count'Min
+             (Item.Workers + 1,
+              (if Work.Weight.Format = Model_Runner.GGUF.Type_Q4_K
+                 or else Work.Weight.Format = Model_Runner.GGUF.Type_Q5_K
+                 or else Work.Weight.Format = Model_Runner.GGUF.Type_Q6_K
+               then Quant_Team else Vector_Team));
       end if;
 
       Item.Latest := Work.Team;

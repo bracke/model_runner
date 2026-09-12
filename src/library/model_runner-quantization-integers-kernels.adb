@@ -45,16 +45,6 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
    --  A byte read as the signed number it holds.
    --
-   --  The six-bit k-quant keeps a sub-block's scale as a signed byte, and
-   --  reading it as unsigned and correcting with a test puts a branch in a
-   --  loop of sixteen -- which a profile found among the hottest
-   --  instructions here, and which is what stops the loop being lanes.
-   function To_Signed (Raw : Interfaces.Unsigned_8) return Interfaces.Integer_8
-   is (if Raw < 128
-       then Interfaces.Integer_8 (Raw)
-       else Interfaces.Integer_8 (Integer (Raw) - 256))
-     with Inline_Always;
-
    --  Not merely Inline. Taking the block size out of the driver's scale
    --  loop left the loop tight enough that the compiler stopped inlining
    --  this and gave it a symbol of its own, and a profile found it there
@@ -128,25 +118,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
    --  halves share one of the activation's scales. Read as eight and
    --  permuted by this, the eight become the sixteen the halves want
    --  without a loop.
-   --  A whole number in both halves of a thirty-two bit word, which is
-   --  what the sixteen-bit multiply-accumulate wants of a scale that is the
-   --  same for both of the pairs it folds.
+   --  Two sixteen-bit halves as the thirty-two bit word they make, which
+   --  is what the sixteen-bit multiply-accumulate reads a pair of its
+   --  operands as.
    function To_Signed_32 is new Ada.Unchecked_Conversion
      (Interfaces.Unsigned_32, Interfaces.Integer_32);
-
-   function Twice (Value : Integer) return Interfaces.Integer_32;
-
-   function Twice (Value : Integer) return Interfaces.Integer_32 is
-      Half : constant := 16;
-
-      --  Biased into range before the conversion, because the value is
-      --  signed and the type it goes through is not.
-      Low : constant Interfaces.Unsigned_32 :=
-        Interfaces.Unsigned_32 (Value + 2 ** Half)
-        and Interfaces.Unsigned_32 (2 ** Half - 1);
-   begin
-      return To_Signed_32 (Low or Interfaces.Shift_Left (Low, 16));
-   end Twice;
 
    Doubling : constant array (0 .. 15) of Interfaces.Unsigned_32 :=
      [0, 0, 1, 1, 2, 2, 3, 3,
@@ -193,11 +169,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
 
-      Steps     : Model_Runner.Numerics.Real_Array;
-
-      --  The half's signed scale as a whole number, held twice in the
-      --  thirty-two bits, and the block's own scale apart from it.
-      Factors   : Sum_Array;
+      --  The block's own scale, one for every row and block. The
+      --  sub-block scales are read out of the block by the assembly.
       Wholes    : Model_Runner.Numerics.Real_Array;
 
       --  The activation summed over every sixteen, from the quantizer.
@@ -15708,15 +15681,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Blocks    : Element_Count;
       Values    : Signed_Array;
       Scales    : Model_Runner.Numerics.Real_Array;
-
-      Steps     : Model_Runner.Numerics.Real_Array;
-
-      --  The half's signed scale as a whole number, held twice in the
-      --  thirty-two bits, and the block's own scale apart from it.
-      Factors   : Sum_Array;
       Wholes    : Model_Runner.Numerics.Real_Array;
-
-      --  The activation summed over every sixteen, from the quantizer.
       Half_Sums : Sum_Array;
       First     : Element_Count;
       Stride    : Element_Count;
@@ -15741,41 +15706,38 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       Scale_Room : constant := 64;
 
-      --  A hundred and thirty-six words a block: a hundred and
-      --  twenty-eight of whole numbers, being each of the eight
-      --  thirty-two element groups' two half scales replicated four times
-      --  for each of the two rows, and then eight floating-point numbers,
-      --  being the block's own scale against each vector's for each row.
-      --  The byte instruction's result spans two halves, so the operand
-      --  that scales it has to as well -- which a full register can do and
-      --  a broadcast cannot.
-      Slot : constant := Panel_Rows * Strip * Halves + Panel_Rows * Strip;
+      --  Forty words a block: the four vectors' sums over every sixteen
+      --  elements, as sixteen-bit halves of thirty-two words, and then
+      --  the block's own scale against each vector's for each of the two
+      --  rows, as eight floating-point numbers. The block's sixteen
+      --  sub-block scales are not here: the assembly sign-extends them
+      --  out of the block itself, once a row a block, and broadcasts
+      --  each into its half of a register from a scratch beside the
+      --  answers. This table was a hundred and thirty-six words a block
+      --  with those scales in it, written four times over by a scalar
+      --  loop for every panel of every strip, and a table of every
+      --  row's scales as floating-point numbers was built beside it for
+      --  every row tile -- and between them they were most of what a
+      --  strip cost: skipping the assembly did not move the clock.
+      Slot : constant := Strip * Halves / 2 + Panel_Rows * Strip;
 
       type Strip_Scales is
-        array (0 .. Slot * Scale_Room - 1) of Interfaces.Integer_32;
+        array (0 .. Slot * Scale_Room - 1) of Interfaces.Integer_32
+        with Alignment => 32;
       Scaling : Strip_Scales;
 
       function As_Bits is new Ada.Unchecked_Conversion
         (N.Real, Interfaces.Integer_32);
 
-      type Undo_Table is
-        array (0 .. Panel_Rows * Strip - 1) of N.Real;
-      Undo : Undo_Table;
-
       type Vector_Places is array (0 .. Strip - 1) of Element_Count;
-      type Vector_Numbers is array (0 .. Strip * Deep * Scale_Room - 1)
-        of N.Real;
-
-      --  The activation sum over every sixteen elements, times that
-      --  block's activation scale, which is what the bias correction wants.
-      type Half_Numbers is array (0 .. Strip * Halves * Scale_Room - 1)
-        of N.Real;
+      type Vector_Numbers is array (0 .. Strip * Scale_Room - 1) of N.Real;
 
       Vector_At    : Vector_Places;
       Vector_Scale : Vector_Numbers;
-      Vector_Half  : Half_Numbers;
 
-      type Strip_Lanes is array (0 .. Panel_Rows * Strip - 1) of Lanes_8;
+      --  Eight answers of eight lanes, and past them the scratch the
+      --  assembly keeps the two rows' sign-extended scales in.
+      type Strip_Lanes is array (0 .. Panel_Rows * Strip + 1) of Lanes_8;
       Landed : Strip_Lanes;
 
       --  The vector a lane of the strip reads: its own where the batch
@@ -15796,26 +15758,44 @@ package body Model_Runner.Quantization.Integers.Kernels is
          Vector_At (Natural (Vector)) := First + Held (Vector) * Stride;
       end loop;
 
+      --  What the strip's four vectors contribute, once for the whole
+      --  call: the block's activation scale -- one for all eight of its
+      --  thirty-two element groups, which is what Supers_Vectors buys
+      --  this format -- and the sums over every sixteen, from the
+      --  quantizer, packed two to a word for the correction below. A
+      --  sum of sixteen signed bytes is within a signed sixteen-bit
+      --  word, and the scale it will be multiplied by is a signed byte,
+      --  so the product and thirty-two times it are within the word
+      --  product's thirty-two bits.
       for Vector in 0 .. Strip - 1 loop
          declare
             Origin : constant Element_Count := Vector_At (Vector);
+            At_Sum : constant Element_Count :=
+              Half_Sums'First + Origin / Activation_Half;
          begin
-            for Block in 0 .. Blocks * Deep - 1 loop
+            for Block in 0 .. Blocks - 1 loop
                Vector_Scale (Natural (Block) * Strip + Vector) :=
                  Scales (Scales'First + Origin / Activation_Block
-                         + Block);
-            end loop;
+                         + Block * Deep);
 
-            --  The same sums the single-vector kernel wants, and from
-            --  the same place: the quantizer. A strip formed them for four
-            --  vectors, for every row tile, out of sixteen byte additions
-            --  apiece.
-            for Half in 0 .. Blocks * Halves - 1 loop
-               Vector_Half (Natural (Half) * Strip + Vector) :=
-                 N.Real (Half_Sums (Half_Sums'First
-                                    + Origin / Activation_Half + Half))
-                 * Scales (Scales'First + Origin / Activation_Block
-                           + Half / 2);
+               for Pair in 0 .. Halves / 2 - 1 loop
+                  declare
+                     Low  : constant Interfaces.Integer_32 :=
+                       Half_Sums (At_Sum + Block * Halves
+                                  + Element_Count (2 * Pair));
+                     High : constant Interfaces.Integer_32 :=
+                       Half_Sums (At_Sum + Block * Halves
+                                  + Element_Count (2 * Pair + 1));
+                  begin
+                     Scaling
+                       (Natural (Block) * Slot + Vector * (Halves / 2)
+                        + Pair) :=
+                       To_Signed_32
+                         ((Interfaces.Unsigned_32'Mod (Low) and 16#FFFF#)
+                          or Interfaces.Shift_Left
+                               (Interfaces.Unsigned_32'Mod (High), 16));
+                  end;
+               end loop;
             end loop;
          end;
       end loop;
@@ -15826,70 +15806,21 @@ package body Model_Runner.Quantization.Integers.Kernels is
             Base   : constant B.Byte_Index :=
               Data'First + Offset + Row_Bytes * B.Byte_Count (At_Row);
          begin
-            Undo := [others => 0.0];
-
+            --  The block's scale against each vector's, for each row.
             for Block in 0 .. Blocks - 1 loop
                for Row in Element_Count range 0 .. Panel_Rows - 1 loop
                   declare
-                     --  Where this row's sixteen sub-block scales were
-                     --  worked out, once for the whole call rather than
-                     --  once for each of the batch's strips.
-                     At_Step : constant Element_Count :=
-                       ((At_Row + Row) * Blocks + Block) * Halves;
-
-                     At_Slot : constant Natural := Natural (Block) * Slot;
-
                      Whole : constant N.Real :=
                        Wholes (Wholes'First
                                + (At_Row + Row) * Blocks + Block);
                   begin
-                     for Half in 0 .. Halves - 1 loop
-                        declare
-                           Step : constant Interfaces.Integer_32 :=
-                             Factors (Factors'First + At_Step
-                                      + Element_Count (Half));
-
-                           Sub : constant N.Real :=
-                             Steps (Steps'First + At_Step
-                                    + Element_Count (Half));
-
-                           At_Half : constant Natural :=
-                             (Natural (Block) * Halves + Half) * Strip;
-                           At_Undo : constant Natural :=
-                             Natural (Row) * Strip;
-
-                           --  Four lanes of the group's eight: the low
-                           --  half's scale in the first four and the high
-                           --  half's in the second.
-                           At_Out : constant Natural :=
-                             At_Slot
-                             + ((Half / 2) * Panel_Rows + Natural (Row)) * 8
-                             + (Half rem 2) * 4;
-                        begin
-                           for Lane in 0 .. 3 loop
-                              Scaling (At_Out + Lane) := Step;
-                           end loop;
-
-                           for K in 0 .. Strip - 1 loop
-                              Undo (At_Undo + K) :=
-                                Undo (At_Undo + K)
-                                + 32.0 * Sub * Vector_Half (At_Half + K);
-                           end loop;
-                        end;
-                     end loop;
-
-                     --  And the two scales, once for the whole block: the
-                     --  activation's is the same for all eight of its
-                     --  thirty-two element groups, which is what
-                     --  Supers_Vectors buys this format.
                      for K in 0 .. Strip - 1 loop
                         Scaling
-                          (At_Slot + Panel_Rows * Strip * Halves
+                          (Natural (Block) * Slot + Strip * Halves / 2
                            + Natural (Row) * Strip + K) :=
                           As_Bits
                             (Whole
-                             * Vector_Scale
-                                 (Natural (Block) * Deep * Strip + K));
+                             * Vector_Scale (Natural (Block) * Strip + K));
                      end loop;
                   end;
                end loop;
@@ -15897,6 +15828,17 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
             Landed := [others => [others => 0.0]];
 
+            --  Over the block: the two rows' scales sign-extended to
+            --  words and parked in the scratch; each group of thirty-two
+            --  assembled from its nibbles and its two high bits, its two
+            --  halves' scales broadcast into the two halves of a register
+            --  under the word masks, and the byte product folded in under
+            --  them; then the correction for the offset the format stores
+            --  its quants at -- thirty-two times each half's scale against
+            --  the activation's sum over that half, one word product a
+            --  vector -- taken off the whole numbers before they are
+            --  converted; and the block's scale against each vector's
+            --  applied once.
             System.Machine_Code.Asm
               ("movl $0x0F0F0F0F, %%eax" & LF &
                "vmovd %%eax, %%xmm3" & LF &
@@ -15904,9 +15846,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "movl $0x03030303, %%eax" & LF &
                "vmovd %%eax, %%xmm4" & LF &
                "vpbroadcastd %%xmm4, %%ymm4" & LF &
-               "movl $15, %%eax" & LF &
+               "movl $255, %%eax" & LF &
                "kmovw %%eax, %%k1" & LF &
-               "movl $240, %%eax" & LF &
+               "movl $65280, %%eax" & LF &
                "kmovw %%eax, %%k2" & LF &
                "vpxord %%ymm16, %%ymm16, %%ymm16" & LF &
                "vpxord %%ymm17, %%ymm17, %%ymm17" & LF &
@@ -15929,6 +15871,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpxord %%ymm29, %%ymm29, %%ymm29" & LF &
                "vpxord %%ymm30, %%ymm30, %%ymm30" & LF &
                "vpxord %%ymm31, %%ymm31, %%ymm31" & LF &
+               "vpmovsxbw 192(%1,%%rcx,1), %%ymm12" & LF &
+               "vpmovsxbw 192(%2,%%rcx,1), %%ymm13" & LF &
+               "vmovdqu %%ymm12, 256(%0)" & LF &
+               "vmovdqu %%ymm13, 288(%0)" & LF &
                "vmovdqu 0(%1,%%rcx,1), %%ymm6" & LF &
                "vmovdqu 32(%1,%%rcx,1), %%ymm7" & LF &
                "vmovdqu 128(%1,%%rcx,1), %%ymm8" & LF &
@@ -15936,55 +15882,63 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpand %%ymm4, %%ymm8, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 256(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 258(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 0(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 0(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 0(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 0(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 0(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 0(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 0(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 0(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpand %%ymm3, %%ymm7, %%ymm0" & LF &
                "vpsrlw $2, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 260(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 262(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 32(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 64(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 32(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 64(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 32(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 64(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 32(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 64(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpsrlw $4, %%ymm6, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $4, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 264(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 266(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 64(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 128(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 64(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 128(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 64(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 128(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 64(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 128(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpsrlw $4, %%ymm7, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $6, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 268(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 270(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 96(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 192(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 96(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 192(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 96(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 192(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 96(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 192(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vmovdqu 0(%2,%%rcx,1), %%ymm6" & LF &
                "vmovdqu 32(%2,%%rcx,1), %%ymm7" & LF &
                "vmovdqu 128(%2,%%rcx,1), %%ymm8" & LF &
@@ -15992,55 +15946,63 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpand %%ymm4, %%ymm8, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 288(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 290(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 0(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 32(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 0(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 32(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 0(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 32(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 0(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 32(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpand %%ymm3, %%ymm7, %%ymm0" & LF &
                "vpsrlw $2, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 292(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 294(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 32(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 96(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 32(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 96(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 32(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 96(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 32(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 96(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpsrlw $4, %%ymm6, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $4, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 296(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 298(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 64(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 160(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 64(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 160(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 64(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 160(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 64(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 160(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpsrlw $4, %%ymm7, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $6, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 300(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 302(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 96(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 224(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 96(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 224(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 96(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 224(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 96(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 224(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vmovdqu 64(%1,%%rcx,1), %%ymm6" & LF &
                "vmovdqu 96(%1,%%rcx,1), %%ymm7" & LF &
                "vmovdqu 160(%1,%%rcx,1), %%ymm8" & LF &
@@ -16048,55 +16010,63 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpand %%ymm4, %%ymm8, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 272(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 274(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 128(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 256(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 128(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 256(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 128(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 256(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 128(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 256(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpand %%ymm3, %%ymm7, %%ymm0" & LF &
                "vpsrlw $2, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 276(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 278(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 160(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 320(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 160(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 320(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 160(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 320(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 160(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 320(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpsrlw $4, %%ymm6, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $4, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 280(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 282(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 192(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 384(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 192(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 384(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 192(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 384(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 192(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 384(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vpsrlw $4, %%ymm7, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $6, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 284(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 286(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 224(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 448(%7,%%rsi,1), %%ymm1, %%ymm24" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm24" & LF &
                "vpmaddubsw 224(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 448(%7,%%rsi,1), %%ymm1, %%ymm25" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm25" & LF &
                "vpmaddubsw 224(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 448(%7,%%rsi,1), %%ymm1, %%ymm26" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm26" & LF &
                "vpmaddubsw 224(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 448(%7,%%rsi,1), %%ymm1, %%ymm27" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm27" & LF &
                "vmovdqu 64(%2,%%rcx,1), %%ymm6" & LF &
                "vmovdqu 96(%2,%%rcx,1), %%ymm7" & LF &
                "vmovdqu 160(%2,%%rcx,1), %%ymm8" & LF &
@@ -16104,73 +16074,105 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpand %%ymm4, %%ymm8, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 304(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 306(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 128(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 288(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 128(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 288(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 128(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 288(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 128(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 288(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpand %%ymm3, %%ymm7, %%ymm0" & LF &
                "vpsrlw $2, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 308(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 310(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 160(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 352(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 160(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 352(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 160(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 352(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 160(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 352(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpsrlw $4, %%ymm6, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $4, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 312(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 314(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 192(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 416(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 192(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 416(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 192(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 416(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 192(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 416(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
                "vpsrlw $4, %%ymm7, %%ymm0" & LF &
                "vpand %%ymm3, %%ymm0, %%ymm0" & LF &
                "vpsrlw $6, %%ymm8, %%ymm2" & LF &
                "vpand %%ymm4, %%ymm2, %%ymm2" & LF &
                "vpsllw $4, %%ymm2, %%ymm2" & LF &
                "vpor %%ymm2, %%ymm0, %%ymm0" & LF &
+               "vpbroadcastw 316(%0), %%ymm9%{%%k1%}" & LF &
+               "vpbroadcastw 318(%0), %%ymm9%{%%k2%}" & LF &
                "vpmaddubsw 224(%3,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 480(%7,%%rsi,1), %%ymm1, %%ymm28" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm28" & LF &
                "vpmaddubsw 224(%4,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 480(%7,%%rsi,1), %%ymm1, %%ymm29" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm29" & LF &
                "vpmaddubsw 224(%5,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 480(%7,%%rsi,1), %%ymm1, %%ymm30" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm30" & LF &
                "vpmaddubsw 224(%6,%%rdx,1), %%ymm0, %%ymm1" & LF &
-               "vpdpwssd 480(%7,%%rsi,1), %%ymm1, %%ymm31" & LF &
+               "vpdpwssd %%ymm9, %%ymm1, %%ymm31" & LF &
+               "vpmaddwd 0(%7,%%rsi,1), %%ymm12, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm24, %%ymm24" & LF &
+               "vpmaddwd 32(%7,%%rsi,1), %%ymm12, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm25, %%ymm25" & LF &
+               "vpmaddwd 64(%7,%%rsi,1), %%ymm12, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm26, %%ymm26" & LF &
+               "vpmaddwd 96(%7,%%rsi,1), %%ymm12, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm27, %%ymm27" & LF &
+               "vpmaddwd 0(%7,%%rsi,1), %%ymm13, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm28, %%ymm28" & LF &
+               "vpmaddwd 32(%7,%%rsi,1), %%ymm13, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm29, %%ymm29" & LF &
+               "vpmaddwd 64(%7,%%rsi,1), %%ymm13, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm30, %%ymm30" & LF &
+               "vpmaddwd 96(%7,%%rsi,1), %%ymm13, %%ymm1" & LF &
+               "vpslld $5, %%ymm1, %%ymm1" & LF &
+               "vpsubd %%ymm1, %%ymm31, %%ymm31" & LF &
                "vcvtdq2ps %%ymm24, %%ymm1" & LF &
-               "vfmadd231ps 512(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm16" & LF &
+               "vfmadd231ps 128(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm16" & LF &
                "vcvtdq2ps %%ymm25, %%ymm1" & LF &
-               "vfmadd231ps 516(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm17" & LF &
+               "vfmadd231ps 132(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm17" & LF &
                "vcvtdq2ps %%ymm26, %%ymm1" & LF &
-               "vfmadd231ps 520(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm18" & LF &
+               "vfmadd231ps 136(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm18" & LF &
                "vcvtdq2ps %%ymm27, %%ymm1" & LF &
-               "vfmadd231ps 524(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm19" & LF &
+               "vfmadd231ps 140(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm19" & LF &
                "vcvtdq2ps %%ymm28, %%ymm1" & LF &
-               "vfmadd231ps 528(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm20" & LF &
+               "vfmadd231ps 144(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm20" & LF &
                "vcvtdq2ps %%ymm29, %%ymm1" & LF &
-               "vfmadd231ps 532(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm21" & LF &
+               "vfmadd231ps 148(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm21" & LF &
                "vcvtdq2ps %%ymm30, %%ymm1" & LF &
-               "vfmadd231ps 536(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm22" & LF &
+               "vfmadd231ps 152(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm22" & LF &
                "vcvtdq2ps %%ymm31, %%ymm1" & LF &
-               "vfmadd231ps 540(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm23" & LF &
+               "vfmadd231ps 156(%7,%%rsi,1)%{1to8%}, %%ymm1, %%ymm23" & LF &
                "addq $210, %%rcx" & LF &
-               "addq $544, %%rsi" & LF &
+               "addq $160, %%rsi" & LF &
                "addq $256, %%rdx" & LF &
                "decq %%rax" & LF &
                "jnz 1b" & LF &
@@ -16199,9 +16201,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   Element_Count'Asm_Input ("r", Blocks)],
                Clobber  =>
                  "rax,rcx,rdx,rsi,k1,k2,ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,ymm7,"
-                 & "ymm8,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,"
-                 & "ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,"
-                 & "memory",
+                 & "ymm8,ymm9,ymm12,ymm13,ymm16,ymm17,ymm18,ymm19,ymm20,"
+                 & "ymm21,ymm22,ymm23,ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,"
+                 & "ymm30,ymm31,memory",
                Volatile => True);
 
             for Row in Element_Count range 0 .. Panel_Rows - 1 loop
@@ -16218,8 +16220,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                      end loop;
 
                      Sums (Sums'First + At_It) :=
-                       Sums (Sums'First + At_It)
-                       + Total - N.Wide_Real (Undo (Which));
+                       Sums (Sums'First + At_It) + Total;
                   end;
                end loop;
             end loop;
@@ -17384,65 +17385,25 @@ package body Model_Runner.Quantization.Integers.Kernels is
                return;
             end if;
 
-            --  Every sub-block scale of the tile, worked out once for the
-            --  whole call: sixteen a block, and a batch has a quarter of
-            --  its length of strips that each wanted the same ones.
+            --  The block's own scale for every row and block, once for
+            --  the whole call. The sixteen sub-block scales were worked
+            --  out here too, twice over -- as floating-point steps and as
+            --  whole numbers -- for every row tile, and the strip kernel
+            --  reads them out of the block itself now: that table and the
+            --  one the strip built from it were most of what a strip of
+            --  four cost, and they were built again for every tile
+            --  whatever the count.
             declare
-               Room : constant Element_Count := Rows * Blocks * 16;
-
-               Held : N.Real_Array (0 .. Room - 1);
-
-               --  The same half's signed byte as a whole number, held twice
-               --  in the thirty-two bits so that the strip kernel reads
-               --  four of them as one operand of a sixteen-bit multiply.
-               --  Kept beside the folded form rather than instead of it:
-               --  the dot product wants the factor apart from the block's
-               --  scale and the minimum's term wants them together, and one
-               --  extra store a half is cheaper than reconstructing either.
-               Held_Factor : Sum_Array (0 .. Room - 1);
-
-               --  And the block's own scale, apart from both.
                Held_Whole : N.Real_Array (0 .. Rows * Blocks - 1);
             begin
                for Row in 0 .. Rows - 1 loop
                   for Block in 0 .. Blocks - 1 loop
-                     declare
-                        At_Byte : constant B.Byte_Index :=
+                     Held_Whole (Row * Blocks + Block) :=
+                       Scale_At
+                         (Data,
                           Data'First + Offset
                           + Row_Bytes * B.Byte_Count (Row)
-                          + Width * B.Byte_Count (Block);
-
-                        Whole : constant N.Real :=
-                          Scale_At (Data, At_Byte + 208);
-
-                        At_Step : constant Element_Count :=
-                          (Row * Blocks + Block) * 16;
-                     begin
-                        for Half in 0 .. 15 loop
-                           declare
-                              --  Read as the signed byte it is rather than
-                              --  as an unsigned one corrected by a test:
-                              --  the test is a branch in a loop of sixteen
-                              --  that a profile finds among the hottest
-                              --  instructions in this file, and it stops
-                              --  the loop being lanes.
-                              Signed : constant Integer :=
-                                Integer
-                                  (To_Signed
-                                     (Data
-                                        (At_Byte + 192
-                                         + B.Byte_Count (Half))));
-                           begin
-                              Held (At_Step + Element_Count (Half)) :=
-                                Whole * N.Real (Signed);
-
-                              Held_Factor (At_Step + Element_Count (Half)) :=
-                                Twice (Signed);
-                           end;
-                        end loop;
-
-                        Held_Whole (Row * Blocks + Block) := Whole;
-                     end;
+                          + Width * B.Byte_Count (Block) + 208);
                   end loop;
                end loop;
 
@@ -17450,7 +17411,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                loop
                   Rows_By_Strips_Q6K
                     (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
-                     Held, Held_Factor, Held_Whole, Halves, First, Stride,
+                     Held_Whole, Halves, First, Stride,
                      Count, At_Strip * 4,
                      Element_Count'Min (4, Count - At_Strip * 4), Sums,
                      Done);
