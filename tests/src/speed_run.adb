@@ -150,6 +150,7 @@ package body Speed_Run is
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Draft_Lookup : Boolean := False;
+      Draft_Next   : Boolean := False;
       Repeats     : Positive;
       Budget      : Boolean := False;
       Timeline    : Boolean := False;
@@ -418,10 +419,13 @@ package body Speed_Run is
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
                   Request.Draft_Tokens :=
-                    (if Drafting or else Draft_Lookup
+                    (if Drafting or else Draft_Lookup or else Draft_Next
                      then Draft_Tokens else 0);
                   Request.Draft_From_Context :=
                     Draft_Lookup and then not Drafting;
+                  Request.Draft_From_Next :=
+                    Draft_Next and then not Drafting
+                    and then not Draft_Lookup;
 
                   --  Before the clock is read, because turning it on is
                   --  the only thing here that could cost the region it is

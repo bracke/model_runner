@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hybrid session's kept states are slots, not copies**, and a
+  batch asked for every row's distribution reads the head once: the
+  block past the stack drafting Qwen3.5-4B 14.47 -> 16.17 tokens a
+  second on the processor, 16.52 -> 18.80 on the device, and the 0.8B
+  52.3 against 49.4 plain. `tests speed --draft-next` measures it.
+
 - **The hybrid architectures `qwen35` and `qwen35moe`**: a gated delta
   rule on three layers in four and gated full attention on the fourth,
   a state a linear layer kept, snapshotted and ringed for a draft's

@@ -19502,6 +19502,24 @@ second and its generation from 33.4 to **49.0**, beside llama.cpp's 457 and
 tokens' worth where a memory-bound product would cost 1.1, and that is the
 ceiling on what a draft can return.
 
+### The draft's verification, priced and cut
+
+The claim that a batch of four rows cost the processor 2.2 tokens' worth was
+one cold run; priced across prompts of one to sixty-four tokens, a batch of
+four costs 1.3 on the dense model and on the hybrid alike, and the product
+was never the fault. What the drafted round's budget showed instead -- `tests
+speed --draft-next --budget`, new for this -- was the ring and the head: a
+session keeping states for a rewind copied every linear layer's state into
+the ring after every position, eighteen megabytes a position, and a batch
+asked for every row's distribution read the head a second time for the last
+row's own. The ring is slots now, a position reading the slot before its own
+and writing its own, so nothing is copied and a rewind moves nothing; the
+last row's distribution is taken from the product over every row. The
+stack's batches went from 0.574 to 0.469 s over forty tokens on the 0.8B,
+and the block's drafting from a loss to a gain there -- **43.3 -> 52.3 tokens
+a second** against 49.4 plain -- and on Qwen3.5-4B from 14.47 to **16.17** on
+the processor and 16.52 to **18.80** on the device.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

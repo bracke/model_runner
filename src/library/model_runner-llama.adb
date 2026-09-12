@@ -115,11 +115,11 @@ package body Model_Runner.Llama is
        * Element_Count (Settings.Conv_Kernel - 1)
        * Element_Count (Mix_Width (Settings)));
 
-   --  Where a linear layer's state begins: State_Size by State_Size a
-   --  value head, the heads one after another, and within a head the
-   --  state kept turned round -- row j holds S (i, j) for every i,
-   --  contiguously -- so that what the rule wants of a row, a dot product
-   --  against the key or the query, walks memory in order.
+   --  Where a linear layer's state begins within a slot: State_Size by
+   --  State_Size a value head, the heads one after another, and within
+   --  a head the state key-major -- row i holds S (i, j) for every j,
+   --  contiguously -- so that every step of the rule is a row scaled
+   --  into a running row.
    function State_At
      (Settings : Configuration; Layer : Natural) return Element_Count
    is (Element_Count (Linear_Ordinal (Settings, Layer))
@@ -139,6 +139,13 @@ package body Model_Runner.Llama is
    is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
        * Element_Count (Settings.Conv_Kernel - 1)
        * Element_Count (Mix_Width (Settings)));
+
+   --  Which slot of the ring holds the state a position reads: the one
+   --  the position before it wrote. Kept_States + 1 slots, the one slot
+   --  where nothing is kept.
+   function State_Slot
+     (Item : Session; Position : Natural) return Element_Count
+   is (Element_Count (Position mod (Item.Kept_States + 1)));
 
    --  The three that shape a linear layer's numbers, in binary32 as the
    --  other runtime computes them.
@@ -7765,17 +7772,32 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
-      --  The linear layers' memories and states, whole.
+      --  The linear layers' memories and states as they are now: the
+      --  slot the committed count reads, whole.
       if Item.Conv_State /= null then
-         for Value of Item.Conv_State.all loop
-            Put_Bits (N.Bits (Value));
-         end loop;
+         declare
+            Slot : constant Element_Count := State_Slot (Item, Item.Committed);
+            Every : constant Element_Count := Conv_Room (Source.Settings);
+         begin
+            for Value of Item.Conv_State.all
+              (Slot * Every .. (Slot + 1) * Every - 1)
+            loop
+               Put_Bits (N.Bits (Value));
+            end loop;
+         end;
       end if;
 
       if Item.Delta_State /= null then
-         for Value of Item.Delta_State.all loop
-            Put_Bits (N.Bits (Value));
-         end loop;
+         declare
+            Slot : constant Element_Count := State_Slot (Item, Item.Committed);
+            Every : constant Element_Count := State_Room (Source.Settings);
+         begin
+            for Value of Item.Delta_State.all
+              (Slot * Every .. (Slot + 1) * Every - 1)
+            loop
+               Put_Bits (N.Bits (Value));
+            end loop;
+         end;
       end if;
    end Snapshot;
 
@@ -8087,26 +8109,46 @@ package body Model_Runner.Llama is
       --  And the linear layers' memories and states, whole, where the
       --  session has them; a snapshot without them is one of another
       --  model's shape and was refused above by its fingerprint.
+      --  Into the slot the committed count will read, which is the
+      --  newest the ring holds and the only one: what was before it
+      --  belongs to a session that is not this one.
       if not Trouble and then Item.Conv_State /= null then
-         for Value of Item.Conv_State.all loop
-            declare
-               Bits : constant Interfaces.Unsigned_32 := Get_Bits;
-            begin
-               exit when Trouble;
-               Value := N.From_Bits (Bits);
-            end;
-         end loop;
+         declare
+            Slot : constant Element_Count :=
+              State_Slot (Item, Natural (Held));
+            Every : constant Element_Count := Conv_Room (Source.Settings);
+         begin
+            for Value of Item.Conv_State.all
+              (Slot * Every .. (Slot + 1) * Every - 1)
+            loop
+               declare
+                  Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+               begin
+                  exit when Trouble;
+                  Value := N.From_Bits (Bits);
+               end;
+            end loop;
+         end;
       end if;
       if not Trouble and then Item.Delta_State /= null then
-         for Value of Item.Delta_State.all loop
-            declare
-               Bits : constant Interfaces.Unsigned_32 := Get_Bits;
-            begin
-               exit when Trouble;
-               Value := N.From_Bits (Bits);
-            end;
-         end loop;
+         declare
+            Slot : constant Element_Count :=
+              State_Slot (Item, Natural (Held));
+            Every : constant Element_Count := State_Room (Source.Settings);
+         begin
+            for Value of Item.Delta_State.all
+              (Slot * Every .. (Slot + 1) * Every - 1)
+            loop
+               declare
+                  Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+               begin
+                  exit when Trouble;
+                  Value := N.From_Bits (Bits);
+               end;
+            end loop;
+         end;
       end if;
+      Item.Kept_Newest := Natural (Held);
 
       if Trouble then
          --  Nothing half read is left where a conversation would be.
@@ -8570,17 +8612,10 @@ package body Model_Runner.Llama is
                T.Allocate (Element_Count (Settings.Value_Heads), Item.Beta_Row);
                T.Allocate
                  (Element_Count (Value_Width (Settings)), Item.Blend_Row);
-               T.Allocate
-                 (Element_Count (Linears)
-                  * Element_Count (Settings.Conv_Kernel - 1)
-                  * Element_Count (Mix_Width (Settings)),
-                  Item.Conv_State);
-               T.Allocate
-                 (Element_Count (Linears)
-                  * Element_Count (Settings.Value_Heads)
-                  * Element_Count (Settings.State_Size)
-                  * Element_Count (Settings.State_Size),
-                  Item.Delta_State);
+               T.Allocate (Conv_Room (Settings), Item.Conv_State);
+               T.Allocate (State_Room (Settings), Item.Delta_State);
+               Item.Kept_States := 0;
+               Item.Kept_Newest := 0;
 
                if Settings.Shared_Feed > 0 then
                   T.Allocate
@@ -8741,8 +8776,6 @@ package body Model_Runner.Llama is
       T.Free (Item.Shared_Rows_Out);
       T.Free (Item.Conv_State);
       T.Free (Item.Delta_State);
-      T.Free (Item.Past_States);
-      T.Free (Item.Past_Convs);
       T.Free (Item.Routing);
       T.Free (Item.Mixture);
       T.Free (Item.Expert_Row);
@@ -9203,35 +9236,40 @@ package body Model_Runner.Llama is
       --  A linear layer's state is what it is now and cannot be walked
       --  back: it is restored from the ring where the ring reaches, nought
       --  again at the front, and refused past that.
+      --  The ring holds it where the position is within Kept_States of
+      --  the newest: the slot the position reads is the one the position
+      --  before it wrote, and nothing since has come round to it.
       if Item.Delta_State /= null and then Position < Item.Committed then
          if Position = 0 then
-            Item.Delta_State.all := [others => 0.0];
-            Item.Conv_State.all := [others => 0.0];
-         elsif Item.Kept_States > 0
-           and then Position <= Item.Kept_Newest
-           and then Position + Item.Kept_States > Item.Kept_Newest
-         then
             declare
                Settings : Configuration renames Item.Owner.Settings;
-               Slot : constant Element_Count :=
-                 Element_Count ((Position - 1) mod Item.Kept_States);
+               Slot : constant Element_Count := State_Slot (Item, 0);
                Every_State : constant Element_Count := State_Room (Settings);
                Every_Conv  : constant Element_Count := Conv_Room (Settings);
             begin
-               Item.Delta_State.all :=
-                 Item.Past_States.all
-                   (Slot * Every_State .. (Slot + 1) * Every_State - 1);
-               Item.Conv_State.all :=
-                 Item.Past_Convs.all
-                   (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1);
+               Item.Delta_State.all
+                 (Slot * Every_State .. (Slot + 1) * Every_State - 1) :=
+                 [others => 0.0];
+               Item.Conv_State.all
+                 (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1) :=
+                 [others => 0.0];
             end;
+            Item.Kept_Newest := 0;
+         elsif Position <= Item.Kept_Newest
+           and then Item.Kept_Newest - Position <= Item.Kept_States
+         then
+            --  Kept_Newest stays: the slots past the position still hold
+            --  what was written there, and what decides whether a later
+            --  rewind's slot is intact is the highest position ever
+            --  written, not the committed count.
+            null;
          else
             Status := E.Make (E.Tensor_Shape_Mismatch);
             E.Add_Integer (Status, "input", Long_Long_Integer (Position));
             E.Add_Integer
               (Status, "expected",
                Long_Long_Integer
-                 (Natural'Max (0, Item.Kept_Newest - Item.Kept_States + 1)));
+                 (Natural'Max (0, Item.Kept_Newest - Item.Kept_States)));
             return;
          end if;
       end if;
@@ -9254,30 +9292,48 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      T.Free (Item.Past_States);
-      T.Free (Item.Past_Convs);
-      Item.Kept_States := 0;
-
-      if Count = 0 or else Item.Delta_State = null then
+      if Item.Delta_State = null or else Count = Item.Kept_States then
          return;
       end if;
 
-      T.Allocate
-        (Element_Count (Count) * State_Room (Item.Owner.Settings),
-         Item.Past_States);
-      T.Allocate
-        (Element_Count (Count) * Conv_Room (Item.Owner.Settings),
-         Item.Past_Convs);
+      --  The ring made anew with Count + 1 slots, the state as it is
+      --  now carried into the slot the committed count reads; what was
+      --  behind it is not, so a rewind reaches back from here only.
+      declare
+         Settings : Configuration renames Item.Owner.Settings;
+         Every_State : constant Element_Count := State_Room (Settings);
+         Every_Conv  : constant Element_Count := Conv_Room (Settings);
+         Slots  : constant Element_Count := Element_Count (Count) + 1;
+         States : T.Real_Array_Access := null;
+         Convs  : T.Real_Array_Access := null;
+         From   : constant Element_Count := State_Slot (Item, Item.Committed);
+         Into   : constant Element_Count :=
+           Element_Count (Item.Committed) mod Slots;
+      begin
+         T.Allocate (Slots * Every_State, States);
+         T.Allocate (Slots * Every_Conv, Convs);
 
-      if Item.Past_States = null or else Item.Past_Convs = null then
-         T.Free (Item.Past_States);
-         T.Free (Item.Past_Convs);
-         Status := E.Make (E.Memory_Allocation_Failed);
-         return;
-      end if;
+         if States = null or else Convs = null then
+            T.Free (States);
+            T.Free (Convs);
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
 
-      Item.Kept_States := Count;
-      Item.Kept_Newest := 0;
+         States.all (Into * Every_State .. (Into + 1) * Every_State - 1) :=
+           Item.Delta_State.all
+             (From * Every_State .. (From + 1) * Every_State - 1);
+         Convs.all (Into * Every_Conv .. (Into + 1) * Every_Conv - 1) :=
+           Item.Conv_State.all
+             (From * Every_Conv .. (From + 1) * Every_Conv - 1);
+
+         T.Free (Item.Delta_State);
+         T.Free (Item.Conv_State);
+         Item.Delta_State := States;
+         Item.Conv_State := Convs;
+         Item.Kept_States := Count;
+         Item.Kept_Newest := Item.Committed;
+      end;
    end Keep_States;
 
    function States_Kept (Item : Session) return Natural
@@ -9422,6 +9478,7 @@ package body Model_Runner.Llama is
    type Rule_Share is limited new Workers_CPU.Task_Item with record
       State      : T.Real_Array_Access := null;
       States     : Element_Count := 0;
+      Written    : Element_Count := 0;
       Head       : Element_Count := 0;
       Keys_Wide  : Element_Count := 0;
       Key_Heads  : Element_Count := 0;
@@ -9470,6 +9527,7 @@ package body Model_Runner.Llama is
 
       if Share.Key_Heads = 0
         or else Share.States + (To + 1) * Head * Head - 1 > State'Last
+        or else Share.Written + (To + 1) * Head * Head - 1 > State'Last
         or else M0 + 2 * Share.Keys_Wide + (To + 1) * Head - 1 > Mixed'Last
         or else Share.Rows.O0 + (To + 1) * Head - 1 > Blend'Last
         or else Share.Rows.Z0 + (To + 1) * Head - 1 > Z_Gate'Last
@@ -9492,6 +9550,7 @@ package body Model_Runner.Llama is
               M0 + 2 * Share.Keys_Wide + H * Head;
             O_At : constant Element_Count := Share.Rows.O0 + H * Head;
             S_At : constant Element_Count := Share.States + H * Head * Head;
+            W_At : constant Element_Count := Share.Written + H * Head * Head;
 
             --  The file keeps minus the exponential of the decay's
             --  shape, not the shape: what is stored is what multiplies.
@@ -9525,19 +9584,21 @@ package body Model_Runner.Llama is
                Error (J) := (Mixed (V_At + J) - Error (J) * Decay) * Rate;
             end loop;
 
-            --  The decay and the correction written in, and the query
-            --  read out of the corrected state, in one pass.
+            --  The decay and the correction written into the slot this
+            --  position leaves, and the query read out of the corrected
+            --  state, in one pass.
             Read := [others => 0.0];
             for I in 0 .. Head - 1 loop
                declare
                   Row   : constant Element_Count := S_At + I * Head;
+                  Out_Row : constant Element_Count := W_At + I * Head;
                   Key   : constant Real := Mixed (K_At + I);
                   Query : constant Real := Mixed (Q_At + I);
                begin
                   for J in 0 .. Head - 1 loop
-                     State (Row + J) :=
+                     State (Out_Row + J) :=
                        State (Row + J) * Decay + Key * Error (J);
-                     Read (J) := Read (J) + State (Row + J) * Query;
+                     Read (J) := Read (J) + State (Out_Row + J) * Query;
                   end loop;
                end;
             end loop;
@@ -9602,6 +9663,18 @@ package body Model_Runner.Llama is
       Value_Heads : constant Element_Count :=
         Element_Count (Settings.Value_Heads);
 
+      --  The slot this position reads -- the one the position before it
+      --  wrote -- and the one it writes; the same slot where nothing is
+      --  kept.
+      Read    : constant Element_Count :=
+        State_Slot (Item, Position) * Conv_Room (Settings);
+      Written : constant Element_Count :=
+        State_Slot (Item, Position + 1) * Conv_Room (Settings);
+      Read_State    : constant Element_Count :=
+        State_Slot (Item, Position) * State_Room (Settings);
+      Written_State : constant Element_Count :=
+        State_Slot (Item, Position + 1) * State_Room (Settings);
+
       --  The reach proved once below and the checks left out of the
       --  loops, as in the rule: with them in, a layer's convolution over
       --  six thousand components read 50 microseconds a position.
@@ -9616,7 +9689,10 @@ package body Model_Runner.Llama is
         or else Current.Conv = null
         or else Current.Conv.all'Length /= Taps * Mix
         or else Item.Conv_State = null
-        or else Memory + (Taps - 1) * Mix - 1 > Item.Conv_State.all'Last
+        or else Written + Memory + (Taps - 1) * Mix - 1
+                > Item.Conv_State.all'Last
+        or else Read + Memory + (Taps - 1) * Mix - 1
+                > Item.Conv_State.all'Last
         or else Taps < 2
         or else 2 * Keys_Wide > Mix
       then
@@ -9646,7 +9722,7 @@ package body Model_Runner.Llama is
 
          for K in 0 .. Taps - 2 loop
             declare
-               Slot : constant Element_Count := Memory + K * Mix;
+               Slot : constant Element_Count := Read + Memory + K * Mix;
                Tap  : constant Element_Count := K * Mix;
             begin
                for C in 0 .. Mix - 1 loop
@@ -9656,11 +9732,16 @@ package body Model_Runner.Llama is
             end;
          end loop;
 
+         --  The memory moved up a position into the slot written: the
+         --  taps but the oldest, and this position under the last.
          for K in 0 .. Taps - 3 loop
-            Kept (Memory + K * Mix .. Memory + (K + 1) * Mix - 1) :=
-              Kept (Memory + (K + 1) * Mix .. Memory + (K + 2) * Mix - 1);
+            Kept (Written + Memory + K * Mix
+                  .. Written + Memory + (K + 1) * Mix - 1) :=
+              Kept (Read + Memory + (K + 1) * Mix
+                    .. Read + Memory + (K + 2) * Mix - 1);
          end loop;
-         Kept (Memory + (Taps - 2) * Mix .. Memory + (Taps - 1) * Mix - 1) :=
+         Kept (Written + Memory + (Taps - 2) * Mix
+               .. Written + Memory + (Taps - 1) * Mix - 1) :=
            Fresh;
 
          K.SiLU (Mixed (M0 .. M0 + Mix - 1));
@@ -9692,7 +9773,8 @@ package body Model_Runner.Llama is
       declare
          Share : aliased Rule_Share :=
            (State      => Item.Delta_State,
-            States     => States,
+            States     => Read_State + States,
+            Written    => Written_State + States,
             Head       => Head,
             Keys_Wide  => Keys_Wide,
             Key_Heads  => Element_Count (Settings.Key_Heads),
@@ -9718,37 +9800,8 @@ package body Model_Runner.Llama is
          end if;
       end;
 
-      --  The state and the memory as this position left them, kept for
-      --  a rewind to this position, in the ring's slot for it.
-      if Item.Kept_States > 0 then
-         declare
-            Slot : constant Element_Count :=
-              Element_Count (Position mod Item.Kept_States);
-            Every_State : constant Element_Count := State_Room (Settings);
-            Every_Conv  : constant Element_Count := Conv_Room (Settings);
-            Span_State  : constant Element_Count :=
-              Value_Heads * Head * Head;
-            Span_Conv   : constant Element_Count :=
-              Element_Count (Settings.Conv_Kernel - 1) * Mix;
-         begin
-            Item.Past_States.all
-              (Slot * Every_State + States
-               .. Slot * Every_State + States + Span_State - 1) :=
-              Item.Delta_State.all (States .. States + Span_State - 1);
-            Item.Past_Convs.all
-              (Slot * Every_Conv + Memory
-               .. Slot * Every_Conv + Memory + Span_Conv - 1) :=
-              Item.Conv_State.all (Memory .. Memory + Span_Conv - 1);
-
-            --  A position written over an older one's slot: the ring
-            --  now reaches from this one back, and no further.
-            Item.Kept_Newest :=
-              (if Position + 1 > Item.Kept_Newest
-                 or else Position + 1 <= Item.Kept_Newest - Item.Kept_States
-               then Position + 1
-               else Item.Kept_Newest);
-         end;
-      end if;
+      --  The ring reaches from this position back, and no further.
+      Item.Kept_Newest := Natural'Max (Item.Kept_Newest, Position + 1);
    end Linear_Core;
 
    procedure Linear_Position
@@ -11260,6 +11313,10 @@ package body Model_Runner.Llama is
       Gates  : T.Real_Array_Access := null;
       Gate   : T.Real_Array_Access := null;
       Up     : T.Real_Array_Access := null;
+
+      --  Whether the last position's distribution was taken from the
+      --  product over every row, so that the head is not read again.
+      Took_Last : Boolean := False;
 
       --  A linear layer's projections over the batch, where the
       --  architecture has such layers: what its rule reads and what it
@@ -13283,6 +13340,27 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
+            --  The last row is the last position's distribution, and the
+            --  head is not read a second time for it: on a small model
+            --  the head is a third of the file, and a draft's every round
+            --  asks for every row.
+            if Settings.Has_Head and then not Rounding then
+               declare
+                  Into : constant Element_Count := (Count - 1) * Vocabulary;
+                  Origin : constant Element_Count := Slot (Count - 1, Width);
+               begin
+                  Logits := Wide_Logits.all (Into .. Into + Vocabulary - 1);
+                  Final_State
+                    (Source, Acts.all (Origin .. Origin + Width - 1),
+                     Item.Normalized.all);
+                  if Item.Last_Final /= null then
+                     Item.Last_Final.all := Item.Normalized.all;
+                     Item.Has_Final := True;
+                  end if;
+                  Took_Last := True;
+               end;
+            end if;
+
             T.Free (Wide_Logits);
          end;
       end if;
@@ -13291,7 +13369,7 @@ package body Model_Runner.Llama is
       --  prompt in order to continue it. A headless model has none and was
       --  refused the ask on the way in, so there is nothing to compute and
       --  nothing to hand back.
-      if Settings.Has_Head and then not Rounding then
+      if Settings.Has_Head and then not Rounding and then not Took_Last then
          declare
             Origin : constant Element_Count := Slot (Count - 1, Width);
          begin

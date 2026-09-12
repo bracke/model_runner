@@ -2039,24 +2039,28 @@ private
       --  What a linear layer keeps instead of keys and values: the last
       --  Conv_Kernel - 1 positions' mixed projections, Mix_Width each,
       --  and the state, State_Size by State_Size a value head. One of
-      --  each a linear layer, laid one after another in layer order. A
-      --  full attention layer has no room here and a linear one has no
-      --  cells.
+      --  each a linear layer, laid one after another in layer order,
+      --  is a slot; a full attention layer has no room in it and a
+      --  linear one has no cells.
       --
-      --  And the states as they were, Kept_States positions back, one
-      --  whole set a position: what a rewind restores, since a state
-      --  summarizes everything and cannot be walked back. Ring-indexed
-      --  by position; a rewind further back than the ring holds is
-      --  refused.
+      --  Kept_States + 1 slots, a ring indexed by position: a position
+      --  reads the slot before its own and writes its own, so the slots
+      --  behind the newest hold the states as they were Kept_States
+      --  positions back, which is what a rewind restores, since a state
+      --  summarizes everything and cannot be walked back. One slot where
+      --  nothing is kept, read and written in place. Kept as slots rather
+      --  than copied into a ring after each position because the copy
+      --  was eighteen megabytes a position on Qwen3.5-0.8B and most of
+      --  what a draft's verification cost.
       Conv_State  : Model_Runner.Tensors.Real_Array_Access := null;
       Delta_State : Model_Runner.Tensors.Real_Array_Access := null;
-      Past_States : Model_Runner.Tensors.Real_Array_Access := null;
-      Past_Convs  : Model_Runner.Tensors.Real_Array_Access := null;
       Kept_States : Natural := 0;
 
-      --  One past the newest position whose state the ring holds: the
-      --  ring reaches Kept_States positions back from there, whatever
-      --  a rewind since has made the committed count.
+      --  One past the highest position written since the ring was
+      --  last empty: the ring reaches Kept_States positions back from
+      --  there. A rewind leaves it, since the slots past the position
+      --  still hold what was written there and a later rewind's slot is
+      --  intact only if nothing has come round to it.
       Kept_Newest : Natural := 0;
 
       --  Room a linear layer's answers take on the way through: the

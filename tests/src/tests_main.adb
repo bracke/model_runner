@@ -1948,6 +1948,7 @@ begin
             Draft       => Option ("--draft-model", ""),
             Draft_Tokens => Number ("--draft-tokens", 4),
             Draft_Lookup => Given ("--draft-lookup"),
+            Draft_Next  => Given ("--draft-next"),
             Repeats     => Number ("--repeats", 3),
             Budget      => Given ("--budget"),
             Timeline    => Given ("--device-timeline"),

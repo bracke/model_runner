@@ -215,6 +215,8 @@ package Speed_Run is
    --  @param Draft_Lookup Propose those tokens out of the context instead,
    --    with no draft model: what followed the last two the last time they
    --    occurred.
+   --  @param Draft_Next Propose them from the model's own block past its
+   --    stack, where the file carries one, with no draft model.
    --  @param Repeats How many times to run, for the median.
    --  @param Budget True to report where the time went, phase by phase, on
    --    standard error as each run ends. Off by default: the clock reads it
@@ -251,6 +253,7 @@ package Speed_Run is
       Draft       : String := "";
       Draft_Tokens : Positive := 4;
       Draft_Lookup : Boolean := False;
+      Draft_Next   : Boolean := False;
       Repeats     : Positive;
       Budget      : Boolean := False;
       Timeline    : Boolean := False;
