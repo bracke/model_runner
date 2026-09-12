@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device and the 35B on this host, re-checked and written off**:
+  the file's pages are refused by libdrm's userptr path by design
+  (`AMDGPU_GEM_USERPTR_ANONONLY`), an arena imported instead costs the
+  kernel a walk over every imported page on every submission -- 20.6 s
+  of kernel time for sixteen tokens of Qwen3-8B, 0.90 tokens a second
+  against 12.37 copied in -- and a device copy costs the host two bytes
+  for each byte on the device. Qwen3.6-35B-A3B runs on the processor
+  here, 14.9 tokens a second against the device's 5.8 to 8.1 with a
+  third of it resident; the record says why a split would not pay on
+  one memory either.
+
 - **The four- and five-bit strips given the six-bit strip's rewrite,
   measured level and not kept**: the minimum's term as a word product
   inside the assembly and the factor tables read a panel at a time

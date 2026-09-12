@@ -19701,3 +19701,61 @@ panels 0A580B617E8B8A56 src/library/model_runner-quantization-interleave.ads src
 # load:  ungated harness runs, one task, hot; the one-minute average
 #        under 1.0
 # model: none; a synthetic 4096 x 2048 matrix in each format
+
+# 2026-09-12, the device and the 35B on this host, re-checked and
+# written off: the file's pages are refused by the userptr path by
+# design, an arena imported instead costs the kernel a walk over every
+# imported page on every submission, and a device copy costs two bytes
+# of host memory for each byte on the device. Qwen3.6-35B-A3B runs on
+# the processor here, at 14.9 tokens a second against the device's 5.8
+# to 8.1 with 6.9 to 8.0 GB of its 21 resident.
+#
+#   THE FILE'S PAGES. The earlier record said this driver will not
+#   import a file's pages, without saying why. It is libdrm: a host
+#   pointer becomes a userptr buffer through amdgpu_create_bo_from_user_
+#   mem, which asks the kernel for AMDGPU_GEM_USERPTR_ANONONLY, and the
+#   kernel refuses any mapping with a file behind it -- a read-only
+#   private mapping of the model included, whether or not its pages have
+#   been touched. Not a driver mood; a flag, and a fact about every
+#   Mesa on amdgpu.
+#
+#   AN ARENA IMPORTED, --device-memory 0 on Qwen3-8B Q4_K_M (5.0 GB),
+#   sixteen tokens after a five-token prompt:
+#
+#     copied in (default)       12.37 t/s     1.5 s user   2.6 s sys   3.7 GB resident
+#     read where they lie        0.90 t/s     1.4 s user  20.6 s sys  10.1 GB resident
+#                               251 of 397 matrices imported, 540 MB copied
+#
+#   Twenty seconds of kernel time for sixteen tokens is the whole of the
+#   difference, and it is per page: a userptr buffer has its pages
+#   re-validated on every command submission, and this program's
+#   submissions each reference every resident buffer, so every product
+#   walks the five gigabytes. About 7 ms a submission over a million
+#   pages, two hundred submissions a token. One import of the whole
+#   arena rather than one a matrix would not change the page count.
+#   The resident figure -- twice the file -- is the kernel's pinning of
+#   the arena's pages beside the arena.
+#
+#   A COPY costs the host twice over, as the tier note in the engine
+#   records from the 30B: shmem and pool pages both. Eight gigabytes on
+#   the device is sixteen of the host's thirty, and twenty-one would be
+#   forty-two. So the budget this host offers, 8.47 GB, is the host's
+#   bound rather than the device's, and the 35B on the device is 15 of
+#   40 layers' expert stacks resident with the rest on the processor:
+#
+#     35B, device, default budget    5.83, 7.68 t/s   prompt 1.9-3.1   7.4 GB resident, 3.3-3.6 s sys of 7-9 s
+#     35B, processor                 14.9 t/s          prompt 67
+#
+#   AND WHY A SPLIT WOULD NOT PAY EITHER. The memory is one memory. The
+#   device reads it at about 45 GB/s on a token and the processor at
+#   about 33, and a token of this model is 2.2 GB of weights: the
+#   dense parts on the device and the experts on the processor, run one
+#   after the other, come to about what the processor takes alone, and
+#   overlapping them is a scheduler this program has not got and would
+#   buy a fifth at most. The device's advantage on an integrated part is
+#   arithmetic, which a prompt has and a token has not.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.6
+# model: Qwen3.6-35B-A3B Q4_K_S, Qwen3-8B Q4_K_M
