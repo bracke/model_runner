@@ -407,7 +407,9 @@ package body Perplexity_Run is
          begin
             Vocab.Encode
               (L.Vocabulary (Under.Engine).all, Body_Text,
-               Add_Beginning => True, Add_End => False,
+               Add_Beginning =>
+                 Vocab.Adds_Beginning (L.Vocabulary (Under.Engine).all),
+               Add_End => False,
                Target => Held, Last => Last, Status => Status);
 
             if E.Is_Error (Status) or else Last = 0 then

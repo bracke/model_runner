@@ -17363,7 +17363,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
             return;
          end if;
 
-         if Count < 4 or else Rows mod 2 /= 0 then
+         if Rows mod 2 /= 0 then
             return;
          end if;
 
@@ -17519,7 +17519,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
             return;
          end if;
 
-         if Count < 4 or else Rows mod 2 /= 0 then
+         if Rows mod 2 /= 0 then
             return;
          end if;
 

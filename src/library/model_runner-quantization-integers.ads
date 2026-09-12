@@ -110,13 +110,22 @@ package Model_Runner.Quantization.Integers is
    --  actually reach the integer path.
    --
    --  Has_Integer_Kernel is a pure function of the format and says what a
-   --  format could be multiplied as; this says what it will be, and the two
-   --  differ for the k-quants, which have a kernel for one vector and a
-   --  kernel for a strip of four and nothing between. The difference
-   --  matters to exactly one caller and matters a great deal to it:
+   --  format could be multiplied as; this says what it will be. The two
+   --  used to differ for the k-quants, which had a kernel for one vector
+   --  and a kernel for a strip of four and nothing between, and the
+   --  difference mattered to exactly one caller and a great deal to it:
    --  quantizing the activations for a product that then declines to use
    --  them is the whole cost of the packing and none of its benefit, and it
    --  measured forty per cent of a generated token before this was asked.
+   --
+   --  The strip has since learned to carry fewer than four vectors -- the
+   --  lanes past the last real one recompute it and drop the answer -- and
+   --  the gap between one and four was still sent to the floating-point
+   --  path by the rule here and by the kernels' own floor. It was found
+   --  by a drafted round on a mixture of experts: a verification batch of
+   --  two or three positions is exactly that gap, and an expert two of
+   --  them chose cost seven times what one choosing it did. Every count
+   --  goes the integer way now, and the two agree again.
    --
    --  @param Format Weight format.
    --  @param Count Vectors in the product.

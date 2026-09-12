@@ -5349,6 +5349,14 @@ package body Model_Runner.Llama is
       end;
    end Shared_Expert;
 
+   procedure Mixture_Batch
+     (Item    : in out Session;
+      Current : Layer;
+      Rows    : T.Real_Array_Access;
+      Count   : Element_Count;
+      Ok      : out Boolean;
+      Status  : out E.Error_Info);
+
    procedure Mixture
      (Item    : in out Session;
       Current : Layer;
@@ -5381,6 +5389,34 @@ package body Model_Runner.Llama is
         and then T.Is_Present (Current.Up_Stack)
         and then T.Is_Present (Current.Down_Stack);
    begin
+      --  On the pool, one position goes the way a batch does: an expert to
+      --  a worker, whole, and the pool woken once a layer. Cut across the
+      --  pool a row at a time, the eight experts of a generated token were
+      --  twenty-four products of a few hundred rows each, with a wake and
+      --  a settle around every one -- and a 35B-A3B token spent 31 ms of
+      --  its 73 in them, reading the experts at 22 GB/s where the dense
+      --  products read at 30. Dealt whole, a worker walks an expert's
+      --  three matrices at its own rate and nine of them together are
+      --  bound by the memory again. The same kernels on the same rows in
+      --  the same order, so the bits are the bits; and the sum is still
+      --  best expert first, which is what Mixture_Batch keeps Ranked for.
+      if Model_Runner.Backend."="
+           (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
+        and then Workers_CPU."/=" (Item.Team, null)
+        and then Input /= Result
+        and then Result.all'Length = Input.all'Length
+      then
+         declare
+            Grouped : Boolean;
+         begin
+            Result.all := Input.all;
+            Mixture_Batch (Item, Current, Result, 1, Grouped, Status);
+            if E.Is_Error (Status) or else Grouped then
+               return;
+            end if;
+         end;
+      end if;
+
       if Gathered then
          declare
             Choice : Model_Runner.Backend.Device.Choice_Array

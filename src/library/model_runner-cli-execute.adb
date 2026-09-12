@@ -345,6 +345,17 @@ package body Model_Runner.CLI.Execute is
    begin
       if Item.Memory_Limit /= 0 then
          Result.Max_Model_Bytes := Item.Memory_Limit;
+
+         --  The weights a device reads where they lie are one arena, and
+         --  the default cap on a single allocation is sixteen gigabytes:
+         --  a 21 GB mixture asked for with --device-memory 0 was refused
+         --  for the arena's size after the caller had named a limit above
+         --  it. A limit the caller wrote is the caller's word for what
+         --  the host can take, so the cap on one allocation follows it up
+         --  and never down.
+         if Item.Memory_Limit > Result.Max_Allocation_Bytes then
+            Result.Max_Allocation_Bytes := Item.Memory_Limit;
+         end if;
       end if;
       return Result;
    end Model_Bounds;

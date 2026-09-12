@@ -19543,6 +19543,54 @@ same processor; its own block drafting from 52.3 to **57.5**; Qwen3.5-4B
 drafting from 16.17 to **17.77** on the processor and 18.80 to **19.40** on the
 device.
 
+### The mixture of experts on a real file, and two things it found
+
+Qwen3.6-35B-A3B is the model the hybrid port was for, and the mixture with
+a shared expert had been checked against the fixture and against llama.cpp's
+sums for one token, never scored. Scored, it read a perplexity of 36.26 over
+the first 256-token chunk of the corpus where llama.cpp read 17.93, and the
+0.8B on the same tool read 48.77 against 48.92 -- so the arithmetic was
+right on one file and wrong on the other, which is the shape a bug has.
+It was the tool: `tests perplexity` prepended the beginning token whether
+the file asked for it or not, the 0.8B's file names none and the 35B's
+names one with `add_bos_token` off, and a hybrid model whose first token
+is a document separator it was not told to expect scores the next hundred
+badly. It follows the flag now, as the command always has: **18.10 against
+17.93** over one chunk, **19.88 against 19.86** over four, the greedy text
+the same to a coin-flip at a logit gap of 0.07.
+
+The other thing was pricing. A 5-token prompt's mixture cost 234 ms where
+one token's cost 26, and a probe inside the batch's expert-per-worker
+share said which experts: one chosen by two positions took seven times
+one chosen by one. The k-quant integer kernels have a strip of four
+vectors and a kernel for one, and the strip has long carried fewer than
+four -- the lanes past the last real vector recompute it and drop the
+answer -- but a rule older than that still sent two and three vectors to
+the floating-point path, and so did the check that decides whether to pack
+the activations at all. Every count goes the integer way now: the 5-token
+prompt's mixture **234 -> 72 ms**, a batch of two **283 -> 118**. And a
+generated token's mixture on the processor was twenty-four products of a
+few hundred rows each, cut across the pool with a wake and a settle around
+every one, reading the experts at 22 GB/s where the dense products read at
+30; it is dealt an expert to a worker now, as a batch's is, and the pool
+woken once a layer: 26 -> 23 ms a token, **13.7 -> 14.3 tokens a second**
+beside llama.cpp's 14.3, the logits bit for bit what they were.
+
+What did not pay is the block past the stack drafting on this model:
+13.3 tokens a second at three drafts against 14.3 plain, where llama.cpp's
+MTP reads 16.4 against its 14.3. A mixture's verification batch reads every
+expert any of its rows chose -- thirteen to twenty-nine of the two hundred
+and fifty-six for four rows, against eight for one -- so the experts cost
+what four tokens' would, and each draft reads the 415 MB head. The round
+is 188 ms against llama.cpp's 143, and the 45 ms between them is the rule
+over a chunk at 26 ms for four positions and the head at 2.4 rows' worth
+for four; both are the next thing. The device on this host holds 8 GB of
+the 21 and reads the rest through the host at 8 tokens a second, and
+reading the weights where they lie needs the arena the file will not fit
+beside: `--memory-limit` above sixteen gigabytes now raises the cap on one
+allocation with it, and the run that allowed was the host at 29 GB of its
+30, so it is a limit lifted and not a road opened.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

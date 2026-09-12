@@ -72,11 +72,7 @@ package body Model_Runner.Quantization.Integers is
      (Format : Model_Runner.GGUF.Tensor_Type;
       Count  : Element_Count;
       Interleaved : Boolean := False) return Boolean
-   is (Has_Integer_Kernel (Format, Interleaved)
-       and then (Format = G.Type_Q8_0
-                 or else Interleaved
-                 or else Count = 1
-                 or else Count >= 4));
+   is (Has_Integer_Kernel (Format, Interleaved) and then Count >= 1);
 
    ---------------------
    -- Supers_Vectors --

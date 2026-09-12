@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Qwen3.6-35B-A3B runs and agrees with llama.cpp**: the mixture with a
+  shared expert checked on a real file for the first time, perplexity
+  18.10 against llama.cpp's 17.93 over one chunk of 256 tokens and
+  19.88 against 19.86 over four, at 14.3 tokens a second on the
+  processor beside llama.cpp's 14.3. The perplexity tool prepended the
+  beginning token whether the file asked for it or not, which doubled
+  the figure on this file and moved the 0.8B's not at all; it follows
+  `add_bos_token` now. The k-quant products with two or three vectors
+  were going to the floating-point path -- the strip carries fewer than
+  four and the rule saying otherwise was older than that -- and an
+  expert two positions of a batch chose cost seven times what one
+  choosing it did: a 5-token prompt's mixture 234 -> 72 ms. A generated
+  token's mixture on the processor is dealt an expert to a worker as a
+  batch's is, 26 -> 23 ms a token on the 35B. Its own block drafting
+  does not pay on this model -- a mixture's verification batch reads
+  every expert its rows chose, and a draft is the head -- and the
+  device on this host holds 8 GB of its 21. A `--memory-limit` above
+  the sixteen-gigabyte cap on one allocation raises that cap with it.
+
 - **The delta rule over a chunk of positions**, `Model_Runner.Delta_Rule`,
   built twice as the integer product is and entered by what the host
   has; its triangles by rows, its gate through the binary32 unit, and
