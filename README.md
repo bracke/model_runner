@@ -19630,6 +19630,27 @@ block reads **14.9 tokens a second** against 14.9 plain, from 13.3 against
 experts stays on this processor, since a four-row batch reads what four
 tokens' experts would and each draft reads the head.
 
+### The shared expert dealt with the experts
+
+Timers a phase inside the batch's mixture said what it spends beside the
+experts, a layer of a four-row batch: the shared expert 0.14 ms, the route
+0.14, the sums 0.07, against the experts' 1.16. For a token alone the first
+two are bytes at the memory's rate -- 126 MB and 80 MB a token -- and there
+is nothing to take; for a batch the shared expert was three products cut
+across the pool with a wake and a settle around each, and the sums were
+scalar. The shared expert is now a chunk of the experts' own job, one for
+every sixteen rows of the batch, numbered as the expert past the last and
+made by whichever worker draws it out of the same packed rows; and `Add`,
+`Multiply` and `Scale` in the kernels package -- the residual add of every
+layer of every model among them -- carried an index, a range and an
+overflow check on every element, which the length guard above each had
+already proved, and run as lanes with the checks suppressed under it. The
+route was left where it is: it is the binary64 floating-point path the
+reference backend agrees with, and a faster sum of the router's logits is
+a different expert at a near tie. Qwen3.6-35B-A3B drafting from its own
+block reads **15.4 tokens a second** against 14.9 plain, its 262-token
+prompt **3.30 -> 3.23 s**, and every digest is the same bits.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

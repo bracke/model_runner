@@ -5849,6 +5849,24 @@ package body Model_Runner.Llama is
 
       Wide   : constant Element_Count := Count * Width;
 
+      --  Whether the experts are dealt to the pool's workers below, an
+      --  expert to a worker -- in which case the shared expert goes with
+      --  them, as chunks of the same job, rather than as three products
+      --  of its own cut across the pool with a wake and a settle around
+      --  each. Three megabytes a layer beside the experts' thirty-five,
+      --  and 0.14 ms a layer of a four-row batch where the bytes were
+      --  0.09 -- and on a token, the same three dispatches for one row.
+      On_Pool : constant Boolean :=
+        Model_Runner.Backend."="
+          (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
+        and then Workers_CPU."/=" (Item.Team, null);
+
+      --  The shared expert's feed width, where there is one; the experts'
+      --  otherwise, so the rooms below are never too narrow.
+      Shared_Feed : constant Element_Count :=
+        (if T.Is_Present (Current.Shared_Gate)
+         then Element_Count (Settings.Shared_Feed) else Feed);
+
       --  Take a buffer if there is not one, or a wider one if what there is
       --  is too narrow. A session does not know how wide a batch it will be
       --  handed, and every one of these is sized by that.
@@ -5939,29 +5957,33 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            Product_Batch
-              (Item, Current.Shared_Gate, Rows, Count, Item.Shared_Rows_A,
-               Status);
-            if E.Is_Error (Status) then
-               return;
-            end if;
-            Product_Batch
-              (Item, Current.Shared_Up, Rows, Count, Item.Shared_Rows_B,
-               Status);
-            if E.Is_Error (Status) then
-               return;
-            end if;
+            --  Its answer, unless the pool will make it below among the
+            --  experts' chunks.
+            if not On_Pool then
+               Product_Batch
+                 (Item, Current.Shared_Gate, Rows, Count, Item.Shared_Rows_A,
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Product_Batch
+                 (Item, Current.Shared_Up, Rows, Count, Item.Shared_Rows_B,
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
 
-            K.SiLU (Item.Shared_Rows_A.all (0 .. Count * Shared - 1));
-            K.Multiply
-              (Item.Shared_Rows_A.all (0 .. Count * Shared - 1),
-               Item.Shared_Rows_B.all (0 .. Count * Shared - 1));
+               K.SiLU (Item.Shared_Rows_A.all (0 .. Count * Shared - 1));
+               K.Multiply
+                 (Item.Shared_Rows_A.all (0 .. Count * Shared - 1),
+                  Item.Shared_Rows_B.all (0 .. Count * Shared - 1));
 
-            Product_Batch
-              (Item, Current.Shared_Down, Item.Shared_Rows_A, Count,
-               Item.Shared_Rows_Out, Status);
-            if E.Is_Error (Status) then
-               return;
+               Product_Batch
+                 (Item, Current.Shared_Down, Item.Shared_Rows_A, Count,
+                  Item.Shared_Rows_Out, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
          end;
       end if;
@@ -6112,10 +6134,7 @@ package body Model_Runner.Llama is
       --  experts share one, so the workers never write where another
       --  reads. The products a worker runs serially are the products the
       --  pool would have cut, so the bits are the bits.
-      if Model_Runner.Backend."="
-           (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
-        and then Workers_CPU."/=" (Item.Team, null)
-      then
+      if On_Pool then
          declare
             --  Every expert's members, gathered once: where each expert's
             --  run begins in Listed and how long it is.
@@ -6136,8 +6155,13 @@ package body Model_Runner.Llama is
             --  dealt into the shares largest first and back and forth.
             Chunk_Size : constant := 16;
 
+            --  And the shared expert's, one for every Chunk_Size rows of
+            --  the batch, its number being Many: the expert past the last.
+            Dealing_Shared : constant Boolean :=
+              T.Is_Present (Current.Shared_Gate);
+
             Most_Chunks : constant Natural :=
-              Natural (Count) * Used + Many;
+              Natural (Count) * Used + Many + Natural (Count);
 
             Chunk_Expert : array (0 .. Most_Chunks - 1) of Natural;
             Chunk_Start  : array (0 .. Most_Chunks - 1) of Natural;
@@ -6182,8 +6206,12 @@ package body Model_Runner.Llama is
                Out_Room : T.Real_Array_Access;
             begin
                T.Allocate (Element_Count (Widest) * Width, In_Room);
-               T.Allocate (Element_Count (Widest) * Feed, A_Room);
-               T.Allocate (Element_Count (Widest) * Feed, B_Room);
+               T.Allocate
+                 (Element_Count (Widest) * Element_Count'Max (Feed, Shared_Feed),
+                  A_Room);
+               T.Allocate
+                 (Element_Count (Widest) * Element_Count'Max (Feed, Shared_Feed),
+                  B_Room);
                T.Allocate (Element_Count (Widest) * Width, Out_Room);
 
                if In_Room = null or else A_Room = null
@@ -6193,7 +6221,122 @@ package body Model_Runner.Llama is
                end if;
 
                for Index_Of in Natural (From) .. Natural (To) loop
-                  if Share.Ok then
+                  if Share.Ok and then Chunk_Expert (Order (Index_Of)) = Many
+                  then
+                     --  The shared expert over a run of the batch's rows:
+                     --  the same three products an expert is, over the
+                     --  rows themselves rather than a gathering of them,
+                     --  and its answer put where the sums below read the
+                     --  shared expert's -- a row's own place, at its gate.
+                     declare
+                        Chunk : constant Natural := Order (Index_Of);
+                        Start : constant Natural := Chunk_Start (Chunk);
+                        Members_Held : constant Natural :=
+                          Chunk_Count (Chunk);
+                        Held : constant Element_Count :=
+                          Element_Count (Members_Held);
+                        Picked : Model_Runner.Shares.Member_Rows
+                          (0 .. Members_Held - 1);
+                        Done   : Boolean;
+                     begin
+                        for Index in 0 .. Members_Held - 1 loop
+                           declare
+                              At_In : constant Element_Count :=
+                                Rows.all'First
+                                + Element_Count (Start + Index) * Width;
+                              At_Room : constant Element_Count :=
+                                In_Room.all'First
+                                + Element_Count (Index) * Width;
+                           begin
+                              In_Room.all (At_Room .. At_Room + Width - 1)
+                                := Rows.all (At_In .. At_In + Width - 1);
+                              Picked (Index) := Start + Index;
+                           end;
+                        end loop;
+
+                        Done := False;
+                        if Supers (Current.Shared_Gate) and then Has_Super
+                        then
+                           Workers_CPU.Multiply_Packed
+                             (Current.Shared_Gate, Packed_Super, Picked,
+                              A_Room, Done);
+                        elsif not Supers (Current.Shared_Gate)
+                          and then Has_Plain
+                        then
+                           Workers_CPU.Multiply_Packed
+                             (Current.Shared_Gate, Packed_Plain, Picked,
+                              A_Room, Done);
+                        end if;
+
+                        if not Done then
+                           Workers_CPU.Dispatch_Batch
+                             (null, Current.Shared_Gate, In_Room, Held,
+                              A_Room, Local);
+                           if E.Is_Error (Local) then
+                              Share.Ok := False;
+                           end if;
+                        end if;
+
+                        Done := False;
+                        if Supers (Current.Shared_Up) and then Has_Super
+                        then
+                           Workers_CPU.Multiply_Packed
+                             (Current.Shared_Up, Packed_Super, Picked,
+                              B_Room, Done);
+                        elsif not Supers (Current.Shared_Up)
+                          and then Has_Plain
+                        then
+                           Workers_CPU.Multiply_Packed
+                             (Current.Shared_Up, Packed_Plain, Picked,
+                              B_Room, Done);
+                        end if;
+
+                        if not Done then
+                           Workers_CPU.Dispatch_Batch
+                             (null, Current.Shared_Up, In_Room, Held,
+                              B_Room, Local);
+                           if E.Is_Error (Local) then
+                              Share.Ok := False;
+                           end if;
+                        end if;
+
+                        --  The gated middle, as the batch off the pool
+                        --  and one position both take it: the logistic
+                        --  unit, whatever the experts' own is.
+                        K.SiLU (A_Room.all (A_Room.all'First
+                                            .. A_Room.all'First
+                                               + Held * Shared_Feed - 1));
+                        K.Multiply
+                          (A_Room.all (A_Room.all'First
+                                       .. A_Room.all'First
+                                          + Held * Shared_Feed - 1),
+                           B_Room.all (B_Room.all'First
+                                       .. B_Room.all'First
+                                          + Held * Shared_Feed - 1));
+
+                        Workers_CPU.Dispatch_Batch
+                          (null, Current.Shared_Down, A_Room, Held,
+                           Out_Room, Local);
+                        if E.Is_Error (Local) then
+                           Share.Ok := False;
+                        end if;
+
+                        for Index in 0 .. Members_Held - 1 loop
+                           declare
+                              From_At : constant Element_Count :=
+                                Out_Room.all'First
+                                + Element_Count (Index) * Width;
+                              Into : constant Element_Count :=
+                                Item.Shared_Rows_Out.all'First
+                                + Element_Count (Start + Index) * Width;
+                           begin
+                              Item.Shared_Rows_Out.all
+                                (Into .. Into + Width - 1) :=
+                                Out_Room.all (From_At .. From_At + Width - 1);
+                           end;
+                        end loop;
+                     end;
+                  elsif Share.Ok then
                      declare
                         Chunk : constant Natural := Order (Index_Of);
                         Which : constant Natural := Chunk_Expert (Chunk);
@@ -6451,6 +6594,22 @@ package body Model_Runner.Llama is
 
             --  The rows packed once, for each kind of sums a gate or up
             --  in this layer wants.
+            if Dealing_Shared then
+               declare
+                  Done : Natural := 0;
+               begin
+                  while Done < Natural (Count) loop
+                     Chunk_Expert (Chunks) := Many;
+                     Chunk_Start (Chunks) := Done;
+                     Chunk_Count (Chunks) :=
+                       Natural'Min (Chunk_Size, Natural (Count) - Done);
+                     Widest := Natural'Max (Widest, Chunk_Count (Chunks));
+                     Done := Done + Chunk_Count (Chunks);
+                     Chunks := Chunks + 1;
+                  end loop;
+               end;
+            end if;
+
             for Which in 0 .. Many - 1 loop
                if Counts (Which) > 0 then
                   if Supers (Current.Experts.all (Which).Gate)
@@ -6465,6 +6624,18 @@ package body Model_Runner.Llama is
                   end if;
                end if;
             end loop;
+
+            if Dealing_Shared then
+               if Supers (Current.Shared_Gate) or else Supers (Current.Shared_Up)
+               then
+                  Has_Super := True;
+               end if;
+               if not Supers (Current.Shared_Gate)
+                 or else not Supers (Current.Shared_Up)
+               then
+                  Has_Plain := True;
+               end if;
+            end if;
 
             if Has_Super then
                Workers_CPU.Pack

@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The shared expert is dealt with the experts**: on the pool, a
+  batch's shared expert is chunks of the same job the experts are,
+  rather than three products cut across the pool with a wake and a
+  settle around each; and `Add`, `Multiply` and `Scale` in the kernels
+  package run as lanes, the checks proved by their guards and
+  suppressed under them. Qwen3.6-35B-A3B drafting from its own block
+  14.9 -> 15.4 tokens a second, its 262-token prompt 3.30 -> 3.23 s;
+  the same bits throughout.
+
 - **The six-bit strip reads its scales out of the block**, and takes the
   offset's correction as one sixteen-bit product a vector: a strip of
   four 1.62 -> 0.56 ms on one task, the four-row head on
