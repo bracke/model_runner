@@ -19061,3 +19061,48 @@ panels 861AEB9B3B2B88EF src/library/model_runner-quantization-interleave.ads src
 #
 # load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.3
 # model: Qwen3-30B-A3B Q2_K
+
+# 2026-09-12, llama.cpp's Radeon 780M tile, tried on the dense tile
+# kernel: sixty-four rows a tile 30 per cent slower, two subgroups of
+# thirty-two by sixty-four the same, and the part is power-bound.
+#
+#   THE LEAD: llama.cpp PR 28611 halves the warp micro-tile's M on
+#   RDNA3 integrated parts -- 64x64 to 32x64 a warp, the workgroup
+#   tile 128x128 -- and reads Qwen3.8-9B Q4_K_M pp512 250 -> 404
+#   tokens a second on a Minisforum UM790 Pro, which is this laptop's
+#   Radeon 780M (RADV PHOENIX, twelve compute units, shared memory).
+#   Our Qwen3-8B Q4_K_M prompt reads 257 at 1302 tokens, so the
+#   question was whether our tile has the same headroom.
+#
+#   THE SHAPES, Qwen3-8B, the 512-position shape of the timeline, the
+#   12288x4096 Q4_K gate stack, three runs each:
+#
+#     32 rows x 128 vectors, 4 subgroups of 32x32 (as it is)
+#         18.0 18.0 17.9 Gcycles at 1.53-1.55 GHz     11.7 ms   eval 6.18-6.26 s
+#     64 rows x 128 vectors, 4 subgroups of 64x32
+#         32.3 31.7 31.8 Gcycles at 2.08-2.11 GHz     15.4 ms   eval 7.77-7.81 s
+#     32 rows x 128 vectors, 2 subgroups of 32x64 (llama.cpp's warp shape)
+#         19.2 19.0 19.0 Gcycles at 1.60 GHz          11.9 ms   eval 6.27-6.31 s
+#
+#   TWO THINGS THE CLOCK SAYS. The part is power-bound on a prompt: the
+#   tile that does the most work a cycle runs at 1.55 GHz and the one
+#   that does less at 2.1, so cycles overstate a change that does less
+#   and microseconds are the measure. And per cycle, the tile as it is
+#   does 2.8 kFLOP a cycle -- 51.5 GFLOP in 18 Gcycles -- where PR
+#   28611's 404 tokens a second over nine billion weights is 7.3
+#   TFLOPS at a desktop part's 2.5 GHz, 2.9 kFLOP a cycle: their tuned
+#   shape and ours are at parity a cycle, and their sixty-one per cent
+#   is the distance their default was behind on this part. The 780M's
+#   matrix peak is about 6 kFLOP a cycle; both are at half of it.
+#
+#   Not kept: the tile stays 32x128 over four subgroups. What remains
+#   from that list is the int8 cooperative-matrix path (PR 27952,
+#   +17-35 per cent a format on Strix Halo), which is twice the rate
+#   and half the energy a multiply-add, and on a power-bound part the
+#   energy is the point; it is a kernel of its own with per-block
+#   scales applied on the instruction's lane layout, and is not begun.
+#
+#   GROUPS. Nothing changed. Nothing to restamp.
+#
+# load:  ungated CLI runs, hot; the one-minute average 0.8 to 1.3
+# model: Qwen3-8B Q4_K_M

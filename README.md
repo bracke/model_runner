@@ -19432,6 +19432,22 @@ that touches every writer and reader of the copy. Not built. The eight-bundle
 six-slice shape is the best of every shape tried, and what it is short of is
 the kernel's own structure, not its bytes.
 
+### llama.cpp's Radeon 780M tile, tried
+
+llama.cpp's PR 28611 halves the warp micro-tile's M on RDNA3 integrated
+parts and reads Qwen3.8-9B Q4_K_M pp512 250 -> 404 tokens a second on the
+same Radeon 780M this laptop has. Tried on the dense tile here: sixty-four
+rows a tile is **30 per cent slower** in microseconds, and two subgroups of
+thirty-two by sixty-four -- their warp shape -- is one to two per cent
+slower. The clock explains the rest: the part is power-bound on a prompt, so
+the tile that does the most work a cycle runs at 1.55 GHz and one that does
+less at 2.1, and per cycle our tile does 2.8 kFLOP where their tuned one
+does 2.9 -- parity, at half the part's matrix peak. Their sixty-one per cent
+is the distance their default was behind on this part. Not kept. What that
+list leaves is the int8 cooperative-matrix path, twice the rate and half the
+energy a multiply-add, which on a power-bound part is the point; it is a
+kernel of its own and is not begun.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
