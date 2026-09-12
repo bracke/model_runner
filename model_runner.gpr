@@ -84,6 +84,16 @@ project Model_Runner is
       --  wider set permits a fused multiply-add, and the two compilations
       --  have to answer bit for bit or the test that says so is a test of
       --  nothing.
+      --  The delta rule's kernel, built a second time for the wider set:
+      --  a row of the state is eight lanes rather than four, and the rule
+      --  is nothing but rows scaled into running rows. -ffp-contract=off
+      --  for the reason the others give: the two compilations answer bit
+      --  for bit.
+      for Switches ("model_runner-delta_rule-wide.ads") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-march=x86-64-v3", "-ffp-contract=off");
+
       for Switches ("model_runner-quantization-integers-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
         & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",

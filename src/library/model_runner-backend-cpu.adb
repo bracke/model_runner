@@ -4,6 +4,7 @@ with System.Atomic_Operations.Integer_Arithmetic;
 with System.Machine_Code;
 
 with Model_Runner.Kernels;
+with Model_Runner.Delta_Rule;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
 
@@ -1800,5 +1801,7 @@ begin
    Model_Runner.Quantization.Integers.Use_Deep_Rows
      (Model_Runner.Platform.Byte_Products);
    Model_Runner.Kernels.Use_Wide_Lanes
+     (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Delta_Rule.Use_Wide
      (Model_Runner.Platform.Wide_Vectors);
 end Model_Runner.Backend.CPU;

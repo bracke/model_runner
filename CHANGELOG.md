@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The delta rule over a chunk of positions**, `Model_Runner.Delta_Rule`,
+  built twice as the integer product is and entered by what the host
+  has; its triangles by rows, its gate through the binary32 unit, and
+  the convolution ahead of it shared over the team. Qwen3.5-0.8B's
+  prompt 417 -> 488 tokens a second, 396 -> 507 at a thousand tokens;
+  Qwen3.5-4B drafting from its own block 16.17 -> 17.77 on the
+  processor, 18.80 -> 19.40 on the device.
+
 - **A hybrid session's kept states are slots, not copies**, and a
   batch asked for every row's distribution reads the head once: the
   block past the stack drafting Qwen3.5-4B 14.47 -> 16.17 tokens a

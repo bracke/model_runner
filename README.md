@@ -19520,6 +19520,29 @@ and the block's drafting from a loss to a gain there -- **43.3 -> 52.3 tokens
 a second** against 49.4 plain -- and on Qwen3.5-4B from 14.47 to **16.17** on
 the processor and 16.52 to **18.80** on the device.
 
+### The rule over a chunk, and its front shared out
+
+The claim was memory -- three passes over eighteen megabytes of state a
+position, which a chunk of positions would read once -- and it was wrong:
+a layer's states are a megabyte and a batch's positions touch them one
+after another, so they were in the caches already, and the chunked rule as
+first built was slower than a position at a time, three products of the
+state for two. What the chunk bought came from a probe a phase saying what
+the rule was actually spending its time on: the two triangles as dot
+products, each entry a chain of a hundred and twenty-eight dependent
+additions, now built a row at a time; the gate's unit through the library's
+binary64 exponential, a hundred and twenty-eight calls a head a position,
+now through the SiLU kernel's binary32 one; four lanes, now eight -- the
+kernel is `Model_Runner.Delta_Rule`, a generic instantiated twice as the
+integer product is, once for x86-64-v3, contraction off so the two answer
+bit for bit; and the convolution ahead of the rule on the calling task
+alone, now shared over the team a head's width of channels at a time.
+Qwen3.5-0.8B's prompt went from 417 to **488 tokens a second** at 121 tokens
+and 396 to **507** at a thousand, against llama.cpp's 457 and 393 on the
+same processor; its own block drafting from 52.3 to **57.5**; Qwen3.5-4B
+drafting from 16.17 to **17.77** on the processor and 18.80 to **19.40** on the
+device.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

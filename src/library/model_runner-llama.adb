@@ -5,6 +5,7 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.Arithmetic;
+with Model_Runner.Delta_Rule;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Integers;
@@ -9464,21 +9465,24 @@ package body Model_Runner.Llama is
       M0, Z0, A0, B0, O0 : Element_Count := 0;
    end record;
 
-   --  The rule for a share of the value heads: each head's state decayed,
-   --  corrected by what it would have said of the value against the value,
-   --  and read at the query; then normalized and gated. Heads are
-   --  independent, so the team takes them in shares.
-   --
-   --  A head's state is kept key-major: row I holds what key dimension I
-   --  contributes to every value dimension. Every step is then a row
-   --  scaled and added to a running row -- contiguous, and no sum to wait
-   --  on. The other way round, value-major, each of the two readings is a
-   --  dot product a row, and a chain of dependent additions a hundred and
-   --  twenty-eight long is what a head's worth of rows spent its time on.
+   --  Where a chunk of positions' rows are: Linear_Rows for the first,
+   --  and how far apart the positions lie in each array.
+   type Chunk_Rows is record
+      First : Linear_Rows;
+      Count : Element_Count := 0;
+      Mix_Stride, Z_Stride, Head_Stride, Blend_Stride : Element_Count := 0;
+   end record;
+
+   --  The rule for a share of the value heads over a chunk of positions,
+   --  reading the state once rather than once a position: what the
+   --  kernel in Model_Runner.Delta_Rule does, a head at a time, with the
+   --  decays and rates a position worked out here from the file's shape
+   --  and bias. Heads are independent, so the team takes them in shares.
    type Rule_Share is limited new Workers_CPU.Task_Item with record
       State      : T.Real_Array_Access := null;
       States     : Element_Count := 0;
-      Written    : Element_Count := 0;
+      Written    : Model_Runner.Delta_Rule.Slot_Origins :=
+        [others => Model_Runner.Delta_Rule.Nowhere];
       Head       : Element_Count := 0;
       Keys_Wide  : Element_Count := 0;
       Key_Heads  : Element_Count := 0;
@@ -9487,7 +9491,7 @@ package body Model_Runner.Llama is
       State_Norm : T.Real_Array_Access := null;
       Epsilon    : Real := 0.0;
       Scale      : Real := 0.0;
-      Rows       : Linear_Rows;
+      Rows       : Chunk_Rows;
 
       --  False where a share found a row out of its array's reach and
       --  wrote nothing.
@@ -9505,34 +9509,38 @@ package body Model_Runner.Llama is
       To    : Element_Count)
    is
       Head   : constant Element_Count := Share.Head;
-      State  : Real_Array renames Share.State.all;
-      Mixed  : Real_Array renames Share.Rows.Mixed.all;
-      Z_Gate : Real_Array renames Share.Rows.Z_Gate.all;
-      Blend  : Real_Array renames Share.Rows.Blend.all;
-      M0     : constant Element_Count := Share.Rows.M0;
-      Error  : Real_Array (0 .. Head - 1);
-      Read   : Real_Array (0 .. Head - 1);
-
-      --  The reach proved once for the last head of the share and the
-      --  checks left out of the loops, which is what lets them run as
-      --  rows rather than as an index check an element: with the checks
-      --  in, a position's eighteen layers of this read 2.7 ms.
-      pragma Suppress (Index_Check);
-      pragma Suppress (Range_Check);
-      pragma Suppress (Overflow_Check);
+      Count  : constant Element_Count := Share.Rows.Count;
+      Mixed  : Real_Array renames Share.Rows.First.Mixed.all;
+      Z_Gate : Real_Array renames Share.Rows.First.Z_Gate.all;
+      Blend  : Real_Array renames Share.Rows.First.Blend.all;
+      Alpha  : Real_Array renames Share.Rows.First.Alpha.all;
+      Beta   : Real_Array renames Share.Rows.First.Beta.all;
+      M0     : constant Element_Count := Share.Rows.First.M0;
+      Square : constant Element_Count := Head * Head;
+      Decay  : Real_Array (0 .. Count - 1);
+      Rate   : Real_Array (0 .. Count - 1);
+      Last_Row : constant Element_Count :=
+        M0 + (Count - 1) * Share.Rows.Mix_Stride;
    begin
       if From > To then
          return;
       end if;
 
-      if Share.Key_Heads = 0
-        or else Share.States + (To + 1) * Head * Head - 1 > State'Last
-        or else Share.Written + (To + 1) * Head * Head - 1 > State'Last
-        or else M0 + 2 * Share.Keys_Wide + (To + 1) * Head - 1 > Mixed'Last
-        or else Share.Rows.O0 + (To + 1) * Head - 1 > Blend'Last
-        or else Share.Rows.Z0 + (To + 1) * Head - 1 > Z_Gate'Last
-        or else Share.Rows.A0 + To > Share.Rows.Alpha.all'Last
-        or else Share.Rows.B0 + To > Share.Rows.Beta.all'Last
+      --  The reach proved once for the last head of the share; the
+      --  kernel checks nothing.
+      if Share.Key_Heads = 0 or else Count = 0
+        or else Count > Model_Runner.Delta_Rule.Chunk_Most
+        or else Share.States + (To + 1) * Square - 1 > Share.State.all'Last
+        or else Last_Row + 2 * Share.Keys_Wide + (To + 1) * Head - 1
+                > Mixed'Last
+        or else Share.Rows.First.O0 + (Count - 1) * Share.Rows.Blend_Stride
+                + (To + 1) * Head - 1 > Blend'Last
+        or else Share.Rows.First.Z0 + (Count - 1) * Share.Rows.Z_Stride
+                + (To + 1) * Head - 1 > Z_Gate'Last
+        or else Share.Rows.First.A0 + (Count - 1) * Share.Rows.Head_Stride + To
+                > Alpha'Last
+        or else Share.Rows.First.B0 + (Count - 1) * Share.Rows.Head_Stride + To
+                > Beta'Last
         or else To > Share.A_Log.all'Last
         or else To > Share.DT_Bias.all'Last
         or else Head - 1 > Share.State_Norm.all'Last
@@ -9541,268 +9549,384 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      for T in 0 .. Count - 1 loop
+         if Share.Written (T) /= Model_Runner.Delta_Rule.Nowhere
+           and then Share.Written (T) + (To + 1) * Square - 1
+                    > Share.State.all'Last
+         then
+            Share.Ok := False;
+            return;
+         end if;
+      end loop;
+
       for H in From .. To loop
          declare
             KH : constant Element_Count := H mod Share.Key_Heads;
-            Q_At : constant Element_Count := M0 + KH * Head;
-            K_At : constant Element_Count := M0 + Share.Keys_Wide + KH * Head;
-            V_At : constant Element_Count :=
-              M0 + 2 * Share.Keys_Wide + H * Head;
-            O_At : constant Element_Count := Share.Rows.O0 + H * Head;
-            S_At : constant Element_Count := Share.States + H * Head * Head;
-            W_At : constant Element_Count := Share.Written + H * Head * Head;
-
-            --  The file keeps minus the exponential of the decay's
-            --  shape, not the shape: what is stored is what multiplies.
-            Decay : constant Real :=
-              Real (N.Exp (N.Wide_Real
-                (Share.A_Log.all (H)
-                 * Softplus (Share.Rows.Alpha.all (Share.Rows.A0 + H)
-                             + Share.DT_Bias.all (H)))));
-            Rate  : constant Real :=
-              Sigmoid (Share.Rows.Beta.all (Share.Rows.B0 + H));
+            Written : Model_Runner.Delta_Rule.Slot_Origins := Share.Written;
          begin
-            --  What the state says of the value, a key row at a time,
-            --  read without being written: the decay is one factor over
-            --  the whole of it and is taken on the sum. The value less
-            --  that, at the rate. Eighteen layers' states are eighteen
-            --  megabytes, past any cache, so a position pays for every
-            --  pass over them in memory; this leaves it three, not four.
-            Error := [others => 0.0];
-            for I in 0 .. Head - 1 loop
-               declare
-                  Row : constant Element_Count := S_At + I * Head;
-                  Key : constant Real := Mixed (K_At + I);
-               begin
-                  for J in 0 .. Head - 1 loop
-                     Error (J) := Error (J) + State (Row + J) * Key;
-                  end loop;
-               end;
+            --  The decays and rates: the file keeps minus the exponential
+            --  of the decay's shape, not the shape, so what is stored is
+            --  what multiplies.
+            for T in 0 .. Count - 1 loop
+               Decay (T) :=
+                 Real (N.Exp (N.Wide_Real
+                   (Share.A_Log.all (H)
+                    * Softplus
+                        (Alpha (Share.Rows.First.A0
+                                + T * Share.Rows.Head_Stride + H)
+                         + Share.DT_Bias.all (H)))));
+               Rate (T) :=
+                 Sigmoid (Beta (Share.Rows.First.B0
+                                + T * Share.Rows.Head_Stride + H));
             end loop;
 
-            for J in 0 .. Head - 1 loop
-               Error (J) := (Mixed (V_At + J) - Error (J) * Decay) * Rate;
+            for T in 0 .. Count - 1 loop
+               if Written (T) /= Model_Runner.Delta_Rule.Nowhere then
+                  Written (T) := Written (T) + H * Square;
+               end if;
             end loop;
 
-            --  The decay and the correction written into the slot this
-            --  position leaves, and the query read out of the corrected
-            --  state, in one pass.
-            Read := [others => 0.0];
-            for I in 0 .. Head - 1 loop
-               declare
-                  Row   : constant Element_Count := S_At + I * Head;
-                  Out_Row : constant Element_Count := W_At + I * Head;
-                  Key   : constant Real := Mixed (K_At + I);
-                  Query : constant Real := Mixed (Q_At + I);
-               begin
-                  for J in 0 .. Head - 1 loop
-                     State (Out_Row + J) :=
-                       State (Row + J) * Decay + Key * Error (J);
-                     Read (J) := Read (J) + State (Out_Row + J) * Query;
-                  end loop;
-               end;
-            end loop;
-
-            --  Normalized and gated, into the blend.
-            declare
-               Sum : N.Wide_Real := 0.0;
-            begin
-               for J in 0 .. Head - 1 loop
-                  Read (J) := Read (J) * Share.Scale;
-                  Sum := Sum + N.Wide_Real (Read (J)) * N.Wide_Real (Read (J));
-               end loop;
-
-               declare
-                  Root : constant Real :=
-                    Real (1.0 / N.Sqrt (Sum / N.Wide_Real (Head)
-                                        + N.Wide_Real (Share.Epsilon)));
-               begin
-                  for J in 0 .. Head - 1 loop
-                     declare
-                        Z : constant Real :=
-                          Z_Gate (Share.Rows.Z0 + H * Head + J);
-                     begin
-                        Blend (O_At + J) :=
-                          Read (J) * Root
-                          * Share.State_Norm.all (J)
-                          * (Z / (1.0 + Real (N.Exp (N.Wide_Real (-Z)))));
-                     end;
-                  end loop;
-               end;
-            end;
+            Model_Runner.Delta_Rule.Chunk
+              (State        => Share.State.all,
+               From         => Share.States + H * Square,
+               Written      => Written,
+               Head         => Head,
+               Count        => Count,
+               Mixed        => Mixed,
+               Stride       => Share.Rows.Mix_Stride,
+               Key_At       => M0 - Mixed'First + Share.Keys_Wide + KH * Head,
+               Query_At     => M0 - Mixed'First + KH * Head,
+               Value_At     => M0 - Mixed'First + 2 * Share.Keys_Wide + H * Head,
+               Decay        => Decay,
+               Rate         => Rate,
+               Z_Gate       => Z_Gate,
+               Z_At         => Share.Rows.First.Z0 + H * Head,
+               Z_Stride     => Share.Rows.Z_Stride,
+               Blend        => Blend,
+               Blend_At     => Share.Rows.First.O0 + H * Head,
+               Blend_Stride => Share.Rows.Blend_Stride,
+               State_Norm   => Share.State_Norm.all,
+               Epsilon      => Share.Epsilon,
+               Scale        => Share.Scale);
          end;
       end loop;
    end Run;
 
-   --  One position of a linear layer past its projections: the
-   --  convolution over the mixed row and the ones remembered, the queries
-   --  and keys to unit length, the rule a value head at a time, and the
-   --  blend normalized and gated -- reading the state the position before
-   --  left and leaving its own.
-   procedure Linear_Core
+   --  The front of a linear layer for a share of the channel blocks over
+   --  a chunk of positions: the convolution over each position and the
+   --  ones remembered, the unit, and the queries and keys to unit length
+   --  -- a block being a head's width, so a query or key head is one
+   --  block. Positions go in order within a block, since each reads what
+   --  the ones before left; blocks are independent, so the team takes
+   --  them in shares.
+   type Front_Share is limited new Workers_CPU.Task_Item with record
+      Conv      : T.Real_Array_Access := null;
+      Kept      : T.Real_Array_Access := null;
+      Read      : Element_Count := 0;
+      Written   : Model_Runner.Delta_Rule.Slot_Origins :=
+        [others => Model_Runner.Delta_Rule.Nowhere];
+      Mix       : Element_Count := 0;
+      Taps      : Element_Count := 0;
+      Head      : Element_Count := 0;
+      Unit_Blocks : Element_Count := 0;
+      Epsilon   : Real := 0.0;
+      Rows      : Chunk_Rows;
+      Ok        : Boolean := True;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Front_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Front_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      Head  : constant Element_Count := Share.Head;
+      Count : constant Element_Count := Share.Rows.Count;
+      Mix   : constant Element_Count := Share.Mix;
+      Taps  : constant Element_Count := Share.Taps;
+      Conv  : Real_Array renames Share.Conv.all;
+      Kept  : Real_Array renames Share.Kept.all;
+      Mixed : Real_Array renames Share.Rows.First.Mixed.all;
+      M0    : constant Element_Count := Share.Rows.First.M0;
+
+      --  What the block remembers: Taps - 1 positions' inputs, oldest
+      --  first, and this position's on the way through.
+      Memory : Real_Array (0 .. (Taps - 1) * Head - 1);
+      Fresh  : Real_Array (0 .. Head - 1);
+      Made    : Real_Array (0 .. Head - 1);
+
+      --  The reach proved once for the last block of the share and the
+      --  checks left out of the loops: with them in, a layer's
+      --  convolution over six thousand components read 50 microseconds
+      --  a position.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      if From > To then
+         return;
+      end if;
+
+      if Count = 0 or else Taps < 2 or else Head = 0
+        or else (To + 1) * Head > Mix
+        or else Conv'Length /= Taps * Mix
+        or else Share.Read + (Taps - 1) * Mix - 1 > Kept'Last
+        or else M0 + (Count - 1) * Share.Rows.Mix_Stride + Mix - 1 > Mixed'Last
+      then
+         Share.Ok := False;
+         return;
+      end if;
+
+      for T in 0 .. Count - 1 loop
+         if Share.Written (T) /= Model_Runner.Delta_Rule.Nowhere
+           and then Share.Written (T) + (Taps - 1) * Mix - 1 > Kept'Last
+         then
+            Share.Ok := False;
+            return;
+         end if;
+      end loop;
+
+      for B in From .. To loop
+         declare
+            C0 : constant Element_Count := B * Head;
+         begin
+            for K in 0 .. Taps - 2 loop
+               Memory (K * Head .. (K + 1) * Head - 1) :=
+                 Kept (Share.Read + K * Mix + C0
+                       .. Share.Read + K * Mix + C0 + Head - 1);
+            end loop;
+
+            for T in 0 .. Count - 1 loop
+               declare
+                  R0 : constant Element_Count :=
+                    M0 + T * Share.Rows.Mix_Stride + C0;
+                  Last : constant Element_Count := (Taps - 1) * Mix + C0;
+               begin
+                  Fresh := Mixed (R0 .. R0 + Head - 1);
+
+                  for C in 0 .. Head - 1 loop
+                     Made (C) := Fresh (C) * Conv (Last + C);
+                  end loop;
+
+                  for K in 0 .. Taps - 2 loop
+                     declare
+                        Tap : constant Element_Count := K * Mix + C0;
+                        Mem : constant Element_Count := K * Head;
+                     begin
+                        for C in 0 .. Head - 1 loop
+                           Made (C) := Made (C) + Memory (Mem + C) * Conv (Tap + C);
+                        end loop;
+                     end;
+                  end loop;
+
+                  --  The memory moved up a position: the inputs but the
+                  --  oldest, and this position's under the last.
+                  for K in 0 .. Taps - 3 loop
+                     Memory (K * Head .. (K + 1) * Head - 1) :=
+                       Memory ((K + 1) * Head .. (K + 2) * Head - 1);
+                  end loop;
+                  Memory ((Taps - 2) * Head .. (Taps - 1) * Head - 1) := Fresh;
+
+                  if Share.Written (T) /= Model_Runner.Delta_Rule.Nowhere then
+                     for K in 0 .. Taps - 2 loop
+                        Kept (Share.Written (T) + K * Mix + C0
+                              .. Share.Written (T) + K * Mix + C0 + Head - 1) :=
+                          Memory (K * Head .. (K + 1) * Head - 1);
+                     end loop;
+                  end if;
+
+                  --  The unit -- the row times its own logistic, through
+                  --  the kernel that takes the exponential in binary32 --
+                  --  and a query or key head to unit length.
+                  K.SiLU (Made);
+
+                  if B < Share.Unit_Blocks then
+                     declare
+                        Sum : Real := 0.0;
+                     begin
+                        for C in 0 .. Head - 1 loop
+                           Sum := Sum + Made (C) * Made (C);
+                        end loop;
+
+                        declare
+                           Unit : constant Real :=
+                             1.0 / Real'Max (Real (N.Sqrt (N.Wide_Real (Sum))),
+                                             Share.Epsilon);
+                        begin
+                           for C in 0 .. Head - 1 loop
+                              Made (C) := Made (C) * Unit;
+                           end loop;
+                        end;
+                     end;
+                  end if;
+
+                  Mixed (R0 .. R0 + Head - 1) := Made;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   --  A chunk of positions of one linear layer past its projections: the
+   --  front over the channel blocks, then the rule over the heads, each
+   --  shared out. Within it a position's state and memory are kept where
+   --  the ring reaches them -- the last Kept_States positions and the last
+   --  of all -- and dropped otherwise. More positions than a chunk holds
+   --  go a chunk at a time, each leaving its last state and memory where
+   --  the next reads them.
+   procedure Linear_Chunk
      (Item        : in out Session;
       Source      : Model'Class;
       Current     : Layer;
       Layer_Index : Natural;
       Position    : Natural;
-      Rows        : Linear_Rows;
+      Rows        : Chunk_Rows;
       Status      : out E.Error_Info)
    is
       Settings : Configuration renames Source.Settings;
-
-      Keys_Wide : constant Element_Count :=
-        Element_Count (Key_Width (Settings));
-      Head      : constant Element_Count :=
+      Head     : constant Element_Count :=
         Element_Count (Settings.State_Size);
-      Mix       : constant Element_Count :=
-        Element_Count (Mix_Width (Settings));
-      Taps      : constant Element_Count :=
+      Mix      : constant Element_Count := Element_Count (Mix_Width (Settings));
+      Taps     : constant Element_Count :=
         Element_Count (Settings.Conv_Kernel);
-      Memory    : constant Element_Count := Conv_At (Settings, Layer_Index);
-      States    : constant Element_Count := State_At (Settings, Layer_Index);
+      States   : constant Element_Count := State_At (Settings, Layer_Index);
+      Memory   : constant Element_Count := Conv_At (Settings, Layer_Index);
+      Every    : constant Element_Count := State_Room (Settings);
+      Every_Conv : constant Element_Count := Conv_Room (Settings);
       Value_Heads : constant Element_Count :=
         Element_Count (Settings.Value_Heads);
-
-      --  The slot this position reads -- the one the position before it
-      --  wrote -- and the one it writes; the same slot where nothing is
-      --  kept.
-      Read    : constant Element_Count :=
-        State_Slot (Item, Position) * Conv_Room (Settings);
-      Written : constant Element_Count :=
-        State_Slot (Item, Position + 1) * Conv_Room (Settings);
-      Read_State    : constant Element_Count :=
-        State_Slot (Item, Position) * State_Room (Settings);
-      Written_State : constant Element_Count :=
-        State_Slot (Item, Position + 1) * State_Room (Settings);
-
-      --  The reach proved once below and the checks left out of the
-      --  loops, as in the rule: with them in, a layer's convolution over
-      --  six thousand components read 50 microseconds a position.
-      pragma Suppress (Index_Check);
-      pragma Suppress (Range_Check);
-      pragma Suppress (Overflow_Check);
+      Taken    : Element_Count := 0;
    begin
       Status := E.Success;
 
-      if Rows.Mixed = null or else Rows.Blend = null
-        or else Rows.M0 + Mix - 1 > Rows.Mixed.all'Last
-        or else Current.Conv = null
-        or else Current.Conv.all'Length /= Taps * Mix
-        or else Item.Conv_State = null
-        or else Written + Memory + (Taps - 1) * Mix - 1
-                > Item.Conv_State.all'Last
-        or else Read + Memory + (Taps - 1) * Mix - 1
-                > Item.Conv_State.all'Last
-        or else Taps < 2
-        or else 2 * Keys_Wide > Mix
+      if Taps < 2 or else Head = 0 or else Mix mod Head /= 0
+        or else Rows.First.Mixed = null or else Rows.First.Blend = null
+        or else Rows.First.Z_Gate = null or else Rows.First.Alpha = null
+        or else Rows.First.Beta = null
+        or else Current.Conv = null or else Item.Conv_State = null
+        or else Item.Delta_State = null
       then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          E.Add_Text (Status, "tensor", "ssm_conv1d", E.Param_Identifier);
          return;
       end if;
 
-      --  The convolution over this position and the ones remembered, a
-      --  tap over the whole row at a time, the memory moved up, and the
-      --  unit -- which is the row times its own logistic, and the kernel
-      --  for that takes the exponential in binary32 rather than through
-      --  the library's: six thousand of the library's a layer read as
-      --  most of what a position cost.
-      declare
-         Conv  : Real_Array renames Current.Conv.all;
-         Kept  : Real_Array renames Item.Conv_State.all;
-         Mixed : Real_Array renames Rows.Mixed.all;
-         M0    : constant Element_Count := Rows.M0;
-         Fresh : constant Real_Array (0 .. Mix - 1) :=
-           Mixed (M0 .. M0 + Mix - 1);
-         Last  : constant Element_Count := (Taps - 1) * Mix;
-      begin
-         for C in 0 .. Mix - 1 loop
-            Mixed (M0 + C) := Fresh (C) * Conv (Last + C);
-         end loop;
+      while Taken < Rows.Count loop
+         declare
+            Here  : constant Element_Count :=
+              Element_Count'Min
+                (Model_Runner.Delta_Rule.Chunk_Most, Rows.Count - Taken);
+            First : constant Natural := Position + Natural (Taken);
+            Chunk : constant Chunk_Rows :=
+              (First =>
+                 (Mixed  => Rows.First.Mixed,
+                  Z_Gate => Rows.First.Z_Gate,
+                  Alpha  => Rows.First.Alpha,
+                  Beta   => Rows.First.Beta,
+                  Blend  => Rows.First.Blend,
+                  M0 => Rows.First.M0 + Taken * Rows.Mix_Stride,
+                  Z0 => Rows.First.Z0 + Taken * Rows.Z_Stride,
+                  A0 => Rows.First.A0 + Taken * Rows.Head_Stride,
+                  B0 => Rows.First.B0 + Taken * Rows.Head_Stride,
+                  O0 => Rows.First.O0 + Taken * Rows.Blend_Stride),
+               Count => Here,
+               Mix_Stride => Rows.Mix_Stride,
+               Z_Stride => Rows.Z_Stride,
+               Head_Stride => Rows.Head_Stride,
+               Blend_Stride => Rows.Blend_Stride);
 
-         for K in 0 .. Taps - 2 loop
+            Written_State : Model_Runner.Delta_Rule.Slot_Origins :=
+              [others => Model_Runner.Delta_Rule.Nowhere];
+            Written_Conv  : Model_Runner.Delta_Rule.Slot_Origins :=
+              [others => Model_Runner.Delta_Rule.Nowhere];
+         begin
+            for T in 0 .. Here - 1 loop
+               if T = Here - 1
+                 or else (Item.Kept_States > 0
+                          and then T + Element_Count (Item.Kept_States) + 1
+                                   >= Here)
+               then
+                  Written_State (T) :=
+                    State_Slot (Item, First + Natural (T) + 1) * Every + States;
+                  Written_Conv (T) :=
+                    State_Slot (Item, First + Natural (T) + 1) * Every_Conv
+                    + Memory;
+               end if;
+            end loop;
+
             declare
-               Slot : constant Element_Count := Read + Memory + K * Mix;
-               Tap  : constant Element_Count := K * Mix;
+               Front : aliased Front_Share :=
+                 (Conv      => Current.Conv,
+                  Kept      => Item.Conv_State,
+                  Read      => State_Slot (Item, First) * Every_Conv + Memory,
+                  Written   => Written_Conv,
+                  Mix       => Mix,
+                  Taps      => Taps,
+                  Head      => Head,
+                  Unit_Blocks => 2 * Element_Count (Settings.Key_Heads),
+                  Epsilon   => Settings.Epsilon,
+                  Rows      => Chunk,
+                  Ok        => True);
             begin
-               for C in 0 .. Mix - 1 loop
-                  Mixed (M0 + C) :=
-                    Mixed (M0 + C) + Kept (Slot + C) * Conv (Tap + C);
-               end loop;
+               Workers_CPU.Dispatch_Shares
+                 (Item.Team, Mix / Head, Front'Unchecked_Access, Status,
+                  Cost => Mix * Taps * Here);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               if not Front.Ok then
+                  Status := E.Make (E.Tensor_Shape_Mismatch);
+                  E.Add_Text
+                    (Status, "tensor", "ssm_conv1d", E.Param_Identifier);
+                  return;
+               end if;
             end;
-         end loop;
 
-         --  The memory moved up a position into the slot written: the
-         --  taps but the oldest, and this position under the last.
-         for K in 0 .. Taps - 3 loop
-            Kept (Written + Memory + K * Mix
-                  .. Written + Memory + (K + 1) * Mix - 1) :=
-              Kept (Read + Memory + (K + 1) * Mix
-                    .. Read + Memory + (K + 2) * Mix - 1);
-         end loop;
-         Kept (Written + Memory + (Taps - 2) * Mix
-               .. Written + Memory + (Taps - 1) * Mix - 1) :=
-           Fresh;
-
-         K.SiLU (Mixed (M0 .. M0 + Mix - 1));
-
-         --  The queries and keys to unit length, a head at a time.
-         for Which in 0 .. 2 * Element_Count (Settings.Key_Heads) - 1 loop
             declare
-               From : constant Element_Count := M0 + Which * Head;
-               Sum  : Real := 0.0;
+               Share : aliased Rule_Share :=
+                 (State      => Item.Delta_State,
+                  States     => State_Slot (Item, First) * Every + States,
+                  Written    => Written_State,
+                  Head       => Head,
+                  Keys_Wide  => Element_Count (Key_Width (Settings)),
+                  Key_Heads  => Element_Count (Settings.Key_Heads),
+                  A_Log      => Current.A_Log,
+                  DT_Bias    => Current.DT_Bias,
+                  State_Norm => Current.State_Norm,
+                  Epsilon    => Settings.Epsilon,
+                  Scale      =>
+                    Real (1.0 / N.Sqrt (N.Wide_Real (Settings.State_Size))),
+                  Rows       => Chunk,
+                  Ok         => True);
             begin
-               for C in From .. From + Head - 1 loop
-                  Sum := Sum + Mixed (C) * Mixed (C);
-               end loop;
+               Workers_CPU.Dispatch_Shares
+                 (Item.Team, Value_Heads, Share'Unchecked_Access, Status,
+                  Cost => Value_Heads * Head * Head * 3 * Here);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
 
-               declare
-                  Unit : constant Real :=
-                    1.0 / Real'Max (Real (N.Sqrt (N.Wide_Real (Sum))),
-                                    Settings.Epsilon);
-               begin
-                  for C in From .. From + Head - 1 loop
-                     Mixed (C) := Mixed (C) * Unit;
-                  end loop;
-               end;
+               if not Share.Ok then
+                  Status := E.Make (E.Tensor_Shape_Mismatch);
+                  E.Add_Text
+                    (Status, "tensor", "ssm_state", E.Param_Identifier);
+                  return;
+               end if;
             end;
-         end loop;
-      end;
 
-      --  The rule, the heads shared out.
-      declare
-         Share : aliased Rule_Share :=
-           (State      => Item.Delta_State,
-            States     => Read_State + States,
-            Written    => Written_State + States,
-            Head       => Head,
-            Keys_Wide  => Keys_Wide,
-            Key_Heads  => Element_Count (Settings.Key_Heads),
-            A_Log      => Current.A_Log,
-            DT_Bias    => Current.DT_Bias,
-            State_Norm => Current.State_Norm,
-            Epsilon    => Settings.Epsilon,
-            Scale      => Real (1.0 / N.Sqrt (N.Wide_Real (Settings.State_Size))),
-            Rows       => Rows,
-            Ok         => True);
-      begin
-         Workers_CPU.Dispatch_Shares
-           (Item.Team, Value_Heads, Share'Unchecked_Access, Status,
-            Cost => Value_Heads * Head * Head * 4);
-         if E.Is_Error (Status) then
-            return;
-         end if;
+            Taken := Taken + Here;
+         end;
+      end loop;
 
-         if not Share.Ok then
-            Status := E.Make (E.Tensor_Shape_Mismatch);
-            E.Add_Text (Status, "tensor", "ssm_state", E.Param_Identifier);
-            return;
-         end if;
-      end;
-
-      --  The ring reaches from this position back, and no further.
-      Item.Kept_Newest := Natural'Max (Item.Kept_Newest, Position + 1);
-   end Linear_Core;
+      --  The ring reaches from the last position back, and no further.
+      Item.Kept_Newest :=
+        Natural'Max (Item.Kept_Newest, Position + Natural (Rows.Count));
+   end Linear_Chunk;
 
    procedure Linear_Position
      (Item    : in out Session;
@@ -9822,11 +9946,12 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Linear_Core
+      Linear_Chunk
         (Item, Source, Current, Layer_Index, Position,
-         (Mixed => Item.Mix_Row, Z_Gate => Item.Z_Row,
-          Alpha => Item.Alpha_Row, Beta => Item.Beta_Row,
-          Blend => Item.Blend_Row, others => 0),
+         (First => (Mixed => Item.Mix_Row, Z_Gate => Item.Z_Row,
+                    Alpha => Item.Alpha_Row, Beta => Item.Beta_Row,
+                    Blend => Item.Blend_Row, others => 0),
+          Count => 1, others => 0),
          Status);
       if E.Is_Error (Status) then
          return;
@@ -12373,21 +12498,18 @@ package body Model_Runner.Llama is
 
                Charge (Item, Attending, Mark);
 
-               for Which in 0 .. Count - 1 loop
-                  Linear_Core
-                    (Item, Source, Current, Natural (Index),
-                     Natural (Sits_At (Which)),
-                     (Mixed => Mix_Rows, Z_Gate => Z_Rows,
-                      Alpha => Alpha_Rows, Beta => Beta_Rows,
-                      Blend => Blend_Rows,
-                      M0 => Which * Mix_Wide,
-                      Z0 => Which * Value_Wide,
-                      A0 => Which * Value_Heads,
-                      B0 => Which * Value_Heads,
-                      O0 => Which * Value_Wide),
-                     Status);
-                  exit when E.Is_Error (Status);
-               end loop;
+               Linear_Chunk
+                 (Item, Source, Current, Natural (Index),
+                  Natural (Sits_At (0)),
+                  (First => (Mixed => Mix_Rows, Z_Gate => Z_Rows,
+                             Alpha => Alpha_Rows, Beta => Beta_Rows,
+                             Blend => Blend_Rows, others => 0),
+                   Count => Count,
+                   Mix_Stride => Mix_Wide,
+                   Z_Stride => Value_Wide,
+                   Head_Stride => Value_Heads,
+                   Blend_Stride => Value_Wide),
+                  Status);
                exit when E.Is_Error (Status);
 
                Charge (Item, Projecting, Mark);
