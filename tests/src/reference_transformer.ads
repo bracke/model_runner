@@ -128,7 +128,7 @@ private
    --  implementation.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
-      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2);
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -198,6 +198,23 @@ private
       Gate_Expert_Bias  : Vector_Access := null;
       Up_Expert_Bias    : Vector_Access := null;
       Down_Expert_Bias  : Vector_Access := null;
+
+      --  A hybrid's linear layer, where the block keeps a state rather
+      --  than a cache: the three projections in one, the gate, the decay
+      --  and the rate a value head, the decay's shape and the rate's
+      --  bias, the taps of the convolution a channel, the blend's gain
+      --  and the way back. Written out here from the architecture's own
+      --  description, and sharing nothing with the engine's kernel.
+      Linear     : Boolean := False;
+      Mix        : Matrix_Access := null;
+      Z_Gate     : Matrix_Access := null;
+      Alpha      : Matrix_Access := null;
+      Beta       : Matrix_Access := null;
+      A_Log      : Vector_Access := null;
+      DT_Bias    : Vector_Access := null;
+      Conv       : Matrix_Access := null;
+      State_Norm : Vector_Access := null;
+      Linear_Out : Matrix_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -263,6 +280,24 @@ private
       Experts      : Natural := 0;
       Experts_Used : Natural := 0;
       Expert_Feed  : Natural := 0;
+
+      --  The hybrid's shape: every Linear_Every-th layer attends in full
+      --  and the rest run the rule over a state of State_Size squared a
+      --  value head, the keys and queries over Key_Heads of the same
+      --  width, after a convolution of Conv_Taps taps. Next_Layers blocks
+      --  past the stack draft the token after the next; they are read, so
+      --  that what the file carries is asked for, and the stack does not
+      --  run them.
+      Linear_Every : Natural := 0;
+      State_Size   : Natural := 0;
+      Key_Heads    : Natural := 0;
+      Value_Heads  : Natural := 0;
+      Conv_Taps    : Natural := 0;
+      Next_Layers  : Natural := 0;
+      Next_Proj    : Matrix_Access := null;
+      Next_Enorm   : Vector_Access := null;
+      Next_Hnorm   : Vector_Access := null;
+      Next_Head_Norm : Vector_Access := null;
       Embeddings   : Matrix_Access := null;
       Output       : Matrix_Access := null;
       Output_Norm  : Vector_Access := null;

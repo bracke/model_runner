@@ -882,7 +882,9 @@ package body Reference_Transformer is
          when GPT2      => "gpt2.",
          when Bert      => "bert.",
          when Nomic_Bert => "nomic-bert.",
-         when Jina_Bert_V2 => "jina-bert-v2.");
+         when Jina_Bert_V2 => "jina-bert-v2.",
+         when Qwen35 => "qwen35.",
+         when Qwen35_MoE => "qwen35moe.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1293,6 +1295,10 @@ package body Reference_Transformer is
             --  Not read from the file. No published jina-bert-v2 states a
             --  bias, and the architecture carries eight.
             Item.Max_Bias := 8.0;
+         elsif Named = "qwen35" then
+            Item.Kind := Qwen35;
+         elsif Named = "qwen35moe" then
+            Item.Kind := Qwen35_MoE;
          else
             return;
          end if;
@@ -1391,6 +1397,40 @@ package body Reference_Transformer is
         Metadata
           (Source, Prefix (Item) & "expert_feed_forward_length",
            Item.Feed_Forward);
+
+      --  The hybrid's shape, all of it required but the interval, which
+      --  the architecture puts at four when the file is silent; and the
+      --  blocks past the stack, which the block count includes and the
+      --  stack does not run. A hybrid's gate beside each attention head
+      --  has the head's width and scales the head's blend, so its value
+      --  width is its head size and a file saying otherwise describes no
+      --  model of this kind.
+      if Item.Kind in Qwen35 | Qwen35_MoE then
+         Item.Linear_Every :=
+           Metadata (Source, Prefix (Item) & "full_attention_interval", 4);
+         Item.State_Size :=
+           Metadata (Source, Prefix (Item) & "ssm.state_size", 0);
+         Item.Key_Heads :=
+           Metadata (Source, Prefix (Item) & "ssm.group_count", 0);
+         Item.Value_Heads :=
+           Metadata (Source, Prefix (Item) & "ssm.time_step_rank", 0);
+         Item.Conv_Taps :=
+           Metadata (Source, Prefix (Item) & "ssm.conv_kernel", 0);
+         Item.Next_Layers :=
+           Metadata (Source, Prefix (Item) & "nextn_predict_layers", 0);
+
+         if Item.Linear_Every = 0 or else Item.State_Size = 0
+           or else Item.Key_Heads = 0 or else Item.Value_Heads = 0
+           or else Item.Value_Heads mod Item.Key_Heads /= 0
+           or else Item.Conv_Taps < 2
+           or else Item.Next_Layers >= Item.Layers
+           or else Item.Value_Size /= Item.Head_Size
+         then
+            return;
+         end if;
+
+         Item.Layers := Item.Layers - Item.Next_Layers;
+      end if;
       if Item.Window >= Item.Context then
          Item.Window := 0;
       end if;
@@ -1563,12 +1603,22 @@ package body Reference_Transformer is
          end if;
       end if;
 
-      Item.Blocks := new Layer_Array (0 .. Item.Layers - 1);
+      Item.Blocks := new Layer_Array (0 .. Item.Layers + Item.Next_Layers - 1);
 
       for Index in Item.Blocks'Range loop
          declare
             Current : Layer renames Item.Blocks (Index);
+
+            --  Whether this block of a hybrid keeps a state: every
+            --  Linear_Every-th attends in full, counting from one, and
+            --  the blocks past the stack attend in full whatever their
+            --  number.
+            Is_Linear : constant Boolean :=
+              Item.Kind in Qwen35 | Qwen35_MoE
+              and then Index < Item.Layers
+              and then (Index + 1) mod Item.Linear_Every /= 0;
          begin
+            Current.Linear := Is_Linear;
             --  Every architecture but Bert normalizes on the way into the
             --  block; Bert's two normalizations are on the way out of its
             --  two sublayers and are read below.
@@ -1637,9 +1687,88 @@ package body Reference_Transformer is
                end if;
             end if;
 
+            --  A linear block's own tensors, and none of attention's.
+            if Is_Linear then
+               Current.Mix :=
+                 Read_Matrix (Layer_Name (Index, "attn_qkv.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Z_Gate :=
+                 Read_Matrix (Layer_Name (Index, "attn_gate.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Alpha :=
+                 Read_Matrix (Layer_Name (Index, "ssm_alpha.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Beta :=
+                 Read_Matrix (Layer_Name (Index, "ssm_beta.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.A_Log :=
+                 Read_Vector (Layer_Name (Index, "ssm_a"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.DT_Bias :=
+                 Read_Vector (Layer_Name (Index, "ssm_dt.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv :=
+                 Read_Matrix (Layer_Name (Index, "ssm_conv1d.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.State_Norm :=
+                 Read_Vector (Layer_Name (Index, "ssm_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Linear_Out :=
+                 Read_Matrix (Layer_Name (Index, "ssm_out.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               --  The shapes the file has to have, checked here because
+               --  the loops below index by them: the projection over the
+               --  three at once, the gate over the values, the decay and
+               --  the rate a value head, the taps a channel.
+               declare
+                  Keys_Wide : constant Natural :=
+                    Item.Key_Heads * Item.State_Size;
+                  Vals_Wide : constant Natural :=
+                    Item.Value_Heads * Item.State_Size;
+                  Mix_Wide  : constant Natural := 2 * Keys_Wide + Vals_Wide;
+               begin
+                  if Current.Mix'Length (1) /= Mix_Wide
+                    or else Current.Mix'Length (2) /= Item.Embedding
+                    or else Current.Z_Gate'Length (1) /= Vals_Wide
+                    or else Current.Alpha'Length (1) /= Item.Value_Heads
+                    or else Current.Beta'Length (1) /= Item.Value_Heads
+                    or else Current.A_Log'Length /= Item.Value_Heads
+                    or else Current.DT_Bias'Length /= Item.Value_Heads
+                    or else Current.Conv'Length (1) /= Mix_Wide
+                    or else Current.Conv'Length (2) /= Item.Conv_Taps
+                    or else Current.State_Norm'Length /= Item.State_Size
+                    or else Current.Linear_Out'Length (1) /= Item.Embedding
+                    or else Current.Linear_Out'Length (2) /= Vals_Wide
+                  then
+                     return;
+                  end if;
+               end;
+            end if;
+
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            if Is_Linear then
+               Present := True;
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -1651,7 +1780,9 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            if Is_Linear then
+               Present := True;
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -1664,7 +1795,9 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            if Is_Linear then
+               Present := True;
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -1736,7 +1869,9 @@ package body Reference_Transformer is
             --  than on the architecture, so loading it is all that this
             --  needs -- which is why the engine and this disagreed by two
             --  logits in three when only the engine loaded it.
-            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3 then
+            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3
+              or else (Item.Kind in Qwen35 | Qwen35_MoE and then not Is_Linear)
+            then
                Current.Query_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
                               Present);
@@ -1752,8 +1887,13 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            Current.Attention_Out :=
-              Read_Matrix (Layer_Name (Index, "attn_output.weight"), Present);
+            if Is_Linear then
+               Present := True;
+            else
+               Current.Attention_Out :=
+                 Read_Matrix (Layer_Name (Index, "attn_output.weight"),
+                              Present);
+            end if;
             if not Present then
                return;
             end if;
@@ -1779,11 +1919,20 @@ package body Reference_Transformer is
             --  feed-forward reads what attention read.
             --  Bert has none either, for the other reason: it normalizes
             --  on the way out of each sublayer rather than into it.
+            --  The hybrids name the normalization before the feed-forward
+            --  for what it follows rather than what it precedes: it is the
+            --  same normalization in the same place.
             if Item.Kind
                  not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
             then
                Current.Feed_Norm :=
-                 Read_Vector (Layer_Name (Index, "ffn_norm.weight"), Present);
+                 Read_Vector
+                   (Layer_Name
+                      (Index,
+                       (if Item.Kind in Qwen35 | Qwen35_MoE
+                        then "post_attention_norm.weight"
+                        else "ffn_norm.weight")),
+                    Present);
                if not Present then
                   return;
                end if;
@@ -1922,6 +2071,38 @@ package body Reference_Transformer is
          end;
       end loop;
 
+      --  What the block past the stack reads besides a full attention
+      --  block's own: the projection of the next token's embedding beside
+      --  the state, each normalized, and the normalization of the state
+      --  it hands on.
+      if Item.Next_Layers > 0 then
+         Item.Next_Proj :=
+           Read_Matrix (Layer_Name (Item.Layers, "nextn.eh_proj.weight"),
+                        Present);
+         if not Present then
+            return;
+         end if;
+         Item.Next_Enorm :=
+           Read_Vector (Layer_Name (Item.Layers, "nextn.enorm.weight"),
+                        Present);
+         if not Present then
+            return;
+         end if;
+         Item.Next_Hnorm :=
+           Read_Vector (Layer_Name (Item.Layers, "nextn.hnorm.weight"),
+                        Present);
+         if not Present then
+            return;
+         end if;
+         Item.Next_Head_Norm :=
+           Read_Vector
+             (Layer_Name (Item.Layers, "nextn.shared_head_norm.weight"),
+              Present);
+         if not Present then
+            return;
+         end if;
+      end if;
+
       Item.Loaded := True;
       Ok := True;
    end Load;
@@ -1956,9 +2137,22 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Gate);
             Free_Matrix (Item.Blocks (Index).Up);
             Free_Matrix (Item.Blocks (Index).Down);
+            Free_Matrix (Item.Blocks (Index).Mix);
+            Free_Matrix (Item.Blocks (Index).Z_Gate);
+            Free_Matrix (Item.Blocks (Index).Alpha);
+            Free_Matrix (Item.Blocks (Index).Beta);
+            Free_Vector (Item.Blocks (Index).A_Log);
+            Free_Vector (Item.Blocks (Index).DT_Bias);
+            Free_Matrix (Item.Blocks (Index).Conv);
+            Free_Vector (Item.Blocks (Index).State_Norm);
+            Free_Matrix (Item.Blocks (Index).Linear_Out);
          end loop;
          Free_Layers (Item.Blocks);
       end if;
+      Free_Matrix (Item.Next_Proj);
+      Free_Vector (Item.Next_Enorm);
+      Free_Vector (Item.Next_Hnorm);
+      Free_Vector (Item.Next_Head_Norm);
 
       if not Tied then
          Free_Matrix (Item.Output);
@@ -2030,6 +2224,34 @@ package body Reference_Transformer is
       Whole   : History_Access := null;
       Queries : History_Access := null;
       Kept    : History_Access := null;
+
+      --  What a hybrid's linear block made of each position, held for the
+      --  second pass where the residual is joined and the feed-forward
+      --  runs, as an attention block's blend is.
+      Linear_Rows : History_Access := null;
+
+      --  The logistic unit and the softplus, each saturating where the
+      --  exponential would not be worth taking: past twenty the logistic
+      --  is one to this format's precision, and softplus is its argument.
+      function Logistic (Value : Long_Float) return Long_Float is
+      begin
+         if Value > 20.0 then
+            return 1.0;
+         elsif Value < -20.0 then
+            return 0.0;
+         else
+            return 1.0 / (1.0 + Functions.Exp (-Value));
+         end if;
+      end Logistic;
+
+      function Softplus (Value : Long_Float) return Long_Float is
+      begin
+         if Value > 20.0 then
+            return Value;
+         else
+            return Functions.Log (1.0 + Functions.Exp (Value));
+         end if;
+      end Softplus;
 
       State  : Real_Vector (0 .. Width - 1) := [others => 0.0];
       Normed : Real_Vector (0 .. Width - 1) := [others => 0.0];
@@ -2411,7 +2633,12 @@ package body Reference_Transformer is
       --  Every position's state, its queries and the normalized input its
       --  feed-forward reads, all held across the two passes a block takes.
       Whole   := new History (0 .. Steps - 1, 0 .. Width - 1);
-      Queries := new History (0 .. Steps - 1, 0 .. Q_Width - 1);
+      Queries :=
+        new History
+          (0 .. Steps - 1,
+           0 .. (if Item.Kind in Qwen35 | Qwen35_MoE then 2 * Q_Width
+                 else Q_Width) - 1);
+      Linear_Rows := new History (0 .. Steps - 1, 0 .. Width - 1);
       Kept    := new History (0 .. Steps - 1, 0 .. Width - 1);
 
       --  Every position embedded before any block runs, because a
@@ -2481,6 +2708,200 @@ package body Reference_Transformer is
          declare
             Current : Layer renames Item.Blocks (Block);
          begin
+            --  A hybrid's linear block: the whole of its attention half,
+            --  position by position in order, since each position's state
+            --  is the one before decayed and corrected. Written out from
+            --  the architecture's description -- the state S_t = a_t S_t-1
+            --  + k_t u_t', with u_t = b_t (v_t - a_t S_t-1' k_t), read at
+            --  the query, normalized, and gated -- one position and one
+            --  head at a time over the state itself, which is the plain
+            --  form the engine's chunked one unrolls.
+            if Current.Linear then
+               declare
+                  S_Size    : constant Natural := Item.State_Size;
+                  Keys_Wide : constant Natural := Item.Key_Heads * S_Size;
+                  Vals_Wide : constant Natural := Item.Value_Heads * S_Size;
+                  Mix_Wide  : constant Natural := 2 * Keys_Wide + Vals_Wide;
+                  Taps      : constant Natural := Item.Conv_Taps;
+
+                  --  The last Taps - 1 positions' projections a channel,
+                  --  oldest first, zero before the first position; and a
+                  --  state a value head, zero at the start of the text.
+                  Memory : Real_Vector (0 .. (Taps - 1) * Mix_Wide - 1) :=
+                    [others => 0.0];
+                  States : Real_Vector
+                    (0 .. Item.Value_Heads * S_Size * S_Size - 1) :=
+                    [others => 0.0];
+               begin
+                  for Step in 0 .. Steps - 1 loop
+                     declare
+                        Mixed  : Real_Vector (0 .. Mix_Wide - 1) :=
+                          [others => 0.0];
+                        Made   : Real_Vector (0 .. Mix_Wide - 1) :=
+                          [others => 0.0];
+                        Gate   : Real_Vector (0 .. Vals_Wide - 1) :=
+                          [others => 0.0];
+                        Alphas : Real_Vector (0 .. Item.Value_Heads - 1) :=
+                          [others => 0.0];
+                        Betas  : Real_Vector (0 .. Item.Value_Heads - 1) :=
+                          [others => 0.0];
+                        Blend  : Real_Vector (0 .. Vals_Wide - 1) :=
+                          [others => 0.0];
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           State (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize (State, Current.Attention_Norm.all, Normed);
+
+                        Project (Current.Mix.all, Normed, Mixed);
+                        Project (Current.Z_Gate.all, Normed, Gate);
+                        Project (Current.Alpha.all, Normed, Alphas);
+                        Project (Current.Beta.all, Normed, Betas);
+
+                        --  The convolution a channel over this position and
+                        --  the remembered ones, the last tap on this one;
+                        --  then the memory moved up a position.
+                        for C in 0 .. Mix_Wide - 1 loop
+                           declare
+                              Total : Long_Float :=
+                                Mixed (C) * Current.Conv (C, Taps - 1);
+                           begin
+                              for K in 0 .. Taps - 2 loop
+                                 Total := Total
+                                   + Memory (K * Mix_Wide + C)
+                                     * Current.Conv (C, K);
+                              end loop;
+                              Made (C) := Total;
+                           end;
+                        end loop;
+                        for K in 0 .. Taps - 3 loop
+                           for C in 0 .. Mix_Wide - 1 loop
+                              Memory (K * Mix_Wide + C) :=
+                                Memory ((K + 1) * Mix_Wide + C);
+                           end loop;
+                        end loop;
+                        for C in 0 .. Mix_Wide - 1 loop
+                           Memory ((Taps - 2) * Mix_Wide + C) := Mixed (C);
+                        end loop;
+
+                        --  The unit, and each query and key head to unit
+                        --  length, the length floored at the epsilon.
+                        for C in 0 .. Mix_Wide - 1 loop
+                           Made (C) := Made (C) * Logistic (Made (C));
+                        end loop;
+                        for H in 0 .. 2 * Item.Key_Heads - 1 loop
+                           declare
+                              Total : Long_Float := 0.0;
+                              Unit  : Long_Float;
+                           begin
+                              for C in 0 .. S_Size - 1 loop
+                                 Total := Total
+                                   + Made (H * S_Size + C) * Made (H * S_Size + C);
+                              end loop;
+                              Unit :=
+                                1.0 / Long_Float'Max
+                                        (Functions.Sqrt (Total), Item.Epsilon);
+                              for C in 0 .. S_Size - 1 loop
+                                 Made (H * S_Size + C) :=
+                                   Made (H * S_Size + C) * Unit;
+                              end loop;
+                           end;
+                        end loop;
+
+                        --  The rule, a value head at a time, each reading
+                        --  the key head it shares with the others of its
+                        --  group. The file keeps minus the exponential of
+                        --  the decay's shape, so what it stores is what
+                        --  multiplies the rate's softplus.
+                        for H in 0 .. Item.Value_Heads - 1 loop
+                           declare
+                              KH : constant Natural := H mod Item.Key_Heads;
+                              Q0 : constant Natural := KH * S_Size;
+                              K0 : constant Natural := Keys_Wide + KH * S_Size;
+                              V0 : constant Natural :=
+                                2 * Keys_Wide + H * S_Size;
+                              S0 : constant Natural := H * S_Size * S_Size;
+                              Decay : constant Long_Float :=
+                                Functions.Exp
+                                  (Current.A_Log (H)
+                                   * Softplus
+                                       (Alphas (H) + Current.DT_Bias (H)));
+                              Rate  : constant Long_Float :=
+                                Logistic (Betas (H));
+                              Fix   : Real_Vector (0 .. S_Size - 1) :=
+                                [others => 0.0];
+                              Read  : Real_Vector (0 .. S_Size - 1) :=
+                                [others => 0.0];
+                              Total : Long_Float := 0.0;
+                           begin
+                              --  u = b (v - a S' k)
+                              for J in 0 .. S_Size - 1 loop
+                                 declare
+                                    Of_Key : Long_Float := 0.0;
+                                 begin
+                                    for I in 0 .. S_Size - 1 loop
+                                       Of_Key := Of_Key
+                                         + States (S0 + I * S_Size + J)
+                                           * Made (K0 + I);
+                                    end loop;
+                                    Fix (J) :=
+                                      Rate * (Made (V0 + J) - Decay * Of_Key);
+                                 end;
+                              end loop;
+
+                              --  S = a S + k u'
+                              for I in 0 .. S_Size - 1 loop
+                                 for J in 0 .. S_Size - 1 loop
+                                    States (S0 + I * S_Size + J) :=
+                                      Decay * States (S0 + I * S_Size + J)
+                                      + Made (K0 + I) * Fix (J);
+                                 end loop;
+                              end loop;
+
+                              --  o = S' q, scaled by the root of the width
+                              for J in 0 .. S_Size - 1 loop
+                                 declare
+                                    Of_Query : Long_Float := 0.0;
+                                 begin
+                                    for I in 0 .. S_Size - 1 loop
+                                       Of_Query := Of_Query
+                                         + States (S0 + I * S_Size + J)
+                                           * Made (Q0 + I);
+                                    end loop;
+                                    Read (J) :=
+                                      Of_Query
+                                      / Functions.Sqrt (Long_Float (S_Size));
+                                    Total := Total + Read (J) * Read (J);
+                                 end;
+                              end loop;
+
+                              --  Normalized over the head with the shared
+                              --  gain, and gated by the unit of the gate.
+                              declare
+                                 Root : constant Long_Float :=
+                                   1.0 / Functions.Sqrt
+                                           (Total / Long_Float (S_Size)
+                                            + Item.Epsilon);
+                              begin
+                                 for J in 0 .. S_Size - 1 loop
+                                    Blend (H * S_Size + J) :=
+                                      Read (J) * Root * Current.State_Norm (J)
+                                      * Gate (H * S_Size + J)
+                                      * Logistic (Gate (H * S_Size + J));
+                                 end loop;
+                              end;
+                           end;
+                        end loop;
+
+                        Project (Current.Linear_Out.all, Blend, Normed);
+                        for Index in 0 .. Width - 1 loop
+                           Linear_Rows (Step, Index) := Normed (Index);
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            end if;
+
             --  What every position projects, and its keys and values
             --  written into the history before any attention reads one.
             for Step in 0 .. Steps - 1 loop
@@ -2492,7 +2913,17 @@ package body Reference_Transformer is
                   Val_Row : Real_Vector (0 .. V_Width - 1) :=
                     [others => 0.0];
                   Slot    : constant Natural := Block * Steps + Step;
+
+                  --  A hybrid's query projection is twice as wide: each
+                  --  head's queries and then its gate.
+                  Wide_Query : Real_Vector
+                    (0 .. (if Item.Kind in Qwen35 | Qwen35_MoE
+                           then 2 * Q_Width else Q_Width) - 1) :=
+                    [others => 0.0];
                begin
+                  if Current.Linear then
+                     goto Projected;
+                  end if;
                   for Index in 0 .. Width - 1 loop
                      State (Index) := Whole (Step, Index);
                   end loop;
@@ -2518,7 +2949,21 @@ package body Reference_Transformer is
                   if Item.Kind in Falcon | Phi2 then
                      Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
                   end if;
-                  Project (Current.Query.all, Normed, Query);
+                  if Item.Kind in Qwen35 | Qwen35_MoE then
+                     Project (Current.Query.all, Normed, Wide_Query);
+                     for Head in 0 .. Item.Heads - 1 loop
+                        for Index in 0 .. Item.Head_Size - 1 loop
+                           Query (Head * Item.Head_Size + Index) :=
+                             Wide_Query (Head * 2 * Item.Head_Size + Index);
+                           Queries (Step, Q_Width + Head * Item.Head_Size + Index)
+                             := Wide_Query
+                                  (Head * 2 * Item.Head_Size + Item.Head_Size
+                                   + Index);
+                        end loop;
+                     end loop;
+                  else
+                     Project (Current.Query.all, Normed, Query);
+                  end if;
                   Project (Current.Key.all, Normed, Key_Row);
                   Project (Current.Value.all, Normed, Val_Row);
 
@@ -2579,6 +3024,7 @@ package body Reference_Transformer is
                         Kept (Step, Index) := Held_Norm (Index);
                      end loop;
                   end if;
+                  <<Projected>>
                end;
             end loop;
 
@@ -2594,6 +3040,16 @@ package body Reference_Transformer is
                   for Index in 0 .. Width - 1 loop
                      State (Index) := Whole (Step, Index);
                   end loop;
+
+                  --  A linear block's answer was made in the first pass,
+                  --  and it wrote no queries to read.
+                  if Current.Linear then
+                     for Index in 0 .. Width - 1 loop
+                        Normed (Index) := Linear_Rows (Step, Index);
+                     end loop;
+                     goto Attended;
+                  end if;
+
                   for Index in 0 .. Q_Width - 1 loop
                      Query (Index) := Queries (Step, Index);
                   end loop;
@@ -2768,8 +3224,19 @@ package body Reference_Transformer is
                      end loop;
                   end;
 
+                  --  Each head's blend through the unit of its gate, where
+                  --  the query projection carried one.
+                  if Item.Kind in Qwen35 | Qwen35_MoE then
+                     for Index in 0 .. B_Width - 1 loop
+                        Blended (Index) :=
+                          Blended (Index)
+                          * Logistic (Queries (Step, Q_Width + Index));
+                     end loop;
+                  end if;
+
                   Project (Current.Attention_Out.all, Blended, Normed);
 
+                  <<Attended>>
                   if Current.Out_Bias /= null then
                      for Index in 0 .. Width - 1 loop
                         Normed (Index) :=
@@ -3134,6 +3601,7 @@ package body Reference_Transformer is
       Free_History (Whole);
       Free_History (Queries);
       Free_History (Kept);
+      Free_History (Linear_Rows);
       Ok := True;
    exception
       when others =>
@@ -3142,6 +3610,7 @@ package body Reference_Transformer is
          Free_History (Whole);
          Free_History (Queries);
          Free_History (Kept);
+         Free_History (Linear_Rows);
          Ok := False;
    end Evaluate;
 

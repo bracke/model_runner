@@ -188,13 +188,20 @@ package Tiny_Model is
    --  @param Kind  Architecture to ask about.
    --  @param Shape Shape to ask about.
    --  @return True when that architecture cannot be built in that shape.
+   --
+   --  Qwen35 cannot hold the shape with the key and value widths apart:
+   --  its full attention carries a gate beside each head, of the head's
+   --  width, that scales the head's blend -- so a value width that is not
+   --  the head size is a model the architecture does not define, and the
+   --  engine refuses it by name.
    function Cannot_Hold
      (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
    is (case Shape is
          when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert,
          when Stretched => Kind in GPT2 | Bert | Jina_Bert_V2,
          when Windowed => Kind in Bert | Nomic_Bert | Jina_Bert_V2,
-         when others => False);
+         when Apart => Kind = Qwen35,
+         when Plain => False);
 
    --  Write a fixture in one of those shapes.
    --

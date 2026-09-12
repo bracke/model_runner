@@ -81,8 +81,13 @@ package body Fixture_Mutation is
       --  and zero after it. The comparison is of two answers to the same
       --  question, so a tail that is zero in both says nothing either way,
       --  and a row per architecture would be two shapes of the same test.
+      --  And a second distribution's worth for a model with a block past
+      --  its stack: that block is read by nothing the logits come from,
+      --  only by a draft, so its fifteen tensors were "unread" by every
+      --  shape of the hybrid fixture on every backend -- the sweep's one
+      --  standing complaint -- until the answer asked the block too.
       Room : constant Natural :=
-        Natural'Max (Words, Tokens'Length * Tiny_Model.Deep_Embedding);
+        Natural'Max (2 * Words, Tokens'Length * Tiny_Model.Deep_Embedding);
 
       subtype Logit_Row is N.Real_Array (0 .. N.Element_Count (Room) - 1);
 
@@ -204,6 +209,26 @@ package body Fixture_Mutation is
                   Status => Status);
                exit when E.Is_Error (Status);
             end loop;
+         end if;
+
+         --  The block past the stack, where there is one: a draft of the
+         --  token after one more, from the stack's last state, as a run
+         --  drafting from the block asks it. Its distribution goes beside
+         --  the model's own, so a tensor only the block reads moves the
+         --  answer too.
+         if E.Is_Ok (Status) and then L.Drafts_Next (Session) then
+            declare
+               Width : constant N.Element_Count :=
+                 N.Element_Count (L.Config (Engine).Embedding);
+               Next  : N.Real_Array (0 .. Width - 1);
+            begin
+               L.Draft_Next
+                 (Session, Engine, Model_Runner.Tokenizer.Token_Id (7),
+                  L.Last_State (Session), L.Position (Session) - 1,
+                  Logits (N.Element_Count (Words)
+                          .. 2 * N.Element_Count (Words) - 1),
+                  Next, Status);
+            end;
          end if;
 
          Ok  := E.Is_Ok (Status);

@@ -812,19 +812,19 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 41780, logits compared 1694232,
-             worst absolute 2.23648335708759E-05,
+conformance: sequences 45319, logits compared 1741752,
+             worst absolute 3.53824042188533E-05,
              worst relative 7.02625907667919E-02,
-             rounded logits compared 161496,
-             rounded worst absolute 1.34238864580048E-01,
+             rounded logits compared 165336,
+             rounded worst absolute 1.67488891391300E-01,
              rounded worst relative 1.99694654308486E+00,
-             cached logits compared 69088,
+             cached logits compared 71696,
              cached worst absolute 9.22822739555551E-03,
              cached worst relative 1.47282761332370E+00,
-             quantized logits compared 1248,
-             quantized worst absolute 9.12532826218675E-02,
+             quantized logits compared 1296,
+             quantized worst absolute 9.14943609165273E-02,
              quantized worst relative 1.92312698956764E+00,
-             byte logits compared 69088,
+             byte logits compared 71696,
              byte worst absolute 3.02784067592779E-01,
              byte worst relative 1.99904656218687E+00,
              outside tolerance 0, unlearned 0
@@ -840,14 +840,14 @@ the sweep ran none of that kind -- which is what a mode that quietly fell
 back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
-The run above crossed 13 architectures, in 16 formats and 5 shapes,
-of which 1248 ran on a device -- which is the same claim the paragraph below makes in
+The run above crossed 14 architectures, in 16 formats and 5 shapes,
+of which 1344 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
-Thirteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
-`gpt2`, `bert`, `nomic-bert` and `jina-bert-v2`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
+Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
+`gpt2`, `bert`, `nomic-bert`, `jina-bert-v2` and `qwen35`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, and heads wider than the embedding implies with
-keys and values different widths again. Ten of the thirteen are compared on the
+keys and values different widths again. Eleven of the fourteen are compared on the
 last position's logits and in every shape they can hold; the three that
 produce states rather than a distribution are compared on
 what the model made of every position, which is the only answer they have and a
@@ -857,7 +857,10 @@ mixture wants a gate it has not got, a stretched rotation wants a rotation it
 has not got, and a window is a bound on how far back a position may look,
 which a model that looks both ways has not got. `nomic-bert` rotates and
 gates, so it holds all but the window; `jina-bert-v2` gates but rotates
-nothing at all, so it holds all but the window and the stretch. They answer fewer of the
+nothing at all, so it holds all but the window and the stretch. `qwen35` holds all but
+the widths apart: the gate beside each of its attention heads has the head's
+width and scales the head's blend, so a value width that is not the head size
+is a model the architecture does not define, and the engine refuses it by name. They answer fewer of the
 sweep's asks for the same reason -- there is no evaluating a position of one
 before the text it reads exists, so a token at a time and a text in pieces are
 both refused -- and the ones they decline are counted rather than quietly
@@ -19650,6 +19653,37 @@ reference backend agrees with, and a faster sum of the router's logits is
 a different expert at a near tie. Qwen3.6-35B-A3B drafting from its own
 block reads **15.4 tokens a second** against 14.9 plain, its 262-token
 prompt **3.30 -> 3.23 s**, and every digest is the same bits.
+
+### The hybrid crossed against the independent implementation, and the sweep made whole
+
+The device work for the hybrid's linear layers was priced first: timers
+around the products put a linear layer of Qwen3.5-0.8B at 0.43 ms on the
+device against 0.20 for its bytes, and of the 4B at 1.13 against 0.70, so
+the rule, the convolution and their round trips on the device are worth
+about a fifth of the 0.8B's token and a tenth of the 4B's -- a device
+implementation of the rule with the states resident, their ring for a
+rewind and their way back to the host for a batch, for 48 -> 57 tokens a
+second on a model that reads 50 on the processor. It was not built, and the
+price is in `docs/measured-figures.txt`.
+
+What was built instead is what the pricing exposed. The hybrid had never
+been crossed against `Reference_Transformer`: the independent
+implementation did not know it, so every tensor of every hybrid fixture was
+"never asked for" by it, the sweep's one standing complaint, and the
+engine's rule had been checked only against llama.cpp's sums on real files.
+The reference reads the architecture now, written out from its description
+-- the convolution over each channel's last taps, the unit and the unit
+length, the state a value head decayed and corrected at the key and read
+at the query, the blend normalized and gated, and the gate beside each
+attention head -- and the sweep crosses it: **45,319 sequences, 3,539 of
+them the hybrid's, outside tolerance 0**, the worst exact disagreement
+3.5e-05. Three more things the sweep had been carrying came out with it:
+the block past the stack is asked as a draft, so its tensors answer; the
+fixture writer quantized a tensor whose count was a whole number of blocks
+though its rows were not, which no reader could take back; and GPT-OSS's
+windowed shape wrote the window key twice. A hybrid whose value width is
+not its head size is refused by name, as a model the architecture does not
+define. `tests fixture-check` reads **unread 0, unwanted 0, refused 0**.
 
 ## License
 

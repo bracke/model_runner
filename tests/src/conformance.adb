@@ -212,12 +212,17 @@ package body Conformance is
       --  that matrix. It answers fewer of the sweep's asks than the others,
       --  because it has no single-token path and no way to take a text in
       --  pieces, and the ones it declines are counted.
-      Crossed : constant array (1 .. 13) of Tiny_Model.Fixture_Architecture :=
+      --  And the hybrid, whose linear layers had nothing independent to
+      --  be checked against for as long as the reference did not know
+      --  them: the rule over a state, the convolution ahead of it and the
+      --  gate beside each attention head are all written out in the
+      --  reference now, from the architecture's description.
+      Crossed : constant array (1 .. 14) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
          Tiny_Model.GPT2, Tiny_Model.Bert, Tiny_Model.Nomic_Bert,
-         Tiny_Model.Jina_Bert_V2];
+         Tiny_Model.Jina_Bert_V2, Tiny_Model.Qwen35];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.

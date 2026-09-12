@@ -186,7 +186,16 @@ package body Tiny_Model is
          Dimensions : Fixtures.Dimension_List;
          Values     : N.Real_Array)
       is
-         Total : constant N.Element_Count := Values'Length;
+         --  A block is a run of one row, so it is the row's width that
+         --  has to be a whole number of blocks and not the tensor's
+         --  count. Asked of the count, a matrix eight wide by an
+         --  embedding long was quantized and could not be read back --
+         --  the hybrid's projection out of its linear layers, which the
+         --  sweep counted as fifteen refusals for as long as the fixture
+         --  existed. A tensor with rows too narrow to block stays in
+         --  binary32, as a converter keeps one.
+         Total : constant N.Element_Count :=
+           N.Element_Count (Dimensions (Dimensions'First));
       begin
          --  A quantized model keeps its matrices quantized and its norms
          --  in binary32; the fixture follows that, so the quantized path
@@ -501,10 +510,15 @@ package body Tiny_Model is
       --  What GPT_OSS states and no other architecture here does: a window
       --  every other layer, and a base of its own for the layers that slide
       --  one. The engine refuses to guess at either.
+      --
+      --  The window is the shape's where the shape names one, and GPT_OSS's
+      --  own four otherwise: written twice, the file carried the key twice
+      --  and the reader refused it, which the sweep counted as fifteen
+      --  refusals of the windowed shape for as long as both were written.
       if Kind = GPT_OSS then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.sliding_window",
-            Interfaces.Unsigned_32 (4));
+            Interfaces.Unsigned_32 (if Window > 0 then Window else 4));
          Fixtures.Add_F32
            (Builder, Prefix & ".rope.freq_base_swa", 8_000.0);
       end if;
@@ -525,7 +539,7 @@ package body Tiny_Model is
 
       --  A sliding window, when one is asked for. Absent otherwise, which
       --  is what a model that attends to everything looks like.
-      if Window > 0 then
+      if Window > 0 and then Kind /= GPT_OSS then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.sliding_window",
             Interfaces.Unsigned_32 (Window));

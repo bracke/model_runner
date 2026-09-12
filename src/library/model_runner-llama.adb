@@ -1088,6 +1088,25 @@ package body Model_Runner.Llama is
       Settings.Value_Size :=
         (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
 
+      --  A hybrid's full attention carries a gate beside each head, of the
+      --  head's own width, and scales the head's blend by it -- so its
+      --  value width is its head size, and a file stating another is a
+      --  model the reference implementation does not define either.
+      --  Refused by name: read anyway, the gate ran off the end of the
+      --  blend, and the fixture sweep's shape with the widths apart said
+      --  INTERNAL_INVARIANT_VIOLATED on every backend for as long as the
+      --  architecture had been read.
+      if Hybrid (Settings.Kind)
+        and then Settings.Value_Size /= Settings.Head_Size
+      then
+         Status := E.Make (E.Arch_Invalid_Dimensions);
+         E.Add_Integer
+           (Status, "head_size", Long_Long_Integer (Settings.Head_Size));
+         E.Add_Integer
+           (Status, "value_size", Long_Long_Integer (Settings.Value_Size));
+         return;
+      end if;
+
       Containers.Get_Integer
         --  From zero, not from one. Zero is what an architecture that
         --  learns where a token is rather than rotating for it states, and

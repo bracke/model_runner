@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The hybrid crossed against the independent implementation, and the
+  fixture sweep made whole.** `Reference_Transformer` reads `qwen35` and
+  `qwen35moe` now, its forward pass written from the architecture's
+  description, and the conformance sweep crosses the hybrid in every
+  shape, format and reading: 41,780 -> 45,319 sequences, outside
+  tolerance 0. The sweep's standing complaint since the architecture
+  went in is gone: the block past the stack is asked as a draft, the
+  fixture writer quantizes by row width, GPT-OSS's windowed fixture
+  writes its window key once, and a hybrid whose value width is not its
+  head size is refused by name rather than running its head gate off
+  the end of the blend. `tests fixture-check` reads unread 0, unwanted
+  0, refused 0. The device work for the hybrid's linear layers was
+  priced first -- a fifth of the 0.8B's token, a tenth of the 4B's --
+  and not built; the price is recorded.
+
 - **The device and the 35B on this host, re-checked and written off**:
   the file's pages are refused by libdrm's userptr path by design
   (`AMDGPU_GEM_USERPTR_ANONONLY`), an arena imported instead costs the
