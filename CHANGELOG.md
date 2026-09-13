@@ -10,11 +10,13 @@ Keep a Changelog and the project uses semantic versioning.
 - **The block past the stack drafts against the independent
   implementation.** `Reference_Transformer` now runs the hybrid's draft
   block, and the conformance sweep compares the engine's draft against
-  it on the one-token prompt, every format, both the processor and the
-  reference backend -- agreeing to 3.5e-05. The block's forward pass had
-  been checked only against llama.cpp on real files; it now has an
-  independent check where a draft turns on it. The multi-position draft
-  (a longer or batched context through the block) is left for the
+  it on the one- and two-token prompts, every format, both the processor
+  and the reference backend -- agreeing to a millionth. The block's
+  forward pass had been checked only against llama.cpp on real files; it
+  now has an independent check where a draft turns on it. At five and
+  eight tokens the drafts part by as much as one, likelier the
+  reference's multi-position block than the engine's (which accepts
+  llama.cpp's drafts on real prompts); that is left for the
   batched-attention work.
 
 - **The hybrid crossed against the independent implementation, and the

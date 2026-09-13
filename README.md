@@ -812,10 +812,10 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 45319, logits compared 1745848,
-             worst absolute 3.53824042188533E-05,
+conformance: sequences 45319, logits compared 1751992,
+             worst absolute 3.73150706233227E-05,
              worst relative 7.02625907667919E-02,
-             rounded logits compared 165848,
+             rounded logits compared 166360,
              rounded worst absolute 1.67488891391300E-01,
              rounded worst relative 1.99694654308486E+00,
              cached logits compared 71696,
@@ -19695,18 +19695,21 @@ architecture as the rest of it is -- the next token's embedding beside the
 stack's state, each normalized and projected into one input; a full
 attention block with the gate beside each head; and the model's head over
 what the last position made -- and the sweep compares the engine's draft
-against it on the one-token prompt, across every format and both the
-processor and the reference backend, in the same buckets as the logits.
-The draft agrees to **3.5e-05**, the exact path's own worst.
+against it on the one- and two-token prompts, across every format and both
+the processor and the reference backend, in the same buckets as the logits.
+The draft agrees to a **millionth**.
 
-It is the one-token prompt the comparison asks, and deliberately: a draft
-runs the block over one position at a time from the state the session hands
-it, and a one-token prompt is that case with the state unambiguous. Driving
-the block over several positions at once -- what a longer or batched context
-does -- is the stack's own batching seen through the block, and belongs with
-the batched attention on the device rather than here. So the block's forward
-pass now has an independent check where the draft turns on it, and the
-multi-position path is left named for the work that owns it.
+Two positions, and not the longer prompts, because the longer ones do not
+yet agree: at five and eight tokens the two drafts part by as much as one.
+The split is unlikely to be the engine's -- its block accepts llama.cpp's
+own drafts on real prompts of hundreds of tokens, where a block wrong by
+that much would be rejected almost always -- so the reference's
+multi-position block is the likelier fault, and running the block over
+several positions at once is the stack's own batching seen through it, which
+belongs with the batched attention rather than here. The block's forward
+pass has an independent check at the one and two positions where the two
+implementations meet exactly; the disagreement past that is written down for
+the work that owns it rather than published as agreement.
 
 ## License
 
