@@ -173,10 +173,10 @@ package body Tool_Commands is
 
    Takes_Agent_Eval : aliased constant String :=
      "--model PATH [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
-     & " [--trace]";
+     & " [--trace] [--report PATH]";
 
    Opts_Agent_Eval : aliased constant String :=
-     " --model --threads --backend --anyway --wait --trace ";
+     " --model --threads --backend --anyway --wait --trace --report ";
 
    Held : constant array (1 .. 24) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,

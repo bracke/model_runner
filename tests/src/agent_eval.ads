@@ -55,15 +55,21 @@ package Agent_Eval is
    --    calls it made, and its final answer -- to standard error, with the
    --    pass or fail and why. It is how a run says which task went wrong and
    --    what it did, rather than only how many passed.
+   --  @param Report_Path When not empty, write a JSON report of the run to
+   --    this path: the run's totals and, per task, its expectations, its
+   --    verdict, and its whole transcript. It is the machine-readable twin
+   --    of Trace -- something a later run can be diffed against, or a
+   --    dashboard can read -- where Trace is for a person reading along.
    procedure Run
-     (Path    : String;
-      Threads : Positive;
-      Backend : Model_Runner.Backend.Backend_Kind :=
+     (Path        : String;
+      Threads     : Positive;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Anyway  : Boolean := False;
-      Waiting : Natural := 0;
-      Trace   : Boolean := False;
-      Result  : out Report);
+      Anyway      : Boolean := False;
+      Waiting     : Natural := 0;
+      Trace       : Boolean := False;
+      Report_Path : String := "";
+      Result      : out Report);
 
    --  A one-line summary of a report, in the style the other campaigns use.
    --

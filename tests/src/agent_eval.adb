@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Text_IO;
+with Ada.Strings.Unbounded;
 
 with Host_Load;
 
@@ -239,6 +240,116 @@ package body Agent_Eval is
       end loop;
    end Dump;
 
+   --  A non-negative number with no leading space.
+   function Num (Value : Natural) return String is
+      Raw : constant String := Natural'Image (Value);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Num;
+
+   --  A string as a JSON string literal's contents: the escapes JSON
+   --  requires, and the control characters it forbids raw written as \uXXXX.
+   function JSON_Escape (Text : String) return String is
+      use Ada.Strings.Unbounded;
+      Out_S : Unbounded_String;
+      Hex   : constant String := "0123456789abcdef";
+   begin
+      for C of Text loop
+         case C is
+            when '"'      => Append (Out_S, "\""");
+            when '\'      => Append (Out_S, "\\");
+            when ASCII.LF => Append (Out_S, "\n");
+            when ASCII.CR => Append (Out_S, "\r");
+            when ASCII.HT => Append (Out_S, "\t");
+            when ASCII.BS => Append (Out_S, "\b");
+            when ASCII.FF => Append (Out_S, "\f");
+            when others =>
+               if Character'Pos (C) < 16#20# then
+                  Append (Out_S, "\u00");
+                  Append (Out_S, Hex (Hex'First + Character'Pos (C) / 16));
+                  Append (Out_S, Hex (Hex'First + Character'Pos (C) mod 16));
+               else
+                  Append (Out_S, C);
+               end if;
+         end case;
+      end loop;
+      return To_String (Out_S);
+   end JSON_Escape;
+
+   --  Append one task's result -- its expectations, verdict and whole
+   --  transcript -- to the report as a JSON object.
+   procedure Emit_Task
+     (Into     : in out Ada.Strings.Unbounded.Unbounded_String;
+      Index    : Positive;
+      Spec     : Task_Spec;
+      Messages : Conv.History;
+      Outcome  : Model_Runner.Agent.Outcome;
+      Passed   : Boolean)
+   is
+      use Ada.Strings.Unbounded;
+      procedure A (Text : String) is
+      begin
+         Append (Into, Text);
+      end A;
+      function Q (Text : String) return String
+      is ("""" & JSON_Escape (Text) & """");
+
+      Needs_Written : Boolean := False;
+      procedure Need (Name : String) is
+      begin
+         if Name /= "" then
+            if Needs_Written then
+               A (",");
+            end if;
+            A (Q (Name));
+            Needs_Written := True;
+         end if;
+      end Need;
+   begin
+      if Length (Into) > 0 then
+         A (",");
+      end if;
+      A ("{""index"":" & Num (Index));
+      A (",""prompt"":" & Q (Spec.Prompt.all));
+      A (",""wants"":" & Q (Spec.Wants.all));
+      if Spec.Also.all /= "" then
+         A (",""also"":" & Q (Spec.Also.all));
+      end if;
+      A (",""needs"":[");
+      Need (Spec.Tool.all);
+      Need (Spec.Tool_Two.all);
+      A ("]");
+      A (",""min_calls"":" & Num (Spec.Min_Calls));
+      A (",""passed"":" & (if Passed then "true" else "false"));
+      A (",""reason"":"
+         & Q (Model_Runner.Agent.Stop_Reason'Image (Outcome.Reason)));
+      A (",""steps"":" & Num (Outcome.Steps));
+      A (",""calls"":" & Num (Outcome.Calls));
+      A (",""final"":" & Q (Final_Answer (Messages)));
+      A (",""transcript"":[");
+      for I in 1 .. Conv.Length (Messages) loop
+         if I > 1 then
+            A (",");
+         end if;
+         A ("{""role"":" & Q (Conv.Role_Name (Conv.Sender_At (Messages, I))));
+         A (",""content"":" & Q (Conv.Content_At (Messages, I)));
+         if Conv.Call_Count (Messages, I) > 0 then
+            A (",""calls"":[");
+            for K in 1 .. Conv.Call_Count (Messages, I) loop
+               if K > 1 then
+                  A (",");
+               end if;
+               A ("{""name"":" & Q (Conv.Call_Name (Messages, I, K)));
+               A (",""arguments"":"
+                  & Q (Conv.Call_Arguments (Messages, I, K)) & "}");
+            end loop;
+            A ("]");
+         end if;
+         A ("}");
+      end loop;
+      A ("]}");
+   end Emit_Task;
+
    ---------
    -- Say --
    ---------
@@ -259,15 +370,20 @@ package body Agent_Eval is
       Threads : Positive;
       Backend : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Anyway  : Boolean := False;
-      Waiting : Natural := 0;
-      Trace   : Boolean := False;
-      Result  : out Report)
+      Anyway      : Boolean := False;
+      Waiting     : Natural := 0;
+      Trace       : Boolean := False;
+      Report_Path : String := "";
+      Result      : out Report)
    is
       Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : L.Model;
       Status    : E.Error_Info;
+
+      --  The task objects of the JSON report, accumulated while each task's
+      --  history is still open, and wrapped and written out at the end.
+      Report_Buf : Ada.Strings.Unbounded.Unbounded_String;
 
       Bounds : constant Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
@@ -425,6 +541,11 @@ package body Agent_Eval is
                   Dump (Index, Spec, Messages, Loop_Out, Passed);
                end if;
 
+               if Report_Path /= "" then
+                  Emit_Task (Report_Buf, Index, Spec, Messages, Loop_Out,
+                             Passed);
+               end if;
+
                Model_Runner.Stops.Close (Stop);
                Model_Runner.Tools.Close (Offered);
                Conv.Close (Messages);
@@ -446,6 +567,35 @@ package body Agent_Eval is
       Result.Ran := Result.Tasks > 0;
       Result.Load_After := Host_Load.Now;
       Say (Result, "scored");
+
+      if Report_Path /= "" then
+         declare
+            File : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create
+              (File, Ada.Text_IO.Out_File, Report_Path);
+            Ada.Text_IO.Put
+              (File, "{""model"":""" & JSON_Escape (Path) & """");
+            Ada.Text_IO.Put
+              (File, ",""backend"":"""
+               & Model_Runner.Backend.Backend_Name (Backend) & """");
+            Ada.Text_IO.Put (File, ",""threads"":" & Num (Threads));
+            Ada.Text_IO.Put (File, ",""tasks"":" & Num (Result.Tasks));
+            Ada.Text_IO.Put (File, ",""passed"":" & Num (Result.Passed));
+            Ada.Text_IO.Put (File, ",""steps"":" & Num (Result.Steps));
+            Ada.Text_IO.Put (File, ",""calls"":" & Num (Result.Calls));
+            Ada.Text_IO.Put
+              (File, ",""results"":["
+               & Ada.Strings.Unbounded.To_String (Report_Buf) & "]}");
+            Ada.Text_IO.New_Line (File);
+            Ada.Text_IO.Close (File);
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+         end;
+      end if;
 
       L.Close (Engine, Status);
       Containers.Close (Container);

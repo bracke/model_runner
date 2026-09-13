@@ -1319,10 +1319,11 @@ begin
             Threads => Number ("--threads",
                                Model_Runner.Platform.Core_Count - 1),
             Backend => Backend_Of (Option ("--backend", "cpu")),
-            Anyway  => Given ("--anyway"),
-            Waiting => Number ("--wait", 0),
-            Trace   => Given ("--trace"),
-            Result  => Result);
+            Anyway      => Given ("--anyway"),
+            Waiting     => Number ("--wait", 0),
+            Trace       => Given ("--trace"),
+            Report_Path => Option ("--report", ""),
+            Result      => Result);
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Agent_Eval.Summary (Result));

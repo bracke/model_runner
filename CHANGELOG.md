@@ -35,9 +35,12 @@ Keep a Changelog and the project uses semantic versioning.
   model, gated like `tests speed` and `tests perplexity` and out of the
   default gate; `--trace` prints each task's transcript -- its turns, the
   calls it made, and its final answer -- so a run says which task went wrong
-  and what it did rather than only how many passed. The built-in tools and
-  the call grammar are covered in the mandatory suite; the loop against a
-  model is what agent-eval measures.
+  and what it did rather than only how many passed, and `--report PATH`
+  writes the same as JSON -- the run's totals and every task's expectations,
+  verdict and whole transcript -- for a run to be diffed against another or
+  read by a dashboard. The built-in tools and the call grammar are covered
+  in the mandatory suite; the loop against a model is what agent-eval
+  measures.
 
 - **The multi-position draft divergence, run down and corrected.** The
   earlier note that the drafts "part by as much as one" past two tokens
