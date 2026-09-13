@@ -8,6 +8,7 @@ with Host_Load;
 with Model_Runner.Agent;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
@@ -449,6 +450,7 @@ package body Agent_Eval is
          Where : constant CPU.Pool_Reference :=
            (if Threads = 1 then null else Team'Unchecked_Access);
          Seeds : aliased Model_Runner.Entropy.Host_Source;
+         Clock : aliased Model_Runner.Clocks.System_Clock;
       begin
          for Index in Tasks'Range loop
             declare
@@ -502,10 +504,14 @@ package body Agent_Eval is
                   Generation => Request,
                   Stop_Set   => Stop,
                   Sink       => null,
-                  Time       => null,
+                  Time       => Clock'Unchecked_Access,
                   Seeds      => Seeds'Unchecked_Access,
                   --  Room for a chain: several tool calls and the answer.
                   Max_Steps  => 10,
+                  --  A ceiling so one task cannot hang the run. Generous:
+                  --  the step budget and the duplicate guard stop it first
+                  --  in the ordinary case; this is the backstop.
+                  Max_Seconds => 300.0,
                   --  Thinking off: the tool-call grammar reserves the '<'
                   --  that begins a call, and a <think> block would open with
                   --  the same character and be refused. A reasoning model

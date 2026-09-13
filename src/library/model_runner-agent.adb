@@ -16,6 +16,7 @@ package body Model_Runner.Agent is
    use type Gen.Completion_Reason;
    use type Interfaces.Unsigned_64;
    use type E.Error_Code;
+   use type Model_Runner.Clocks.Clock_Reference;
 
    --  How many distinct calls one loop remembers, to notice a repeat. A
    --  model asks for a handful of tools; a table this size costs a couple
@@ -42,6 +43,7 @@ package body Model_Runner.Agent is
       Seeds      : Model_Runner.Entropy.Source_Reference;
       Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Max_Steps  : Positive := 8;
+      Max_Seconds : Duration := 0.0;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
@@ -66,6 +68,15 @@ package body Model_Runner.Agent is
       Request : Gen.Request := Generation;
 
       Last_Result : Gen.Result;
+
+      --  A wall-clock budget for the loop, checked between steps. Read once
+      --  at the start; a monotonic clock never goes back, so the elapsed
+      --  time below is never negative.
+      Timing    : constant Boolean := Time /= null and then Max_Seconds > 0.0;
+      Started   : constant Model_Runner.Clocks.Nanoseconds :=
+        (if Timing then Model_Runner.Clocks.Read (Time) else 0);
+      Budget_Ns : constant Model_Runner.Clocks.Nanoseconds :=
+        Model_Runner.Clocks.Nanoseconds (Long_Float (Max_Seconds) * 1.0e9);
 
       --  The calls made so far, by a hash of name-and-arguments, so a call
       --  the model has already made is noticed rather than run again -- a
@@ -158,6 +169,16 @@ package body Model_Runner.Agent is
 
       Step_Loop :
       loop
+         --  The wall-clock budget, between steps. A generation in flight is
+         --  bounded by its token budget, so this is checked here rather than
+         --  inside one.
+         if Timing
+           and then Model_Runner.Clocks.Read (Time) - Started > Budget_Ns
+         then
+            Result.Reason := Timed_Out;
+            exit Step_Loop;
+         end if;
+
          declare
             Rendered : Text_Access := null;
             Status   : E.Error_Info;

@@ -43,6 +43,7 @@ package Model_Runner.Agent is
    type Stop_Reason is
      (Answered,           --  the model replied with no call to run
       Step_Limit,         --  the step budget ran out with a call still open
+      Timed_Out,          --  the wall-clock budget ran out between steps
       Repeating,          --  a turn made only calls already made, and got
                           --  no further, so the loop stopped rather than
                           --  circle
@@ -129,6 +130,12 @@ package Model_Runner.Agent is
    --  @param Cancel Cancellation token, or null.
    --  @param Max_Steps Most model turns before the loop gives up on an open
    --    call. A task that needs one tool and an answer takes two.
+   --  @param Max_Seconds A wall-clock budget for the whole loop, or 0.0 for
+   --    none. It is checked between steps -- a single generation is bounded
+   --    by its token budget, not this -- so the loop may overrun by the one
+   --    generation in flight when the budget passes, and then stops. Needs
+   --    Time; with no clock there is nothing to measure and the budget is
+   --    ignored.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
@@ -147,6 +154,7 @@ package Model_Runner.Agent is
       Seeds      : Model_Runner.Entropy.Source_Reference;
       Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Max_Steps  : Positive := 8;
+      Max_Seconds : Duration := 0.0;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
