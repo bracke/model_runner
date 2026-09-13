@@ -81,19 +81,67 @@ package body Agent_Eval is
      "Reply with exactly the single word BLUE and nothing else.";
    W5 : aliased constant String := "BLUE";
 
+   --  Multi-step tasks: each needs more than one tool call, either the same
+   --  tool twice or two different tools, and the answer depends on the whole
+   --  chain. A single call cannot pass them, which is what Min_Calls holds.
+
+   --  A chain through one tool: the second call reads the first's result.
+   P6 : aliased constant String :=
+     "Add 5 and 7 with the calculator, then multiply that result by 3 with "
+     & "the calculator. Tell me the final number.";
+   W6 : aliased constant String := "36";
+
+   --  A chain through two tools: reverse, then count the reversed word.
+   P7 : aliased constant String :=
+     "Reverse the word ""stressed"" with reverse_text, then count the "
+     & "characters of the reversed word with string_length. Tell me the "
+     & "count.";
+   T7B : aliased constant String := "string_length";
+   W7 : aliased constant String := "8";
+
+   --  Two facts from one tool, both wanted in the answer.
+   P8 : aliased constant String :=
+     "Look up the fact for capital_of_france and the fact for ada_year, and "
+     & "tell me both.";
+   W8A : aliased constant String := "Paris";
+   W8B : aliased constant String := "1983";
+
+   --  Two calculations, both wanted in the answer.
+   P9 : aliased constant String :=
+     "What is 6 times 7, and what is 12 plus 9? Give me both numbers.";
+   W9A : aliased constant String := "42";
+   W9B : aliased constant String := "21";
+
    type Task_Spec is record
-      System : access constant String;
-      Prompt : access constant String;
-      Tool   : access constant String;
-      Wants  : access constant String;
+      System    : access constant String;
+      Prompt    : access constant String;
+      Tool      : access constant String;   --  a tool that must be called
+      Tool_Two  : access constant String;   --  a second tool, or Empty
+      Wants     : access constant String;   --  a substring the answer needs
+      Also      : access constant String;   --  a second one, or Empty
+      Min_Calls : Natural;                   --  fewest tool calls the task
+                                             --  must make
    end record;
 
    Tasks : constant array (Positive range <>) of Task_Spec :=
-     [(Sys_Tools'Access, P1'Access, T1'Access, W1'Access),
-      (Sys_Tools'Access, P2'Access, T2'Access, W2'Access),
-      (Sys_Tools'Access, P3'Access, T3'Access, W3'Access),
-      (Sys_Tools'Access, P4'Access, T4'Access, W4'Access),
-      (Sys_Plain'Access, P5'Access, Empty'Access, W5'Access)];
+     [(Sys_Tools'Access, P1'Access, T1'Access, Empty'Access,
+       W1'Access, Empty'Access, 1),
+      (Sys_Tools'Access, P2'Access, T2'Access, Empty'Access,
+       W2'Access, Empty'Access, 1),
+      (Sys_Tools'Access, P3'Access, T3'Access, Empty'Access,
+       W3'Access, Empty'Access, 1),
+      (Sys_Tools'Access, P4'Access, T4'Access, Empty'Access,
+       W4'Access, Empty'Access, 1),
+      (Sys_Plain'Access, P5'Access, Empty'Access, Empty'Access,
+       W5'Access, Empty'Access, 0),
+      (Sys_Tools'Access, P6'Access, T1'Access, Empty'Access,
+       W6'Access, Empty'Access, 2),
+      (Sys_Tools'Access, P7'Access, T3'Access, T7B'Access,
+       W7'Access, Empty'Access, 2),
+      (Sys_Tools'Access, P8'Access, T4'Access, Empty'Access,
+       W8A'Access, W8B'Access, 2),
+      (Sys_Tools'Access, P9'Access, T1'Access, Empty'Access,
+       W9A'Access, W9B'Access, 2)];
 
    ---------------------------------------------------------------------------
    --  Checking a transcript
@@ -171,8 +219,15 @@ package body Agent_Eval is
             & (if Passed then "  PASS" else "  FAIL")
             & "  reason=" & Model_Runner.Agent.Stop_Reason'Image
                               (Outcome.Reason)
+            & "  calls=" & Natural'Image (Outcome.Calls)
             & "  wants=""" & Spec.Wants.all & """"
+            & (if Spec.Also.all /= "" then " +""" & Spec.Also.all & """"
+               else "")
             & (if Spec.Tool.all /= "" then "  needs=" & Spec.Tool.all else "")
+            & (if Spec.Tool_Two.all /= "" then "+" & Spec.Tool_Two.all
+               else "")
+            & (if Spec.Min_Calls > 1
+               then " min-calls=" & Natural'Image (Spec.Min_Calls) else "")
             & " ---");
       for I in 1 .. Conv.Length (Messages) loop
          Line ("  " & Conv.Role_Name (Conv.Sender_At (Messages, I)) & ": "
@@ -333,7 +388,8 @@ package body Agent_Eval is
                   Sink       => null,
                   Time       => null,
                   Seeds      => Seeds'Unchecked_Access,
-                  Max_Steps  => 6,
+                  --  Room for a chain: several tool calls and the answer.
+                  Max_Steps  => 10,
                   --  Thinking off: the tool-call grammar reserves the '<'
                   --  that begins a call, and a <think> block would open with
                   --  the same character and be refused. A reasoning model
@@ -345,14 +401,21 @@ package body Agent_Eval is
                Result.Steps := Result.Steps + Loop_Out.Steps;
                Result.Calls := Result.Calls + Loop_Out.Calls;
 
-               --  A pass is the answer the tool makes true, and -- where the
-               --  task is one only a tool can answer -- the tool having been
-               --  the thing that answered it.
+               --  A pass is the answer the task's tools make true, the tools
+               --  it needs having been the ones that answered it, and -- for
+               --  a chain -- enough calls to have gone through the steps
+               --  rather than guessed the end.
                Passed :=
                  Loop_Out.Reason = Model_Runner.Agent.Answered
                  and then Contains (Final_Answer (Messages), Spec.Wants.all)
+                 and then (Spec.Also.all = ""
+                           or else Contains (Final_Answer (Messages),
+                                             Spec.Also.all))
                  and then (not Wanted_Tool
-                           or else Called_Tool (Messages, Spec.Tool.all));
+                           or else Called_Tool (Messages, Spec.Tool.all))
+                 and then (Spec.Tool_Two.all = ""
+                           or else Called_Tool (Messages, Spec.Tool_Two.all))
+                 and then Loop_Out.Calls >= Spec.Min_Calls;
 
                if Passed then
                   Result.Passed := Result.Passed + 1;
