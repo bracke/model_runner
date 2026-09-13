@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 87) of Registry_Row :=
+   Registry : constant array (1 .. 88) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -72,6 +72,8 @@ package body Model_Runner.CLI.Options is
        Text ("tools")),
       (Text ("--tools-file"), [Command_Run => True, others => False],
        Text ("tools_file")),
+      (Text ("--tool-command"), [Command_Run => True, others => False],
+       Text ("tool_command")),
       (Text ("--assistant"), [Command_Run => True, others => False],
        Text ("assistant")),
       (Text ("--assistant-file"), [Command_Run => True, others => False],
@@ -830,7 +832,7 @@ package body Model_Runner.CLI.Options is
          Flag_Grammar,
          Flag_Grammar_File,
          Flag_Schema, Flag_Schema_File,
-         Flag_Tools, Flag_Tools_File,
+         Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
          Flag_Context_Shift, Flag_Context_Keep,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
@@ -1230,6 +1232,17 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--tools-file" then
                      Bounded_Value (Flag_Tools_File, Result.Tools_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tool-command" then
+                     Mark (Flag_Tool_Command, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Tool_Command, Good);
                      if not Good then
                         return;
                      end if;

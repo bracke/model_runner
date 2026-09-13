@@ -500,6 +500,15 @@ package Model_Runner.CLI.Options is
       Tools_Text : Text_Access := null;
       Tools_Path : Model_Runner.Text.Bounded;
 
+      --  A program the agent loop runs a tool through, instead of the
+      --  built-in tools. With it, a call the model makes is handed to the
+      --  program as its two arguments -- the function name and the arguments
+      --  as JSON -- and what the program prints is the tool's answer. The
+      --  tools offered come from --tools or --tools-file, so the model is
+      --  told what the program can do; this only says how to run it. Empty
+      --  means the agent uses its built-in tools.
+      Tool_Command : Text_Access := null;
+
       Pooling    : Pooling_Kind := Pool_Mean;
 
       --  Whether the caller named one. A model may state which pooling it

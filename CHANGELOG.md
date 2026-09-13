@@ -37,7 +37,12 @@ Keep a Changelog and the project uses semantic versioning.
   string operations, a fixed lookup -- that starts no process and so keeps
   the library's promise while letting the loop run in-process; a tool that
   reaches the world lives in a caller's own runner. `model_runner run
-  --agent` drives it with the built-in tools, and `tests agent-eval --model
+  --agent` drives it with the built-in tools, or with `--tool-command CMD`
+  runs the tools offered by `--tools`/`--tools-file` through that program --
+  each call handed to it as its name and its arguments, and what it prints
+  taken as the answer -- which is the caller's own runner reached from the
+  command line, the program spawned by the command and never by the library.
+  `tests agent-eval --model
   MODEL --anyway` scores it on a table of tool-use tasks against a real
   model, gated like `tests speed` and `tests perplexity` and out of the
   default gate; `--trace` prints each task's transcript -- its turns, the

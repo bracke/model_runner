@@ -42,6 +42,9 @@ with Model_Runner.UTF8;
 
 with Model_Runner.Agent;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Runner;
+
+with GNAT.OS_Lib;
 with Model_Runner.CLI.Interactive;
 
 package body Model_Runner.CLI.Execute is
@@ -118,6 +121,119 @@ package body Model_Runner.CLI.Execute is
         (Self.Screen.all, "cli.agent.tool_result",
          [Loc.Named ("detail", Result)]);
    end On_Result;
+
+   --  Runs a tool call by handing it to an external program: the program is
+   --  invoked with the function name and the arguments (as JSON) as its two
+   --  arguments, and what it prints to standard output is the tool's answer.
+   --  The library starts no process; this is the command, which may. The
+   --  program's own standard error is left alone, so it can log while it
+   --  works.
+   type Command_Runner (Command : access constant String) is
+     limited new Model_Runner.Tools.Runner.Instance with null record;
+
+   overriding procedure Run
+     (Self      : in out Command_Runner;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   overriding procedure Run
+     (Self      : in out Command_Runner;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      use type GNAT.OS_Lib.String_Access;
+      Program : GNAT.OS_Lib.String_Access :=
+        GNAT.OS_Lib.Locate_Exec_On_Path (Self.Command.all);
+      Args    : GNAT.OS_Lib.Argument_List :=
+        [1 => new String'(Named), 2 => new String'(Arguments)];
+      Handle  : GNAT.OS_Lib.File_Descriptor;
+      Path    : GNAT.OS_Lib.String_Access;
+      Ran     : Boolean := False;
+      Code    : Integer := -1;
+
+      --  Put a short text into the result, in place of an answer.
+      procedure Note (Text : String) is
+      begin
+         Last := 0;
+         if Text'Length <= Result'Length then
+            Result (Result'First .. Result'First + Text'Length - 1) := Text;
+            Last := Result'First + Text'Length - 1;
+         end if;
+      end Note;
+   begin
+      Status := Model_Runner.Errors.Success;
+      Last := 0;
+
+      if Program = null then
+         Note ("error: tool command not found on the path: "
+               & Self.Command.all);
+         for A of Args loop
+            GNAT.OS_Lib.Free (A);
+         end loop;
+         return;
+      end if;
+
+      GNAT.OS_Lib.Create_Temp_File (Handle, Path);
+      GNAT.OS_Lib.Close (Handle);
+      GNAT.OS_Lib.Spawn
+        (Program.all, Args, Path.all, Ran, Code, Err_To_Out => False);
+
+      if Ran and then Code = 0 then
+         declare
+            File  : Ada.Text_IO.File_Type;
+            Fill  : Natural := Result'First - 1;
+            First : Boolean := True;
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path.all);
+            while not Ada.Text_IO.End_Of_File (File) loop
+               declare
+                  Line : constant String := Ada.Text_IO.Get_Line (File);
+                  Gap  : constant Natural := (if First then 0 else 1);
+               begin
+                  exit when Fill + Gap + Line'Length > Result'Last;
+                  if not First then
+                     Fill := Fill + 1;
+                     Result (Fill) := ASCII.LF;
+                  end if;
+                  Result (Fill + 1 .. Fill + Line'Length) := Line;
+                  Fill := Fill + Line'Length;
+                  First := False;
+               end;
+            end loop;
+            Ada.Text_IO.Close (File);
+
+            if Fill >= Result'First then
+               Last := Fill;
+            else
+               --  The program said nothing. The model still needs a turn,
+               --  and an empty one is not a valid message.
+               Note ("(the tool command produced no output)");
+            end if;
+         exception
+            when others =>
+               Note ("error: could not read the tool command's output");
+         end;
+      else
+         Note ("error: the tool command failed");
+      end if;
+
+      declare
+         Gone : Boolean;
+      begin
+         GNAT.OS_Lib.Delete_File (Path.all, Gone);
+      end;
+      GNAT.OS_Lib.Free (Path);
+      GNAT.OS_Lib.Free (Program);
+      for A of Args loop
+         GNAT.OS_Lib.Free (A);
+      end loop;
+   end Run;
 
    --  Read a whole file as UTF-8, subject to a size limit.
    --  Write bytes to a path, replacing whatever was there.
@@ -1855,10 +1971,12 @@ package body Model_Runner.CLI.Execute is
          end if;
 
          --  Agent mode owns its loop too. It closes the tool loop the
-         --  single run leaves open: the model's calls are run against the
-         --  built-in tools and the answers fed back until it answers. The
-         --  built-in tools are all this program can run, so agent mode
-         --  offers those and ignores any --tools a caller also gave.
+         --  single run leaves open: the model's calls are run and the
+         --  answers fed back until it answers. Without --tool-command the
+         --  tools are the built-in ones and any --tools is ignored; with
+         --  --tool-command the tools are the caller's, offered through
+         --  --tools or --tools-file and run by handing each call to that
+         --  program.
          if Item.Agent then
             if Item.Raw then
                Fail (E.Make (E.CLI_Conflicting_Prompt_Sources));
@@ -1870,17 +1988,89 @@ package body Model_Runner.CLI.Execute is
             end if;
 
             declare
-               Messages    : Conv.History;
-               Agent_Tools : aliased Model_Runner.Tools.Definitions;
-               Runner      : Model_Runner.Tools.Builtin.Instance;
-               Request     : Gen.Request;
-               Loop_Out    : Model_Runner.Agent.Outcome;
-               Watcher     : aliased Agent_Watch (Screen'Unchecked_Access);
+               Messages     : Conv.History;
+               Agent_Tools  : aliased Model_Runner.Tools.Definitions;
+               Built_Runner : aliased Model_Runner.Tools.Builtin.Instance;
+               Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
+               Request      : Gen.Request;
+               Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
+
+               Using_Command : constant Boolean :=
+                 Item.Tool_Command /= null
+                 and then Item.Tool_Command.all /= "";
+
+               --  One place the loop runs from, whichever tools and runner
+               --  it was given.
+               procedure Drive
+                 (Off  : Model_Runner.Tools.Definitions;
+                  Exec : in out Model_Runner.Tools.Runner.Instance'Class)
+               is
+                  Loop_Out : Model_Runner.Agent.Outcome;
+               begin
+                  Model_Runner.Agent.Run
+                    (Source     => Prepared,
+                     Session    => Session,
+                     Messages   => Messages,
+                     Offered    => Off,
+                     Executor   => Exec,
+                     Generation => Request,
+                     Stop_Set   => Stop_Set,
+                     Sink       => Sink'Unchecked_Access,
+                     Time       => Clock'Unchecked_Access,
+                     Seeds      => Seeds'Unchecked_Access,
+                     Max_Steps  => Positive'Max (1, Item.Max_Steps),
+                     Thinking   => Item.Thinking,
+                     Watch      => Watcher'Unchecked_Access,
+                     Result     => Loop_Out);
+
+                  Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+
+                  --  The calls and their results were shown as they happened
+                  --  by the watcher; here only the outcome is left to note.
+                  Pres.Put_Note
+                    (Screen, "cli.agent.stopped",
+                     [Loc.Named
+                        ("state",
+                         Model_Runner.Agent.Stop_Reason'Image
+                           (Loop_Out.Reason)),
+                      Loc.Named
+                        ("count",
+                         T.Image (Long_Long_Integer (Loop_Out.Steps))),
+                      Loc.Named
+                        ("total",
+                         T.Image (Long_Long_Integer (Loop_Out.Calls)))]);
+
+                  Status := E.Exit_Success;
+                  if Loop_Out.Reason /= Model_Runner.Agent.Answered
+                    and then E.Is_Error (Loop_Out.Error)
+                  then
+                     Pres.Report (Screen, Loop_Out.Error);
+                     Status := E.Exit_Status (Loop_Out.Error);
+                  end if;
+               end Drive;
             begin
                if not Model_Runner.Templates.Reads_Tools
                         (L.Template (Prepared).all)
                then
                   Fail (E.Make (E.Tools_Not_In_Template));
+                  return;
+               end if;
+
+               --  A tool command with nothing to describe is a program the
+               --  model was never told about; the definitions come from
+               --  --tools or --tools-file.
+               if Using_Command and then not Tools_Ready then
+                  declare
+                     Reason : E.Error_Info := E.Make (E.CLI_Option_Combination);
+                  begin
+                     E.Add_Text
+                       (Reason, "option", "--tool-command",
+                        E.Param_Identifier);
+                     E.Add_Text
+                       (Reason, "other", "--tools or --tools-file",
+                        E.Param_Identifier);
+                     Fail (Reason);
+                  end;
                   return;
                end if;
 
@@ -1922,14 +2112,6 @@ package body Model_Runner.CLI.Execute is
                   return;
                end if;
 
-               Model_Runner.Tools.Read
-                 (Agent_Tools, Model_Runner.Tools.Builtin.Definitions_Text,
-                  Condition);
-               if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-
                Conv.Open (Messages, Status => Condition);
                if E.Is_Error (Condition) then
                   Fail (Condition);
@@ -1952,42 +2134,21 @@ package body Model_Runner.CLI.Execute is
                Request.Has_Seed := Item.Has_Seed;
                Request.Batch_Size := Item.Batch_Size;
 
-               Model_Runner.Agent.Run
-                 (Source     => Prepared,
-                  Session    => Session,
-                  Messages   => Messages,
-                  Offered    => Agent_Tools,
-                  Executor   => Runner,
-                  Generation => Request,
-                  Stop_Set   => Stop_Set,
-                  Sink       => Sink'Unchecked_Access,
-                  Time       => Clock'Unchecked_Access,
-                  Seeds      => Seeds'Unchecked_Access,
-                  Max_Steps  => Positive'Max (1, Item.Max_Steps),
-                  Thinking   => Item.Thinking,
-                  Watch      => Watcher'Unchecked_Access,
-                  Result     => Loop_Out);
-
-               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
-
-               --  The calls and their results were shown as they happened by
-               --  the watcher above; here only the outcome is left to note.
-               Pres.Put_Note
-                 (Screen, "cli.agent.stopped",
-                  [Loc.Named
-                     ("state",
-                      Model_Runner.Agent.Stop_Reason'Image (Loop_Out.Reason)),
-                   Loc.Named
-                     ("count", T.Image (Long_Long_Integer (Loop_Out.Steps))),
-                   Loc.Named
-                     ("total", T.Image (Long_Long_Integer (Loop_Out.Calls)))]);
-
-               Status := E.Exit_Success;
-               if Loop_Out.Reason /= Model_Runner.Agent.Answered
-                 and then E.Is_Error (Loop_Out.Error)
-               then
-                  Pres.Report (Screen, Loop_Out.Error);
-                  Status := E.Exit_Status (Loop_Out.Error);
+               --  The caller's tools run by the named program, or the
+               --  built-in ones. Either way the loop is the same; only what
+               --  it offers and what runs a call differ.
+               if Using_Command then
+                  Drive (Offered, Cmd_Runner);
+               else
+                  Model_Runner.Tools.Read
+                    (Agent_Tools,
+                     Model_Runner.Tools.Builtin.Definitions_Text, Condition);
+                  if E.Is_Error (Condition) then
+                     Conv.Close (Messages);
+                     Fail (Condition);
+                     return;
+                  end if;
+                  Drive (Agent_Tools, Built_Runner);
                end if;
 
                Conv.Close (Messages);
