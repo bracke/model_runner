@@ -1,4 +1,5 @@
 with Ada.Unchecked_Deallocation;
+with Interfaces;
 
 with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
@@ -13,6 +14,13 @@ package body Model_Runner.Agent is
    package Vocab renames Model_Runner.Tokenizer;
 
    use type Gen.Completion_Reason;
+   use type Interfaces.Unsigned_64;
+   use type E.Error_Code;
+
+   --  How many distinct calls one loop remembers, to notice a repeat. A
+   --  model asks for a handful of tools; a table this size costs a couple
+   --  of kilobytes and holds far more calls than a well-behaved loop makes.
+   Seen_Max : constant := 256;
 
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
@@ -58,6 +66,51 @@ package body Model_Runner.Agent is
       Request : Gen.Request := Generation;
 
       Last_Result : Gen.Result;
+
+      --  The calls made so far, by a hash of name-and-arguments, so a call
+      --  the model has already made is noticed rather than run again -- a
+      --  real tool may not be idempotent, and a model that repeats itself
+      --  is not making progress.
+      Seen      : array (1 .. Seen_Max) of Interfaces.Unsigned_64;
+      Seen_Used : Natural := 0;
+
+      --  FNV-1a over the name, a separator, and the arguments.
+      function Digest (Named : String; Args : String)
+        return Interfaces.Unsigned_64
+      is
+         Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+         procedure Mix (Text : String) is
+         begin
+            for C of Text loop
+               Hash :=
+                 (Hash xor Interfaces.Unsigned_64 (Character'Pos (C)))
+                 * 16#0000_0100_0000_01B3#;
+            end loop;
+         end Mix;
+      begin
+         Mix (Named);
+         Mix ([1 => ASCII.NUL]);
+         Mix (Args);
+         return Hash;
+      end Digest;
+
+      function Already_Seen (Key : Interfaces.Unsigned_64) return Boolean is
+      begin
+         for Index in 1 .. Seen_Used loop
+            if Seen (Index) = Key then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Already_Seen;
+
+      procedure Remember (Key : Interfaces.Unsigned_64) is
+      begin
+         if Seen_Used < Seen_Max then
+            Seen_Used := Seen_Used + 1;
+            Seen (Seen_Used) := Key;
+         end if;
+      end Remember;
 
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
@@ -165,6 +218,16 @@ package body Model_Runner.Agent is
                   Gen.Generated_Text (Last_Result), Status);
             end if;
 
+            --  An empty reply -- no words and no call -- is not a failure of
+            --  the history; it is a model with nothing more to say. Take the
+            --  loop as answered rather than erroring on the empty turn, which
+            --  a model does reach when a tool's result was all it needed and
+            --  it adds nothing to it.
+            if Status.Code = E.Conversation_Empty then
+               Result.Reason := Answered;
+               exit Step_Loop;
+            end if;
+
             if E.Is_Error (Status) then
                L.Reset (Session);
                Result.Reason := History_Failed;
@@ -178,6 +241,11 @@ package body Model_Runner.Agent is
          declare
             Turn  : constant Positive := Conv.Length (Messages);
             Asked : constant Natural := Conv.Call_Count (Messages, Turn);
+
+            --  Whether this turn made a call it had not made before. A turn
+            --  whose calls are all repeats got nowhere, and the loop stops
+            --  rather than circle.
+            Progressed : Boolean := False;
          begin
             --  Nothing left to run: the model has answered.
             exit Step_Loop when Asked = 0;
@@ -195,6 +263,8 @@ package body Model_Runner.Agent is
                     Conv.Call_Name (Messages, Turn, Call);
                   Args  : constant String :=
                     Conv.Call_Arguments (Messages, Turn, Call);
+                  Key   : constant Interfaces.Unsigned_64 :=
+                    Digest (Named, Args);
                   Answer : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
                   Filled : Natural;
                   Status : E.Error_Info;
@@ -204,42 +274,68 @@ package body Model_Runner.Agent is
                      Watch.On_Call (Named, Args);
                   end if;
 
-                  if Model_Runner.Tools.Offers (Offered, Named) then
-                     Executor.Run (Named, Args, Answer, Filled, Ran);
-                     if E.Is_Error (Ran) then
-                        --  The tool answered with more than fits. The model
-                        --  is told so, in place of an answer it cannot have.
-                        declare
-                           Note : constant String :=
-                             "error: the tool's answer was too large "
-                             & "to return";
-                        begin
-                           Conv.Append (Messages, Conv.Tool_Role, Note, Status);
-                           if Watch /= null then
-                              Watch.On_Result (Named, Note);
-                           end if;
-                        end;
-                     else
-                        Conv.Append
-                          (Messages, Conv.Tool_Role,
-                           Answer (1 .. Filled), Status);
-                        if Watch /= null then
-                           Watch.On_Result (Named, Answer (1 .. Filled));
-                        end if;
-                     end if;
-                  else
-                     --  The grammar should have made this impossible; if it
-                     --  happens anyway, the model hears the truth and may
-                     --  correct itself rather than the loop breaking.
+                  if Already_Seen (Key) then
+                     --  A call the model has already made. A real tool need
+                     --  not be safe to run twice, and running it again buys
+                     --  nothing, so it is not run: the model is told it
+                     --  repeated itself and pointed back at the answer it
+                     --  already has.
                      declare
                         Note : constant String :=
-                          "error: no tool named """ & Named & """";
+                          "error: this exact call was already made in this "
+                          & "conversation; use its earlier result rather "
+                          & "than repeating the call";
                      begin
                         Conv.Append (Messages, Conv.Tool_Role, Note, Status);
                         if Watch /= null then
                            Watch.On_Result (Named, Note);
                         end if;
                      end;
+
+                  else
+                     Progressed := True;
+                     Remember (Key);
+
+                     if Model_Runner.Tools.Offers (Offered, Named) then
+                        Executor.Run (Named, Args, Answer, Filled, Ran);
+                        if E.Is_Error (Ran) then
+                           --  The tool answered with more than fits. The
+                           --  model is told so, in place of an answer it
+                           --  cannot have.
+                           declare
+                              Note : constant String :=
+                                "error: the tool's answer was too large "
+                                & "to return";
+                           begin
+                              Conv.Append
+                                (Messages, Conv.Tool_Role, Note, Status);
+                              if Watch /= null then
+                                 Watch.On_Result (Named, Note);
+                              end if;
+                           end;
+                        else
+                           Conv.Append
+                             (Messages, Conv.Tool_Role,
+                              Answer (1 .. Filled), Status);
+                           if Watch /= null then
+                              Watch.On_Result (Named, Answer (1 .. Filled));
+                           end if;
+                        end if;
+                     else
+                        --  The grammar should have made this impossible; if
+                        --  it happens anyway, the model hears the truth and
+                        --  may correct itself rather than the loop breaking.
+                        declare
+                           Note : constant String :=
+                             "error: no tool named """ & Named & """";
+                        begin
+                           Conv.Append
+                             (Messages, Conv.Tool_Role, Note, Status);
+                           if Watch /= null then
+                              Watch.On_Result (Named, Note);
+                           end if;
+                        end;
+                     end if;
                   end if;
 
                   Result.Calls := Result.Calls + 1;
@@ -252,6 +348,14 @@ package body Model_Runner.Agent is
                   end if;
                end;
             end loop;
+
+            --  A turn that only repeated calls it had already made is going
+            --  in circles. Stop rather than let it spend the step budget on
+            --  the same calls over and over.
+            if not Progressed then
+               Result.Reason := Repeating;
+               exit Step_Loop;
+            end if;
          end;
       end loop Step_Loop;
 

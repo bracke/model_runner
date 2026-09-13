@@ -43,6 +43,9 @@ package Model_Runner.Agent is
    type Stop_Reason is
      (Answered,           --  the model replied with no call to run
       Step_Limit,         --  the step budget ran out with a call still open
+      Repeating,          --  a turn made only calls already made, and got
+                          --  no further, so the loop stopped rather than
+                          --  circle
       Render_Failed,      --  the conversation would not render
       Grammar_Failed,     --  the tool grammar would not compile
       Generation_Failed,  --  a generation ended in a runtime error

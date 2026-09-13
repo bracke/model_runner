@@ -14,7 +14,12 @@ Keep a Changelog and the project uses semantic versioning.
   it, generate a reply a grammar keeps to prose or a readable call, take the
   reply apart, run each call through a `Model_Runner.Tools.Runner` the caller
   supplies, feed the answers back as tool turns, and render again -- until
-  the model answers or a step budget runs out. The reply is always
+  the model answers or a step budget runs out. A call the model has already
+  made is not run a second time -- a real tool need not be safe to repeat,
+  and a turn whose calls are all ones already made got nowhere, so the loop
+  stops rather than circle; an empty reply, no words and no call, is taken as
+  an answer rather than an error, which a model reaches when a tool's result
+  was all it needed. The reply is always
   grammar-constrained (`Model_Runner.Tools.Constraint` compiles a grammar
   from the tools offered), so a call always parses and always names a tool on
   offer -- and its arguments match that tool's own parameter schema, turned
