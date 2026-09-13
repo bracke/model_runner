@@ -19838,3 +19838,45 @@ panels E178A632D1F963E5 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  ungated CLI runs, hot; the one-minute average 0.7 to 1.6
 # model: Qwen3.5-0.8B Q8_0, Qwen3.5-4B Q8_0; the fixtures
+
+# 2026-09-13, hybrid attention batching on the device, priced and not
+# built: a hybrid's full-attention layers fall to the host in a batch,
+# and moving them to the device buys a fraction of a prompt that already
+# wins there and nothing of the model that matters.
+#
+#   WHAT FALLS. A batch on the device takes its projections and its
+#   whole-layer attention on the device only where the layer fits whole
+#   and the cache is resident; a hybrid's full-attention layer carries a
+#   head normalization and a gate beside each head, so the device
+#   batched-projection path (which handles neither) excludes it, and
+#   without the whole-layer path it does its projections and its
+#   attention on the host. Counted over a 262-token prompt of Qwen3.5-4B
+#   on the device: 0 full-attention layers on the device, 8 on the host.
+#
+#   WHAT IT COSTS. The prompt, medians of three:
+#
+#     Qwen3.5-4B, 262 tokens, device   1.72 s   PROJECTING 0.51, ATTENDING 0.39
+#                             cpu      2.97 s
+#
+#   The device already wins the prompt, fed only 33 per cent of it and
+#   clocked at 866 MHz of 2700 -- power-bound and idle, carried by the
+#   mixture's feed-forward (42 per cent, on the device) while the host
+#   runs the linear layers' rule and the full layers' attention. Of the
+#   0.90 s of host projection and attention, the six full-attention
+#   layers are a part; the eighteen linear layers' rule is the rest and
+#   needs a device rule, which is a kernel of its own priced and
+#   declined already. Moving the full layers to the device might overlap
+#   0.1 to 0.15 s of the prompt -- under a tenth -- and touches neither
+#   generation, where the whole-layer path is taken when the cache is
+#   resident, nor the 35B, which runs on the processor because the device
+#   holds 8 of its 21 gigabytes.
+#
+#   So: real work -- the head normalization, the per-head gate and the
+#   batched hybrid attention, all on the device -- for under a tenth of
+#   a prompt on the one model it helps, a model whose prompt the device
+#   already reads faster than the processor. Not built.
+#
+#   Nothing changed, so no figure moves and no group is restamped.
+#
+# load:  ungated CLI runs, hot; the one-minute average 0.7 to 0.9
+# model: Qwen3.5-4B Q8_0

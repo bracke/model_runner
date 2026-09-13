@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Hybrid attention batching on the device, priced and not built.** A
+  hybrid's full-attention layers fall to the host in a batch -- the
+  device batched-projection path excludes them for the head norm and the
+  per-head gate -- but the device still reads Qwen3.5-4B's 262-token
+  prompt faster than the processor (1.72 s against 2.97), carried by the
+  mixture's feed-forward while it sits power-bound and 33 per cent fed.
+  Moving the six full-attention layers to the device would overlap under
+  a tenth of that prompt and touches neither generation (which takes the
+  whole-layer path when the cache is resident) nor the 35B (which runs on
+  the processor). Recorded.
+
 - **The hybrid mixture's shared expert is under the conformance sweep.**
   The fixture writes `qwen35moe` with the shared expert on every layer
   and the block past the stack, and `Reference_Transformer` reads and
