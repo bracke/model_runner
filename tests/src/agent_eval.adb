@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Text_IO;
 
 with Host_Load;
 
@@ -145,6 +146,44 @@ package body Agent_Eval is
       return False;
    end Called_Tool;
 
+   ----------
+   -- Dump --
+   ----------
+
+   --  The whole of one task's transcript, to standard error: every turn with
+   --  its role and text, each call it made beneath the turn that made it, and
+   --  the verdict. This is what turns "4 of 5 passed" into "task 3 called
+   --  reverse_text with these arguments and answered this", which is the
+   --  difference between a number and something a reader can act on.
+   procedure Dump
+     (Index    : Positive;
+      Spec     : Task_Spec;
+      Messages : Conv.History;
+      Outcome  : Model_Runner.Agent.Outcome;
+      Passed   : Boolean)
+   is
+      procedure Line (Text : String) is
+      begin
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Text);
+      end Line;
+   begin
+      Line ("--- task" & Positive'Image (Index)
+            & (if Passed then "  PASS" else "  FAIL")
+            & "  reason=" & Model_Runner.Agent.Stop_Reason'Image
+                              (Outcome.Reason)
+            & "  wants=""" & Spec.Wants.all & """"
+            & (if Spec.Tool.all /= "" then "  needs=" & Spec.Tool.all else "")
+            & " ---");
+      for I in 1 .. Conv.Length (Messages) loop
+         Line ("  " & Conv.Role_Name (Conv.Sender_At (Messages, I)) & ": "
+               & Conv.Content_At (Messages, I));
+         for K in 1 .. Conv.Call_Count (Messages, I) loop
+            Line ("    -> " & Conv.Call_Name (Messages, I, K) & " "
+                  & Conv.Call_Arguments (Messages, I, K));
+         end loop;
+      end loop;
+   end Dump;
+
    ---------
    -- Say --
    ---------
@@ -167,6 +206,7 @@ package body Agent_Eval is
         Model_Runner.Backend.Backend_CPU;
       Anyway  : Boolean := False;
       Waiting : Natural := 0;
+      Trace   : Boolean := False;
       Result  : out Report)
    is
       Source    : Shards.Shard_Set;
@@ -316,6 +356,10 @@ package body Agent_Eval is
 
                if Passed then
                   Result.Passed := Result.Passed + 1;
+               end if;
+
+               if Trace then
+                  Dump (Index, Spec, Messages, Loop_Out, Passed);
                end if;
 
                Model_Runner.Stops.Close (Stop);

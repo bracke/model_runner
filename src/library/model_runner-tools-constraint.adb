@@ -1,13 +1,25 @@
+with Ada.Unchecked_Deallocation;
+
+with Model_Runner.Schema;
+
 package body Model_Runner.Tools.Constraint is
 
    package E renames Model_Runner.Errors;
 
-   --  The fixed part of the grammar. A JSON value in full, wrapped in the
-   --  call envelope, with the one hole -- the name rule -- filled from the
-   --  tools offered. The quote and the backslash are written as \x22 and
-   --  \x5C throughout rather than as escaped quotes, so that a reader is
-   --  spared counting backslashes through two layers of quoting.
-   Fixed : constant String :=
+   --  A grammar with no calls in it: the model was offered nothing, so its
+   --  reply is prose and nothing follows it.
+   Prose_Only : constant String :=
+     "root ::= [^<]*" & ASCII.LF;
+
+   --  The loose grammar's fixed part: the call envelope around a general
+   --  JSON value, with the one hole -- the name rule -- filled from the
+   --  tools offered. This is the fallback, used when a tool's argument
+   --  schema cannot be turned into a grammar of its own; it still
+   --  guarantees a readable call naming a tool on offer, only without
+   --  pinning the argument shape. The quote and backslash are written as
+   --  \x22 and \x5C throughout, to spare a reader counting backslashes
+   --  through two layers of quoting.
+   Loose_Fixed : constant String :=
      "root ::= prose calls?" & ASCII.LF &
      "prose ::= [^<]*" & ASCII.LF &
      "calls ::= call ( ws call )*" & ASCII.LF &
@@ -33,10 +45,242 @@ package body Model_Runner.Tools.Constraint is
      "expp ::= [eE] [+-]? [0-9]+" & ASCII.LF &
      "ws ::= [ \x09\x0A\x0D]*" & ASCII.LF;
 
-   --  A grammar with no calls in it: the model was offered nothing, so its
-   --  reply is prose and nothing follows it.
-   Prose_Only : constant String :=
-     "root ::= [^<]*" & ASCII.LF;
+   type Text_Access is access String;
+   procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+
+   --  A small decimal image, no leading space.
+   function Image (Value : Positive) return String is
+      Raw : constant String := Positive'Image (Value);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Image;
+
+   --  The index just past a JSON string whose opening quote is at Index.
+   function After_String (Text : String; Index : Positive) return Positive is
+      I : Natural := Index + 1;
+   begin
+      while I <= Text'Last loop
+         if Text (I) = '\' then
+            I := I + 2;
+         elsif Text (I) = '"' then
+            return I + 1;
+         else
+            I := I + 1;
+         end if;
+      end loop;
+      return Text'Last + 1;
+   end After_String;
+
+   --  The "parameters" object of a tool definition: the slice from its
+   --  opening brace to its closing one. Found is false when the definition
+   --  names no parameters object -- a tool without arguments, or one this
+   --  cannot read -- and the caller then falls back to the loose grammar.
+   procedure Parameters_Of
+     (Def   : String;
+      First : out Natural;
+      Last  : out Natural;
+      Found : out Boolean)
+   is
+      Key : constant String := """parameters""";
+      I   : Natural := Def'First;
+
+      function White (C : Character) return Boolean
+      is (C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR);
+   begin
+      First := 0;
+      Last  := 0;
+      Found := False;
+
+      while I + Key'Length - 1 <= Def'Last loop
+         if Def (I .. I + Key'Length - 1) = Key then
+            declare
+               J : Natural := I + Key'Length;
+            begin
+               while J <= Def'Last and then White (Def (J)) loop
+                  J := J + 1;
+               end loop;
+               if J <= Def'Last and then Def (J) = ':' then
+                  J := J + 1;
+                  while J <= Def'Last and then White (Def (J)) loop
+                     J := J + 1;
+                  end loop;
+                  if J <= Def'Last and then Def (J) = '{' then
+                     First := J;
+                     declare
+                        Depth : Natural := 0;
+                     begin
+                        while J <= Def'Last loop
+                           case Def (J) is
+                              when '"' =>
+                                 J := After_String (Def, J);
+                              when '{' =>
+                                 Depth := Depth + 1;
+                                 J := J + 1;
+                              when '}' =>
+                                 Depth := Depth - 1;
+                                 J := J + 1;
+                                 if Depth = 0 then
+                                    Last  := J - 1;
+                                    Found := True;
+                                    return;
+                                 end if;
+                              when others =>
+                                 J := J + 1;
+                           end case;
+                        end loop;
+                     end;
+                     return;   --  unbalanced; leave Found false
+                  end if;
+               end if;
+            end;
+         end if;
+         I := I + 1;
+      end loop;
+   end Parameters_Of;
+
+   ---------------------------------------------------------------------------
+   --  Building the two grammars
+   ---------------------------------------------------------------------------
+
+   --  Append into a bounded buffer, noting an overflow rather than raising.
+   type Builder is record
+      Room : Text_Access;
+      Used : Natural := 0;
+      Full : Boolean := False;
+   end record;
+
+   procedure Put (B : in out Builder; Text : String) is
+   begin
+      if B.Full or else B.Used + Text'Length > B.Room'Length then
+         B.Full := True;
+         return;
+      end if;
+      B.Room (B.Room'First + B.Used .. B.Room'First + B.Used + Text'Length - 1)
+        := Text;
+      B.Used := B.Used + Text'Length;
+   end Put;
+
+   --  The loose grammar (§a): envelope + general JSON arguments, names
+   --  constrained to those offered.
+   procedure Build_Loose (Offered : Definitions; B : in out Builder) is
+   begin
+      Put (B, Loose_Fixed);
+      Put (B, "name ::= ");
+      for Index in 1 .. Count (Offered) loop
+         if Index > 1 then
+            Put (B, " | ");
+         end if;
+         Put (B, """\x22" & Tool_Name (Offered, Index) & "\x22""");
+      end loop;
+      Put (B, "" & ASCII.LF);
+   end Build_Loose;
+
+   --  The tight grammar (§b): each offered tool paired with a grammar for
+   --  its own argument schema, so a call names a tool and its arguments
+   --  match that tool's parameters. Ok is false when any tool's schema
+   --  cannot be read or turned into a grammar, and the caller then builds
+   --  the loose grammar instead.
+   procedure Build_Tight
+     (Offered : Definitions;
+      Scratch : Text_Access;
+      B       : in out Builder;
+      Ok      : out Boolean)
+   is
+      Count_Of : constant Natural := Count (Offered);
+   begin
+      Ok := True;
+
+      --  Note: ws is not defined here. Each tool's schema grammar defines
+      --  it (Model_Runner.Schema emits a shared ws rule), and those helpers
+      --  are emitted once below; defining it here too would be a duplicate
+      --  rule and refuse the grammar.
+      Put (B, "root ::= prose calls?" & ASCII.LF);
+      Put (B, "prose ::= [^<]*" & ASCII.LF);
+      Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
+
+      Put (B, "call ::= ");
+      for Index in 1 .. Count_Of loop
+         if Index > 1 then
+            Put (B, " | ");
+         end if;
+         Put (B, "call_" & Image (Index));
+      end loop;
+      Put (B, "" & ASCII.LF);
+
+      for Index in 1 .. Count_Of loop
+         declare
+            Def         : constant String := Definition (Offered, Index);
+            First, Last : Natural;
+            Present     : Boolean;
+         begin
+            Parameters_Of (Def, First, Last, Present);
+            if not Present then
+               Ok := False;
+               return;
+            end if;
+
+            declare
+               Grammar_Last : Natural;
+               St           : E.Error_Info;
+            begin
+               Model_Runner.Schema.To_Grammar
+                 (Def (First .. Last), Scratch.all, Grammar_Last, St);
+               if E.Is_Error (St) or else Grammar_Last = 0 then
+                  Ok := False;
+                  return;
+               end if;
+
+               --  The schema grammar is "root ::= <body>" on the first line
+               --  and its shared helper rules (str, num, int, ...) after it.
+               --  Rename root to this tool's args rule and keep the body; the
+               --  helpers are identical for every schema and are emitted once
+               --  below, from the last tool read.
+               declare
+                  Text : String renames Scratch.all (1 .. Grammar_Last);
+                  Break : Natural := Text'First;
+               begin
+                  while Break <= Text'Last
+                    and then Text (Break) /= ASCII.LF
+                  loop
+                     Break := Break + 1;
+                  end loop;
+
+                  --  The body follows "root ::= ".
+                  declare
+                     Head : constant String := "root ::= ";
+                     Body_First : constant Natural := Text'First + Head'Length;
+                  begin
+                     if Break - 1 < Body_First
+                       or else Text (Text'First .. Body_First - 1) /= Head
+                     then
+                        Ok := False;
+                        return;
+                     end if;
+
+                     Put (B, "call_" & Image (Index)
+                          & " ::= ""<tool_call>"" ws ""{"" ws "
+                          & """\x22name\x22"" ws "":"" ws ""\x22"
+                          & Tool_Name (Offered, Index)
+                          & "\x22"" ws "","" ws ""\x22arguments\x22"" ws "
+                          & """:"" ws args_" & Image (Index)
+                          & " ws ""}"" ws ""</tool_call>""" & ASCII.LF);
+                     Put (B, "args_" & Image (Index) & " ::= "
+                          & Text (Body_First .. Break - 1) & ASCII.LF);
+
+                     --  The shared helpers, once, taken from the last tool.
+                     if Index = Count_Of and then Break < Text'Last then
+                        Put (B, Text (Break + 1 .. Text'Last));
+                     end if;
+                  end;
+               end;
+            end;
+         end;
+      end loop;
+
+      if B.Full then
+         Ok := False;
+      end if;
+   end Build_Tight;
 
    ------------------------
    -- Compile_Call_Grammar --
@@ -47,7 +291,7 @@ package body Model_Runner.Tools.Constraint is
       Into    : in out Model_Runner.Grammar.Compiled;
       Status  : out Model_Runner.Errors.Error_Info)
    is
-      Tool_Count : constant Natural := Model_Runner.Tools.Count (Offered);
+      Tool_Count : constant Natural := Count (Offered);
    begin
       if Tool_Count = 0 then
          Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
@@ -55,43 +299,40 @@ package body Model_Runner.Tools.Constraint is
       end if;
 
       declare
-         --  The fixed part, then one name rule listing the offered names as
-         --  alternatives. Generous room: sixty-four names of a few bytes
-         --  each is a kilobyte beside this.
-         Room : String (1 .. Fixed'Length + 32 * 1024);
-         Used : Natural := 0;
-         Full : Boolean := False;
-
-         procedure Put (Text : String) is
-         begin
-            if Full or else Used + Text'Length > Room'Length then
-               Full := True;
+         Scratch : Text_Access :=
+           new String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+         Tight   : Builder :=
+           (Room => new String (1 .. 256 * 1024), others => <>);
+         Loose   : Builder :=
+           (Room => new String (1 .. Loose_Fixed'Length + 32 * 1024),
+            others => <>);
+         Ok      : Boolean;
+      begin
+         --  Try the tight grammar first; fall back to the loose one when a
+         --  tool's schema cannot be read or the result will not compile.
+         Build_Tight (Offered, Scratch, Tight, Ok);
+         if Ok then
+            Model_Runner.Grammar.Compile
+              (Into, Tight.Room (1 .. Tight.Used), Status);
+            if E.Is_Ok (Status) then
+               Free (Scratch);
+               Free (Tight.Room);
+               Free (Loose.Room);
                return;
             end if;
-            Room (Used + 1 .. Used + Text'Length) := Text;
-            Used := Used + Text'Length;
-         end Put;
-      begin
-         Put (Fixed);
-         Put ("name ::= ");
-         for Index in 1 .. Tool_Count loop
-            if Index > 1 then
-               Put (" | ");
-            end if;
-            --  Each name as the literal quote-name-quote the JSON object
-            --  carries. A name is an identifier the definitions named, so
-            --  it has no quote or backslash of its own to escape.
-            Put ("""\x22" & Model_Runner.Tools.Tool_Name (Offered, Index)
-                 & "\x22""");
-         end loop;
-         Put ("" & ASCII.LF);
-
-         if Full then
-            Status := E.Make (E.Tools_Too_Large);
-            return;
          end if;
 
-         Model_Runner.Grammar.Compile (Into, Room (1 .. Used), Status);
+         Build_Loose (Offered, Loose);
+         if Loose.Full then
+            Status := E.Make (E.Tools_Too_Large);
+         else
+            Model_Runner.Grammar.Compile
+              (Into, Loose.Room (1 .. Loose.Used), Status);
+         end if;
+
+         Free (Scratch);
+         Free (Tight.Room);
+         Free (Loose.Room);
       end;
    end Compile_Call_Grammar;
 

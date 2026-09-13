@@ -126,11 +126,27 @@ package body Tests.Tools_Cases is
    is
       pragma Unreferenced (T);
    begin
+      --  A well-formed call whose arguments match the calculator's schema.
+      --  The arguments are compact, which is what the schema grammar allows;
+      --  whitespace is still fine in the envelope around them.
+      Assert
+        (Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":47,""op"":""*"",""b"":89}}</tool_call>"),
+         "the grammar refused a well-formed call to an offered tool");
+      Assert
+        (Grammar_Takes
+           ("<tool_call>{""name"": ""lookup"", ""arguments"": "
+            & "{""key"":""capital_of_france""}}</tool_call>"),
+         "the grammar refused a well-formed lookup call");
+      --  The same call spaced the way a model naturally writes it -- a space
+      --  after each colon and comma -- is taken too: the schema grammar
+      --  tolerates whitespace rather than forcing compact JSON.
       Assert
         (Grammar_Takes
            ("<tool_call>{""name"": ""calculator"", ""arguments"": "
             & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>"),
-         "the grammar refused a well-formed call to an offered tool");
+         "the grammar refused a schema-valid call with natural spacing");
       Assert
         (Grammar_Takes ("The answer is 4183."),
          "the grammar refused plain prose");
@@ -142,8 +158,30 @@ package body Tests.Tools_Cases is
       Assert
         (not Grammar_Takes
            ("<tool_call>{""name"": ""calculator"", ""arguments"": "
-            & "{""a"": 47</tool_call>"),
+            & "{""a"":47</tool_call>"),
          "the grammar took a call whose arguments never closed");
+
+      --  Arguments that do not match the named tool's schema are refused:
+      --  the calculator requires a, op and b, so a call missing op and b is
+      --  not a call the grammar allows.
+      Assert
+        (not Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":47}}</tool_call>"),
+         "the grammar took a calculator call missing required arguments");
+      --  A string where the schema asks for an integer is refused too.
+      Assert
+        (not Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":""x"",""op"":""*"",""b"":89}}</tool_call>"),
+         "the grammar took a calculator call with a non-integer argument");
+      --  And the lookup's key is one of a fixed set: another string is not
+      --  a call the grammar allows.
+      Assert
+        (not Grammar_Takes
+           ("<tool_call>{""name"": ""lookup"", ""arguments"": "
+            & "{""key"":""nonesuch""}}</tool_call>"),
+         "the grammar took a lookup call with a key outside its enum");
    end Grammar_Constrains;
 
    -------------------

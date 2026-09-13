@@ -17,15 +17,27 @@ Keep a Changelog and the project uses semantic versioning.
   the model answers or a step budget runs out. The reply is always
   grammar-constrained (`Model_Runner.Tools.Constraint` compiles a grammar
   from the tools offered), so a call always parses and always names a tool on
-  offer. `Model_Runner.Tools.Builtin` is a pure runner -- arithmetic, two
+  offer -- and its arguments match that tool's own parameter schema, turned
+  into a grammar by `Model_Runner.Schema` and paired with the tool's name, so
+  a call for one tool cannot carry another's arguments; a tool whose schema
+  cannot be read falls back to a general JSON value. To that end
+  `Model_Runner.Schema` now writes optional whitespace between JSON tokens,
+  so a schema grammar takes {"a": 1} with the spacing a model was trained to
+  write and not only compact {"a":1} -- which also loosens `--json-schema`
+  and `tests schema`, and which a trajectory dump caught forcing a small
+  model off the rails when it was compact-only.
+  `Model_Runner.Tools.Builtin` is a pure runner -- arithmetic, two
   string operations, a fixed lookup -- that starts no process and so keeps
   the library's promise while letting the loop run in-process; a tool that
   reaches the world lives in a caller's own runner. `model_runner run
   --agent` drives it with the built-in tools, and `tests agent-eval --model
   MODEL --anyway` scores it on a table of tool-use tasks against a real
   model, gated like `tests speed` and `tests perplexity` and out of the
-  default gate. The built-in tools and the call grammar are covered in the
-  mandatory suite; the loop against a model is what agent-eval measures.
+  default gate; `--trace` prints each task's transcript -- its turns, the
+  calls it made, and its final answer -- so a run says which task went wrong
+  and what it did rather than only how many passed. The built-in tools and
+  the call grammar are covered in the mandatory suite; the loop against a
+  model is what agent-eval measures.
 
 - **The multi-position draft divergence, run down and corrected.** The
   earlier note that the drafts "part by as much as one" past two tokens

@@ -15,9 +15,19 @@ with Model_Runner.Grammar;
 --
 --  What the grammar allows: some prose, then any number of tool-call blocks.
 --  Each block is the envelope around a JSON object whose name is one of the
---  tools offered and whose arguments are a well-formed JSON value. So a call
---  always parses and always names a tool the caller has -- which is the
---  guarantee the loop is built on.
+--  tools offered and whose arguments match that tool's own parameter schema
+--  -- the same schema the model was shown, turned into a grammar by
+--  Model_Runner.Schema and paired with the tool's name, so a call for the
+--  calculator cannot carry the lookup's arguments. When a tool names no
+--  schema this can read, that tool's arguments fall back to a general JSON
+--  value; when no tool's schema can be read, the whole grammar does. Either
+--  way a call always parses and always names a tool the caller has -- which
+--  is the guarantee the loop is built on.
+--
+--  The schema grammar is compact: it allows no whitespace inside the
+--  arguments object, so a model constrained by it writes {"a":1} and not
+--  {"a": 1}. The envelope around the arguments still allows whitespace, and
+--  either spelling is JSON the reader accepts.
 --
 --  The narrow edge: prose may not contain a '<'. A grammar governs the whole
 --  generation, not the calls alone, and telling prose from the start of a

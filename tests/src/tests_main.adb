@@ -1321,6 +1321,7 @@ begin
             Backend => Backend_Of (Option ("--backend", "cpu")),
             Anyway  => Given ("--anyway"),
             Waiting => Number ("--wait", 0),
+            Trace   => Given ("--trace"),
             Result  => Result);
 
          Ada.Text_IO.Put_Line

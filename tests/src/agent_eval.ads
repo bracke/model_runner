@@ -51,6 +51,10 @@ package Agent_Eval is
    --  @param Anyway Run even when the machine is busy.
    --  @param Waiting Minutes to wait for the machine to quiet, at most.
    --  @param Result What was scored.
+   --  @param Trace When set, print each task's transcript -- its turns, the
+   --    calls it made, and its final answer -- to standard error, with the
+   --    pass or fail and why. It is how a run says which task went wrong and
+   --    what it did, rather than only how many passed.
    procedure Run
      (Path    : String;
       Threads : Positive;
@@ -58,6 +62,7 @@ package Agent_Eval is
         Model_Runner.Backend.Backend_CPU;
       Anyway  : Boolean := False;
       Waiting : Natural := 0;
+      Trace   : Boolean := False;
       Result  : out Report);
 
    --  A one-line summary of a report, in the style the other campaigns use.

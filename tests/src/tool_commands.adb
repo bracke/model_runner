@@ -172,10 +172,11 @@ package body Tool_Commands is
      "score the agent loop on tool-use tasks against a real model";
 
    Takes_Agent_Eval : aliased constant String :=
-     "--model PATH [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]";
+     "--model PATH [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
+     & " [--trace]";
 
    Opts_Agent_Eval : aliased constant String :=
-     " --model --threads --backend --anyway --wait ";
+     " --model --threads --backend --anyway --wait --trace ";
 
    Held : constant array (1 .. 24) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,

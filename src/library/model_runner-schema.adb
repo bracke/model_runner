@@ -389,7 +389,7 @@ package body Model_Runner.Schema is
             return;
          end if;
 
-         Put ("""{"" ");
+         Put ("""{"" ws ");
 
          Item := (At_Char => At_Props, others => <>);
          Skip_Blanks (Text, Item);
@@ -446,13 +446,13 @@ package body Model_Runner.Schema is
                   end if;
 
                   if Count > 0 then
-                     Put (" ("","" ");
+                     Put (" ("","" ws ");
                   end if;
                   Count := Count + 1;
 
                   Put ("""\""");
                   Put (Text (Key_First .. Key_Last));
-                  Put ("\"":"" ");
+                  Put ("\"":"" ws ");
                   Shape (Value_First, Depth + 1);
 
                   if Count > 1 then
@@ -469,7 +469,7 @@ package body Model_Runner.Schema is
             end;
          end loop;
 
-         Put (" ""}""");
+         Put (" ws ""}""");
 
          --  Every name the schema requires has to be one it describes. A
          --  required name that no property matches is a demand the grammar
@@ -537,11 +537,11 @@ package body Model_Runner.Schema is
          end if;
 
          --  Empty, one, or several separated by commas.
-         Put ("""["" (");
+         Put ("""["" ws (");
          Shape (At_Items, Depth + 1);
-         Put (" ("","" ");
+         Put (" ("","" ws ");
          Shape (At_Items, Depth + 1);
-         Put (")*)? ""]""");
+         Put (")*)? ws ""]""");
       end Array_Shape;
 
       --  A list of literal values, as alternatives written exactly as the
@@ -763,6 +763,11 @@ package body Model_Runner.Schema is
       Put ("num ::= ""-""? [0-9]+ (""."" [0-9]+)? "
            & "([eE] [-+]? [0-9]+)?" & Character'Val (10));
       Put ("bool ::= ""true"" | ""false""" & Character'Val (10));
+      --  Whitespace between JSON tokens, so a model constrained by this
+      --  grammar may write {"a": 1, "b": 2} with the spacing it was trained
+      --  to produce and is not forced into compact {"a":1,"b":2}. It is
+      --  optional everywhere, so compact JSON is still accepted.
+      Put ("ws ::= [ \x09\x0A\x0D]*" & Character'Val (10));
 
       if Malformed then
          Status := E.Make (E.Grammar_Syntax_Error);
