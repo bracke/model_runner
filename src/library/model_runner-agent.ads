@@ -64,6 +64,41 @@ package Model_Runner.Agent is
       Error : Model_Runner.Errors.Error_Info;
    end record;
 
+   --  Somewhere for the loop to report what it does as it does it.
+   --
+   --  The loop leaves the whole transcript in the history for a caller to
+   --  read after, but a caller that wants to watch it happen -- print a call
+   --  as the model makes it, log a tool's answer as it comes back -- reads
+   --  it here instead of waiting for the end. A caller that wants neither
+   --  passes null and pays for nothing.
+   --
+   --  Task safety: the loop calls these on its own task, in order, one at a
+   --  time.
+   type Observer is limited interface;
+
+   --  A call the model made, about to be run.
+   --
+   --  @param Self The observer.
+   --  @param Named The function the model called.
+   --  @param Arguments The arguments, as one line of JSON.
+   procedure On_Call
+     (Self      : in out Observer;
+      Named     : String;
+      Arguments : String) is abstract;
+
+   --  What running that call returned, about to be fed back to the model.
+   --
+   --  @param Self The observer.
+   --  @param Named The function that was run.
+   --  @param Result The text the tool answered with.
+   procedure On_Result
+     (Self   : in out Observer;
+      Named  : String;
+      Result : String) is abstract;
+
+   --  A reference to whatever is watching the loop.
+   type Observer_Reference is access all Observer'Class;
+
    --  Run a conversation to an answer.
    --
    --  The history is the caller's to seed and the caller's to read after.
@@ -92,6 +127,8 @@ package Model_Runner.Agent is
    --  @param Max_Steps Most model turns before the loop gives up on an open
    --    call. A task that needs one tool and an answer takes two.
    --  @param Thinking Whether to ask the template for a thinking block.
+   --  @param Watch Where the loop reports each call and each tool result as
+   --    they happen, or null for none.
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
@@ -109,6 +146,7 @@ package Model_Runner.Agent is
       Max_Steps  : Positive := 8;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
+      Watch      : Observer_Reference := null;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome);

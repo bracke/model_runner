@@ -90,6 +90,35 @@ package body Model_Runner.CLI.Execute is
    procedure Free_Text is
      new Ada.Unchecked_Deallocation (String, Opt.Text_Access);
 
+   --  Prints the agent loop's calls and tool results to the console as they
+   --  happen, so `run --agent` shows the loop unfolding rather than only its
+   --  end. The console goes to standard error, so standard output stays the
+   --  model's own text.
+   type Agent_Watch (Screen : access Pres.Console) is
+     limited new Model_Runner.Agent.Observer with null record;
+
+   overriding procedure On_Call
+     (Self : in out Agent_Watch; Named : String; Arguments : String);
+   overriding procedure On_Result
+     (Self : in out Agent_Watch; Named : String; Result : String);
+
+   overriding procedure On_Call
+     (Self : in out Agent_Watch; Named : String; Arguments : String) is
+   begin
+      Pres.Put_Note
+        (Self.Screen.all, "cli.interactive.tool_call",
+         [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
+   end On_Call;
+
+   overriding procedure On_Result
+     (Self : in out Agent_Watch; Named : String; Result : String) is
+      pragma Unreferenced (Named);
+   begin
+      Pres.Put_Note
+        (Self.Screen.all, "cli.agent.tool_result",
+         [Loc.Named ("detail", Result)]);
+   end On_Result;
+
    --  Read a whole file as UTF-8, subject to a size limit.
    --  Write bytes to a path, replacing whatever was there.
    --
@@ -1846,6 +1875,7 @@ package body Model_Runner.CLI.Execute is
                Runner      : Model_Runner.Tools.Builtin.Instance;
                Request     : Gen.Request;
                Loop_Out    : Model_Runner.Agent.Outcome;
+               Watcher     : aliased Agent_Watch (Screen'Unchecked_Access);
             begin
                if not Model_Runner.Templates.Reads_Tools
                         (L.Template (Prepared).all)
@@ -1935,20 +1965,13 @@ package body Model_Runner.CLI.Execute is
                   Seeds      => Seeds'Unchecked_Access,
                   Max_Steps  => Positive'Max (1, Item.Max_Steps),
                   Thinking   => Item.Thinking,
+                  Watch      => Watcher'Unchecked_Access,
                   Result     => Loop_Out);
 
                Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
 
-               --  The tool turns, so a reader sees what the model asked and
-               --  what it was told. The reply itself has already streamed.
-               for Index in 1 .. Conv.Length (Messages) loop
-                  if Conv.Sender_At (Messages, Index) = Conv.Tool_Role then
-                     Pres.Put_Note
-                       (Screen, "cli.agent.tool_result",
-                        [Loc.Named ("detail", Conv.Content_At (Messages, Index))]);
-                  end if;
-               end loop;
-
+               --  The calls and their results were shown as they happened by
+               --  the watcher above; here only the outcome is left to note.
                Pres.Put_Note
                  (Screen, "cli.agent.stopped",
                   [Loc.Named

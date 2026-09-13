@@ -36,6 +36,7 @@ package body Model_Runner.Agent is
       Max_Steps  : Positive := 8;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
+      Watch      : Observer_Reference := null;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome)
@@ -199,27 +200,46 @@ package body Model_Runner.Agent is
                   Status : E.Error_Info;
                   Ran    : E.Error_Info;
                begin
+                  if Watch /= null then
+                     Watch.On_Call (Named, Args);
+                  end if;
+
                   if Model_Runner.Tools.Offers (Offered, Named) then
                      Executor.Run (Named, Args, Answer, Filled, Ran);
                      if E.Is_Error (Ran) then
                         --  The tool answered with more than fits. The model
                         --  is told so, in place of an answer it cannot have.
-                        Conv.Append
-                          (Messages, Conv.Tool_Role,
-                           "error: the tool's answer was too large to return",
-                           Status);
+                        declare
+                           Note : constant String :=
+                             "error: the tool's answer was too large "
+                             & "to return";
+                        begin
+                           Conv.Append (Messages, Conv.Tool_Role, Note, Status);
+                           if Watch /= null then
+                              Watch.On_Result (Named, Note);
+                           end if;
+                        end;
                      else
                         Conv.Append
                           (Messages, Conv.Tool_Role,
                            Answer (1 .. Filled), Status);
+                        if Watch /= null then
+                           Watch.On_Result (Named, Answer (1 .. Filled));
+                        end if;
                      end if;
                   else
                      --  The grammar should have made this impossible; if it
                      --  happens anyway, the model hears the truth and may
                      --  correct itself rather than the loop breaking.
-                     Conv.Append
-                       (Messages, Conv.Tool_Role,
-                        "error: no tool named """ & Named & """", Status);
+                     declare
+                        Note : constant String :=
+                          "error: no tool named """ & Named & """";
+                     begin
+                        Conv.Append (Messages, Conv.Tool_Role, Note, Status);
+                        if Watch /= null then
+                           Watch.On_Result (Named, Note);
+                        end if;
+                     end;
                   end if;
 
                   Result.Calls := Result.Calls + 1;
