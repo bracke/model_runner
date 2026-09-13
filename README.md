@@ -19699,17 +19699,25 @@ against it on the one- and two-token prompts, across every format and both
 the processor and the reference backend, in the same buckets as the logits.
 The draft agrees to a **millionth**.
 
-Two positions, and not the longer prompts, because the longer ones do not
-yet agree: at five and eight tokens the two drafts part by as much as one.
-The split is unlikely to be the engine's -- its block accepts llama.cpp's
-own drafts on real prompts of hundreds of tokens, where a block wrong by
-that much would be rejected almost always -- so the reference's
-multi-position block is the likelier fault, and running the block over
-several positions at once is the stack's own batching seen through it, which
-belongs with the batched attention rather than here. The block's forward
-pass has an independent check at the one and two positions where the two
-implementations meet exactly; the disagreement past that is written down for
-the work that owns it rather than published as agreement.
+Two positions, and not the longer prompts, though the reason is smaller
+than it first looked. Widened to every length, the comparison found what
+seemed a divergence of as much as one -- and it was mostly the check's
+own doing: a draft reads the exact state the session hands it and never
+the halved or eighth cache, so the comparisons that kept a rounded cache
+were comparing the reference's draft against a half the engine leaves
+empty. Over an exact cache and the file's own weights the drafts agree to
+a millionth at one, two and eight tokens; only the five-token sequence
+and the windowed eight part at all, by about **0.09** -- the draft is the
+whole stack, then the block, then the head, so the engine's binary32
+storage and the reference's binary64 drift furthest apart on the
+sharpest-conditioned rows. That is a tolerance the draft could be given,
+as the cached and lossy paths have their own; it is left ungiven because
+0.09 is loose enough to hide a real fault in a block, and the engine's
+block is checked another way -- it accepts llama.cpp's own drafts on real
+prompts of hundreds of tokens. So the check holds at the one and two
+positions where the two implementations meet to a millionth, and the
+depth-amplified drift past that is written down rather than papered over
+with a bound wide enough to swallow a bug.
 
 ### The hybrid mixture's shared expert, under the sweep
 

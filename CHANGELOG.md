@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The multi-position draft divergence, run down and corrected.** The
+  earlier note that the drafts "part by as much as one" past two tokens
+  was mostly the check's own doing: a draft reads the exact state and
+  never a rounded cache, so the comparisons keeping a halved or eighth
+  cache measured the reference's draft against an empty engine half. Over
+  an exact cache and real weights the drafts agree to a millionth at one,
+  two and eight tokens; only the five-token sequence and the windowed
+  eight part, by about 0.09, which is the depth of the block (stack,
+  attention, feed-forward, head) amplifying binary32-against-binary64
+  drift on the sharpest rows -- not a fault (the engine's block accepts
+  llama.cpp's drafts on real prompts). Left at one and two positions
+  rather than given a 0.09 bound wide enough to hide a real bug;
+  recorded.
+
 - **Hybrid attention batching on the device, priced and not built.** A
   hybrid's full-attention layers fall to the host in a batch -- the
   device batched-projection path excludes them for the head norm and the
