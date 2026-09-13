@@ -377,7 +377,8 @@ package body Tiny_Model is
            when Bert      => "bert",
            when Nomic_Bert => "nomic-bert",
            when Jina_Bert_V2 => "jina-bert-v2",
-           when Qwen35    => "qwen35");
+           when Qwen35    =>
+             (if Experts > 0 then "qwen35moe" else "qwen35"));
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -535,6 +536,15 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_feed_forward_length",
             Interfaces.Unsigned_32 (Expert_Feed));
+         --  The shared expert every position of a hybrid mixture goes
+         --  through beside the chosen ones. Its width is stated apart, as
+         --  the file states it; the same width as an expert here, which is
+         --  enough to run the path.
+         if Kind = Qwen35 then
+            Fixtures.Add_U32
+              (Builder, Prefix & ".expert_shared_feed_forward_length",
+               Interfaces.Unsigned_32 (Expert_Feed));
+         end if;
       end if;
 
       --  A sliding window, when one is asked for. Absent otherwise, which
@@ -1101,6 +1111,27 @@ package body Tiny_Model is
                         Expert_Feed * Experts);
                Norm_Of (Layer_Name (Index, "ffn_down_exps.bias"),
                         Embedding * Experts);
+            end if;
+            --  The shared expert: the same gate-up-down block an expert
+            --  is, and a row that gates its answer against the input. Every
+            --  layer of a hybrid mixture carries one, the block past the
+            --  stack included.
+            if Kind = Qwen35 then
+               Weight (Layer_Name (Index, "ffn_gate_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_up_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_down_shexp.weight"),
+                       [G.U64 (Expert_Feed), G.U64 (Embedding)]);
+               --  The shared expert's gating row, drawn small and centred
+               --  rather than around one: it is a projection to one number
+               --  through a sigmoid, and a row of ones saturates the gate,
+               --  so moving it leaves the answer where a quantized run's
+               --  noise hides it. Centred, the gate sits where it responds.
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ffn_gate_inp_shexp.weight"),
+                  [G.U64 (Embedding)], G.Type_F32,
+                  Fixtures.Encode_F32 (Next (N.Element_Count (Embedding))));
             end if;
          elsif Kind in Falcon | Phi2 | GPT2 | Bert then
             --  No gate: one projection up and one down.

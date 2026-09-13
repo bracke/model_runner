@@ -813,7 +813,7 @@ therefore cannot be common to both.
 
 ```
 conformance: sequences 45319, logits compared 1751992,
-             worst absolute 3.73150706233227E-05,
+             worst absolute 6.04463587507986E-05,
              worst relative 7.02625907667919E-02,
              rounded logits compared 166360,
              rounded worst absolute 1.67488891391300E-01,
@@ -19710,6 +19710,26 @@ belongs with the batched attention rather than here. The block's forward
 pass has an independent check at the one and two positions where the two
 implementations meet exactly; the disagreement past that is written down for
 the work that owns it rather than published as agreement.
+
+### The hybrid mixture's shared expert, under the sweep
+
+Qwen3.6-35B-A3B's mixture has a shared expert -- the gate-up-down block
+every position runs beside its chosen experts, scaled by the sigmoid of
+its own router row against the input -- and rewriting how a batch deals it
+across the pool earlier had no fixture behind it: the mixture was checked
+against llama.cpp's perplexity on the real file, never against an
+independent implementation on a fixture. The hybrid fixture now writes
+`qwen35moe` -- the shared expert on every layer, the block past the stack
+included -- and `Reference_Transformer` reads and applies it, so the
+conformance sweep crosses the shared-expert path in every format and both
+non-device backends, outside tolerance 0. That the path is exercised and
+not merely present is checked the way the rest of the sweep is: taking the
+shared expert out of the reference moves fourteen thousand logits, so the
+comparison would catch it going wrong. The one snag the sweep caught on
+the way in was its own: the shared expert's gating row, written around one
+as a normalization would be, saturated its sigmoid, and moving it left the
+answer inside a quantized run's noise -- so the fixture draws it small and
+centred, where the gate responds.
 
 ## License
 

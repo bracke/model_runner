@@ -226,6 +226,14 @@ private
       Up_Expert_Bias    : Vector_Access := null;
       Down_Expert_Bias  : Vector_Access := null;
 
+      --  A hybrid mixture's shared expert: the gate-up-down block every
+      --  position goes through beside the chosen experts, and the row
+      --  that gates its answer against the input.
+      Shared_Gate    : Matrix_Access := null;
+      Shared_Up      : Matrix_Access := null;
+      Shared_Down    : Matrix_Access := null;
+      Shared_Router  : Vector_Access := null;
+
       --  A hybrid's linear layer, where the block keeps a state rather
       --  than a cache: the three projections in one, the gate, the decay
       --  and the rate a value head, the decay's shape and the rate's
@@ -307,6 +315,7 @@ private
       Experts      : Natural := 0;
       Experts_Used : Natural := 0;
       Expert_Feed  : Natural := 0;
+      Shared_Feed  : Natural := 0;
 
       --  The hybrid's shape: every Linear_Every-th layer attends in full
       --  and the rest run the rule over a state of State_Size squared a

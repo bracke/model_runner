@@ -1397,6 +1397,9 @@ package body Reference_Transformer is
         Metadata
           (Source, Prefix (Item) & "expert_feed_forward_length",
            Item.Feed_Forward);
+      Item.Shared_Feed :=
+        Metadata
+          (Source, Prefix (Item) & "expert_shared_feed_forward_length", 0);
 
       --  The hybrid's shape, all of it required but the interval, which
       --  the architecture puts at four when the file is silent; and the
@@ -2005,6 +2008,36 @@ package body Reference_Transformer is
                if not Present then
                   return;
                end if;
+
+               --  The shared expert, where the mixture has one: the same
+               --  gate-up-down block and the row that gates it.
+               if Item.Shared_Feed > 0 then
+                  Current.Shared_Gate :=
+                    Read_Matrix (Layer_Name (Index, "ffn_gate_shexp.weight"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+                  Current.Shared_Up :=
+                    Read_Matrix (Layer_Name (Index, "ffn_up_shexp.weight"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+                  Current.Shared_Down :=
+                    Read_Matrix (Layer_Name (Index, "ffn_down_shexp.weight"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+                  Current.Shared_Router :=
+                    Read_Vector
+                      (Layer_Name (Index, "ffn_gate_inp_shexp.weight"),
+                       Present);
+                  if not Present then
+                     return;
+                  end if;
+               end if;
             else
                if Item.Kind in Falcon | Phi2 | GPT2 | Bert then
                   --  No gate at all: one projection up, a Gaussian unit,
@@ -2134,6 +2167,10 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Gate_Experts);
             Free_Matrix (Item.Blocks (Index).Up_Experts);
             Free_Matrix (Item.Blocks (Index).Down_Experts);
+            Free_Matrix (Item.Blocks (Index).Shared_Gate);
+            Free_Matrix (Item.Blocks (Index).Shared_Up);
+            Free_Matrix (Item.Blocks (Index).Shared_Down);
+            Free_Vector (Item.Blocks (Index).Shared_Router);
             Free_Matrix (Item.Blocks (Index).Gate);
             Free_Matrix (Item.Blocks (Index).Up);
             Free_Matrix (Item.Blocks (Index).Down);
@@ -2784,6 +2821,39 @@ package body Reference_Transformer is
                      end loop;
                   end;
                end loop;
+
+               --  The shared expert, where the mixture has one: the same
+               --  gate-up-down block over the whole input, scaled by the
+               --  sigmoid of its own router row against the input, and
+               --  added to what the chosen experts said.
+               if Current.Shared_Gate /= null then
+                  declare
+                     S_Feed : constant Natural := Item.Shared_Feed;
+                     S_Gate : Real_Vector (0 .. S_Feed - 1) :=
+                       [others => 0.0];
+                     S_Up   : Real_Vector (0 .. S_Feed - 1) :=
+                       [others => 0.0];
+                     S_Out  : Real_Vector (0 .. Width - 1) :=
+                       [others => 0.0];
+                     G_Sum  : Long_Float := 0.0;
+                     Scale  : Long_Float;
+                  begin
+                     Project (Current.Shared_Gate.all, Input, S_Gate);
+                     Project (Current.Shared_Up.all, Input, S_Up);
+                     for Index in S_Gate'Range loop
+                        S_Gate (Index) := Gated (S_Gate (Index)) * S_Up (Index);
+                     end loop;
+                     Project (Current.Shared_Down.all, S_Gate, S_Out);
+                     for Index in Input'Range loop
+                        G_Sum := G_Sum
+                          + Input (Index) * Current.Shared_Router (Index);
+                     end loop;
+                     Scale := 1.0 / (1.0 + Functions.Exp (-G_Sum));
+                     for Index in Sum'Range loop
+                        Sum (Index) := Sum (Index) + Scale * S_Out (Index);
+                     end loop;
+                  end;
+               end if;
 
                Normed := Sum;
             end;

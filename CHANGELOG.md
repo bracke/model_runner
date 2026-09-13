@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The hybrid mixture's shared expert is under the conformance sweep.**
+  The fixture writes `qwen35moe` with the shared expert on every layer
+  and the block past the stack, and `Reference_Transformer` reads and
+  applies it, so the shared-expert path -- checked before only against
+  llama.cpp's perplexity on the real 35B -- is now crossed against an
+  independent implementation in every format and both non-device
+  backends, outside tolerance 0; taking it out of the reference moves
+  fourteen thousand logits, which is the sweep confirming the path is
+  run and not merely present.
+
 - **The block past the stack drafts against the independent
   implementation.** `Reference_Transformer` now runs the hybrid's draft
   block, and the conformance sweep compares the engine's draft against
