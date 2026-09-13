@@ -125,6 +125,19 @@ package body Conformance is
 
       Expected : Expectation := [others => [others => 0.0]];
 
+      --  And what the reference's block past the stack drafts from the
+      --  same text, for the architecture that carries one: compared
+      --  beside the logits, in the same buckets, so that the draft the
+      --  engine takes from its own block has something independent to
+      --  be right against. The token proposed for the position after the
+      --  text is the last token's successor in the vocabulary, which is
+      --  as arbitrary as any and never out of range.
+      Expected_Draft : Expectation := [others => [others => 0.0]];
+      Drafted        : array (Sequence_Index) of Boolean := [others => False];
+
+      function Proposed (Tokens : Sequence) return Natural
+      is ((Tokens (Tokens'Last) + 1) mod Words);
+
       --  And what it makes of every position, for the architecture that has
       --  no distribution to make. Sized for the longest sequence at the
       --  widest embedding any fixture here is built at, because one array
@@ -155,6 +168,7 @@ package body Conformance is
       procedure Forget is
       begin
          Known := [others => False];
+         Drafted := [others => False];
       end Forget;
 
       --  The shapes a supported model comes in. Not flags, because they are
@@ -271,6 +285,19 @@ package body Conformance is
             end;
          else
             R.Run (Second, Tokens, Expected (Which), Made);
+
+            if Made and then R.Drafts (Second) then
+               declare
+                  Held : Sequence (Tokens'Range);
+               begin
+                  for Index in Tokens'Range loop
+                     Held (Index) := Tokens (Index);
+                  end loop;
+                  R.Draft
+                    (Second, Tokens, Proposed (Held), Expected_Draft (Which),
+                     Drafted (Which));
+               end;
+            end if;
          end if;
       end Answer_From;
 
@@ -399,6 +426,32 @@ package body Conformance is
          Both_Ways : constant Boolean :=
            Current_Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
                          | Tiny_Model.Jina_Bert_V2;
+
+         --  Whether the engine's draft from the block past the stack is
+         --  compared here. Only where the reference drafted, and not on
+         --  the device: a hybrid's linear layers run on the host under
+         --  the device backend, so the states the block reads are the
+         --  host's, and the block's own attention on the device is the
+         --  path that still excludes the hybrid -- checked against the
+         --  processor and the reference, which is where the draft's
+         --  arithmetic lives.
+         --  The one-token prompt, on the processor and the reference,
+         --  a token at a time. The draft the engine takes from its block
+         --  runs one position through it after a prompt; a single-token
+         --  prompt is that case in the small, and the state the block
+         --  reads is the one the session hands a draft. The longer and
+         --  batched contexts drive the block over several positions at
+         --  once, which is the stack's own batching seen through the
+         --  block and belongs with the batched attention work; this asks
+         --  the one question the draft turns on -- whether the block's
+         --  forward pass agrees with an independent one -- where the
+         --  state feeding it is unambiguous.
+         Draft_Here : constant Boolean :=
+           Drafted (Which)
+           and then Which = 1
+           and then not Batched
+           and then Model_Runner.Backend."/="
+                      (Backend, Model_Runner.Backend.Backend_Device);
       begin
          --  A model that attends both ways has no single-token evaluation
          --  and no way to take a text in pieces: a position cannot be
@@ -445,8 +498,12 @@ package body Conformance is
             --  position, which is the only answer it has and a stronger
             --  one: a logit is the last position's state through one more
             --  matrix, and these are every position's before it.
+            --  And twice the vocabulary for a model that drafts: its own
+            --  distribution and then the draft's.
             Span : constant Natural :=
-              (if Both_Ways then Tokens'Length * Current_Width else Words);
+              (if Both_Ways then Tokens'Length * Current_Width
+               elsif Draft_Here then 2 * Words
+               else Words);
 
             Answer : R.Real_Vector (0 .. Span - 1) := [others => 0.0];
             Actual : N.Real_Array (0 .. N.Element_Count (Span) - 1) :=
@@ -455,12 +512,67 @@ package body Conformance is
             --  Where the engine writes every position's state, for the
             --  comparison that asks for those.
             Room : Model_Runner.Tensors.Real_Array_Access := null;
+
+            --  The stack's state at every position, for the block past
+            --  the stack to be given position by position as a run gives
+            --  it after a prompt.
+            Rows : Model_Runner.Tensors.Real_Array_Access := null;
+
+            --  The engine's draft from its block, into the second half of
+            --  Actual: every position of the text run through the block
+            --  with the token after it beside the stack's state at it,
+            --  then the proposed token at the last.
+            procedure Draft_Too is
+               Width : constant N.Element_Count :=
+                 N.Element_Count (Current_Width);
+               Next_Out : N.Real_Array (0 .. Width - 1);
+               None     : N.Real_Array (1 .. 0);
+            begin
+               for Step in 0 .. Tokens'Length - 1 loop
+                  declare
+                     At_Row : constant N.Element_Count :=
+                       N.Element_Count (Step) * Width;
+                     Given  : constant Model_Runner.Tokenizer.Token_Id :=
+                       Model_Runner.Tokenizer.Token_Id
+                         (if Step < Tokens'Length - 1
+                          then Tokens (Tokens'First + Step + 1)
+                          else Proposed (Tokens));
+                  begin
+                     if Step < Tokens'Length - 1 then
+                        L.Draft_Next
+                          (Session, Engine, Given,
+                           Rows.all (At_Row .. At_Row + Width - 1),
+                           Step, None, Next_Out, Status);
+                     else
+                        L.Draft_Next
+                          (Session, Engine, Given,
+                           Rows.all (At_Row .. At_Row + Width - 1),
+                           Step,
+                           Actual (N.Element_Count (Words)
+                                   .. 2 * N.Element_Count (Words) - 1),
+                           Next_Out, Status);
+                     end if;
+                     exit when E.Is_Error (Status);
+                  end;
+               end loop;
+            end Draft_Too;
          begin
             if Both_Ways then
                Answer := Expected_States (Which) (0 .. Span - 1);
                Model_Runner.Tensors.Allocate
                  (N.Element_Count (Span), Room);
                if Room = null then
+                  Result.Refused := Result.Refused + 1;
+                  L.Close (Engine, Status);
+                  Containers.Close (Parsed);
+                  return;
+               end if;
+            elsif Draft_Here then
+               Answer (0 .. Words - 1) := Expected (Which);
+               Answer (Words .. 2 * Words - 1) := Expected_Draft (Which);
+               Model_Runner.Tensors.Allocate
+                 (N.Element_Count (Tokens'Length * Current_Width), Rows);
+               if Rows = null then
                   Result.Refused := Result.Refused + 1;
                   L.Close (Engine, Status);
                   Containers.Close (Parsed);
@@ -525,6 +637,36 @@ package body Conformance is
                                 (Session, Engine, Held (From .. Upto),
                                  Nothing, States => Room, Status => Status);
                            end;
+                        elsif Draft_Here then
+                           --  The states of this chunk's rows, into their
+                           --  places among every position's.
+                           declare
+                              Width : constant N.Element_Count :=
+                                N.Element_Count (Current_Width);
+                              Part  : Model_Runner.Tensors.Real_Array_Access;
+                           begin
+                              Model_Runner.Tensors.Allocate
+                                (N.Element_Count (Upto - From + 1) * Width,
+                                 Part);
+                              if Part = null then
+                                 Status := E.Make (E.Memory_Allocation_Failed);
+                              else
+                                 L.Evaluate_Batch
+                                   (Session, Engine, Held (From .. Upto),
+                                    Actual (0 .. N.Element_Count (Words) - 1),
+                                    States => Part, Status => Status);
+                                 if E.Is_Ok (Status) then
+                                    Rows.all
+                                      (N.Element_Count (From - 1) * Width
+                                       .. N.Element_Count (Upto) * Width - 1)
+                                      := Part.all
+                                           (0 .. N.Element_Count
+                                                   (Upto - From + 1) * Width
+                                                 - 1);
+                                 end if;
+                                 Model_Runner.Tensors.Free (Part);
+                              end if;
+                           end;
                         else
                            L.Evaluate_Batch
                              (Session, Engine, Held (From .. Upto), Actual,
@@ -540,10 +682,30 @@ package body Conformance is
                   L.Evaluate
                     (Session, Engine,
                      Model_Runner.Tokenizer.Token_Id (Tokens (Index)),
-                     Actual, Status => Status);
+                     Actual (0 .. N.Element_Count (Words) - 1),
+                     Status => Status);
                   exit when E.Is_Error (Status);
+
+                  --  The stack's state at this position, kept for the
+                  --  block past the stack.
+                  if Draft_Here then
+                     declare
+                        Width  : constant N.Element_Count :=
+                          N.Element_Count (Current_Width);
+                        At_Row : constant N.Element_Count :=
+                          N.Element_Count (Index - Tokens'First) * Width;
+                     begin
+                        Rows.all (At_Row .. At_Row + Width - 1) :=
+                          L.Last_State (Session);
+                     end;
+                  end if;
                end loop;
             end if;
+
+            if E.Is_Ok (Status) and then Draft_Here then
+               Draft_Too;
+            end if;
+            Model_Runner.Tensors.Free (Rows);
 
             --  An evaluation that ended in a diagnostic is counted rather
             --  than passed over. It used to leave no trace but a total that

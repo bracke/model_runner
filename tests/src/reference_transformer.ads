@@ -110,6 +110,33 @@ package Reference_Transformer is
       States : out Real_Vector;
       Ok     : out Boolean);
 
+   --  A draft from the block past the stack, for a model that carries
+   --  one: the distribution over the token after Next, where Next is the
+   --  token proposed for the position after the text. The stack runs the
+   --  text, and the block runs every position of it in order -- given the
+   --  token after each beside the stack's state at it -- so that the
+   --  draft attends over what the block was given before, as the engine's
+   --  own draft does after a prompt.
+   --
+   --  @param Item Loaded model with a block past its stack.
+   --  @param Tokens The text.
+   --  @param Next The token proposed for the position after it.
+   --  @param Logits Distribution over the token after that; Vocabulary
+   --    numbers.
+   --  @param Ok True when the model drafts and the shapes agree.
+   procedure Draft
+     (Item   : in out Model;
+      Tokens : Token_Vector;
+      Next   : Natural;
+      Logits : out Real_Vector;
+      Ok     : out Boolean);
+
+   --  Whether a loaded model carries a block past its stack to draft from.
+   --
+   --  @param Item Loaded model.
+   --  @return True when the file counts one or more blocks past the stack.
+   function Drafts (Item : Model) return Boolean;
+
 private
 
    type Matrix is array (Natural range <>, Natural range <>) of Long_Float;

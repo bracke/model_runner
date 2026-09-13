@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The block past the stack drafts against the independent
+  implementation.** `Reference_Transformer` now runs the hybrid's draft
+  block, and the conformance sweep compares the engine's draft against
+  it on the one-token prompt, every format, both the processor and the
+  reference backend -- agreeing to 3.5e-05. The block's forward pass had
+  been checked only against llama.cpp on real files; it now has an
+  independent check where a draft turns on it. The multi-position draft
+  (a longer or batched context through the block) is left for the
+  batched-attention work.
+
 - **The hybrid crossed against the independent implementation, and the
   fixture sweep made whole.** `Reference_Transformer` reads `qwen35` and
   `qwen35moe` now, its forward pass written from the architecture's

@@ -812,10 +812,10 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 45319, logits compared 1741752,
+conformance: sequences 45319, logits compared 1745848,
              worst absolute 3.53824042188533E-05,
              worst relative 7.02625907667919E-02,
-             rounded logits compared 165336,
+             rounded logits compared 165848,
              rounded worst absolute 1.67488891391300E-01,
              rounded worst relative 1.99694654308486E+00,
              cached logits compared 71696,
@@ -19684,6 +19684,29 @@ though its rows were not, which no reader could take back; and GPT-OSS's
 windowed shape wrote the window key twice. A hybrid whose value width is
 not its head size is refused by name, as a model the architecture does not
 define. `tests fixture-check` reads **unread 0, unwanted 0, refused 0**.
+
+### The block past the stack drafts against the independent implementation
+
+The hybrid's block past the stack -- the one `--draft-tokens` runs with no
+draft model -- had been checked only against llama.cpp on real files: the
+conformance sweep read its tensors so nothing counted them unread, but ran
+nothing through it. `Reference_Transformer` drafts now, written from the
+architecture as the rest of it is -- the next token's embedding beside the
+stack's state, each normalized and projected into one input; a full
+attention block with the gate beside each head; and the model's head over
+what the last position made -- and the sweep compares the engine's draft
+against it on the one-token prompt, across every format and both the
+processor and the reference backend, in the same buckets as the logits.
+The draft agrees to **3.5e-05**, the exact path's own worst.
+
+It is the one-token prompt the comparison asks, and deliberately: a draft
+runs the block over one position at a time from the state the session hands
+it, and a one-token prompt is that case with the state unambiguous. Driving
+the block over several positions at once -- what a longer or batched context
+does -- is the stack's own batching seen through the block, and belongs with
+the batched attention on the device rather than here. So the block's forward
+pass now has an independent check where the draft turns on it, and the
+multi-position path is left named for the work that owns it.
 
 ## License
 

@@ -2199,7 +2199,8 @@ package body Reference_Transformer is
       Logits      : out Real_Vector;
       States      : out Real_Vector;
       Want_States : Boolean;
-      Ok          : out Boolean)
+      Ok          : out Boolean;
+      Draft_Token : Integer := -1)
    is
       Width    : constant Natural := Item.Embedding;
       KV_Width : constant Natural := Item.KV_Heads * Item.Head_Size;
@@ -2600,6 +2601,236 @@ package body Reference_Transformer is
             end loop;
          end loop;
       end Rotate;
+
+      --  The feed-forward of a block, dense or a mixture, over what the
+      --  block normalized for it and back into the same vector. Factored
+      --  out of the second pass so that the block past the stack, which
+      --  is a full attention block with a feed-forward of its own, can
+      --  take it too.
+      procedure Feed_Forward (Current : Layer; Normed : in out Real_Vector);
+
+      procedure Feed_Forward (Current : Layer; Normed : in out Real_Vector)
+      is
+      begin
+         if Item.Experts > 0 then
+            --  A mixture: the router scores the experts, the softmax
+            --  turns the scores into shares, the highest few are kept
+            --  and their shares put back on a scale of one, and each
+            --  of them runs the block a dense model has one of.
+            declare
+               Width_Feed : constant Natural := Item.Expert_Feed;
+
+               Scores : Real_Vector (0 .. Item.Experts - 1) :=
+                 [others => 0.0];
+               Taken  : array (0 .. Item.Experts - 1) of Boolean :=
+                 [others => False];
+               Picked : array (0 .. Item.Experts_Used - 1) of Natural :=
+                 [others => 0];
+               Share  : array (0 .. Item.Experts_Used - 1) of Long_Float
+                 := [others => 0.0];
+
+               Input  : constant Real_Vector := Normed;
+               Sum    : Real_Vector (0 .. Width - 1) := [others => 0.0];
+
+               Largest, Total : Long_Float;
+            begin
+               Project (Current.Router.all, Input, Scores);
+
+               if Current.Router_Bias /= null then
+                  for Index in Scores'Range loop
+                     Scores (Index) := Scores (Index)
+                       + Current.Router_Bias.all (Index);
+                  end loop;
+               end if;
+
+               Largest := Scores (0);
+               for Index in Scores'Range loop
+                  if Scores (Index) > Largest then
+                     Largest := Scores (Index);
+                  end if;
+               end loop;
+
+               Total := 0.0;
+               for Index in Scores'Range loop
+                  Scores (Index) := Functions.Exp (Scores (Index)
+                                                   - Largest);
+                  Total := Total + Scores (Index);
+               end loop;
+               for Index in Scores'Range loop
+                  Scores (Index) := Scores (Index) / Total;
+               end loop;
+
+               --  The highest few, ties going to the lower-numbered
+               --  expert.
+               Total := 0.0;
+               for Slot in Picked'Range loop
+                  declare
+                     Best : Integer := -1;
+                  begin
+                     for Index in Scores'Range loop
+                        if not Taken (Index)
+                          and then (Best < 0
+                                    or else Scores (Index)
+                                            > Scores (Best))
+                        then
+                           Best := Index;
+                        end if;
+                     end loop;
+
+                     Taken (Best) := True;
+                     Picked (Slot) := Best;
+                     Share (Slot) := Scores (Best);
+                     Total := Total + Share (Slot);
+                  end;
+               end loop;
+
+               for Slot in Share'Range loop
+                  Share (Slot) := Share (Slot) / Total;
+               end loop;
+
+               for Slot in Picked'Range loop
+                  declare
+                     --  Where this expert's rows start in each stack.
+                     Rows_Feed : constant Natural :=
+                       Picked (Slot) * Width_Feed;
+                     Rows_Down : constant Natural :=
+                       Picked (Slot) * Width;
+
+                     Gate : Real_Vector (0 .. Width_Feed - 1) :=
+                       [others => 0.0];
+                     Up   : Real_Vector (0 .. Width_Feed - 1) :=
+                       [others => 0.0];
+                     Out_Row : Real_Vector (0 .. Width - 1) :=
+                       [others => 0.0];
+                  begin
+                     Project_Rows
+                       (Current.Gate_Experts.all, Rows_Feed, Input,
+                        Gate);
+                     Project_Rows
+                       (Current.Up_Experts.all, Rows_Feed, Input, Up);
+
+                     --  The biases, where the architecture carries
+                     --  them, indexed as the weights are: one
+                     --  expert's run at its own place in an array
+                     --  holding every expert's.
+                     if Current.Gate_Expert_Bias /= null then
+                        for Index in Gate'Range loop
+                           Gate (Index) := Gate (Index)
+                             + Current.Gate_Expert_Bias.all
+                                 (Rows_Feed + Index);
+                           Up (Index) := Up (Index)
+                             + Current.Up_Expert_Bias.all
+                                 (Rows_Feed + Index);
+                        end loop;
+                     end if;
+
+                     --  Through the same gate the dense block uses,
+                     --  which is the architecture's and not a copy of
+                     --  one. This was the logistic written out, and a
+                     --  mixture under an architecture with a
+                     --  different gate then disagreed with the engine
+                     --  by two logits in three -- while every gate
+                     --  either implementation printed matched, because
+                     --  the dense blocks were never the ones that
+                     --  differed.
+                     --
+                     --  GPT_OSS is the exception and cannot go
+                     --  through Gated at all: it holds both
+                     --  projections at a limit, takes the logistic
+                     --  at a steeper slope, and adds one to the up
+                     --  projection, so the gate reaches the second
+                     --  vector as well as the first.
+                     if Item.Kind = GPT_OSS then
+                        for Index in Gate'Range loop
+                           declare
+                              Limit : constant Long_Float := 7.0;
+                              Alpha : constant Long_Float := 1.702;
+
+                              X : constant Long_Float :=
+                                Long_Float'Min (Gate (Index), Limit);
+                              Y : constant Long_Float :=
+                                Long_Float'Max
+                                  (-Limit,
+                                   Long_Float'Min (Up (Index),
+                                                   Limit));
+                           begin
+                              Gate (Index) :=
+                                X / (1.0 + Functions.Exp (-Alpha * X))
+                                * (Y + 1.0);
+                           end;
+                        end loop;
+                     else
+                        for Index in Gate'Range loop
+                           Gate (Index) :=
+                             Gated (Gate (Index)) * Up (Index);
+                        end loop;
+                     end if;
+
+                     Project_Rows
+                       (Current.Down_Experts.all, Rows_Down, Gate,
+                        Out_Row);
+
+                     if Current.Down_Expert_Bias /= null then
+                        for Index in Out_Row'Range loop
+                           Out_Row (Index) := Out_Row (Index)
+                             + Current.Down_Expert_Bias.all
+                                 (Rows_Down + Index);
+                        end loop;
+                     end if;
+
+                     for Index in Sum'Range loop
+                        Sum (Index) :=
+                          Sum (Index) + Share (Slot) * Out_Row (Index);
+                     end loop;
+                  end;
+               end loop;
+
+               Normed := Sum;
+            end;
+         else
+            declare
+               Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                 [others => 0.0];
+               Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
+                 [others => 0.0];
+            begin
+               --  No gate is its own arrangement, not a gate of ones:
+               --  one projection up, a Gaussian unit, one down.
+               if Current.Gate = null then
+                  Project (Current.Up.all, Normed, Gate);
+
+                  --  The bias belongs to the projection, so it is
+                  --  added before the unit rather than after it.
+                  if Current.Up_Bias /= null then
+                     for Index in Gate'Range loop
+                        Gate (Index) :=
+                          Gate (Index) + Current.Up_Bias.all (Index);
+                     end loop;
+                  end if;
+
+                  for Index in Gate'Range loop
+                     Gate (Index) := Gated (Gate (Index));
+                  end loop;
+               else
+                  Project (Current.Gate.all, Normed, Gate);
+                  Project (Current.Up.all, Normed, Up);
+
+                  for Index in Gate'Range loop
+                     Gate (Index) := Gated (Gate (Index)) * Up (Index);
+                  end loop;
+               end if;
+
+               Project (Current.Down.all, Gate, Normed);
+
+               if Current.Down_Bias /= null then
+                  for Index in 0 .. Width - 1 loop
+                     Normed (Index) :=
+                       Normed (Index) + Current.Down_Bias.all (Index);
+                  end loop;
+               end if;
+            end;
+         end if;
+      end Feed_Forward;
 
    begin
       Ok := False;
@@ -3294,224 +3525,7 @@ package body Reference_Transformer is
                      Normalize (State, Current.Feed_Norm.all, Normed);
                   end if;
 
-                  if Item.Experts > 0 then
-                     --  A mixture: the router scores the experts, the softmax
-                     --  turns the scores into shares, the highest few are kept
-                     --  and their shares put back on a scale of one, and each
-                     --  of them runs the block a dense model has one of.
-                     declare
-                        Width_Feed : constant Natural := Item.Expert_Feed;
-
-                        Scores : Real_Vector (0 .. Item.Experts - 1) :=
-                          [others => 0.0];
-                        Taken  : array (0 .. Item.Experts - 1) of Boolean :=
-                          [others => False];
-                        Picked : array (0 .. Item.Experts_Used - 1) of Natural :=
-                          [others => 0];
-                        Share  : array (0 .. Item.Experts_Used - 1) of Long_Float
-                          := [others => 0.0];
-
-                        Input  : constant Real_Vector := Normed;
-                        Sum    : Real_Vector (0 .. Width - 1) := [others => 0.0];
-
-                        Largest, Total : Long_Float;
-                     begin
-                        Project (Current.Router.all, Input, Scores);
-
-                        if Current.Router_Bias /= null then
-                           for Index in Scores'Range loop
-                              Scores (Index) := Scores (Index)
-                                + Current.Router_Bias.all (Index);
-                           end loop;
-                        end if;
-
-                        Largest := Scores (0);
-                        for Index in Scores'Range loop
-                           if Scores (Index) > Largest then
-                              Largest := Scores (Index);
-                           end if;
-                        end loop;
-
-                        Total := 0.0;
-                        for Index in Scores'Range loop
-                           Scores (Index) := Functions.Exp (Scores (Index)
-                                                            - Largest);
-                           Total := Total + Scores (Index);
-                        end loop;
-                        for Index in Scores'Range loop
-                           Scores (Index) := Scores (Index) / Total;
-                        end loop;
-
-                        --  The highest few, ties going to the lower-numbered
-                        --  expert.
-                        Total := 0.0;
-                        for Slot in Picked'Range loop
-                           declare
-                              Best : Integer := -1;
-                           begin
-                              for Index in Scores'Range loop
-                                 if not Taken (Index)
-                                   and then (Best < 0
-                                             or else Scores (Index)
-                                                     > Scores (Best))
-                                 then
-                                    Best := Index;
-                                 end if;
-                              end loop;
-
-                              Taken (Best) := True;
-                              Picked (Slot) := Best;
-                              Share (Slot) := Scores (Best);
-                              Total := Total + Share (Slot);
-                           end;
-                        end loop;
-
-                        for Slot in Share'Range loop
-                           Share (Slot) := Share (Slot) / Total;
-                        end loop;
-
-                        for Slot in Picked'Range loop
-                           declare
-                              --  Where this expert's rows start in each stack.
-                              Rows_Feed : constant Natural :=
-                                Picked (Slot) * Width_Feed;
-                              Rows_Down : constant Natural :=
-                                Picked (Slot) * Width;
-
-                              Gate : Real_Vector (0 .. Width_Feed - 1) :=
-                                [others => 0.0];
-                              Up   : Real_Vector (0 .. Width_Feed - 1) :=
-                                [others => 0.0];
-                              Out_Row : Real_Vector (0 .. Width - 1) :=
-                                [others => 0.0];
-                           begin
-                              Project_Rows
-                                (Current.Gate_Experts.all, Rows_Feed, Input,
-                                 Gate);
-                              Project_Rows
-                                (Current.Up_Experts.all, Rows_Feed, Input, Up);
-
-                              --  The biases, where the architecture carries
-                              --  them, indexed as the weights are: one
-                              --  expert's run at its own place in an array
-                              --  holding every expert's.
-                              if Current.Gate_Expert_Bias /= null then
-                                 for Index in Gate'Range loop
-                                    Gate (Index) := Gate (Index)
-                                      + Current.Gate_Expert_Bias.all
-                                          (Rows_Feed + Index);
-                                    Up (Index) := Up (Index)
-                                      + Current.Up_Expert_Bias.all
-                                          (Rows_Feed + Index);
-                                 end loop;
-                              end if;
-
-                              --  Through the same gate the dense block uses,
-                              --  which is the architecture's and not a copy of
-                              --  one. This was the logistic written out, and a
-                              --  mixture under an architecture with a
-                              --  different gate then disagreed with the engine
-                              --  by two logits in three -- while every gate
-                              --  either implementation printed matched, because
-                              --  the dense blocks were never the ones that
-                              --  differed.
-                              --
-                              --  GPT_OSS is the exception and cannot go
-                              --  through Gated at all: it holds both
-                              --  projections at a limit, takes the logistic
-                              --  at a steeper slope, and adds one to the up
-                              --  projection, so the gate reaches the second
-                              --  vector as well as the first.
-                              if Item.Kind = GPT_OSS then
-                                 for Index in Gate'Range loop
-                                    declare
-                                       Limit : constant Long_Float := 7.0;
-                                       Alpha : constant Long_Float := 1.702;
-
-                                       X : constant Long_Float :=
-                                         Long_Float'Min (Gate (Index), Limit);
-                                       Y : constant Long_Float :=
-                                         Long_Float'Max
-                                           (-Limit,
-                                            Long_Float'Min (Up (Index),
-                                                            Limit));
-                                    begin
-                                       Gate (Index) :=
-                                         X / (1.0 + Functions.Exp (-Alpha * X))
-                                         * (Y + 1.0);
-                                    end;
-                                 end loop;
-                              else
-                                 for Index in Gate'Range loop
-                                    Gate (Index) :=
-                                      Gated (Gate (Index)) * Up (Index);
-                                 end loop;
-                              end if;
-
-                              Project_Rows
-                                (Current.Down_Experts.all, Rows_Down, Gate,
-                                 Out_Row);
-
-                              if Current.Down_Expert_Bias /= null then
-                                 for Index in Out_Row'Range loop
-                                    Out_Row (Index) := Out_Row (Index)
-                                      + Current.Down_Expert_Bias.all
-                                          (Rows_Down + Index);
-                                 end loop;
-                              end if;
-
-                              for Index in Sum'Range loop
-                                 Sum (Index) :=
-                                   Sum (Index) + Share (Slot) * Out_Row (Index);
-                              end loop;
-                           end;
-                        end loop;
-
-                        Normed := Sum;
-                     end;
-                  else
-                     declare
-                        Gate : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                          [others => 0.0];
-                        Up   : Real_Vector (0 .. Item.Feed_Forward - 1) :=
-                          [others => 0.0];
-                     begin
-                        --  No gate is its own arrangement, not a gate of ones:
-                        --  one projection up, a Gaussian unit, one down.
-                        if Current.Gate = null then
-                           Project (Current.Up.all, Normed, Gate);
-
-                           --  The bias belongs to the projection, so it is
-                           --  added before the unit rather than after it.
-                           if Current.Up_Bias /= null then
-                              for Index in Gate'Range loop
-                                 Gate (Index) :=
-                                   Gate (Index) + Current.Up_Bias.all (Index);
-                              end loop;
-                           end if;
-
-                           for Index in Gate'Range loop
-                              Gate (Index) := Gated (Gate (Index));
-                           end loop;
-                        else
-                           Project (Current.Gate.all, Normed, Gate);
-                           Project (Current.Up.all, Normed, Up);
-
-                           for Index in Gate'Range loop
-                              Gate (Index) := Gated (Gate (Index)) * Up (Index);
-                           end loop;
-                        end if;
-
-                        Project (Current.Down.all, Gate, Normed);
-
-                        if Current.Down_Bias /= null then
-                           for Index in 0 .. Width - 1 loop
-                              Normed (Index) :=
-                                Normed (Index) + Current.Down_Bias.all (Index);
-                           end loop;
-                        end if;
-                     end;
-                  end if;
+                  Feed_Forward (Current, Normed);
 
                   if Current.Post_Feed_Norm /= null
                     and then Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2
@@ -3568,7 +3582,182 @@ package body Reference_Transformer is
          end loop;
       end if;
 
-      if Item.Output /= null then
+      --  The block past the stack, asked for a draft: run through every
+      --  position of the text in order, each position given the token
+      --  after it beside the stack's state at it, both normalized and
+      --  projected together into one input; then a full attention block
+      --  over its own keys and values, with the gate beside each head;
+      --  and at the last position the token the caller proposes for the
+      --  one after the text, whose successor the head then draws. The
+      --  stack's state is what the model's own head would read: the
+      --  residual through the output normalization.
+      if Draft_Token >= 0 then
+         if Item.Next_Layers = 0 or else Draft_Token >= Item.Words
+           or else Item.Output = null
+           or else Logits'Length /= Item.Words
+         then
+            raise Constraint_Error;
+         end if;
+
+         declare
+            Block : Layer renames Item.Blocks (Item.Layers);
+            Group : constant Natural := Item.Heads / Item.KV_Heads;
+            Scale : constant Long_Float :=
+              1.0 / Functions.Sqrt (Long_Float (Item.Head_Size));
+
+            Block_Keys   : History_Access :=
+              new History (0 .. Steps - 1, 0 .. KV_Width - 1);
+            Block_Values : History_Access :=
+              new History (0 .. Steps - 1, 0 .. V_Width - 1);
+
+            Input   : Real_Vector (0 .. Width - 1) := [others => 0.0];
+            Joined  : Real_Vector (0 .. 2 * Width - 1) := [others => 0.0];
+            Row     : Real_Vector (0 .. Width - 1) := [others => 0.0];
+         begin
+            for Step in 0 .. Steps - 1 loop
+               declare
+                  Tok : constant Natural :=
+                    (if Step < Steps - 1
+                     then Tokens (Tokens'First + Step + 1)
+                     else Draft_Token);
+
+                  Wide_Query : Real_Vector (0 .. 2 * Q_Width - 1) :=
+                    [others => 0.0];
+                  Query      : Real_Vector (0 .. Q_Width - 1) :=
+                    [others => 0.0];
+                  Head_Gate  : Real_Vector (0 .. Q_Width - 1) :=
+                    [others => 0.0];
+                  Key_Row    : Real_Vector (0 .. KV_Width - 1) :=
+                    [others => 0.0];
+                  Val_Row    : Real_Vector (0 .. V_Width - 1) :=
+                    [others => 0.0];
+                  Blended    : Real_Vector (0 .. B_Width - 1) :=
+                    [others => 0.0];
+               begin
+                  --  The next token's embedding and the stack's state at
+                  --  this position, each normalized, side by side.
+                  for Index in 0 .. Width - 1 loop
+                     Row (Index) := Item.Embeddings (Tok, Index);
+                  end loop;
+                  Normalize (Row, Item.Next_Enorm.all, Normed);
+                  Joined (0 .. Width - 1) := Normed;
+
+                  for Index in 0 .. Width - 1 loop
+                     State (Index) := Whole (Step, Index);
+                  end loop;
+                  Normalize (State, Item.Output_Norm.all, Row);
+                  Normalize (Row, Item.Next_Hnorm.all, Normed);
+                  Joined (Width .. 2 * Width - 1) := Normed;
+
+                  Project (Item.Next_Proj.all, Joined, Input);
+
+                  --  The block's attention, as the stack's full blocks
+                  --  attend, over what the block was given at the
+                  --  positions before.
+                  Normalize (Input, Block.Attention_Norm.all, Normed);
+                  Project (Block.Query.all, Normed, Wide_Query);
+                  for Head in 0 .. Item.Heads - 1 loop
+                     for Index in 0 .. Item.Head_Size - 1 loop
+                        Query (Head * Item.Head_Size + Index) :=
+                          Wide_Query (Head * 2 * Item.Head_Size + Index);
+                        Head_Gate (Head * Item.Head_Size + Index) :=
+                          Wide_Query
+                            (Head * 2 * Item.Head_Size + Item.Head_Size
+                             + Index);
+                     end loop;
+                  end loop;
+                  Project (Block.Key.all, Normed, Key_Row);
+                  Project (Block.Value.all, Normed, Val_Row);
+                  Normalize_Heads
+                    (Query, Item.Heads, Item.Head_Size, Block.Query_Norm.all);
+                  Normalize_Heads
+                    (Key_Row, Item.KV_Heads, Item.Head_Size,
+                     Block.Key_Norm.all);
+                  Rotate (Query, Item.Heads, Step, Item.Layers);
+                  Rotate (Key_Row, Item.KV_Heads, Step, Item.Layers);
+                  for Index in 0 .. KV_Width - 1 loop
+                     Block_Keys (Step, Index) := Key_Row (Index);
+                  end loop;
+                  for Index in 0 .. V_Width - 1 loop
+                     Block_Values (Step, Index) := Val_Row (Index);
+                  end loop;
+
+                  for Head in 0 .. Item.Heads - 1 loop
+                     declare
+                        Source_Head : constant Natural := Head / Group;
+                        Scores  : Real_Vector (0 .. Step) := [others => 0.0];
+                        Largest : Long_Float;
+                        Total   : Long_Float := 0.0;
+                     begin
+                        for Past in 0 .. Step loop
+                           for Component in 0 .. Item.Head_Size - 1 loop
+                              Scores (Past) := Scores (Past)
+                                + Query (Head * Item.Head_Size + Component)
+                                  * Block_Keys
+                                      (Past,
+                                       Source_Head * Item.Head_Size
+                                       + Component);
+                           end loop;
+                           Scores (Past) := Scores (Past) * Scale;
+                        end loop;
+
+                        Largest := Scores (0);
+                        for Past in 0 .. Step loop
+                           if Scores (Past) > Largest then
+                              Largest := Scores (Past);
+                           end if;
+                        end loop;
+                        for Past in 0 .. Step loop
+                           Scores (Past) :=
+                             Functions.Exp (Scores (Past) - Largest);
+                           Total := Total + Scores (Past);
+                        end loop;
+
+                        for Component in 0 .. Item.Value_Size - 1 loop
+                           declare
+                              Sum : Long_Float := 0.0;
+                           begin
+                              for Past in 0 .. Step loop
+                                 Sum := Sum
+                                   + Scores (Past)
+                                     * Block_Values
+                                         (Past,
+                                          Source_Head * Item.Value_Size
+                                          + Component);
+                              end loop;
+                              Blended (Head * Item.Value_Size + Component) :=
+                                Sum / Total;
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+
+                  for Index in 0 .. B_Width - 1 loop
+                     Blended (Index) :=
+                       Blended (Index) * Logistic (Head_Gate (Index));
+                  end loop;
+                  Project (Block.Attention_Out.all, Blended, Normed);
+                  for Index in 0 .. Width - 1 loop
+                     Input (Index) := Input (Index) + Normed (Index);
+                  end loop;
+
+                  Normalize (Input, Block.Feed_Norm.all, Normed);
+                  Feed_Forward (Block, Normed);
+                  for Index in 0 .. Width - 1 loop
+                     Input (Index) := Input (Index) + Normed (Index);
+                  end loop;
+               end;
+            end loop;
+
+            --  What the block made at the last position, through the
+            --  block's own normalization and the model's head.
+            Normalize (Input, Item.Next_Head_Norm.all, Normed);
+            Project (Item.Output.all, Normed, Logits);
+
+            Free_History (Block_Keys);
+            Free_History (Block_Values);
+         end;
+      elsif Item.Output /= null then
          if Item.Kind in Falcon | Phi2 | GPT2 then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
@@ -3632,6 +3821,25 @@ package body Reference_Transformer is
    ----------------
    -- Run_States --
    ----------------
+
+   function Drafts (Item : Model) return Boolean
+   is (Item.Loaded and then Item.Next_Layers > 0);
+
+   -----------
+   -- Draft --
+   -----------
+
+   procedure Draft
+     (Item   : in out Model;
+      Tokens : Token_Vector;
+      Next   : Natural;
+      Logits : out Real_Vector;
+      Ok     : out Boolean)
+   is
+      Nothing : Real_Vector (1 .. 0);
+   begin
+      Evaluate (Item, Tokens, Logits, Nothing, False, Ok, Draft_Token => Next);
+   end Draft;
 
    procedure Run_States
      (Item   : in out Model;
