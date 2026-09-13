@@ -50,6 +50,7 @@ with Packaging;
 with Pristine;
 with Host_Load;
 with Imatrix_Run;
+with Agent_Eval;
 with Perplexity_Run;
 with Quantize_Run;
 with Speed_Run;
@@ -1262,6 +1263,72 @@ begin
          --  A run that measured nothing is a failure, for the reason every
          --  other campaign here gives: an "I did nothing" that exits with a
          --  success is indistinguishable from an "I did".
+         if not Result.Ran then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "agent-eval" then
+      --  The agent loop closed against a real model: a task posed, a call
+      --  the grammar shaped, a tool's answer, and the reply it makes true.
+      --  Gated like the other model campaigns, and out of the default gate.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         function Number (Name : String; Default : Natural) return Natural is
+            Said : constant String := Option (Name, "");
+         begin
+            if Said = "" then
+               return Default;
+            end if;
+            return Natural'Value (Said);
+         exception
+            when others =>
+               return Default;
+         end Number;
+
+         function Given (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Given;
+
+         Result : Agent_Eval.Report;
+      begin
+         if Option ("--model", "") = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "agent-eval: --model is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         Agent_Eval.Run
+           (Path    => Option ("--model", ""),
+            Threads => Number ("--threads",
+                               Model_Runner.Platform.Core_Count - 1),
+            Backend => Backend_Of (Option ("--backend", "cpu")),
+            Anyway  => Given ("--anyway"),
+            Waiting => Number ("--wait", 0),
+            Result  => Result);
+
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, Agent_Eval.Summary (Result));
+
+         --  A run that scored nothing is a failure, the same reason every
+         --  campaign here gives: a "did nothing" that exits with a success
+         --  cannot be told from a "did".
          if not Result.Ran then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

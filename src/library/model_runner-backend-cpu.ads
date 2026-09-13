@@ -39,6 +39,14 @@ with Model_Runner.Tensors;
 --  that owns it and the language waits for its workers to terminate when that
 --  frame exits. Close asks the workers to finish and is idempotent.
 --
+--  Close must be called explicitly before the pool leaves scope. A worker
+--  leaves its loop only when Close raises the shutdown flag, and the language
+--  awaits a master's dependent tasks before it finalizes the object they
+--  belong to (RM 7.6.1) -- so a pool left to its own Finalize is awaited by a
+--  master that then blocks on workers Finalize was going to stop but never
+--  gets to, and every task of the pool sleeps forever. The Finalize is a
+--  backstop for an already-closed pool, not a substitute for closing one.
+--
 --  Task safety: one task submits work at a time. The workers synchronize
 --  through the protected coordinator and share nothing else.
 package Model_Runner.Backend.CPU is

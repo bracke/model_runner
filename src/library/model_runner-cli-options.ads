@@ -290,6 +290,20 @@ package Model_Runner.CLI.Options is
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
 
+      --  Close the tool loop rather than leaving it open. Without this a run
+      --  that is offered tools writes its calls and stops, for the caller to
+      --  run and hand back on the next run; with it, the program runs the
+      --  built-in tools itself and feeds the answers back until the model
+      --  answers or the step budget below runs out. The built-in tools are
+      --  all this program can run -- a tool that reaches the world lives in
+      --  a caller's own runner, which is a library thing and not a flag.
+      Agent : Boolean := False;
+
+      --  Most model turns the agent loop takes before it gives up on a call
+      --  it cannot get answered. A task that needs one tool and a reply
+      --  takes two.
+      Max_Steps : Natural := 8;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is

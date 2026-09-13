@@ -40,6 +40,8 @@ with Model_Runner.Tools;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 
+with Model_Runner.Agent;
+with Model_Runner.Tools.Builtin;
 with Model_Runner.CLI.Interactive;
 
 package body Model_Runner.CLI.Execute is
@@ -52,6 +54,8 @@ package body Model_Runner.CLI.Execute is
    use type Model_Runner.CLI.Options.Text_Access;
    use type Model_Runner.CLI.Options.Verbosity;
    use type Model_Runner.Generation.Completion_Reason;
+   use type Model_Runner.Conversation.Role;
+   use type Model_Runner.Agent.Stop_Reason;
 
    package Conv renames Model_Runner.Conversation;
    package E renames Model_Runner.Errors;
@@ -1817,6 +1821,155 @@ package body Model_Runner.CLI.Execute is
                (if Rules_Ready then Rules'Unchecked_Access else null),
                (if Tools_Ready then Offered'Unchecked_Access else null),
                Status);
+            Cleanup;
+            return;
+         end if;
+
+         --  Agent mode owns its loop too. It closes the tool loop the
+         --  single run leaves open: the model's calls are run against the
+         --  built-in tools and the answers fed back until it answers. The
+         --  built-in tools are all this program can run, so agent mode
+         --  offers those and ignores any --tools a caller also gave.
+         if Item.Agent then
+            if Item.Raw then
+               Fail (E.Make (E.CLI_Conflicting_Prompt_Sources));
+               return;
+            end if;
+            if not L.Template_Ready (Prepared) then
+               Fail (L.Template_Condition (Prepared));
+               return;
+            end if;
+
+            declare
+               Messages    : Conv.History;
+               Agent_Tools : aliased Model_Runner.Tools.Definitions;
+               Runner      : Model_Runner.Tools.Builtin.Instance;
+               Request     : Gen.Request;
+               Loop_Out    : Model_Runner.Agent.Outcome;
+            begin
+               if not Model_Runner.Templates.Reads_Tools
+                        (L.Template (Prepared).all)
+               then
+                  Fail (E.Make (E.Tools_Not_In_Template));
+                  return;
+               end if;
+
+               --  The prompt: the first one given, resolved as the run path
+               --  resolves it.
+               case Item.Prompt_Kind is
+                  when Opt.Prompt_Inline =>
+                     Prompt := new String'(Item.Prompts (1).all);
+
+                  when Opt.Prompt_File =>
+                     Read_File
+                       (T.To_String (Item.Prompt_Path),
+                        Model_Runner.Limits.Default_Session_Limits
+                          .Max_Prompt_Bytes,
+                        Prompt, Condition);
+                     if E.Is_Error (Condition) then
+                        Fail (Condition);
+                        return;
+                     end if;
+
+                  when others =>
+                     Read_Standard_Input
+                       (Pres.Message_Value (Screen, "cli.label.standard_input"),
+                        Model_Runner.Limits.Default_Session_Limits
+                          .Max_Prompt_Bytes,
+                        Prompt, Condition);
+                     if E.Is_Error (Condition) then
+                        Fail (Condition);
+                        return;
+                     end if;
+               end case;
+
+               if Prompt = null or else Prompt.all'Length = 0 then
+                  Fail (E.Make (E.CLI_No_Prompt_Available));
+                  return;
+               end if;
+               if not Model_Runner.UTF8.Is_Valid (Prompt.all) then
+                  Fail (E.Make (E.IO_Invalid_UTF8));
+                  return;
+               end if;
+
+               Model_Runner.Tools.Read
+                 (Agent_Tools, Model_Runner.Tools.Builtin.Definitions_Text,
+                  Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Conv.Open (Messages, Status => Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
+               if Item.Has_System and then Item.System_Text /= null then
+                  Conv.Set_System (Messages, Item.System_Text.all, Condition);
+               end if;
+               Conv.Append
+                 (Messages, Conv.User_Role, Prompt.all, Condition);
+               if E.Is_Error (Condition) then
+                  Conv.Close (Messages);
+                  Fail (Condition);
+                  return;
+               end if;
+
+               Request.Sampling := Item.Sampling;
+               Request.Max_Tokens := Item.Max_Tokens;
+               Request.Seed := Item.Seed;
+               Request.Has_Seed := Item.Has_Seed;
+               Request.Batch_Size := Item.Batch_Size;
+
+               Model_Runner.Agent.Run
+                 (Source     => Prepared,
+                  Session    => Session,
+                  Messages   => Messages,
+                  Offered    => Agent_Tools,
+                  Executor   => Runner,
+                  Generation => Request,
+                  Stop_Set   => Stop_Set,
+                  Sink       => Sink'Unchecked_Access,
+                  Time       => Clock'Unchecked_Access,
+                  Seeds      => Seeds'Unchecked_Access,
+                  Max_Steps  => Positive'Max (1, Item.Max_Steps),
+                  Thinking   => Item.Thinking,
+                  Result     => Loop_Out);
+
+               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+
+               --  The tool turns, so a reader sees what the model asked and
+               --  what it was told. The reply itself has already streamed.
+               for Index in 1 .. Conv.Length (Messages) loop
+                  if Conv.Sender_At (Messages, Index) = Conv.Tool_Role then
+                     Pres.Put_Note
+                       (Screen, "cli.agent.tool_result",
+                        [Loc.Named ("detail", Conv.Content_At (Messages, Index))]);
+                  end if;
+               end loop;
+
+               Pres.Put_Note
+                 (Screen, "cli.agent.stopped",
+                  [Loc.Named
+                     ("state",
+                      Model_Runner.Agent.Stop_Reason'Image (Loop_Out.Reason)),
+                   Loc.Named
+                     ("count", T.Image (Long_Long_Integer (Loop_Out.Steps))),
+                   Loc.Named
+                     ("total", T.Image (Long_Long_Integer (Loop_Out.Calls)))]);
+
+               Status := E.Exit_Success;
+               if Loop_Out.Reason /= Model_Runner.Agent.Answered
+                 and then E.Is_Error (Loop_Out.Error)
+               then
+                  Pres.Report (Screen, Loop_Out.Error);
+                  Status := E.Exit_Status (Loop_Out.Error);
+               end if;
+
+               Conv.Close (Messages);
+            end;
+
             Cleanup;
             return;
          end if;

@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **An agentic loop, closing the tool loop this program left open.** The
+  tool packages read the definitions a caller offers and the calls a model
+  writes back, and said the loop closes outside the program or not at all.
+  `Model_Runner.Agent` closes it: render the conversation with the tools in
+  it, generate a reply a grammar keeps to prose or a readable call, take the
+  reply apart, run each call through a `Model_Runner.Tools.Runner` the caller
+  supplies, feed the answers back as tool turns, and render again -- until
+  the model answers or a step budget runs out. The reply is always
+  grammar-constrained (`Model_Runner.Tools.Constraint` compiles a grammar
+  from the tools offered), so a call always parses and always names a tool on
+  offer. `Model_Runner.Tools.Builtin` is a pure runner -- arithmetic, two
+  string operations, a fixed lookup -- that starts no process and so keeps
+  the library's promise while letting the loop run in-process; a tool that
+  reaches the world lives in a caller's own runner. `model_runner run
+  --agent` drives it with the built-in tools, and `tests agent-eval --model
+  MODEL --anyway` scores it on a table of tool-use tasks against a real
+  model, gated like `tests speed` and `tests perplexity` and out of the
+  default gate. The built-in tools and the call grammar are covered in the
+  mandatory suite; the loop against a model is what agent-eval measures.
+
 - **The multi-position draft divergence, run down and corrected.** The
   earlier note that the drafts "part by as much as one" past two tokens
   was mostly the check's own doing: a draft reads the exact state and

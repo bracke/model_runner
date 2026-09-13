@@ -23,6 +23,7 @@ package body Tool_Commands is
    Name_Slow           : aliased constant String := "slow";
    Name_Device_Bench   : aliased constant String := "device-bench";
    Name_Perplexity     : aliased constant String := "perplexity";
+   Name_Agent_Eval     : aliased constant String := "agent-eval";
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
 
@@ -167,7 +168,16 @@ package body Tool_Commands is
      & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
      & " [--rope-scaling NAME] [--rope-scale N]";
 
-   Held : constant array (1 .. 23) of Command :=
+   Says_Agent_Eval : aliased constant String :=
+     "score the agent loop on tool-use tasks against a real model";
+
+   Takes_Agent_Eval : aliased constant String :=
+     "--model PATH [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]";
+
+   Opts_Agent_Eval : aliased constant String :=
+     " --model --threads --backend --anyway --wait ";
+
+   Held : constant array (1 .. 24) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -213,7 +223,9 @@ package body Tool_Commands is
       (Name_Slow'Access, Takes_Slow'Access, Says_Slow'Access,
        Opts_None'Access),
       (Name_Device_Bench'Access, Takes_Bench'Access, Says_Bench'Access,
-       Opts_None'Access)];
+       Opts_None'Access),
+      (Name_Agent_Eval'Access, Takes_Agent_Eval'Access,
+       Says_Agent_Eval'Access, Opts_Agent_Eval'Access)];
 
    -----------
    -- Count --

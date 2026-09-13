@@ -26,13 +26,15 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 85) of Registry_Row :=
+   Registry : constant array (1 .. 87) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
+      (Text ("--agent"), [Command_Run => True, others => False], Text ("agent")),
+      (Text ("--max-steps"), [Command_Run => True, others => False], Text ("max_steps")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--think"), [Command_Run => True, others => False],
        Text ("think")),
@@ -800,7 +802,8 @@ package body Model_Runner.CLI.Options is
       --  rather than a silent last-wins.
       type Option_Flag is
         (Flag_Prompt_File, Flag_System, Flag_System_File,
-         Flag_Max_Tokens, Flag_Context, Flag_Batch, Flag_Temperature,
+         Flag_Max_Tokens, Flag_Max_Steps, Flag_Context, Flag_Batch,
+         Flag_Temperature,
          Flag_Rope_Scaling, Flag_Rope_Scale, Flag_Rope_Base,
          Flag_Yarn_Original, Flag_Yarn_Attention,
          Flag_Yarn_Beta_Fast, Flag_Yarn_Beta_Slow,
@@ -1308,6 +1311,21 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Prompt_Kind := Prompt_Interactive;
+
+                  elsif Name = "--agent" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Agent := True;
+
+                  elsif Name = "--max-steps" then
+                     Natural_Value (Flag_Max_Steps, 1, 1_000,
+                                    Result.Max_Steps, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--repack" then
                      declare

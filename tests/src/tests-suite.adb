@@ -7,6 +7,7 @@ with Tests.Inference_Cases;
 with Tests.Accounting_Cases;
 with Tests.Sampling_Cases;
 with Tests.Template_Cases;
+with Tests.Tools_Cases;
 
 package body Tests.Suite is
 
@@ -21,6 +22,7 @@ package body Tests.Suite is
    Backend_Case   : aliased Tests.Backend_Cases.Case_Type;
    Template_Case  : aliased Tests.Template_Cases.Case_Type;
    Grammar_Case   : aliased Tests.Grammar_Cases.Case_Type;
+   Tools_Case     : aliased Tests.Tools_Cases.Case_Type;
 
    -----------
    -- Suite --
@@ -37,6 +39,7 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, Accounting_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Template_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Grammar_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Tools_Case'Access);
       return Result'Access;
    end Suite;
 
