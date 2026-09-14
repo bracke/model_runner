@@ -856,6 +856,33 @@ package body Model_Runner.Tools.Builtin is
       return Download (Url);
    end Http_Get;
 
+   --  Percent-encode a query string for a URL: the unreserved characters
+   --  pass through, everything else -- a space, a symbol, a non-ASCII byte --
+   --  becomes %XX, so the query is safe to paste after "?q=".
+   function Encode_Query (S : String) return String is
+      Hex  : constant String := "0123456789ABCDEF";
+      Room : String (1 .. S'Length * 3);
+      Used : Natural := 0;
+
+      procedure Put (C : Character) is
+      begin
+         Used := Used + 1;
+         Room (Used) := C;
+      end Put;
+   begin
+      for C of S loop
+         if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~'
+         then
+            Put (C);
+         else
+            Put ('%');
+            Put (Hex (Character'Pos (C) / 16 + 1));
+            Put (Hex (Character'Pos (C) mod 16 + 1));
+         end if;
+      end loop;
+      return Room (1 .. Used);
+   end Encode_Query;
+
    function Web_Search (Args : String) return String is
       Have  : Boolean;
       Query : constant String := Text_Argument (Args, "query", Have);
@@ -863,13 +890,10 @@ package body Model_Runner.Tools.Builtin is
       if not Have then
          return "error: web_search needs a query";
       end if;
-      --  curl encodes the query, so a space or a symbol in it is safe.
-      return Capture
-        ("curl",
-         [new String'("-fsSL"),
-          new String'("--data-urlencode"),
-          new String'("q=" & Query),
-          new String'("https://lite.duckduckgo.com/lite/")]);
+      --  Fetched the same way as http_get -- through the in-process client,
+      --  streamed -- with the query percent-encoded into the URL.
+      return Download
+        ("https://lite.duckduckgo.com/lite/?q=" & Encode_Query (Query));
    end Web_Search;
 
    function Sql (Args : String) return String is

@@ -271,11 +271,12 @@ budget (`--max-steps N`, eight by default) runs out, or a call repeats one
 already made. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a shell, Python,
 an HTTP fetch, a web search and SQLite -- so unlike the rest of the program
-the agent's built-ins *do* start processes and open files. `http_get` fetches
-through an in-process HTTP/HTTPS client (the `httpclient` crate, its body
-streamed to a file rather than held in memory); `web_search`, `run_python`,
-`sql` and `shell` run `curl`, `python3`, `sqlite3` or `sh`, and say so plainly
-when that program is not installed. Each spawned command runs
+the agent's built-ins *do* start processes and open files. `http_get` and
+`web_search` fetch through an in-process HTTP/HTTPS client (the `httpclient`
+crate, the body streamed to a file rather than held in memory -- `web_search`
+percent-encodes its query into a GET to the DuckDuckGo lite endpoint);
+`run_python`, `sql` and `shell` run `python3`, `sqlite3` or `sh`, and say so
+plainly when that program is not installed. Each spawned command runs
 under a watchdog that stops it after thirty seconds, so one that hangs
 answers the model with a timeout rather than stalling the loop. Because those
 built-ins reach the world, `--confirm-tools` puts a hand on the gate: each
