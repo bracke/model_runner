@@ -15,6 +15,13 @@ package body Model_Runner.Tools.Builtin is
    --  a truncation note.
    Cap : constant := Model_Runner.Tools.Max_Call_Bytes - 64;
 
+   --  How long a spawned command -- a shell, python, curl, sqlite -- may run
+   --  before it is stopped. A tool that hangs would hang the whole loop,
+   --  which the agent's own wall-clock budget cannot cut short because it is
+   --  only checked between steps, never inside a call. This is the bound
+   --  inside the call.
+   Tool_Timeout : constant Duration := 30.0;
+
    ---------------------------------------------------------------------------
    --  Definitions
    --
@@ -598,12 +605,11 @@ package body Model_Runner.Tools.Builtin is
      (Program : String; Args : GNAT.OS_Lib.Argument_List) return String
    is
       use type GNAT.OS_Lib.String_Access;
+      use type GNAT.OS_Lib.Process_Id;
       Prog : GNAT.OS_Lib.String_Access :=
         GNAT.OS_Lib.Locate_Exec_On_Path (Program);
       Path : GNAT.OS_Lib.String_Access;
       FD   : GNAT.OS_Lib.File_Descriptor;
-      Ran  : Boolean := False;
-      Code : Integer := -1;
 
       procedure Release is
       begin
@@ -616,6 +622,13 @@ package body Model_Runner.Tools.Builtin is
          end loop;
          GNAT.OS_Lib.Free (Prog);
       end Release;
+
+      function Seconds return String is
+         Whole : constant Integer := Integer (Tool_Timeout);
+         Raw   : constant String := Integer'Image (Whole);
+      begin
+         return Raw (Raw'First + 1 .. Raw'Last);
+      end Seconds;
    begin
       if Prog = null then
          Release;
@@ -624,24 +637,67 @@ package body Model_Runner.Tools.Builtin is
 
       GNAT.OS_Lib.Create_Temp_File (FD, Path);
       GNAT.OS_Lib.Close (FD);
-      GNAT.OS_Lib.Spawn (Prog.all, Args, Path.all, Ran, Code,
-                         Err_To_Out => True);
 
       declare
-         Output : constant String := Read_Capped (Path.all);
-         Gone   : Boolean;
+         Pid : constant GNAT.OS_Lib.Process_Id :=
+           GNAT.OS_Lib.Non_Blocking_Spawn
+             (Prog.all, Args, Path.all, Err_To_Out => True);
+         Gone : Boolean;
       begin
-         GNAT.OS_Lib.Delete_File (Path.all, Gone);
-         GNAT.OS_Lib.Free (Path);
-         Release;
-         if not Ran then
+         if Pid = GNAT.OS_Lib.Invalid_Pid then
+            GNAT.OS_Lib.Delete_File (Path.all, Gone);
+            GNAT.OS_Lib.Free (Path);
+            Release;
             return "error: could not run '" & Program & "'";
-         elsif Output = "" then
-            return "(the command produced no output; exit code"
-              & Integer'Image (Code) & ")";
-         else
-            return Output;
          end if;
+
+         --  A watchdog that kills the child if it outlives the budget. The
+         --  main path waits for the child -- which returns whether it exited
+         --  on its own or was killed -- and then stops the watchdog, telling
+         --  it whether it was the one that ended the child.
+         declare
+            task Watchdog is
+               entry Stop (Killed : out Boolean);
+            end Watchdog;
+
+            task body Watchdog is
+            begin
+               select
+                  accept Stop (Killed : out Boolean) do
+                     Killed := False;
+                  end Stop;
+               or
+                  delay Tool_Timeout;
+                  GNAT.OS_Lib.Kill (Pid, Hard_Kill => True);
+                  accept Stop (Killed : out Boolean) do
+                     Killed := True;
+                  end Stop;
+               end select;
+            end Watchdog;
+
+            Done_Pid  : GNAT.OS_Lib.Process_Id;
+            Ok        : Boolean;
+            Timed_Out : Boolean;
+         begin
+            GNAT.OS_Lib.Wait_Process (Done_Pid, Ok);
+            Watchdog.Stop (Timed_Out);
+
+            declare
+               Output : constant String := Read_Capped (Path.all);
+            begin
+               GNAT.OS_Lib.Delete_File (Path.all, Gone);
+               GNAT.OS_Lib.Free (Path);
+               Release;
+               if Timed_Out then
+                  return "error: '" & Program & "' did not finish within "
+                    & Seconds & " seconds and was stopped";
+               elsif Output = "" then
+                  return "(the command produced no output)";
+               else
+                  return Output;
+               end if;
+            end;
+         end;
       end;
    end Capture;
 

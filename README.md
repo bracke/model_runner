@@ -273,8 +273,11 @@ scratchpad it can write and read, base64, the clock, files, a shell, Python,
 an HTTP fetch, a web search and SQLite -- so unlike the rest of the program
 the agent's built-ins *do* start processes and open files: the ones that
 reach the network or a database run `curl`, `python3`, `sqlite3` or `sh`, and
-say so plainly when that program is not installed. Because those built-ins
-reach the world, `--confirm-tools` puts a hand on the gate: each call is
+say so plainly when that program is not installed. Each such command runs
+under a watchdog that stops it after thirty seconds, so one that hangs
+answers the model with a timeout rather than stalling the loop. Because those
+built-ins reach the world, `--confirm-tools` puts a hand on the gate: each
+call is
 printed and the loop waits on standard input -- y runs it, q stops the run, and
 anything else declines the one call and tells the model, which may then take
 another way to the answer. `--max-retries N` gives a generation that errors a

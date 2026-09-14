@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A tool that hangs no longer hangs the agent.** The built-in tools that
+  run a program -- `shell`, `run_python`, `http_get`, `web_search`, `sql` --
+  spawned it and waited for it with no bound, so a command that never
+  returned stalled the whole loop: the agent's wall-clock budget is checked
+  between steps, never inside a call, and could not cut it short. Each such
+  command now runs under a watchdog. It is spawned without blocking; a
+  companion task kills it if it outlives the budget (30 seconds); the loop
+  waits for the child either way and, when the watchdog was the one to end
+  it, answers the model `error: '<program>' did not finish within 30 seconds
+  and was stopped` in place of an answer that was never coming. A command
+  that finishes in time is unaffected -- the watchdog is stopped the moment
+  the child returns.
+
 - **The eval scores structured answers too.** `tests agent-eval` gains a
   task that asks a question needing no tool but holds the answer to a JSON
   schema -- an object with an integer -- and passes only when the model
