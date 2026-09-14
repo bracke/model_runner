@@ -143,10 +143,12 @@ package body Tests.Template_Cases is
         & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
         & "<|im_start|>assistant" & LF;
 
-      --  MiniCPM's plain turns are ChatML's too; where it differs is the
-      --  folded tool answers, which the case below covers.
+      --  MiniCPM's plain turns are ChatML's, after a leading bos_token the
+      --  model needs; where it differs is the folded tool answers, which the
+      --  case below covers.
       MiniCPM_Text : aliased constant String :=
-        "<|im_start|>user" & LF & "hi<|im_end|>" & LF
+        "<s>"
+        & "<|im_start|>user" & LF & "hi<|im_end|>" & LF
         & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
         & "<|im_start|>assistant" & LF;
 

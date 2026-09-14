@@ -273,7 +273,8 @@ package body Model_Runner.Templates is
          --  path produces one, is a separate matter the tools reader handles
          --  (see Tools.Read_Calls, Function_XML).
          return
-           "{% if messages[0]['role'] == 'system' %}"
+           "{{ bos_token }}"
+           & "{% if messages[0]['role'] == 'system' %}"
            & "<|im_start|>system" & LF
            & "{{ messages[0]['content'] }}<|im_end|>" & LF
            & "{% set turns = messages[1:] %}"
