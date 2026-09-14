@@ -31,17 +31,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **Checkpoint and resume an agent run: `--checkpoint-file PATH`.** At the end
-  of a run the whole conversation is written to the file; at the start, when
-  the file already holds a conversation, the run loads it and continues rather
-  than starting from the prompt -- the prompt becomes the next user turn, a
-  follow-up on the resumed run. So a run stopped at a step or token budget can
-  be taken up again with a higher one, or a task carried across sessions and
-  processes. The conversation is serialized with the same length-prefixed
-  format as the memory store -- each message its role, content and calls, each
-  field its byte count then its bytes -- so any content round-trips with no
-  escaping, and it is rebuilt through the ordinary Conversation append calls.
-  A missing or unparsable file just starts fresh. Writing is best effort.
+- **Checkpoint and resume an agent run: `--checkpoint-file PATH`.** The
+  conversation is written to the file at the close of every step and once more
+  at the end; at the start, when the file already holds a conversation, the
+  run loads it and continues rather than starting from the prompt -- the
+  prompt becomes the next user turn, a follow-up on the resumed run. So a run
+  stopped at a step or token budget can be taken up again with a higher one, a
+  task carried across sessions and processes, and a run cut off partway --
+  killed, a crash -- resumed from the last step it finished rather than lost.
+  The per-step save rides a new `On_Step` hook on the `Agent.Observer`
+  interface (a null default, so other observers are unaffected). The
+  conversation is serialized with the same length-prefixed format as the
+  memory store -- each message its role, content and calls, each field its
+  byte count then its bytes -- so any content round-trips with no escaping,
+  and it is rebuilt through the ordinary Conversation append calls. A missing
+  or unparsable file just starts fresh. Writing is best effort.
 
 - **Guardrails for an unattended agent run: `--deny-tool` and `--deny-arg`.**
   The approval gate was human-only (`--confirm-tools`, a prompt on standard

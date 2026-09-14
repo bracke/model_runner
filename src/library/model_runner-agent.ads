@@ -121,6 +121,14 @@ package Model_Runner.Agent is
       Named  : String;
       Result : String) is abstract;
 
+   --  A step has finished: the model's turn and every tool result it drew are
+   --  in the history now. Called once at the close of each step that ran
+   --  tools, before the next begins, so a watcher can persist the run's
+   --  progress as it goes. The default does nothing.
+   --
+   --  @param Self The observer.
+   procedure On_Step (Self : in out Observer) is null;
+
    --  A reference to whatever is watching the loop.
    type Observer_Reference is access all Observer'Class;
 

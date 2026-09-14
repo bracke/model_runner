@@ -357,13 +357,15 @@ turns kept, and a short digest of what was dropped -- the calls made and what
 they returned, in a line each -- is folded into the task, so the run keeps
 the thread of what it has already done rather than losing it outright. The
 digest is bounded and carried forward, so it never grows the task without
-limit. `--checkpoint-file PATH` lets a run be taken up again: at the end it
-writes the whole conversation to the file, and at the start, when the file
-already holds one, it loads that conversation and continues it rather than
-starting from the prompt -- the prompt becomes the next turn, a follow-up on
-the resumed run. So a run stopped at a step or token budget can be continued
-with a higher one, or a task carried across sessions. The format is
-length-prefixed, so any content round-trips whole. `--embed-model PATH` gives
+limit. `--checkpoint-file PATH` lets a run be taken up again: it writes the
+whole conversation to the file at the close of every step and once more at the
+end, and at the start, when the file already holds one, it loads that
+conversation and continues it rather than starting from the prompt -- the
+prompt becomes the next turn, a follow-up on the resumed run. So a run stopped
+at a step or token budget can be continued with a higher one, a task carried
+across sessions, and a run cut off partway -- killed, a crash -- resumed from
+the last step it finished rather than lost. The format is length-prefixed, so
+any content round-trips whole. `--embed-model PATH` gives
 the `retrieve` tool a model trained to
 embed, so it ranks a folder's passages by meaning rather than by the words
 they share (without it, the model being run embeds, or the ranking stays

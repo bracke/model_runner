@@ -127,23 +127,92 @@ package body Model_Runner.CLI.Execute is
       return US.To_String (Out_S);
    end JSON_Escape;
 
+   --  Save the conversation so a later run can take it up. Each message is
+   --  its role, its content, its call count, then each call's name and
+   --  arguments -- every field length-prefixed (its byte count, a space, its
+   --  bytes), so any content, a newline or a brace included, round-trips with
+   --  no escaping. Best effort: a checkpoint that will not write is not fatal.
+   procedure Save_Checkpoint (Path : String; Messages : Conv.History) is
+      use Ada.Streams;
+      use Ada.Streams.Stream_IO;
+      File : Stream_IO.File_Type;
+      Buf  : US.Unbounded_String;
+
+      procedure LP (S : String) is
+      begin
+         US.Append (Buf, T.Image (Long_Long_Integer (S'Length)) & " " & S);
+      end LP;
+   begin
+      for I in 1 .. Conv.Length (Messages) loop
+         declare
+            Role  : constant String :=
+              (case Conv.Sender_At (Messages, I) is
+                 when Conv.System_Role    => "S",
+                 when Conv.User_Role      => "U",
+                 when Conv.Assistant_Role => "A",
+                 when Conv.Tool_Role      => "T");
+            Calls : constant Natural := Conv.Call_Count (Messages, I);
+         begin
+            LP (Role);
+            LP (Conv.Content_At (Messages, I));
+            LP (T.Image (Long_Long_Integer (Calls)));
+            for C in 1 .. Calls loop
+               LP (Conv.Call_Name (Messages, I, C));
+               LP (Conv.Call_Arguments (Messages, I, C));
+            end loop;
+         end;
+      end loop;
+
+      Create (File, Out_File, Path);
+      declare
+         S     : constant String := US.To_String (Buf);
+         Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
+      begin
+         for I in S'Range loop
+            Block (Stream_Element_Offset (I - S'First + 1)) :=
+              Stream_Element (Character'Pos (S (I)));
+         end loop;
+         Write (File, Block);
+      end;
+      Close (File);
+   exception
+      when others =>
+         if Is_Open (File) then
+            Close (File);
+         end if;
+   end Save_Checkpoint;
+
    --  Prints the agent loop's calls and tool results to the console as they
    --  happen, so `run --agent` shows the loop unfolding rather than only its
    --  end. The console goes to standard error, so standard output stays the
    --  model's own text. When Trace is on it also records each call and result,
    --  with the milliseconds since it started, as JSON objects, which the run
-   --  writes out as a trace when it ends.
-   type Agent_Watch (Screen : access Pres.Console; Trace : Boolean) is
+   --  writes out as a trace when it ends. When a checkpoint file is set it
+   --  saves the conversation at the close of each step, so a run interrupted
+   --  partway is still resumable, not only one that stops on its own.
+   type Agent_Watch
+     (Screen : access Pres.Console;
+      Trace  : Boolean;
+      Log    : access Conv.History) is
      limited new Model_Runner.Agent.Observer with record
-        Started : Ada.Calendar.Time := Ada.Calendar.Clock;
-        Events  : US.Unbounded_String;
-        Count   : Natural := 0;
+        Started    : Ada.Calendar.Time := Ada.Calendar.Clock;
+        Events     : US.Unbounded_String;
+        Count      : Natural := 0;
+        Checkpoint : US.Unbounded_String;   --  path, or empty for none
      end record;
 
    overriding procedure On_Call
      (Self : in out Agent_Watch; Named : String; Arguments : String);
    overriding procedure On_Result
      (Self : in out Agent_Watch; Named : String; Result : String);
+   overriding procedure On_Step (Self : in out Agent_Watch);
+
+   overriding procedure On_Step (Self : in out Agent_Watch) is
+   begin
+      if Self.Log /= null and then US.Length (Self.Checkpoint) > 0 then
+         Save_Checkpoint (US.To_String (Self.Checkpoint), Self.Log.all);
+      end if;
+   end On_Step;
 
    --  Milliseconds from the watch's start to now, as a decimal with no sign.
    function Elapsed_Ms (Self : Agent_Watch) return String is
@@ -2015,61 +2084,6 @@ package body Model_Runner.CLI.Execute is
          else E.Exit_Success);
    end Do_Inspect;
 
-   --  Save the conversation so a later run can take it up. Each message is
-   --  its role, its content, its call count, then each call's name and
-   --  arguments -- every field length-prefixed (its byte count, a space, its
-   --  bytes), so any content, a newline or a brace included, round-trips with
-   --  no escaping. Best effort: a checkpoint that will not write is not fatal.
-   procedure Save_Checkpoint (Path : String; Messages : Conv.History) is
-      use Ada.Streams;
-      use Ada.Streams.Stream_IO;
-      File : Stream_IO.File_Type;
-      Buf  : US.Unbounded_String;
-
-      procedure LP (S : String) is
-      begin
-         US.Append (Buf, T.Image (Long_Long_Integer (S'Length)) & " " & S);
-      end LP;
-   begin
-      for I in 1 .. Conv.Length (Messages) loop
-         declare
-            Role  : constant String :=
-              (case Conv.Sender_At (Messages, I) is
-                 when Conv.System_Role    => "S",
-                 when Conv.User_Role      => "U",
-                 when Conv.Assistant_Role => "A",
-                 when Conv.Tool_Role      => "T");
-            Calls : constant Natural := Conv.Call_Count (Messages, I);
-         begin
-            LP (Role);
-            LP (Conv.Content_At (Messages, I));
-            LP (T.Image (Long_Long_Integer (Calls)));
-            for C in 1 .. Calls loop
-               LP (Conv.Call_Name (Messages, I, C));
-               LP (Conv.Call_Arguments (Messages, I, C));
-            end loop;
-         end;
-      end loop;
-
-      Create (File, Out_File, Path);
-      declare
-         S     : constant String := US.To_String (Buf);
-         Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
-      begin
-         for I in S'Range loop
-            Block (Stream_Element_Offset (I - S'First + 1)) :=
-              Stream_Element (Character'Pos (S (I)));
-         end loop;
-         Write (File, Block);
-      end;
-      Close (File);
-   exception
-      when others =>
-         if Is_Open (File) then
-            Close (File);
-         end if;
-   end Save_Checkpoint;
-
    --  Rebuild a conversation from a checkpoint into Messages, which the caller
    --  has opened. A file that is missing or will not parse leaves Messages as
    --  it was and reports through Status.
@@ -2691,14 +2705,15 @@ package body Model_Runner.CLI.Execute is
             end if;
 
             declare
-               Messages     : Conv.History;
+               Messages     : aliased Conv.History;
                Agent_Tools  : aliased Model_Runner.Tools.Definitions;
                Built_Runner : aliased Model_Runner.Tools.Builtin.Instance;
                Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
                Request      : aliased Gen.Request;
                Watcher      : aliased Agent_Watch
                  (Screen'Unchecked_Access,
-                  Trace => not T.Is_Empty (Item.Trace_File_Path));
+                  Trace => not T.Is_Empty (Item.Trace_File_Path),
+                  Log   => Messages'Access);
                --  An aliased copy so the approver can point at the guardrail
                --  rules; only their values are read, never the shared prompts.
                Rules_Copy   : aliased constant Opt.Command := Item;
@@ -2766,6 +2781,12 @@ package body Model_Runner.CLI.Execute is
                is
                   Loop_Out : Model_Runner.Agent.Outcome;
                begin
+                  --  Checkpoint at the close of each step, when one was asked
+                  --  for, so an interrupted run is resumable too.
+                  Watcher.Checkpoint :=
+                    US.To_Unbounded_String
+                      (T.To_String (Item.Checkpoint_File_Path));
+
                   Model_Runner.Agent.Run
                     (Source     => Prepared,
                      Session    => Session,

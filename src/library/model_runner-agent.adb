@@ -575,6 +575,12 @@ package body Model_Runner.Agent is
             end if;
          end;
 
+         --  The step's turn and its tool results are in the history now; a
+         --  watcher may persist the run's progress before the next step.
+         if Watch /= null then
+            Watch.On_Step;
+         end if;
+
          --  Where a retried generation rejoins the loop, having reset the
          --  session and left the committed conversation as it was.
          <<Next_Iteration>>
