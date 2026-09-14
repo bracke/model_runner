@@ -376,7 +376,15 @@ private
       --  Write the value as JSON. A tool has no text of its own and this is
       --  the only way a template may write one; text has text, and what
       --  this makes of it is a quoted JSON string.
-      Filter_JSON);
+      Filter_JSON,
+
+      --  Write a call's arguments -- a JSON object -- as MiniCPM's parameter
+      --  elements: a <param name="k">v</param> per pair, the value plain
+      --  (a string unquoted) and wrapped in <![CDATA[..]]> when it holds a
+      --  '<', an '&' or a newline, as that family's template requires. It is
+      --  what lets the built-in minicpm format write a tool call without the
+      --  engine having to walk the mapping in a loop of its own.
+      Filter_Params);
 
    --  What a template does to a piece of text after it has it: take
    --  whitespace off one end or both, or cut it at a marker and keep one

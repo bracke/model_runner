@@ -256,35 +256,57 @@ package body Model_Runner.Templates is
       elsif Name = Format_Name (Format_MiniCPM) then
          --  MiniCPM5, carried for the same reason as Qwen3-Coder: the model's
          --  own template will not compile -- it captures blocks into set,
-         --  walks the arguments of a call as a mapping, steps a slice
-         --  backwards and reaches for filters this engine does not carry.
-         --  What is written here is that template's conversation shape said
-         --  in the subset: MiniCPM's turns are ChatML's, with a run of tool
-         --  answers folded into one user turn between <tool_response> tags,
-         --  exactly as Qwen3-Coder's are.
+         --  steps a slice backwards and reaches for string methods this
+         --  engine does not carry. What is written here is that template said
+         --  in the subset, tools and all.
          --
-         --  What it is not is the tool half. MiniCPM writes a call as a
-         --  <function> element with a <param> per argument, which means
-         --  walking the call's arguments as a mapping -- the one thing this
-         --  engine cannot do. So a caller offering tools is refused before a
-         --  prompt is built, and a turn that carries calls is refused where
-         --  the call would have been written rather than rendered as though
-         --  the turn had said nothing. Reading such a call back, when another
-         --  path produces one, is a separate matter the tools reader handles
-         --  (see Tools.Read_Calls, Function_XML).
+         --  A system turn opens the prompt; when tools are offered it also
+         --  carries the <tools> block -- each tool written with tojson,
+         --  wrapped in the usage guidelines MiniCPM was trained on. Turns are
+         --  ChatML's; an assistant turn that asked for tools writes each call
+         --  as a <function> element, its arguments turned into <param>
+         --  children by the params filter, which is what stands in for the
+         --  mapping walk the model's own template does. A run of tool answers
+         --  is folded into one user turn between <tool_response> tags. The
+         --  call a model writes is read back by Tools.Read_Calls in its
+         --  Function_XML syntax.
          return
            "{{ bos_token }}"
-           & "{% if messages[0]['role'] == 'system' %}"
+           & "{% if messages[0]['role'] == 'system' or tools %}"
            & "<|im_start|>system" & LF
-           & "{{ messages[0]['content'] }}<|im_end|>" & LF
+           & "{% if messages[0]['role'] == 'system' %}"
+           & "{{ messages[0]['content'] }}"
+           & "{% if tools %}" & LF & LF & "{% endif %}"
+           & "{% endif %}"
+           & "{% if tools %}"
+           & "# Tools" & LF & LF
+           & "You are provided with function signatures within "
+           & "<tools></tools> XML tags:" & LF
+           & "<tools>"
+           & "{% for tool in tools %}" & LF & "{{ tool | tojson }}"
+           & "{% endfor %}" & LF
+           & "</tools>" & LF & LF
+           & "Tool usage guidelines:" & LF
+           & "- You may call zero or more functions. If no function calls are "
+           & "needed, just answer normally and do not include any "
+           & "<function ... </function>." & LF
+           & "- When calling a function, return an XML object within "
+           & "<function ... </function> using:" & LF
+           & "<function name=""function-name""><param name=""param-name"">"
+           & "param-value</param></function>" & LF
+           & "- param-value may be multi-line. If it contains <, & or newline "
+           & "characters, wrap it in a CDATA block: "
+           & "<param name=""param-name""><![CDATA[...multi-line value...]]>"
+           & "</param>"
+           & "{% endif %}"
+           & "<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% if messages[0]['role'] == 'system' %}"
            & "{% set turns = messages[1:] %}"
            & "{% else %}"
            & "{% set turns = messages %}"
            & "{% endif %}"
            & "{% for message in turns %}"
-           & "{% if message.tool_calls %}"
-           & "{{ this_format_cannot_write_a_tool_call }}"
-           & "{% endif %}"
            & "{% if message.role == 'tool' %}"
            & "{% if not loop.first"
            & " and turns[loop.index0 - 1].role != 'tool' %}"
@@ -297,6 +319,16 @@ package body Model_Runner.Templates is
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<|im_end|>" & LF
            & "{% endif %}"
+           & "{% elif message.role == 'assistant' %}"
+           & "<|im_start|>assistant" & LF
+           & "{{ message.content }}"
+           & "{% if message.tool_calls %}"
+           & "{% for tool_call in message.tool_calls %}"
+           & "<function name=""{{ tool_call.name }}"">"
+           & "{{ tool_call.arguments | params }}</function>"
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "<|im_end|>" & LF
            & "{% else %}"
            & "<|im_start|>{{ message.role }}" & LF
            & "{{ message.content }}<|im_end|>" & LF
@@ -1398,6 +1430,8 @@ package body Model_Runner.Templates is
                   Result.Numeric := True;
                elsif Text (First .. Last) = "tojson" then
                   Result.Filter := Filter_JSON;
+               elsif Text (First .. Last) = "params" then
+                  Result.Filter := Filter_Params;
                else
                   Result :=
                     Refused (Text (First .. Last), E.Template_Unknown_Filter);
@@ -3576,6 +3610,127 @@ package body Model_Runner.Templates is
          return "";
       end JSON_Of;
 
+      --  A call's arguments -- a JSON object -- written as MiniCPM's
+      --  parameter elements. The value the term holds is that object as text;
+      --  this reads its top-level pairs and writes a <param name="k">v</param>
+      --  for each, the value plain (a JSON string unquoted) and inside a
+      --  <![CDATA[..]]> block when it holds a '<', an '&' or a newline.
+      function Params_Of (Value : Term) return String is
+         Src : constant String := Raw_Of (Value);
+         Buf : String (1 .. 8 * Src'Length + 256);
+         N   : Natural := 0;
+         I   : Natural := Src'First;
+
+         procedure Put (S : String) is
+         begin
+            if N + S'Length <= Buf'Length then
+               Buf (N + 1 .. N + S'Length) := S;
+               N := N + S'Length;
+            end if;
+         end Put;
+
+         procedure Skip_Blanks is
+         begin
+            while I <= Src'Last
+              and then Src (I) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+            loop
+               I := I + 1;
+            end loop;
+         end Skip_Blanks;
+
+         --  A JSON string at I ("...") decoded to its characters, I left past
+         --  the closing quote.
+         function Read_String return String is
+            R : String (1 .. Src'Length);
+            M : Natural := 0;
+         begin
+            I := I + 1;
+            while I <= Src'Last and then Src (I) /= '"' loop
+               if Src (I) = '\' and then I < Src'Last then
+                  I := I + 1;
+                  M := M + 1;
+                  case Src (I) is
+                     when 'n'    => R (M) := ASCII.LF;
+                     when 't'    => R (M) := ASCII.HT;
+                     when 'r'    => R (M) := ASCII.CR;
+                     when others => R (M) := Src (I);
+                  end case;
+               else
+                  M := M + 1;
+                  R (M) := Src (I);
+               end if;
+               I := I + 1;
+            end loop;
+            if I <= Src'Last then
+               I := I + 1;
+            end if;
+            return R (1 .. M);
+         end Read_String;
+
+         --  A bare JSON value at I (number, true/false/null, object, array)
+         --  as its own text, I left at the following ',' or '}'.
+         function Read_Bare return String is
+            First : constant Natural := I;
+            Depth : Natural := 0;
+         begin
+            while I <= Src'Last loop
+               case Src (I) is
+                  when '{' | '[' => Depth := Depth + 1;
+                  when '}' | ']' =>
+                     exit when Depth = 0;
+                     Depth := Depth - 1;
+                  when ',' => exit when Depth = 0;
+                  when others => null;
+               end case;
+               I := I + 1;
+            end loop;
+            return Model_Runner.Text.Trim (Src (First .. I - 1));
+         end Read_Bare;
+      begin
+         Skip_Blanks;
+         if I <= Src'Last and then Src (I) = '{' then
+            I := I + 1;
+         end if;
+         loop
+            Skip_Blanks;
+            exit when I > Src'Last or else Src (I) = '}' or else Src (I) /= '"';
+            declare
+               Key : constant String := Read_String;
+            begin
+               Skip_Blanks;
+               if I <= Src'Last and then Src (I) = ':' then
+                  I := I + 1;
+               end if;
+               Skip_Blanks;
+               declare
+                  Val : constant String :=
+                    (if I <= Src'Last and then Src (I) = '"'
+                     then Read_String else Read_Bare);
+                  CDATA : constant Boolean :=
+                    (for some C of Val =>
+                       C = '<' or else C = '&' or else C = ASCII.LF);
+               begin
+                  Put ("<param name=""");
+                  Put (Key);
+                  Put (""">");
+                  if CDATA then
+                     Put ("<![CDATA[");
+                     Put (Val);
+                     Put ("]]>");
+                  else
+                     Put (Val);
+                  end if;
+                  Put ("</param>");
+               end;
+            end;
+            Skip_Blanks;
+            if I <= Src'Last and then Src (I) = ',' then
+               I := I + 1;
+            end if;
+         end loop;
+         return Buf (1 .. N);
+      end Params_Of;
+
       --  Value of one term with its filter applied.
       function Value_Of (Value : Term) return String is
       begin
@@ -3592,6 +3747,9 @@ package body Model_Runner.Templates is
 
             when Filter_JSON =>
                return JSON_Of (Value);
+
+            when Filter_Params =>
+               return Params_Of (Value);
 
             when Filter_Length =>
                --  A list's length is the one thing about a list this engine

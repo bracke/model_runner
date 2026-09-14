@@ -296,6 +296,88 @@ package body Tests.Template_Cases is
       Tmpl.Close (Item);
    end Built_In_Formats_Render_Their_Turns;
 
+   --  The minicpm format, unlike qwen3-coder, does write the tool half: the
+   --  tools offered as a <tools> block, and a call as a <function> element
+   --  whose arguments the params filter turns into <param> children -- the
+   --  shape MiniCPM emits and Tools.Read_Calls reads back in Function_XML.
+   procedure MiniCPM_Renders_Tool_Calls
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF       : constant Character := Character'Val (10);
+      pragma Unreferenced (LF);
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Defs     : aliased Model_Runner.Tools.Definitions;
+      Asked    : Model_Runner.Tools.Calls;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 4096);
+      Last     : Natural;
+
+      function Has (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Whole'Length < Part'Length then
+            return False;
+         end if;
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+   begin
+      Model_Runner.Tools.Read
+        (Defs,
+         "[{""type"": ""function"", ""function"": {""name"": ""calc"", "
+         & """description"": ""d"", ""parameters"": {""type"": ""object"", "
+         & """properties"": {""a"": {""type"": ""number""}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      Tmpl.Compile
+        (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_MiniCPM)),
+         Status => Status);
+      Assert (E.Is_Ok (Status), "the minicpm format did not compile");
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "hi", Status);
+      Conv.Append_Asking (Messages, "", Status);
+      Model_Runner.Tools.Read_Calls
+        (Asked,
+         "<tool_call>{""name"": ""calc"", ""arguments"": "
+         & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>",
+         Status);
+      Conv.Append_Call
+        (Messages, Model_Runner.Tools.Called (Asked, 1),
+         Model_Runner.Tools.Arguments (Asked, 1), Status);
+      Model_Runner.Tools.Close (Asked);
+
+      Tmpl.Render
+        (Item, Messages, "<s>", "</s>", True, Target, Last, Status,
+         Tools => Defs'Access);
+      Assert (E.Is_Ok (Status),
+              "the minicpm format did not render with tools: "
+              & E.Error_Code'Image (Status.Code));
+
+      declare
+         R : constant String := Target (1 .. Last);
+      begin
+         Assert (Has (R, "<tools>") and then Has (R, """name"": ""calc"""),
+                 "the tools were not offered: " & R);
+         Assert (Has (R, "<function name=""calc"">"),
+                 "the call was not written as a function element: " & R);
+         Assert (Has (R, "<param name=""a"">47</param>"),
+                 "a param was not written from the arguments: " & R);
+         Assert (Has (R, "<param name=""op"">*</param>"),
+                 "the op param was not written: " & R);
+      end;
+
+      Conv.Close (Messages);
+      Tmpl.Close (Item);
+      Model_Runner.Tools.Close (Defs);
+   end MiniCPM_Renders_Tool_Calls;
+
    procedure Ordinary_Template_Renders
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1723,6 +1805,10 @@ package body Tests.Template_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, MiniCPM_Renders_Tool_Calls'Access,
+         "the minicpm format offers tools and writes a call as a function "
+         & "element with param children");
       Register_Routine
         (T, Built_In_Formats_Render_Their_Turns'Access,
          "each built-in chat format renders the turns its architecture reads");
