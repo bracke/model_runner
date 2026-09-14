@@ -2222,6 +2222,7 @@ package body Model_Runner.CLI.Execute is
                        (if Item.Confirm_Tools then Confirmer'Unchecked_Access
                         else null),
                      Max_Retries => Item.Max_Retries,
+                     Max_Total_Tokens => Item.Max_Total_Tokens,
                      Compact     => Item.Compact,
                      Answer_Schema =>
                        (if Answer /= null then Answer.all else ""),

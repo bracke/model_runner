@@ -44,6 +44,7 @@ package Model_Runner.Agent is
      (Answered,           --  the model replied with no call to run
       Step_Limit,         --  the step budget ran out with a call still open
       Timed_Out,          --  the wall-clock budget ran out between steps
+      Token_Limit,        --  the cumulative token budget ran out between steps
       Repeating,          --  a turn made only calls already made, and got
                           --  no further, so the loop stopped rather than
                           --  circle
@@ -191,6 +192,10 @@ package Model_Runner.Agent is
    --    generation in flight when the budget passes, and then stops. Needs
    --    Time; with no clock there is nothing to measure and the budget is
    --    ignored.
+   --  @param Max_Total_Tokens A ceiling on the tokens generated over the whole
+   --    loop, or 0 for none. Like Max_Seconds it is checked between steps, so
+   --    the generation in flight when the ceiling is reached finishes before
+   --    the loop stops with Token_Limit; a turn that answers is never cut off.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
@@ -233,6 +238,7 @@ package Model_Runner.Agent is
       Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Max_Steps  : Positive := 8;
       Max_Seconds : Duration := 0.0;
+      Max_Total_Tokens : Natural := 0;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;

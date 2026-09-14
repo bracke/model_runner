@@ -44,6 +44,7 @@ package body Model_Runner.Agent is
       Cancel     : Model_Runner.Cancellation.Token_Reference := null;
       Max_Steps  : Positive := 8;
       Max_Seconds : Duration := 0.0;
+      Max_Total_Tokens : Natural := 0;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
@@ -324,6 +325,14 @@ package body Model_Runner.Agent is
             --  Calls to run, but no room to run them and read the answer.
             if Result.Steps >= Max_Steps then
                Result.Reason := Step_Limit;
+               exit Step_Loop;
+            end if;
+
+            --  Calls to run, but the cumulative token budget is spent.
+            if Max_Total_Tokens > 0
+              and then Result.Generated_Tokens >= Max_Total_Tokens
+            then
+               Result.Reason := Token_Limit;
                exit Step_Loop;
             end if;
 

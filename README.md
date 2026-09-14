@@ -267,7 +267,8 @@ on offer and `/tool TEXT` to hand an answer back.
 
 **Closing the loop.** `--agent` runs the loop rather than leaving it open: the
 model's calls are run and the answers fed back until it answers, a step
-budget (`--max-steps N`, eight by default) runs out, or a call repeats one
+budget (`--max-steps N`, eight by default) or a token budget
+(`--max-total-tokens N`, off by default) runs out, or a call repeats one
 already made. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a ranked search
 over a folder of text files, PDFs, Office documents (modern and legacy),
@@ -287,7 +288,11 @@ call is
 printed and the loop waits on standard input -- y runs it, q stops the run, and
 anything else declines the one call and tells the model, which may then take
 another way to the answer. `--max-retries N` gives a generation that errors a
-second try instead of ending the run on the first stumble. `--compact` keeps a
+second try instead of ending the run on the first stumble.
+`--max-total-tokens N` caps the tokens generated over the whole loop, not just
+one reply: it is checked between steps, so the reply in flight finishes and
+then the loop stops rather than running the next round of calls -- a turn that
+answers is never cut off. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
 turns kept. `--embed-model PATH` gives the `retrieve` tool a model trained to

@@ -5,6 +5,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A total token budget for the agent loop (`--max-total-tokens N`).** The
+  loop was bounded by its step count (`--max-steps`) and, with a clock, its
+  wall-clock time; each reply was bounded by its own token budget; but nothing
+  bounded the tokens generated across the whole run. `--max-total-tokens N`
+  (off by default) caps that cumulative total. Like the wall-clock budget it
+  is checked between steps -- the reply in flight finishes, then the loop stops
+  with `Token_Limit` before it runs the next round of calls, and a turn that
+  answers is never cut off. `Agent.Run` takes it as `Max_Total_Tokens`
+  (0 = no limit), reusing the `Outcome.Generated_Tokens` the loop already kept.
+
 ### Fixed
 
 - **A retrieve passage is now valid UTF-8, so semantic ranking works over

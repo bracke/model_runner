@@ -309,6 +309,11 @@ package Model_Runner.CLI.Options is
       --  on the first such error.
       Max_Retries : Natural := 0;
 
+      --  A ceiling on the tokens the agent may generate over the whole loop.
+      --  Checked between steps, so the reply in flight finishes; zero, the
+      --  default, sets no ceiling.
+      Max_Total_Tokens : Natural := 0;
+
       --  Whether to ask before each tool call the agent would run. With it,
       --  the program prints the call and waits on standard input: a line
       --  starting y runs it, n declines it and tells the model, and q or an

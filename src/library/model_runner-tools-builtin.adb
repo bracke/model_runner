@@ -946,8 +946,7 @@ package body Model_Runner.Tools.Builtin is
       Max_Terms  : constant := 24;    --  distinct query words scored
       Max_Files  : constant := 1024;  --  files read from the folder
       Snippet    : constant := 600;   --  characters in a passage window
-      Front      : constant := 1200;  --  leading bytes of a long document
-                                      --  dropped as front matter
+      Front      : constant := 1200;  --  leading bytes dropped as front matter
       Top        : constant := 3;     --  passages returned
       Embed_Cap  : constant := 64;    --  most passages embedded in one call
       Max_Width  : constant := 8192;  --  widest embedding vector held
