@@ -2,6 +2,8 @@ with Ada.Strings.Unbounded;
 
 with Zlib;
 
+with Model_Runner.Tools.Text_Util;
+
 package body Model_Runner.Tools.PDF is
 
    package U renames Ada.Strings.Unbounded;
@@ -255,7 +257,8 @@ package body Model_Runner.Tools.PDF is
          end;
       end loop;
 
-      return U.To_String (Out_Buf);
+      return Model_Runner.Tools.Text_Util.Collapse_Blanks
+        (U.To_String (Out_Buf));
    end Extract_Text;
 
 end Model_Runner.Tools.PDF;

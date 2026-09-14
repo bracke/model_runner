@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The document extractors collapse whitespace.** Stripping tags out of a
+  PDF, an Office or OpenDocument file or an EPUB left long runs of the spaces
+  and newlines the tags had stood between, so a returned passage read as
+  ragged whitespace with words adrift in it. `Model_Runner.Tools.Text_Util`
+  now folds every run of blanks to one space and trims the ends, and the PDF,
+  OOXML and legacy-`.doc` extractors pass their output through it -- so a
+  passage reads as its words, one space apart.
+
 - **`retrieve` reads legacy Word `.doc` files.** The old OLE2 compound format
   keeps its text as runs of single-byte (Windows-1252) or UTF-16LE
   characters inside its container. `Model_Runner.Tools.DOC` reads those

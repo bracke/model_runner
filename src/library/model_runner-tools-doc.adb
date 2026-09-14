@@ -1,5 +1,7 @@
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Tools.Text_Util;
+
 package body Model_Runner.Tools.DOC is
 
    package U renames Ada.Strings.Unbounded;
@@ -85,7 +87,8 @@ package body Model_Runner.Tools.DOC is
          end if;
       end loop;
 
-      return U.To_String (Out_Buf);
+      return Model_Runner.Tools.Text_Util.Collapse_Blanks
+        (U.To_String (Out_Buf));
    end Extract_Text;
 
 end Model_Runner.Tools.DOC;
