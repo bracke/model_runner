@@ -1,15 +1,30 @@
+with Ada.Calendar.Formatting;
+with Ada.Directories;
+with Ada.Text_IO;
+
+with GNAT.OS_Lib;
+
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tools.Builtin is
 
    package E renames Model_Runner.Errors;
+   package U renames Ada.Strings.Unbounded;
 
-   --  The definitions, written once. The grammar and the answers below both
-   --  read the same names and the same shapes from here, so a tool added to
-   --  one and forgotten in the other cannot happen: there is one list.
-   Definitions : constant String :=
-     "["
-     & "{""type"": ""function"", ""function"": {"
+   --  The most a tool answers with, leaving room under the call buffer for
+   --  a truncation note.
+   Cap : constant := Model_Runner.Tools.Max_Call_Bytes - 64;
+
+   ---------------------------------------------------------------------------
+   --  Definitions
+   --
+   --  Two objects share the four pure tools' text: the pure set the eval
+   --  offers, and the full set the command line offers. Written once so a
+   --  tool cannot be described in one place and not the other.
+   ---------------------------------------------------------------------------
+
+   Pure_Body : constant String :=
+     "{""type"": ""function"", ""function"": {"
      & """name"": ""calculator"", "
      & """description"": ""Evaluate a binary arithmetic operation on two "
      & "integers."", "
@@ -37,34 +52,80 @@ package body Model_Runner.Tools.Builtin is
      & """parameters"": {""type"": ""object"", ""properties"": {"
      & """key"": {""type"": ""string"", ""enum"": ["
      & """capital_of_france"", ""speed_of_light"", ""ada_year""]}}, "
-     & """required"": [""key""]}}}"
-     & "]";
+     & """required"": [""key""]}}}";
 
-   ---------------------
-   -- Definitions_Text --
-   ---------------------
+   --  Shorthands for the many one- and two-string parameter schemas below.
+   function Str1 (Name : String) return String
+   is ("{""type"": ""object"", ""properties"": {"
+       & """" & Name & """: {""type"": ""string""}}, "
+       & """required"": [""" & Name & """]}");
+
+   function Str2 (A, B : String) return String
+   is ("{""type"": ""object"", ""properties"": {"
+       & """" & A & """: {""type"": ""string""}, "
+       & """" & B & """: {""type"": ""string""}}, "
+       & """required"": [""" & A & """, """ & B & """]}");
+
+   function Tool (Name, Description, Parameters : String) return String
+   is ("{""type"": ""function"", ""function"": {""name"": """ & Name
+       & """, ""description"": """ & Description
+       & """, ""parameters"": " & Parameters & "}}");
+
+   More_Body : constant String :=
+     Tool ("base64_encode", "Encode a string as base64.", Str1 ("text"))
+     & ", "
+     & Tool ("base64_decode", "Decode a base64 string.", Str1 ("text"))
+     & ", "
+     & Tool ("now", "Return the current local date and time.",
+             "{""type"": ""object"", ""properties"": {}}")
+     & ", "
+     & Tool ("memory_put", "Remember a value under a key for later.",
+             Str2 ("key", "value"))
+     & ", "
+     & Tool ("memory_get", "Recall the value remembered under a key.",
+             Str1 ("key"))
+     & ", "
+     & Tool ("read_file", "Read a text file and return its contents.",
+             Str1 ("path"))
+     & ", "
+     & Tool ("write_file", "Write text to a file, replacing it.",
+             Str2 ("path", "content"))
+     & ", "
+     & Tool ("list_directory", "List the entries of a directory.",
+             Str1 ("path"))
+     & ", "
+     & Tool ("shell", "Run a shell command and return its output.",
+             Str1 ("command"))
+     & ", "
+     & Tool ("run_python", "Run Python 3 source and return its output.",
+             Str1 ("code"))
+     & ", "
+     & Tool ("http_get", "Fetch a URL over HTTP and return the body.",
+             Str1 ("url"))
+     & ", "
+     & Tool ("web_search", "Search the web and return the results page.",
+             Str1 ("query"))
+     & ", "
+     & Tool ("sql", "Run a query against a SQLite database file.",
+             Str2 ("database", "query"));
+
+   Definitions     : constant String := "[" & Pure_Body & "]";
+   All_Definitions : constant String := "[" & Pure_Body & ", " & More_Body
+                                        & "]";
 
    function Definitions_Text return String is (Definitions);
+   function All_Definitions_Text return String is (All_Definitions);
 
    ---------------------------------------------------------------------------
-   --  Reading arguments
-   --
-   --  The arguments arrive as one line of JSON the engine has already
-   --  rewritten in its own spelling: a space after every colon and comma,
-   --  escapes decoded to the characters they stand for and re-escaped only
-   --  where JSON requires it. So a reader here need not be a JSON parser --
-   --  it walks the top level of one object and reads the value beside a key.
+   --  Reading arguments (a walk over the top level of one JSON object)
    ---------------------------------------------------------------------------
 
-   --  Advance past a JSON string, whose opening quote is at Index. Returns
-   --  the index just after the closing quote, or Text'Last + 1 when the
-   --  string is unterminated.
    function After_String (Text : String; Index : Positive) return Positive is
       I : Natural := Index + 1;
    begin
       while I <= Text'Last loop
          if Text (I) = '\' then
-            I := I + 2;                --  an escape and the byte it escapes
+            I := I + 2;
          elsif Text (I) = '"' then
             return I + 1;
          else
@@ -74,8 +135,6 @@ package body Model_Runner.Tools.Builtin is
       return Text'Last + 1;
    end After_String;
 
-   --  The content of a JSON string whose opening quote is at Index, with the
-   --  escapes JSON requires decoded to the characters they stand for.
    function String_Content (Text : String; Index : Positive) return String is
       Room : String (1 .. Text'Length);
       Used : Natural := 0;
@@ -95,7 +154,7 @@ package body Model_Runner.Tools.Builtin is
                when 'r'    => Put (ASCII.CR);
                when 'b'    => Put (ASCII.BS);
                when 'f'    => Put (ASCII.FF);
-               when others => Put (Text (I + 1));  --  \" \\ \/ and the rest
+               when others => Put (Text (I + 1));
             end case;
             I := I + 2;
          else
@@ -106,9 +165,6 @@ package body Model_Runner.Tools.Builtin is
       return Room (1 .. Used);
    end String_Content;
 
-   --  The raw value beside Key at the top level of the object in Args: the
-   --  slice as it stands, quotes and all for a string. Found is false when
-   --  the object has no such key.
    procedure Locate
      (Args  : String;
       Key   : String;
@@ -123,7 +179,6 @@ package body Model_Runner.Tools.Builtin is
       Last  := 0;
       Found := False;
 
-      --  To the opening brace.
       while I <= Args'Last and then Args (I) /= '{' loop
          I := I + 1;
       end loop;
@@ -133,7 +188,6 @@ package body Model_Runner.Tools.Builtin is
       I := I + 1;
 
       loop
-         --  Whitespace before a key or the closing brace.
          while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
            | ASCII.LF | ASCII.CR
          loop
@@ -141,9 +195,8 @@ package body Model_Runner.Tools.Builtin is
          end loop;
          exit when I > Args'Last or else Args (I) = '}';
 
-         --  A member begins with a key, which is a string.
          if Args (I) /= '"' then
-            return;                    --  not the object shape this reads
+            return;
          end if;
 
          declare
@@ -159,7 +212,7 @@ package body Model_Runner.Tools.Builtin is
                I := I + 1;
             end loop;
             exit when I > Args'Last or else Args (I) /= ':';
-            I := I + 1;                --  past the colon
+            I := I + 1;
             while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
               | ASCII.LF | ASCII.CR
             loop
@@ -167,7 +220,6 @@ package body Model_Runner.Tools.Builtin is
             end loop;
             exit when I > Args'Last;
 
-            --  The value. Its extent depends on its kind.
             declare
                Value_First : constant Positive := I;
             begin
@@ -202,7 +254,6 @@ package body Model_Runner.Tools.Builtin is
                end if;
             end;
 
-            --  Past whitespace to the comma between members, if any.
             while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
               | ASCII.LF | ASCII.CR
             loop
@@ -214,38 +265,23 @@ package body Model_Runner.Tools.Builtin is
       end loop;
    end Locate;
 
-   --  A string argument's decoded content. Found is false when the key is
-   --  absent or its value is not a string.
-   procedure String_Argument
-     (Args  : String;
-      Key   : String;
-      Value : out String;
-      Last  : out Natural;
-      Found : out Boolean)
+   --  A string argument's decoded content, unbounded so a tool need not size
+   --  a buffer for it.
+   function Text_Argument (Args : String; Key : String; Found : out Boolean)
+     return String
    is
       From, To : Natural;
       Present  : Boolean;
    begin
-      Last  := 0;
       Found := False;
       Locate (Args, Key, From, To, Present);
       if not Present or else To < From or else Args (From) /= '"' then
-         return;
+         return "";
       end if;
-      declare
-         Content : constant String := String_Content (Args, From);
-      begin
-         if Content'Length > Value'Length then
-            return;                    --  the caller sized it; do not overrun
-         end if;
-         Value (Value'First .. Value'First + Content'Length - 1) := Content;
-         Last  := Value'First + Content'Length - 1;
-         Found := True;
-      end;
-   end String_Argument;
+      Found := True;
+      return String_Content (Args, From);
+   end Text_Argument;
 
-   --  An integer argument. Found is false when the key is absent or its
-   --  value is not something this reads as a whole number.
    procedure Integer_Argument
      (Args  : String;
       Key   : String;
@@ -263,11 +299,11 @@ package body Model_Runner.Tools.Builtin is
       end if;
 
       declare
-         Raw   : String renames Args (From .. To);
-         Sign  : Long_Long_Integer := 1;
-         Acc   : Long_Long_Integer := 0;
-         I     : Natural := Raw'First;
-         Seen  : Boolean := False;
+         Raw  : String renames Args (From .. To);
+         Sign : Long_Long_Integer := 1;
+         Acc  : Long_Long_Integer := 0;
+         I    : Natural := Raw'First;
+         Seen : Boolean := False;
       begin
          if I <= Raw'Last and then Raw (I) = '-' then
             Sign := -1;
@@ -275,13 +311,11 @@ package body Model_Runner.Tools.Builtin is
          end if;
          while I <= Raw'Last and then Raw (I) in '0' .. '9' loop
             Acc := Acc * 10
-              + Long_Long_Integer (Character'Pos (Raw (I)) - Character'Pos ('0'));
+              + Long_Long_Integer
+                  (Character'Pos (Raw (I)) - Character'Pos ('0'));
             Seen := True;
             I := I + 1;
          end loop;
-         --  A whole number and nothing after it. A value like 1.5 is a
-         --  number the calculator was not offered, so it is refused here
-         --  rather than truncated silently.
          if Seen and then I > Raw'Last then
             Value := Sign * Acc;
             Found := True;
@@ -289,11 +323,6 @@ package body Model_Runner.Tools.Builtin is
       end;
    end Integer_Argument;
 
-   ---------------------------------------------------------------------------
-   --  Writing the answer
-   ---------------------------------------------------------------------------
-
-   --  A decimal image without Ada's leading space on non-negatives.
    function Image (Value : Long_Long_Integer) return String is
       Raw : constant String := Long_Long_Integer'Image (Value);
    begin
@@ -304,80 +333,74 @@ package body Model_Runner.Tools.Builtin is
       end if;
    end Image;
 
+   --  Cut an answer to what the call buffer holds, noting where it was cut.
+   function Capped (Text : String) return String is
+   begin
+      if Text'Length <= Cap then
+         return Text;
+      end if;
+      return Text (Text'First .. Text'First + Cap - 1) & " ...(truncated)";
+   end Capped;
+
    ---------------------------------------------------------------------------
-   --  The tools
+   --  The pure tools
    ---------------------------------------------------------------------------
 
    function Calculator (Args : String) return String is
       A, B : Long_Long_Integer;
-      Op   : String (1 .. 8);
-      Op_Last : Natural;
       Found_A, Found_B, Found_Op : Boolean;
+      Op : constant String := Text_Argument (Args, "op", Found_Op);
    begin
       Integer_Argument (Args, "a", A, Found_A);
       Integer_Argument (Args, "b", B, Found_B);
-      String_Argument (Args, "op", Op, Op_Last, Found_Op);
       if not (Found_A and then Found_B and then Found_Op) then
          return "error: calculator needs integers a and b and an op";
       end if;
-      declare
-         Operator : constant String := Op (Op'First .. Op_Last);
-      begin
-         if Operator = "+" then
-            return Image (A + B);
-         elsif Operator = "-" then
-            return Image (A - B);
-         elsif Operator = "*" then
-            return Image (A * B);
-         elsif Operator = "/" then
-            if B = 0 then
-               return "error: division by zero";
-            else
-               return Image (A / B);
-            end if;
+      if Op = "+" then
+         return Image (A + B);
+      elsif Op = "-" then
+         return Image (A - B);
+      elsif Op = "*" then
+         return Image (A * B);
+      elsif Op = "/" then
+         if B = 0 then
+            return "error: division by zero";
          else
-            return "error: op must be one of + - * /";
+            return Image (A / B);
          end if;
-      end;
+      else
+         return "error: op must be one of + - * /";
+      end if;
    end Calculator;
 
    function String_Length (Args : String) return String is
-      Room : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
-      Last : Natural;
       Have : Boolean;
+      Text : constant String := Text_Argument (Args, "text", Have);
    begin
-      String_Argument (Args, "text", Room, Last, Have);
       if not Have then
          return "error: string_length needs a string text";
       end if;
       return Image
-        (Long_Long_Integer
-           (Model_Runner.UTF8.Code_Point_Count (Room (Room'First .. Last))));
+        (Long_Long_Integer (Model_Runner.UTF8.Code_Point_Count (Text)));
    end String_Length;
 
    function Reverse_Text (Args : String) return String is
-      Room : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
-      Last : Natural;
       Have : Boolean;
+      Text : constant String := Text_Argument (Args, "text", Have);
    begin
-      String_Argument (Args, "text", Room, Last, Have);
       if not Have then
          return "error: reverse_text needs a string text";
       end if;
-
-      --  Reversed by code point, not by byte: reversing the bytes of a
-      --  multi-byte character makes a sequence that is not that character
-      --  and may not be UTF-8 at all.
       declare
-         Text   : String renames Room (Room'First .. Last);
-         Output : String (1 .. Last - Room'First + 1);
+         Output : String (1 .. Text'Length);
          Fill   : Natural := Output'Last;
          I      : Natural := Text'First;
          Point  : Natural;
          Width  : Natural;
       begin
          while I <= Text'Last loop
-            Model_Runner.UTF8.Decode_First (Text (I .. Text'Last), Point, Width);
+            Model_Runner.UTF8.Decode_First
+              (Text (I .. Text'Last), Point, Width);
             exit when Width = 0;
             Output (Fill - Width + 1 .. Fill) := Text (I .. I + Width - 1);
             Fill := Fill - Width;
@@ -388,28 +411,366 @@ package body Model_Runner.Tools.Builtin is
    end Reverse_Text;
 
    function Lookup (Args : String) return String is
-      Room : String (1 .. 256);
-      Last : Natural;
       Have : Boolean;
+      Key  : constant String := Text_Argument (Args, "key", Have);
    begin
-      String_Argument (Args, "key", Room, Last, Have);
       if not Have then
          return "error: lookup needs a string key";
+      elsif Key = "capital_of_france" then
+         return "Paris";
+      elsif Key = "speed_of_light" then
+         return "299792458 metres per second";
+      elsif Key = "ada_year" then
+         return "1983";
+      else
+         return "error: no fact by that key";
+      end if;
+   end Lookup;
+
+   --  Base64, the standard alphabet with = padding.
+   Alphabet : constant String :=
+     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+   function Base64_Encode (Args : String) return String is
+      Have : Boolean;
+      Text : constant String := Text_Argument (Args, "text", Have);
+   begin
+      if not Have then
+         return "error: base64_encode needs a string text";
       end if;
       declare
-         Key : constant String := Room (Room'First .. Last);
+         Out_S : U.Unbounded_String;
+         I     : Natural := Text'First;
+         function Byte (K : Natural) return Natural
+         is (Character'Pos (Text (K)));
       begin
-         if Key = "capital_of_france" then
-            return "Paris";
-         elsif Key = "speed_of_light" then
-            return "299792458 metres per second";
-         elsif Key = "ada_year" then
-            return "1983";
+         while I <= Text'Last loop
+            declare
+               B0 : constant Natural := Byte (I);
+               Have1 : constant Boolean := I + 1 <= Text'Last;
+               Have2 : constant Boolean := I + 2 <= Text'Last;
+               B1 : constant Natural := (if Have1 then Byte (I + 1) else 0);
+               B2 : constant Natural := (if Have2 then Byte (I + 2) else 0);
+            begin
+               U.Append (Out_S, Alphabet (Alphabet'First + B0 / 4));
+               U.Append
+                 (Out_S,
+                  Alphabet (Alphabet'First + (B0 mod 4) * 16 + B1 / 16));
+               U.Append
+                 (Out_S,
+                  (if Have1
+                   then Alphabet
+                          (Alphabet'First + (B1 mod 16) * 4 + B2 / 64)
+                   else '='));
+               U.Append
+                 (Out_S,
+                  (if Have2 then Alphabet (Alphabet'First + B2 mod 64)
+                   else '='));
+            end;
+            I := I + 3;
+         end loop;
+         return Capped (U.To_String (Out_S));
+      end;
+   end Base64_Encode;
+
+   function Base64_Decode (Args : String) return String is
+      Have : Boolean;
+      Text : constant String := Text_Argument (Args, "text", Have);
+
+      function Value_Of (C : Character) return Integer is
+      begin
+         for K in Alphabet'Range loop
+            if Alphabet (K) = C then
+               return K - Alphabet'First;
+            end if;
+         end loop;
+         return -1;
+      end Value_Of;
+   begin
+      if not Have then
+         return "error: base64_decode needs a string text";
+      end if;
+      declare
+         Out_S : U.Unbounded_String;
+         Bits  : Natural := 0;
+         Acc   : Natural := 0;
+      begin
+         for C of Text loop
+            exit when C = '=';
+            if C not in ' ' | ASCII.LF | ASCII.CR | ASCII.HT then
+               declare
+                  V : constant Integer := Value_Of (C);
+               begin
+                  if V < 0 then
+                     return "error: not valid base64";
+                  end if;
+                  Acc := Acc * 64 + V;
+                  Bits := Bits + 6;
+                  if Bits >= 8 then
+                     Bits := Bits - 8;
+                     U.Append
+                       (Out_S, Character'Val ((Acc / (2 ** Bits)) mod 256));
+                  end if;
+               end;
+            end if;
+         end loop;
+         return Capped (U.To_String (Out_S));
+      end;
+   end Base64_Decode;
+
+   function Now_Text return String is
+   begin
+      return Ada.Calendar.Formatting.Image (Ada.Calendar.Clock);
+   end Now_Text;
+
+   function Memory_Put (Self : in out Instance; Args : String) return String is
+      Have_K, Have_V : Boolean;
+      Key   : constant String := Text_Argument (Args, "key", Have_K);
+      Value : constant String := Text_Argument (Args, "value", Have_V);
+   begin
+      if not (Have_K and then Have_V) then
+         return "error: memory_put needs a key and a value";
+      end if;
+      for I in 1 .. Self.Used loop
+         if U.To_String (Self.Memory (I).Key) = Key then
+            Self.Memory (I).Value := U.To_Unbounded_String (Value);
+            return "ok";
+         end if;
+      end loop;
+      if Self.Used >= Max_Notes then
+         return "error: memory is full";
+      end if;
+      Self.Used := Self.Used + 1;
+      Self.Memory (Self.Used) :=
+        (Key => U.To_Unbounded_String (Key),
+         Value => U.To_Unbounded_String (Value));
+      return "ok";
+   end Memory_Put;
+
+   function Memory_Get (Self : in out Instance; Args : String) return String is
+      Have : Boolean;
+      Key  : constant String := Text_Argument (Args, "key", Have);
+   begin
+      if not Have then
+         return "error: memory_get needs a key";
+      end if;
+      for I in 1 .. Self.Used loop
+         if U.To_String (Self.Memory (I).Key) = Key then
+            return U.To_String (Self.Memory (I).Value);
+         end if;
+      end loop;
+      return "error: nothing remembered under that key";
+   end Memory_Get;
+
+   ---------------------------------------------------------------------------
+   --  The tools that reach the world
+   ---------------------------------------------------------------------------
+
+   --  Read a file into a string, no more than the call buffer holds.
+   function Read_Capped (Path : String) return String is
+      File  : Ada.Text_IO.File_Type;
+      Out_S : U.Unbounded_String;
+      First : Boolean := True;
+   begin
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+      while not Ada.Text_IO.End_Of_File (File)
+        and then U.Length (Out_S) <= Cap
+      loop
+         if not First then
+            U.Append (Out_S, ASCII.LF);
+         end if;
+         U.Append (Out_S, Ada.Text_IO.Get_Line (File));
+         First := False;
+      end loop;
+      Ada.Text_IO.Close (File);
+      return Capped (U.To_String (Out_S));
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+         return "error: could not read the file";
+   end Read_Capped;
+
+   --  Run a program, capturing its output (and its errors), and free the
+   --  argument list. A program that is not installed is said so plainly.
+   function Capture
+     (Program : String; Args : GNAT.OS_Lib.Argument_List) return String
+   is
+      use type GNAT.OS_Lib.String_Access;
+      Prog : GNAT.OS_Lib.String_Access :=
+        GNAT.OS_Lib.Locate_Exec_On_Path (Program);
+      Path : GNAT.OS_Lib.String_Access;
+      FD   : GNAT.OS_Lib.File_Descriptor;
+      Ran  : Boolean := False;
+      Code : Integer := -1;
+
+      procedure Release is
+      begin
+         for A of Args loop
+            declare
+               Item : GNAT.OS_Lib.String_Access := A;
+            begin
+               GNAT.OS_Lib.Free (Item);
+            end;
+         end loop;
+         GNAT.OS_Lib.Free (Prog);
+      end Release;
+   begin
+      if Prog = null then
+         Release;
+         return "error: '" & Program & "' is not installed on this machine";
+      end if;
+
+      GNAT.OS_Lib.Create_Temp_File (FD, Path);
+      GNAT.OS_Lib.Close (FD);
+      GNAT.OS_Lib.Spawn (Prog.all, Args, Path.all, Ran, Code,
+                         Err_To_Out => True);
+
+      declare
+         Output : constant String := Read_Capped (Path.all);
+         Gone   : Boolean;
+      begin
+         GNAT.OS_Lib.Delete_File (Path.all, Gone);
+         GNAT.OS_Lib.Free (Path);
+         Release;
+         if not Ran then
+            return "error: could not run '" & Program & "'";
+         elsif Output = "" then
+            return "(the command produced no output; exit code"
+              & Integer'Image (Code) & ")";
          else
-            return "error: no fact by that key";
+            return Output;
          end if;
       end;
-   end Lookup;
+   end Capture;
+
+   function Read_File (Args : String) return String is
+      Have : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have);
+   begin
+      if not Have then
+         return "error: read_file needs a path";
+      elsif not Ada.Directories.Exists (Path) then
+         return "error: no file at that path";
+      end if;
+      return Read_Capped (Path);
+   end Read_File;
+
+   function Write_File (Args : String) return String is
+      Have_P, Have_C : Boolean;
+      Path    : constant String := Text_Argument (Args, "path", Have_P);
+      Content : constant String := Text_Argument (Args, "content", Have_C);
+      File    : Ada.Text_IO.File_Type;
+   begin
+      if not (Have_P and then Have_C) then
+         return "error: write_file needs a path and content";
+      end if;
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+      Ada.Text_IO.Put (File, Content);
+      Ada.Text_IO.Close (File);
+      return "wrote" & Natural'Image (Content'Length) & " bytes to " & Path;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+         return "error: could not write the file";
+   end Write_File;
+
+   function List_Directory (Args : String) return String is
+      Have : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have);
+      Out_S : U.Unbounded_String;
+      Search : Ada.Directories.Search_Type;
+      Item   : Ada.Directories.Directory_Entry_Type;
+   begin
+      if not Have then
+         return "error: list_directory needs a path";
+      elsif not Ada.Directories.Exists (Path) then
+         return "error: no directory at that path";
+      end if;
+      Ada.Directories.Start_Search (Search, Path, "");
+      while Ada.Directories.More_Entries (Search)
+        and then U.Length (Out_S) <= Cap
+      loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+         declare
+            Name : constant String := Ada.Directories.Simple_Name (Item);
+         begin
+            if Name /= "." and then Name /= ".." then
+               if U.Length (Out_S) > 0 then
+                  U.Append (Out_S, ASCII.LF);
+               end if;
+               U.Append (Out_S, Name);
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      return Capped (U.To_String (Out_S));
+   exception
+      when others =>
+         return "error: could not list the directory";
+   end List_Directory;
+
+   function Shell (Args : String) return String is
+      Have : Boolean;
+      Cmd  : constant String := Text_Argument (Args, "command", Have);
+   begin
+      if not Have then
+         return "error: shell needs a command";
+      end if;
+      return Capture ("sh", [new String'("-c"), new String'(Cmd)]);
+   end Shell;
+
+   function Run_Python (Args : String) return String is
+      Have : Boolean;
+      Code : constant String := Text_Argument (Args, "code", Have);
+   begin
+      if not Have then
+         return "error: run_python needs code";
+      end if;
+      return Capture ("python3", [new String'("-c"), new String'(Code)]);
+   end Run_Python;
+
+   function Http_Get (Args : String) return String is
+      Have : Boolean;
+      Url  : constant String := Text_Argument (Args, "url", Have);
+   begin
+      if not Have then
+         return "error: http_get needs a url";
+      end if;
+      return Capture
+        ("curl", [new String'("-fsSL"), new String'(Url)]);
+   end Http_Get;
+
+   function Web_Search (Args : String) return String is
+      Have  : Boolean;
+      Query : constant String := Text_Argument (Args, "query", Have);
+   begin
+      if not Have then
+         return "error: web_search needs a query";
+      end if;
+      --  curl encodes the query, so a space or a symbol in it is safe.
+      return Capture
+        ("curl",
+         [new String'("-fsSL"),
+          new String'("--data-urlencode"),
+          new String'("q=" & Query),
+          new String'("https://lite.duckduckgo.com/lite/")]);
+   end Web_Search;
+
+   function Sql (Args : String) return String is
+      Have_D, Have_Q : Boolean;
+      Database : constant String := Text_Argument (Args, "database", Have_D);
+      Query    : constant String := Text_Argument (Args, "query", Have_Q);
+   begin
+      if not (Have_D and then Have_Q) then
+         return "error: sql needs a database and a query";
+      end if;
+      return Capture
+        ("sqlite3", [new String'(Database), new String'(Query)]);
+   end Sql;
 
    ---------
    -- Run --
@@ -423,8 +784,6 @@ package body Model_Runner.Tools.Builtin is
       Last      : out Natural;
       Status    : out Model_Runner.Errors.Error_Info)
    is
-      pragma Unreferenced (Self);
-
       function Answer return String is
       begin
          if Named = "calculator" then
@@ -435,6 +794,32 @@ package body Model_Runner.Tools.Builtin is
             return Reverse_Text (Arguments);
          elsif Named = "lookup" then
             return Lookup (Arguments);
+         elsif Named = "base64_encode" then
+            return Base64_Encode (Arguments);
+         elsif Named = "base64_decode" then
+            return Base64_Decode (Arguments);
+         elsif Named = "now" then
+            return Now_Text;
+         elsif Named = "memory_put" then
+            return Memory_Put (Self, Arguments);
+         elsif Named = "memory_get" then
+            return Memory_Get (Self, Arguments);
+         elsif Named = "read_file" then
+            return Read_File (Arguments);
+         elsif Named = "write_file" then
+            return Write_File (Arguments);
+         elsif Named = "list_directory" then
+            return List_Directory (Arguments);
+         elsif Named = "shell" then
+            return Shell (Arguments);
+         elsif Named = "run_python" then
+            return Run_Python (Arguments);
+         elsif Named = "http_get" then
+            return Http_Get (Arguments);
+         elsif Named = "web_search" then
+            return Web_Search (Arguments);
+         elsif Named = "sql" then
+            return Sql (Arguments);
          else
             return "error: no tool by the name """ & Named & """";
          end if;

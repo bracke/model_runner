@@ -239,9 +239,11 @@ refused rather than told nothing and asked anyway. What comes back is a
 reply, and what the reply asks for is read out of it and reported on standard
 error, by name, so standard output stays what the model wrote.
 
-Nothing here runs anything. This program starts no process, opens no socket
-and loads no library, so a tool call is text the model wrote and a tool
-result is text you hand back. The loop closes outside this program:
+Reading a tool definition or a tool call runs nothing: the tool packages
+start no process, open no socket and load no library, so a tool call is text
+the model wrote and a tool result is text you hand back. Offered this way and
+left open, the loop closes outside the program -- you run the tool and pass
+its answer back on the next turn:
 
 ```
 $ model_runner run MODEL --tools-file tools.json \
@@ -264,14 +266,19 @@ happened to spell it. Interactively the same loop is `/tools` to see what is
 on offer and `/tool TEXT` to hand an answer back.
 
 **Closing the loop.** `--agent` runs the loop rather than leaving it open: the
-model's calls are run and the answers fed back until it answers or a step
-budget (`--max-steps N`, eight by default) runs out. The program can only run
-its own built-in tools -- a small deterministic set: arithmetic, two string
-operations and a fixed lookup -- because those are pure Ada that starts no
-process and keeps the promise above; a tool that reaches the world lives in a
-caller's own runner, which is a library thing. The reply is always
-grammar-constrained here, so a call the model writes always parses and always
-names a tool on offer. The library is where this is assembled --
+model's calls are run and the answers fed back until it answers, a step
+budget (`--max-steps N`, eight by default) runs out, or a call repeats one
+already made. It runs a broad built-in set -- arithmetic and string work, a
+scratchpad it can write and read, base64, the clock, files, a shell, Python,
+an HTTP fetch, a web search and SQLite -- so unlike the rest of the program
+the agent's built-ins *do* start processes and open files: the ones that
+reach the network or a database run `curl`, `python3`, `sqlite3` or `sh`, and
+say so plainly when that program is not installed. `--tool-command CMD`
+instead runs the tools `--tools`/`--tools-file` describe by handing each call
+to that program, which is a caller's own runner reached from the command
+line. Either way the reply is grammar-constrained, so a call the model writes
+always parses and always names a tool on offer. The library is where this is
+assembled --
 `Model_Runner.Agent` drives the render/generate/parse/run circle over
 `Model_Runner.Tools`, `Model_Runner.Conversation`, `Model_Runner.Templates`
 and `Model_Runner.Generation`, against a `Model_Runner.Tools.Runner` a caller

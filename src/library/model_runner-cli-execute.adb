@@ -2142,7 +2142,8 @@ package body Model_Runner.CLI.Execute is
                else
                   Model_Runner.Tools.Read
                     (Agent_Tools,
-                     Model_Runner.Tools.Builtin.Definitions_Text, Condition);
+                     Model_Runner.Tools.Builtin.All_Definitions_Text,
+                     Condition);
                   if E.Is_Error (Condition) then
                      Conv.Close (Messages);
                      Fail (Condition);

@@ -54,6 +54,23 @@ Keep a Changelog and the project uses semantic versioning.
   in the mandatory suite; the loop against a model is what agent-eval
   measures.
 
+- **A broad built-in tool set for the agent, and the promise it spends.**
+  `run --agent` now offers, beyond the pure four, tools that reach the world:
+  a scratchpad the model writes and reads, base64, the clock, `read_file`,
+  `write_file`, `list_directory`, `shell`, `run_python`, `http_get`,
+  `web_search` and `sql`. The ones that reach the network or a database do it
+  by running `curl`, `python3`, `sqlite3` or `sh`, and answer with a plain
+  error when that program is not installed. This is deliberate and it is a
+  real cost: `Model_Runner.Tools.Builtin` no longer keeps the "starts no
+  process, opens no socket" property the rest of the library keeps, so the
+  agent's built-ins now spawn processes and open files. The eval keeps
+  offering only the pure four (`Definitions_Text`), because a shell or a
+  fetch is not a thing a test can score the same way twice;
+  `All_Definitions_Text` is the full set, and the CLI uses it. The pure
+  additions (base64, memory) and the full set's grammar are covered in the
+  suite; the impure tools are left out of the gate to keep it hermetic and
+  were exercised by hand.
+
 - **The multi-position draft divergence, run down and corrected.** The
   earlier note that the drafts "part by as much as one" past two tokens
   was mostly the check's own doing: a draft reads the exact state and

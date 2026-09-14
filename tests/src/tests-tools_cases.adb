@@ -117,7 +117,66 @@ package body Tests.Tools_Cases is
       Assert (not Tools.Offers (Defs, "danger"),
               "a tool nobody defined is offered");
       Tools.Close (Defs);
+
+      --  The full set reads too, and offers the tools that reach the world.
+      declare
+         All_Defs : Tools.Definitions;
+         Rules    : G.Compiled;
+         G_Status : E.Error_Info;
+      begin
+         Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
+         Assert (E.Is_Ok (Status), "the full definitions would not read");
+         Assert (Tools.Count (All_Defs) = 17,
+                 "the full set is not seventeen tools");
+         Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
+         Assert (Tools.Offers (All_Defs, "http_get"),
+                 "http_get is not offered");
+         Assert (Tools.Offers (All_Defs, "memory_put"),
+                 "memory_put is not offered");
+
+         --  The grammar still compiles over the full set (a no-argument tool
+         --  makes it fall back to the looser form, which must still build).
+         Constraint.Compile_Call_Grammar (All_Defs, Rules, G_Status);
+         Assert (E.Is_Ok (G_Status) and then G.Is_Ready (Rules),
+                 "the call grammar would not compile over the full set");
+         G.Close (Rules);
+         Tools.Close (All_Defs);
+      end;
    end Definitions_Read;
+
+   --  The stateless new pure tools answer the same way every time.
+   procedure Pure_Additions
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      Assert (Answer ("base64_encode", "{""text"":""hi""}") = "aGk=",
+              "base64_encode is wrong");
+      Assert (Answer ("base64_decode", "{""text"":""aGk=""}") = "hi",
+              "base64_decode did not round-trip");
+   end Pure_Additions;
+
+   --  Memory keeps what one call wrote for a later call to read.
+   procedure Memory_Round_Trips
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Runner : Builtin.Instance;
+      Room   : String (1 .. Tools.Max_Call_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+   begin
+      Runner.Run ("memory_put", "{""key"":""x"",""value"":""42""}",
+                  Room, Last, Status);
+      Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "ok",
+              "memory_put did not accept the note");
+      Runner.Run ("memory_get", "{""key"":""x""}", Room, Last, Status);
+      Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "42",
+              "memory_get did not recall what was put");
+      Runner.Run ("memory_get", "{""key"":""nope""}", Room, Last, Status);
+      Assert (Room (1 .. Last) (1 .. 5) = "error",
+              "memory_get invented a value for an unknown key");
+   end Memory_Round_Trips;
 
    --  The grammar takes a well-formed call to an offered tool, takes prose,
    --  and refuses a call to a tool nobody offered.
@@ -197,6 +256,12 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Definitions_Read'Access,
          "the built-in definitions read as the tools they describe");
+      Register_Routine
+        (T, Pure_Additions'Access,
+         "the added pure tools answer the same way every time");
+      Register_Routine
+        (T, Memory_Round_Trips'Access,
+         "memory keeps what one call wrote for a later call to read");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "
