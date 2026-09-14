@@ -7,12 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **`retrieve` searches a folder tree, not only its top level.** It descends
-  into subdirectories now, labelling each passage with its path under the
-  folder given (`notes/ocean.txt`, not just `ocean.txt`); a name beginning
-  with a dot -- `.git` and the like -- is skipped, and the file and passage
-  caps bound the whole walk. The suite writes a nested file and confirms a
-  query for it comes back labelled with its subdirectory.
+- **`retrieve` searches a folder tree, not only its top level, and skips
+  binaries.** It descends into subdirectories now, labelling each passage
+  with its path under the folder given (`notes/ocean.txt`, not just
+  `ocean.txt`); a name beginning with a dot -- `.git` and the like -- is
+  skipped, and the file and passage caps bound the whole walk. It reads text
+  files of any kind (`.md`, source, JSON, logs -- extension does not matter),
+  but a file whose first bytes carry a NUL is taken for binary -- an image, a
+  PDF, an archive -- and left out rather than turned into noise. The suite
+  writes a nested file and a binary file and confirms the nested one comes
+  back labelled with its subdirectory while the binary is not searched.
 
 - **A `retrieve` tool that searches a folder of text files, by meaning when
   a model is at hand.** The agent could read one named file and list a

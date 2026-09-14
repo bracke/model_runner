@@ -411,6 +411,10 @@ package body Tests.Tools_Cases is
       Write_File
         ("notes/ocean.txt",
          "The ocean is a vast body of saltwater covering most of the earth.");
+      --  A binary file: a NUL byte among words found nowhere else. It must
+      --  be skipped, so a query for those words finds nothing.
+      Write_File
+        ("blob.bin", "xyzzy" & Character'Val (0) & "hidden treasure trove");
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -431,6 +435,16 @@ package body Tests.Tools_Cases is
          Room, Last, Status);
       Assert (Begins (Room (1 .. Last), "[notes/ocean.txt]"),
               "retrieve did not find the passage in the subdirectory: "
+              & Room (1 .. Last));
+
+      --  The binary file's words are searched for: it was skipped, so
+      --  nothing matches even though the bytes are there.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""xyzzy hidden treasure""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "no passage"),
+              "retrieve searched a binary file it should have skipped: "
               & Room (1 .. Last));
 
       --  A query whose words are in no file: nothing matches.

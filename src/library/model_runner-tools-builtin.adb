@@ -1,6 +1,7 @@
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 
 with GNAT.OS_Lib;
@@ -587,6 +588,34 @@ package body Model_Runner.Tools.Builtin is
    ---------------------------------------------------------------------------
 
    --  Read a file into a string, no more than the call buffer holds.
+   --  Whether a file looks binary rather than text: its first bytes carry a
+   --  NUL, which text does not and most binary formats do. Cheap and bounded
+   --  -- a couple of kilobytes -- and a file that will not open is called
+   --  binary so retrieve leaves it alone. It keeps a folder's images, PDFs
+   --  and archives out of a text search rather than turning them to noise.
+   function Is_Binary (Path : String) return Boolean is
+      use Ada.Streams;
+      File : Stream_IO.File_Type;
+      Buf  : Stream_Element_Array (1 .. 2048);
+      Last : Stream_Element_Offset;
+   begin
+      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Read (File, Buf, Last);
+      Stream_IO.Close (File);
+      for I in 1 .. Last loop
+         if Buf (I) = 0 then
+            return True;
+         end if;
+      end loop;
+      return False;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
+         end if;
+         return True;
+   end Is_Binary;
+
    function Read_Capped (Path : String) return String is
       File  : Ada.Text_IO.File_Type;
       Out_S : U.Unbounded_String;
@@ -1033,6 +1062,9 @@ package body Model_Runner.Tools.Builtin is
                        = Ada.Directories.Directory
                then
                   Walk (Full, Prefix & Name & "/");
+               elsif Is_Binary (Full) then
+                  --  An image, a PDF, an archive -- not text to search.
+                  null;
                else
                   Files := Files + 1;
                   declare
