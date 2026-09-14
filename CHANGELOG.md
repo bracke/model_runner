@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Mid-loop user clarification: an `ask_user` built-in tool.** The agent can
+  pause to put a question to the user -- a missing detail, a choice, a
+  go-ahead -- and carry on with the answer, so a run is a conversation where
+  it needs to be, not only a one-shot task. `Tools.Builtin` gained an
+  `Inquirer` limited interface and `Use_Inquirer`, the same injection shape as
+  `Embedder`/`Delegator`: the console inquirer (question to the console,
+  answer read from standard input as one line) lives in the CLI. With no
+  inquirer wired -- an eval, a library embedding, a sub-agent, a closed input
+  -- `ask_user` declines or reads no answer rather than blocking on input no
+  one will give, so the loop always goes on. The full built-in set is now
+  twenty tools.
+
 - **Sub-agent delegation: a `delegate` built-in tool.** The agent can hand a
   self-contained subtask to a sub-agent that runs a full loop of its own --
   the same tools, its own step and token budget, and a session and

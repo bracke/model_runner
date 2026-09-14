@@ -97,6 +97,31 @@ package Model_Runner.Tools.Builtin is
    --  A reference to whatever runs a delegated subtask.
    type Delegator_Reference is access all Delegator'Class;
 
+   --  Something that puts a question to the user and returns their answer,
+   --  for the ask_user tool. A caller with a console supplies one (see
+   --  Use_Inquirer); with it, the model can pause mid-loop to ask for what
+   --  only the user knows -- a missing detail, a choice, a go-ahead -- and
+   --  carry on with the answer. Without one, ask_user declines, so a run with
+   --  no one to ask (an eval, a library embedding) does not block.
+   type Inquirer is limited interface;
+
+   --  Put Question to the user and return their answer.
+   --
+   --  @param Self The inquirer.
+   --  @param Question The question, in the words the user is shown.
+   --  @param Answer Buffer receiving the user's answer.
+   --  @param Last Number of bytes written.
+   --  @param Status Success, or a diagnostic when no answer can be had.
+   procedure Ask
+     (Self     : in out Inquirer;
+      Question : String;
+      Answer   : out String;
+      Last     : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  A reference to whatever asks the user a question.
+   type Inquirer_Reference is access all Inquirer'Class;
+
    --  A runner over the built-in tools. It carries the scratchpad the memory
    --  tools write and read, so a call to remember something is seen by a
    --  later call to recall it, for the life of this runner.
@@ -119,6 +144,15 @@ package Model_Runner.Tools.Builtin is
    --  @param Source What delegate will run a subtask with, or null.
    procedure Use_Delegator
      (Self : in out Instance; Source : Delegator_Reference);
+
+   --  Give this runner an inquirer, so its ask_user tool can put a question
+   --  to the user. Passing null (the default state) leaves ask_user declining,
+   --  so a run with no one to ask does not block.
+   --
+   --  @param Self The runner.
+   --  @param Source What ask_user will ask through, or null.
+   procedure Use_Inquirer
+     (Self : in out Instance; Source : Inquirer_Reference);
 
    --  Answer one call to a built-in tool.
    --
@@ -166,6 +200,9 @@ private
 
       --  What delegate runs a subtask with, or null to decline delegation.
       Sub    : Delegator_Reference := null;
+
+      --  What ask_user asks through, or null to decline the question.
+      Asker  : Inquirer_Reference := null;
    end record;
 
 end Model_Runner.Tools.Builtin;

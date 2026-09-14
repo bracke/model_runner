@@ -143,7 +143,14 @@ package body Model_Runner.Tools.Builtin is
              & "your own context: describe the whole subtask in one task "
              & "string, as the sub-agent starts with no memory of this "
              & "conversation.",
-             Str1 ("task"));
+             Str1 ("task"))
+     & ", "
+     & Tool ("ask_user",
+             "Ask the user a question and get back what they type. Use it "
+             & "when the task is ambiguous, a choice is the user's to make, or "
+             & "you need something only the user knows -- not for what a tool "
+             & "or your own reasoning can settle.",
+             Str1 ("question"));
 
    Definitions     : constant String := "[" & Pure_Body & "]";
    All_Definitions : constant String := "[" & Pure_Body & ", " & More_Body
@@ -954,6 +961,47 @@ package body Model_Runner.Tools.Builtin is
       Self.Sub := Source;
    end Use_Delegator;
 
+   procedure Use_Inquirer
+     (Self : in out Instance; Source : Inquirer_Reference) is
+   begin
+      Self.Asker := Source;
+   end Use_Inquirer;
+
+   --  The ask_user tool: put a question to the user and return the answer.
+   --  With no inquirer wired -- an eval, a library embedding, or a sub-agent,
+   --  none of which has a user at a console -- the call is declined in words
+   --  the model reads, so the loop goes on rather than blocking on input
+   --  no one will give.
+   function Ask_User
+     (Self : in out Instance; Args : String) return String
+   is
+      Have     : Boolean;
+      Question : constant String := Text_Argument (Args, "question", Have);
+   begin
+      if not Have then
+         return "error: ask_user needs a question string";
+      end if;
+      if Self.Asker = null then
+         return "error: no user is available to ask; decide with what you "
+                & "have or use another tool";
+      end if;
+
+      declare
+         Buffer : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Self.Asker.Ask (Question, Buffer, Last, Status);
+         if E.Is_Error (Status) then
+            return "error: the user could not be asked";
+         elsif Last = 0 then
+            return "the user gave no answer";
+         else
+            return Buffer (1 .. Last);
+         end if;
+      end;
+   end Ask_User;
+
    --  The delegate tool: run one subtask on a sub-agent and return its
    --  answer. With no delegator wired -- which is how a sub-agent's own
    --  runner is left -- the call is declined in words the model reads, so
@@ -1583,6 +1631,8 @@ package body Model_Runner.Tools.Builtin is
             return Retrieve (Arguments, Self.Embed);
          elsif Named = "delegate" then
             return Delegate (Self, Arguments);
+         elsif Named = "ask_user" then
+            return Ask_User (Self, Arguments);
          else
             return "error: no tool by the name """ & Named & """";
          end if;

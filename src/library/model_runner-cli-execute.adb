@@ -161,6 +161,51 @@ package body Model_Runner.CLI.Execute is
       end if;
    end Consider;
 
+   --  Puts the model's question to the user on the console and reads their
+   --  answer from standard input, for the ask_user tool. An end of input --
+   --  a closed or piped-dry stdin -- is no answer rather than an error, so
+   --  the loop goes on rather than blocking on input no one will give.
+   type Console_Inquirer (Screen : access Pres.Console) is
+     limited new Model_Runner.Tools.Builtin.Inquirer with null record;
+
+   overriding procedure Ask
+     (Self     : in out Console_Inquirer;
+      Question : String;
+      Answer   : out String;
+      Last     : out Natural;
+      Status   : out E.Error_Info);
+
+   overriding procedure Ask
+     (Self     : in out Console_Inquirer;
+      Question : String;
+      Answer   : out String;
+      Last     : out Natural;
+      Status   : out E.Error_Info)
+   is
+      Line : String (1 .. 4096);
+      Read : Natural := 0;
+   begin
+      Last   := 0;
+      Status := E.Success;
+      Pres.Put_Note
+        (Self.Screen.all, "cli.agent.ask", [Loc.Named ("detail", Question)]);
+      begin
+         Ada.Text_IO.Get_Line (Line, Read);
+      exception
+         when Ada.Text_IO.End_Error =>
+            Read := 0;
+      end;
+      declare
+         Take : constant Natural := Natural'Min (Read, Answer'Length);
+      begin
+         if Take > 0 then
+            Answer (Answer'First .. Answer'First + Take - 1) :=
+              Line (1 .. Take);
+            Last := Take;
+         end if;
+      end;
+   end Ask;
+
    --  Embeds text for the agent's retrieve tool, using the loaded model on a
    --  session of its own. What the model has made of a text lives in its
    --  hidden state; this reduces that to one mean-pooled, unit-length vector,
@@ -2292,6 +2337,9 @@ package body Model_Runner.CLI.Execute is
                Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
+               --  Asks the user a question for the ask_user tool.
+               Asker        : aliased Console_Inquirer
+                                (Screen'Unchecked_Access);
                --  Embed with the dedicated model when one was loaded, else
                --  with the model being run.
                Embedder     : aliased Model_Embedder
@@ -2540,6 +2588,10 @@ package body Model_Runner.CLI.Execute is
                      Built_Runner.Use_Delegator
                        (Delegate_Runner'Unchecked_Access);
                   end if;
+
+                  --  The run has a console, so ask_user can put a question to
+                  --  the user; an end of input is answered as no answer.
+                  Built_Runner.Use_Inquirer (Asker'Unchecked_Access);
 
                   Drive (Agent_Tools, Built_Runner);
 

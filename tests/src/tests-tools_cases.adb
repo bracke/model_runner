@@ -256,8 +256,8 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 19,
-                 "the full set is not nineteen tools");
+         Assert (Tools.Count (All_Defs) = 20,
+                 "the full set is not twenty tools");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");
@@ -267,6 +267,8 @@ package body Tests.Tools_Cases is
                  "retrieve is not offered");
          Assert (Tools.Offers (All_Defs, "delegate"),
                  "delegate is not offered");
+         Assert (Tools.Offers (All_Defs, "ask_user"),
+                 "ask_user is not offered");
 
          --  The grammar compiles over the full set (the tight form, which
          --  the rule bound is now wide enough to hold -- see Full_Set_Is_Tight).
@@ -325,6 +327,21 @@ package body Tests.Tools_Cases is
               = "error",
               "delegate with no delegator did not decline as an error");
    end Delegate_Declines_Undelegated;
+
+   --  With no inquirer wired -- the state of a runner given none, as an eval
+   --  or a sub-agent is -- ask_user declines rather than blocking on input no
+   --  one will give, so the loop goes on.
+   procedure Ask_User_Declines_Unwired
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Reply : constant String :=
+        Answer ("ask_user", "{""question"":""which one?""}");
+   begin
+      Assert (Reply'Length >= 5 and then Reply (Reply'First .. Reply'First + 4)
+              = "error",
+              "ask_user with no inquirer did not decline as an error");
+   end Ask_User_Declines_Unwired;
 
    --  The grammar takes a well-formed call to an offered tool, takes prose,
    --  and refuses a call to a tool nobody offered.
@@ -761,6 +778,9 @@ package body Tests.Tools_Cases is
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "
          & "recursing");
+      Register_Routine
+        (T, Ask_User_Declines_Unwired'Access,
+         "ask_user with no inquirer declines rather than blocking on input");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "

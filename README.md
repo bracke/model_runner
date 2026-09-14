@@ -273,7 +273,8 @@ already made. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a ranked search
 over a folder of text files, PDFs, Office documents (modern and legacy),
 OpenDocument, EPUB, RTF and HTML, a shell, Python, an HTTP fetch, a web
-search, SQLite, and a `delegate` that hands a subtask to a sub-agent
+search, SQLite, a `delegate` that hands a subtask to a sub-agent, and an
+`ask_user` that puts a question to the user mid-loop
 -- so unlike the rest of the program
 the agent's built-ins *do* start processes and open files. `http_get` and
 `web_search` fetch through an in-process HTTP/HTTPS client (the `httpclient`
@@ -299,7 +300,13 @@ apart from the caller's -- and only the sub-agent's final answer comes back,
 so the detail of the piece never fills the caller's context. A sub-agent is
 given no delegator of its own, so delegation goes one level deep and no
 further; when a second session will not open (most often for want of memory)
-`delegate` declines and the run goes on with the other tools. `--compact` keeps a
+`delegate` declines and the run goes on with the other tools. The `ask_user`
+tool lets the model pause to ask for what only the user knows -- a missing
+detail, a choice, a go-ahead: the question goes to the console and the
+answer is read from standard input as one line, so a run is a conversation
+where it needs to be, not only a one-shot task. With no one to ask -- an
+eval, a library embedding, a closed input -- `ask_user` gets no answer
+rather than blocking, and the loop goes on. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
 turns kept. `--embed-model PATH` gives the `retrieve` tool a model trained to
