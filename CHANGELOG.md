@@ -44,6 +44,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM's `<function>`/`<param>` tool-call format is now a readable
+  syntax.** `Tools.Read_Calls` gained a `Syntax` selector (`Tool_Call_JSON`,
+  the default and every caller's current behaviour, or `Function_XML`). In the
+  new syntax it reads each `<function name="..."> ... </function>` as a call
+  and each `<param name="p">v</param>` as an argument -- a `<![CDATA[..]]>`
+  wrapper removed and the value written back as a JSON string -- so a MiniCPM
+  reply comes out the same shape as any other: a name and its arguments as one
+  JSON object. This is the parsing half; a MiniCPM model cannot yet be driven
+  through `run --agent` end to end, because its chat template uses constructs
+  outside the renderable subset (a separate limit) and the agent grammar still
+  constrains output to the `<tool_call>` form -- so the syntax is offered as a
+  library capability and covered by a parser test, not wired to a CLI flag.
+
 - **`/save PATH` and `/load PATH` in interactive mode.** `/save` writes the
   conversation to a file and `/load` replaces it with one, so a session can be
   kept and taken up later. They use the same conversation serializer as the

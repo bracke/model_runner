@@ -899,6 +899,60 @@ package body Tests.Tools_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Retrieve_Ranks_The_Folder;
 
+   --  MiniCPM writes a call as a <function> element with a <param> per
+   --  argument, not a <tool_call> JSON object. Read in that syntax, a call
+   --  comes out the same shape as any other: a name and its arguments as one
+   --  JSON object, each param value a JSON string, a CDATA wrapper removed.
+   procedure Function_XML_Calls_Parse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Asked  : Tools.Calls;
+      Status : E.Error_Info;
+   begin
+      --  One call, three params; the values become JSON strings.
+      Tools.Read_Calls
+        (Asked,
+         "<function name=""calculator"">"
+         & "<param name=""a"">47</param>"
+         & "<param name=""op"">*</param>"
+         & "<param name=""b"">89</param></function>",
+         Status, Syntax => Tools.Function_XML);
+      Assert (E.Is_Ok (Status), "the function-form call would not read");
+      Assert (Tools.Count (Asked) = 1, "not one call");
+      Assert (Tools.Called (Asked, 1) = "calculator",
+              "wrong name: " & Tools.Called (Asked, 1));
+      Assert (Tools.Arguments (Asked, 1)
+              = "{""a"": ""47"", ""op"": ""*"", ""b"": ""89""}",
+              "wrong arguments: " & Tools.Arguments (Asked, 1));
+      Tools.Close (Asked);
+
+      --  Two calls, and a CDATA value with a newline becomes an escaped
+      --  JSON string.
+      Tools.Read_Calls
+        (Asked,
+         "<function name=""first""><param name=""x"">1</param></function>"
+         & "<function name=""note""><param name=""body"">"
+         & "<![CDATA[a" & ASCII.LF & "b]]></param></function>",
+         Status, Syntax => Tools.Function_XML);
+      Assert (E.Is_Ok (Status), "the two function-form calls would not read");
+      Assert (Tools.Count (Asked) = 2, "not two calls");
+      Assert (Tools.Called (Asked, 2) = "note", "wrong second name");
+      Assert (Tools.Arguments (Asked, 2) = "{""body"": ""a\nb""}",
+              "CDATA value not read as an escaped JSON string: "
+              & Tools.Arguments (Asked, 2));
+      Tools.Close (Asked);
+
+      --  The function form read as the JSON form finds nothing, and that is
+      --  not an error: the syntaxes do not collide.
+      Tools.Read_Calls
+        (Asked, "<function name=""x""></function>", Status,
+         Syntax => Tools.Tool_Call_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 0,
+              "the function form was mistaken for a tool_call");
+      Tools.Close (Asked);
+   end Function_XML_Calls_Parse;
+
    -------------------
    -- Register_Tests --
    -------------------
@@ -918,6 +972,9 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Memory_Round_Trips'Access,
          "memory keeps what one call wrote for a later call to read");
+      Register_Routine
+        (T, Function_XML_Calls_Parse'Access,
+         "a MiniCPM function/param reply reads as calls with JSON arguments");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

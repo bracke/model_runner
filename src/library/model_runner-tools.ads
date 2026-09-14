@@ -114,12 +114,27 @@ package Model_Runner.Tools is
    --  idempotent.
    type Calls is tagged limited private;
 
+   --  The shape a model writes its calls in. Families differ: most wrap a
+   --  JSON object in <tool_call> tags, which is what the loop was built for;
+   --  MiniCPM writes an XML element instead, a <function> named by an
+   --  attribute with a <param> per argument. Whichever shape a reply is read
+   --  in, a call comes out the same -- a name and its arguments as one line
+   --  of JSON -- so the rest of the program need not know which family wrote
+   --  it.
+   type Call_Syntax is
+     (Tool_Call_JSON,   --  <tool_call>{"name": .., "arguments": {..}}</tool_call>
+      Function_XML);    --  <function name=".."><param name="p">v</param></function>
+
    --  Read every call a reply carries.
    --
-   --  What lies between <tool_call> and </tool_call> is read as a JSON
-   --  object naming the function and its arguments. The arguments are
-   --  written back in the same spelling the definitions are, so what a
-   --  caller reads here is a call and not a transcription.
+   --  In Tool_Call_JSON, what lies between <tool_call> and </tool_call> is a
+   --  JSON object naming the function and its arguments; the arguments are
+   --  written back in the same spelling the definitions are. In Function_XML,
+   --  each <function name=".."> ... </function> names a call and each
+   --  <param name="p">v</param> inside it one argument, whose value -- a
+   --  <![CDATA[..]]> block unwrapped -- becomes a JSON string, so the call's
+   --  arguments read as one JSON object either way. What a caller reads here
+   --  is a call and not a transcription.
    --
    --  A reply with no such block carries no calls and is not an error: a
    --  model asked a question it can answer itself answers it.
@@ -129,10 +144,12 @@ package Model_Runner.Tools is
    --  @param Status Success, Tools_Call_Malformed when a block is not a call
    --    this can read -- the calls read before it are kept -- Tools_Too_Many
    --    or Tools_Too_Large.
+   --  @param Syntax The shape the calls are written in.
    procedure Read_Calls
      (Item   : in out Calls;
       Reply  : String;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Syntax : Call_Syntax := Tool_Call_JSON);
 
    --  Release the calls.
    --

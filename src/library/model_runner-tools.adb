@@ -848,7 +848,8 @@ package body Model_Runner.Tools is
    procedure Read_Calls
      (Item   : in out Calls;
       Reply  : String;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Syntax : Call_Syntax := Tool_Call_JSON)
    is
       Index : Natural;
 
@@ -953,6 +954,171 @@ package body Model_Runner.Tools is
          end;
       end Take_One;
 
+      --  Store one call the arguments of which are already built as JSON,
+      --  which is how the <function> form arrives.
+      procedure Store (Name : String; Args : String) is
+         Name_At, Args_At : Span;
+      begin
+         if Item.Used = Max_Calls then
+            Status := E.Make (E.Tools_Too_Many);
+            E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Calls));
+            return;
+         end if;
+         Keep (Name, Name_At);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Keep (Args, Args_At);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Item.Used := Item.Used + 1;
+         Item.Rows (Item.Used) := (Name => Name_At, Arguments => Args_At);
+      end Store;
+
+      --  The value of the name="..." attribute at or after From, or "" when
+      --  there is none before End_At.
+      function Attribute_Name (From, End_At : Natural) return String is
+         Key : constant String := "name=""";
+         P   : Natural := From;
+      begin
+         while P + Key'Length - 1 <= End_At loop
+            if Reply (P .. P + Key'Length - 1) = Key then
+               declare
+                  V : constant Natural := P + Key'Length;
+                  Q : Natural := V;
+               begin
+                  while Q <= End_At and then Reply (Q) /= '"' loop
+                     Q := Q + 1;
+                  end loop;
+                  if Q <= End_At then
+                     return Reply (V .. Q - 1);
+                  end if;
+                  return "";
+               end;
+            end if;
+            P := P + 1;
+         end loop;
+         return "";
+      end Attribute_Name;
+
+      --  A raw parameter value as a JSON string: any CDATA wrapper removed,
+      --  then the characters JSON must not carry raw turned into escapes.
+      function As_JSON_String (Raw : String) return String is
+         Open  : constant String := "<![CDATA[";
+         Close : constant String := "]]>";
+         Inner : constant String :=
+           (if Raw'Length >= Open'Length + Close'Length
+              and then Raw (Raw'First .. Raw'First + Open'Length - 1) = Open
+              and then Raw (Raw'Last - Close'Length + 1 .. Raw'Last) = Close
+            then Raw (Raw'First + Open'Length .. Raw'Last - Close'Length)
+            else Raw);
+         Out_S : String (1 .. 2 + Inner'Length * 6);
+         N     : Natural := 0;
+         procedure Put (S : String) is
+         begin
+            Out_S (N + 1 .. N + S'Length) := S;
+            N := N + S'Length;
+         end Put;
+      begin
+         Put ("""");
+         for C of Inner loop
+            case C is
+               when '"'      => Put ("\""");
+               when '\'      => Put ("\\");
+               when ASCII.LF => Put ("\n");
+               when ASCII.CR => Put ("\r");
+               when ASCII.HT => Put ("\t");
+               when Character'Val (0) .. Character'Val (8)
+                  | Character'Val (11) .. Character'Val (12)
+                  | Character'Val (14) .. Character'Val (31) =>
+                  declare
+                     Hex : constant String := "0123456789abcdef";
+                     Code : constant Natural := Character'Pos (C);
+                  begin
+                     Put ("\u00");
+                     Put ([1 => Hex (Hex'First + Code / 16)]);
+                     Put ([1 => Hex (Hex'First + Code mod 16)]);
+                  end;
+               when others   => Put ([1 => C]);
+            end case;
+         end loop;
+         Put ("""");
+         return Out_S (1 .. N);
+      end As_JSON_String;
+
+      --  Read one <function ...> ... </function> block into a call: its name
+      --  from the function's attribute, its arguments from a JSON object
+      --  built of the <param name="p">v</param> children.
+      procedure Take_Function (First, Last : Natural) is
+         Head_End : Natural := First;
+         Args     : String (1 .. Max_Call_Bytes);
+         A_Len    : Natural := 0;
+         P        : Natural;
+         Count    : Natural := 0;
+
+         procedure Add (S : String) is
+         begin
+            Args (A_Len + 1 .. A_Len + S'Length) := S;
+            A_Len := A_Len + S'Length;
+         end Add;
+      begin
+         --  The function's opening tag ends at the first '>'.
+         while Head_End <= Last and then Reply (Head_End) /= '>' loop
+            Head_End := Head_End + 1;
+         end loop;
+         declare
+            Name : constant String := Attribute_Name (First, Head_End);
+         begin
+            if Name = "" then
+               Status := E.Make (E.Tools_Call_Malformed);
+               E.Add_Integer
+                 (Status, "index", Long_Long_Integer (Item.Used + 1));
+               return;
+            end if;
+
+            Add ("{");
+            P := Head_End + 1;
+            while P <= Last loop
+               if P + 6 <= Last and then Reply (P .. P + 5) = "<param" then
+                  declare
+                     Tag_End : Natural := P;
+                     Key     : constant String := Attribute_Name (P, Last);
+                     V_First : Natural;
+                     V_Last  : Natural;
+                  begin
+                     while Tag_End <= Last and then Reply (Tag_End) /= '>' loop
+                        Tag_End := Tag_End + 1;
+                     end loop;
+                     V_First := Tag_End + 1;
+                     V_Last  := V_First - 1;
+                     while V_Last + 8 <= Last
+                       and then Reply (V_Last + 1 .. V_Last + 8) /= "</param>"
+                     loop
+                        V_Last := V_Last + 1;
+                     end loop;
+                     if Key /= "" then
+                        if Count > 0 then
+                           Add (", ");
+                        end if;
+                        Add (As_JSON_String (Key));
+                        Add (": ");
+                        Add (As_JSON_String
+                               ((if V_Last >= V_First
+                                 then Reply (V_First .. V_Last) else "")));
+                        Count := Count + 1;
+                     end if;
+                     P := V_Last + 1;
+                  end;
+               else
+                  P := P + 1;
+               end if;
+            end loop;
+            Add ("}");
+            Store (Name, Args (1 .. A_Len));
+         end;
+      end Take_Function;
+
    begin
       Close (Item);
       Status := E.Success;
@@ -960,6 +1126,8 @@ package body Model_Runner.Tools is
       Item.Pool := new String (1 .. Max_Call_Bytes);
       Item.Pool.all := [others => ' '];
 
+      case Syntax is
+      when Tool_Call_JSON =>
       Index := Reply'First;
       while Index <= Reply'Last loop
          if Marks (Index, Call_Opens) then
@@ -993,6 +1161,42 @@ package body Model_Runner.Tools is
             Index := Index + 1;
          end if;
       end loop;
+
+      when Function_XML =>
+         declare
+            Open_Tag  : constant String := "<function";
+            Close_Tag : constant String := "</function>";
+         begin
+            Index := Reply'First;
+            while Index <= Reply'Last loop
+               if Marks (Index, Open_Tag) then
+                  declare
+                     Shut : Natural := Index;
+                  begin
+                     while Shut <= Reply'Last
+                       and then not Marks (Shut, Close_Tag)
+                     loop
+                        Shut := Shut + 1;
+                     end loop;
+                     if Shut > Reply'Last then
+                        Status := E.Make (E.Tools_Call_Malformed);
+                        E.Add_Integer
+                          (Status, "index",
+                           Long_Long_Integer (Item.Used + 1));
+                        return;
+                     end if;
+                     Take_Function (Index, Shut - 1);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                     Index := Shut + Close_Tag'Length;
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
+            end loop;
+         end;
+      end case;
    exception
       when others =>
          Close (Item);
