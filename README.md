@@ -295,7 +295,14 @@ built-ins reach the world, `--confirm-tools` puts a hand on the gate: each
 call is
 printed and the loop waits on standard input -- y runs it, q stops the run, and
 anything else declines the one call and tells the model, which may then take
-another way to the answer. `--max-retries N` gives a generation that errors a
+another way to the answer. For an unattended run there are guardrails that
+need no one at the keyboard: `--deny-tool NAME` (repeatable) refuses every
+call to a named tool, and `--deny-arg TEXT` (repeatable) refuses any call
+whose arguments contain the text -- a shell command with `rm`, a path outside
+a root, a host you will not reach. A refused call is not fatal: the model is
+told, as with a declined confirmation, and may take another way, so the run
+goes on inside the fence. The rules are checked before a call runs and before
+any confirmation prompt. `--max-retries N` gives a generation that errors a
 second try instead of ending the run on the first stumble.
 `--max-total-tokens N` caps the tokens generated over the whole loop, not just
 one reply: it is checked between steps, so the reply in flight finishes and

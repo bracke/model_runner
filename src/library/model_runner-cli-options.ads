@@ -226,6 +226,12 @@ package Model_Runner.CLI.Options is
    type Adapter_List is
      array (1 .. Max_Adapters) of Model_Runner.Text.Bounded;
 
+   --  How many guardrail rules of each kind the agent's approver may carry.
+   Max_Guards : constant := 32;
+
+   type Guard_List is
+     array (1 .. Max_Guards) of Model_Runner.Text.Bounded;
+
    --  A fully validated command.
    --
    --  Owns the heap text it points at; release it with Release.
@@ -324,6 +330,16 @@ package Model_Runner.CLI.Options is
       --  starting y runs it, n declines it and tells the model, and q or an
       --  end of input stops the loop. Without it every call runs unasked.
       Confirm_Tools : Boolean := False;
+
+      --  Guardrails for an unattended run: tools named here are refused, and
+      --  any call whose arguments contain one of the deny strings is refused,
+      --  before it runs and with no one asked. A refused call is not fatal --
+      --  the model is told and may take another way -- so the run goes on
+      --  within the fence rather than stopping. Empty lists fence nothing.
+      Deny_Tools      : Guard_List := [others => Model_Runner.Text.Empty];
+      Deny_Tool_Count : Natural := 0;
+      Deny_Args       : Guard_List := [others => Model_Runner.Text.Empty];
+      Deny_Arg_Count  : Natural := 0;
 
       --  Whether to compact the conversation and carry on when it grows too
       --  large to render, rather than stopping. The oldest turns are dropped,

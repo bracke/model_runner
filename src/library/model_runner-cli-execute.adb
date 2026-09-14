@@ -194,27 +194,71 @@ package body Model_Runner.CLI.Execute is
       end if;
    end On_Result;
 
-   --  Asks the operator before each tool call the agent would run. The
-   --  prompt goes to the console (standard error); the answer is read from
-   --  standard input. A line beginning y allows the call, one beginning q
-   --  stops the loop, and anything else -- n, a blank line, an end of input
-   --  -- declines the one call, which the model is told about and may work
-   --  around. This is the hand on the gate for `run --agent`, whose
-   --  built-in tools reach a shell, files and the network.
-   type Confirm_Approver (Screen : access Pres.Console) is
+   --  Whether Whole contains Part.
+   function Contains (Whole, Part : String) return Boolean is
+   begin
+      if Part'Length = 0 then
+         return False;
+      elsif Whole'Length < Part'Length then
+         return False;
+      end if;
+      for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+         if Whole (P .. P + Part'Length - 1) = Part then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Contains;
+
+   --  The gate on each tool call the agent would run. It fences an unattended
+   --  run first: a tool named in --deny-tool, or a call whose arguments hold a
+   --  --deny-arg string, is refused before it runs and with no one asked --
+   --  the model is told and may take another way, so the run goes on within
+   --  the fence. Then, with --confirm-tools, it asks the operator: the prompt
+   --  goes to the console (standard error) and the answer is read from
+   --  standard input -- a line beginning y allows the call, one beginning q
+   --  stops the loop, anything else (n, a blank line, an end of input)
+   --  declines the one call. With neither a matching rule nor --confirm-tools,
+   --  the call runs.
+   type Policy_Approver
+     (Screen : access Pres.Console;
+      Rules  : access constant Opt.Command) is
      limited new Model_Runner.Agent.Approver with null record;
 
    overriding function Consider
-     (Self : in out Confirm_Approver; Named : String; Arguments : String)
+     (Self : in out Policy_Approver; Named : String; Arguments : String)
       return Model_Runner.Agent.Verdict;
 
    overriding function Consider
-     (Self : in out Confirm_Approver; Named : String; Arguments : String)
+     (Self : in out Policy_Approver; Named : String; Arguments : String)
       return Model_Runner.Agent.Verdict
    is
       Line : String (1 .. 256);
       Last : Natural := 0;
    begin
+      --  The fence: a denied tool, or a denied argument string, is refused.
+      for I in 1 .. Self.Rules.Deny_Tool_Count loop
+         if Named = T.To_String (Self.Rules.Deny_Tools (I)) then
+            Pres.Put_Note
+              (Self.Screen.all, "cli.agent.denied",
+               [Loc.Named ("name", Named)]);
+            return Model_Runner.Agent.Deny;
+         end if;
+      end loop;
+      for I in 1 .. Self.Rules.Deny_Arg_Count loop
+         if Contains (Arguments, T.To_String (Self.Rules.Deny_Args (I))) then
+            Pres.Put_Note
+              (Self.Screen.all, "cli.agent.denied",
+               [Loc.Named ("name", Named)]);
+            return Model_Runner.Agent.Deny;
+         end if;
+      end loop;
+
+      --  Past the fence: run it, unless the operator is asked and says not to.
+      if not Self.Rules.Confirm_Tools then
+         return Model_Runner.Agent.Allow;
+      end if;
+
       Pres.Put_Note
         (Self.Screen.all, "cli.agent.confirm",
          [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
@@ -2474,8 +2518,12 @@ package body Model_Runner.CLI.Execute is
                Watcher      : aliased Agent_Watch
                  (Screen'Unchecked_Access,
                   Trace => not T.Is_Empty (Item.Trace_File_Path));
-               Confirmer    : aliased Confirm_Approver
-                                (Screen'Unchecked_Access);
+               --  An aliased copy so the approver can point at the guardrail
+               --  rules; only their values are read, never the shared prompts.
+               Rules_Copy   : aliased constant Opt.Command := Item;
+               Confirmer    : aliased Policy_Approver
+                                (Screen'Unchecked_Access,
+                                 Rules_Copy'Unchecked_Access);
                --  Asks the user a question for the ask_user tool.
                Asker        : aliased Console_Inquirer
                                 (Screen'Unchecked_Access);
@@ -2552,7 +2600,10 @@ package body Model_Runner.CLI.Execute is
                      Thinking   => Item.Thinking,
                      Watch      => Watcher'Unchecked_Access,
                      Approve    =>
-                       (if Item.Confirm_Tools then Confirmer'Unchecked_Access
+                       (if Item.Confirm_Tools
+                          or else Item.Deny_Tool_Count > 0
+                          or else Item.Deny_Arg_Count > 0
+                        then Confirmer'Unchecked_Access
                         else null),
                      Max_Retries => Item.Max_Retries,
                      Max_Total_Tokens => Item.Max_Total_Tokens,

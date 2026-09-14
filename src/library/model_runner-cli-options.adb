@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 96) of Registry_Row :=
+   Registry : constant array (1 .. 98) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -43,6 +43,10 @@ package body Model_Runner.CLI.Options is
        Text ("max_parallel")),
       (Text ("--confirm-tools"), [Command_Run => True, others => False],
        Text ("confirm_tools")),
+      (Text ("--deny-tool"), [Command_Run => True, others => False],
+       Text ("deny_tool")),
+      (Text ("--deny-arg"), [Command_Run => True, others => False],
+       Text ("deny_arg")),
       (Text ("--compact"), [Command_Run => True, others => False],
        Text ("compact")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
@@ -1386,6 +1390,39 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Confirm_Tools := True;
+
+                  elsif Name = "--deny-tool" then
+                     --  Repeatable: each names a tool the run refuses.
+                     if Result.Deny_Tool_Count = Max_Guards then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Deny_Tool_Count := Result.Deny_Tool_Count + 1;
+                     Result.Deny_Tools (Result.Deny_Tool_Count) :=
+                       T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--deny-arg" then
+                     --  Repeatable: a call whose arguments contain one of
+                     --  these is refused.
+                     if Result.Deny_Arg_Count = Max_Guards then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Deny_Arg_Count := Result.Deny_Arg_Count + 1;
+                     Result.Deny_Args (Result.Deny_Arg_Count) :=
+                       T.To_Bounded (Held.all);
+                     Free_Text (Held);
 
                   elsif Name = "--compact" then
                      No_Value (Name, Value_Present,

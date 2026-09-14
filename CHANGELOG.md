@@ -31,6 +31,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Guardrails for an unattended agent run: `--deny-tool` and `--deny-arg`.**
+  The approval gate was human-only (`--confirm-tools`, a prompt on standard
+  input). Now a run can carry rules that need no one at the keyboard:
+  `--deny-tool NAME` (repeatable) refuses every call to a named tool, and
+  `--deny-arg TEXT` (repeatable) refuses any call whose arguments contain the
+  text -- a shell command with `rm`, a path outside a root, a host to avoid. A
+  refused call is not fatal: the model is told, as with a declined
+  confirmation, and may take another way, so the run stays inside the fence
+  rather than stopping. The rules are checked before a call runs and before
+  any confirmation prompt; the `Agent.Approver` interface already in place is
+  the seam, and the CLI's approver now applies the rules and then, if asked,
+  the prompt.
+
 - **Trace export: `--trace-file PATH`.** An agent run can now write a
   machine-readable record of itself to a file as JSON -- the model, the final
   tally (reason, steps, calls, retries, generated and prompt tokens,
