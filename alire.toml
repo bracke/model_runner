@@ -24,6 +24,13 @@ messages = "~0.1.0"
 [[depends-on]]
 hostkit = "*"
 
+# The agent's http_get tool fetches a URL through this in-process HTTP/HTTPS
+# client -- streamed to a file, never held whole in memory -- instead of
+# spawning curl. The crate was already in the build graph (i18n's build
+# tooling pulls it); this makes the library compile against it.
+[[depends-on]]
+httpclient = "*"
+
 [[pins]]
 terminal_styles = { path = "../terminal_styles" }
 

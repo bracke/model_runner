@@ -4,6 +4,9 @@ with Ada.Text_IO;
 
 with GNAT.OS_Lib;
 
+with Http_Client.Clients;
+with Http_Client.Errors;
+
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tools.Builtin is
@@ -789,6 +792,60 @@ package body Model_Runner.Tools.Builtin is
       return Capture ("python3", [new String'("-c"), new String'(Code)]);
    end Run_Python;
 
+   --  Fetch a URL's body through the in-process HTTP/HTTPS client, streamed
+   --  to a temporary file and never held whole in memory, then return it
+   --  capped. No process is spawned; the client's own timeouts bound a slow
+   --  or silent server, and Max_Download_Size keeps the temp file no larger
+   --  than what the tool will hand back.
+   function Download (Url : String) return String is
+      package HC renames Http_Client.Clients;
+      package HE renames Http_Client.Errors;
+
+      Path : GNAT.OS_Lib.String_Access;
+      FD   : GNAT.OS_Lib.File_Descriptor;
+      Outcome : HC.Download_Result;
+      Options : HC.Download_Options := HC.Default_Download_Options;
+      Config  : HC.Client_Configuration := HC.Default_Client_Configuration;
+      Status  : HE.Result_Status;
+      Gone    : Boolean;
+   begin
+      Options.Max_Download_Size := Cap;
+
+      --  The streaming download writes what the stream yields and does not
+      --  decode a content coding, so a body the server compressed would come
+      --  back as bytes no reader can use. Ask for none: no Accept-Encoding
+      --  advertised, so the server sends the text as it is.
+      Config.Enable_Decompression := False;
+      Config.Execution.Advertise_Accept_Encoding := False;
+
+      GNAT.OS_Lib.Create_Temp_File (FD, Path);
+      GNAT.OS_Lib.Close (FD);
+
+      Status := HC.Download_To_File
+        (URL           => Url,
+         Path          => Path.all,
+         Result        => Outcome,
+         Options       => Options,
+         Configuration => Config);
+
+      declare
+         Body_Text : constant String :=
+           (if HE.Is_Success (Status) then Read_Capped (Path.all) else "");
+      begin
+         GNAT.OS_Lib.Delete_File (Path.all, Gone);
+         GNAT.OS_Lib.Free (Path);
+         if not HE.Is_Success (Status) then
+            return "error: the request failed ("
+              & HE.Result_Status'Image (Status) & ")";
+         elsif Body_Text = "" then
+            return "(the request returned no body; HTTP status"
+              & Natural'Image (Outcome.HTTP_Status_Code) & ")";
+         else
+            return Body_Text;
+         end if;
+      end;
+   end Download;
+
    function Http_Get (Args : String) return String is
       Have : Boolean;
       Url  : constant String := Text_Argument (Args, "url", Have);
@@ -796,8 +853,7 @@ package body Model_Runner.Tools.Builtin is
       if not Have then
          return "error: http_get needs a url";
       end if;
-      return Capture
-        ("curl", [new String'("-fsSL"), new String'(Url)]);
+      return Download (Url);
    end Http_Get;
 
    function Web_Search (Args : String) return String is

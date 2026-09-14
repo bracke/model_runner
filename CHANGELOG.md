@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`http_get` fetches through an Ada HTTP client, not curl.** The tool ran
+  `curl` in a subprocess; it now calls `httpclient`'s streaming
+  `Download_To_File` in process -- the response body streamed to a temporary
+  file, never held whole in memory, then returned capped. HTTPS is handled by
+  the client's own TLS, so a machine without curl still fetches, and the
+  client's default timeouts bound a slow or silent server the way the spawn
+  watchdog bounded curl. `Max_Download_Size` holds the temporary file to no
+  more than the tool will hand back. The crate was already in the build graph
+  (`i18n`'s build tooling pulls it); this makes the library compile against
+  it and adds `httpclient` as a direct dependency. `web_search`, `shell`,
+  `run_python` and `sql` still spawn their programs.
+
 - **A tool that hangs no longer hangs the agent.** The built-in tools that
   run a program -- `shell`, `run_python`, `http_get`, `web_search`, `sql` --
   spawned it and waited for it with no bound, so a command that never
