@@ -128,7 +128,6 @@ package body Model_Runner.CLI.Execute is
       return US.To_String (Out_S);
    end JSON_Escape;
 
-
    --  Prints the agent loop's calls and tool results to the console as they
    --  happen, so `run --agent` shows the loop unfolding rather than only its
    --  end. The console goes to standard error, so standard output stays the
@@ -2028,7 +2027,6 @@ package body Model_Runner.CLI.Execute is
          else E.Exit_Success);
    end Do_Inspect;
 
-
    ---------------------------------------------------------------------------
    --  run
    ---------------------------------------------------------------------------
@@ -2630,11 +2628,15 @@ package body Model_Runner.CLI.Execute is
                      Max_Total_Tokens => Item.Max_Total_Tokens,
                      Max_Parallel => Positive'Max (1, Item.Max_Parallel),
                      --  A model rendered with the minicpm format writes its
-                     --  calls in the <function> form, so the loop reads them
-                     --  that way; every other format uses <tool_call>.
+                     --  calls in the <function name="..">  form and one
+                     --  rendered qwen3-coder in the <function=..> form, so the
+                     --  loop reads each that way; every other format uses the
+                     --  <tool_call> JSON envelope.
                      Tool_Syntax =>
                        (if T.To_String (Item.Chat_Template) = "minicpm"
                         then Model_Runner.Tools.Function_XML
+                        elsif T.To_String (Item.Chat_Template) = "qwen3-coder"
+                        then Model_Runner.Tools.Qwen_XML
                         else Model_Runner.Tools.Tool_Call_JSON),
                      Compact     => Item.Compact,
                      Answer_Schema =>

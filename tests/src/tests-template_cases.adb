@@ -236,41 +236,9 @@ package body Tests.Template_Cases is
          Tmpl.Close (Item);
       end;
 
-      --  And what it will not do rather than do wrongly. That template
-      --  writes a call as one element per argument, walking the pairs of a
-      --  mapping, and nothing here walks a mapping -- so a turn carrying
-      --  calls is refused where the call would have been written, by a name
-      --  that says why, rather than rendered as a turn that said nothing.
-      declare
-         Asked : Model_Runner.Tools.Calls;
-      begin
-         Tmpl.Compile
-           (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_Qwen3_Coder)),
-            Status => Status);
-         Conv.Open (Messages, Status => Status);
-         Conv.Append (Messages, Conv.User_Role, "P.", Status);
-         Conv.Append_Asking (Messages, "", Status);
-
-         Model_Runner.Tools.Read_Calls
-           (Asked,
-            "<tool_call>{""name"": ""f"", ""arguments"": {""a"": 1}}"
-            & "</tool_call>", Status);
-         Conv.Append_Call
-           (Messages, Model_Runner.Tools.Called (Asked, 1),
-            Model_Runner.Tools.Arguments (Asked, 1), Status);
-         Model_Runner.Tools.Close (Asked);
-
-         Tmpl.Render
-           (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
-         Assert (Status.Code = E.Template_Unknown_Variable,
-                 "a turn carrying calls rendered as "
-                 & E.Error_Code'Image (Status.Code)
-                 & " where this format cannot write one");
-         Assert (Last = 0, "a refused render wrote something");
-
-         Conv.Close (Messages);
-         Tmpl.Close (Item);
-      end;
+      --  Its calls are covered on their own in Qwen3_Coder_Renders_Tool_Calls,
+      --  where the tools it offers and the <function=..> call it writes need
+      --  a definitions list to render against.
 
       --  A template compiled into a Compiled that held another answers for
       --  itself. The name table and the slots that point into it are not
@@ -377,6 +345,94 @@ package body Tests.Template_Cases is
       Tmpl.Close (Item);
       Model_Runner.Tools.Close (Defs);
    end MiniCPM_Renders_Tool_Calls;
+
+   --  The qwen3-coder format writes the tool half in its own shape: the tools
+   --  offered inside a <tools> block with the model's exact call-format
+   --  instructions, and a call as <tool_call><function=name><parameter=k>v
+   --  </parameter></function></tool_call> -- the shape Qwen3-Coder emits and
+   --  Tools.Read_Calls reads back in Qwen_XML, the qwen_params filter standing
+   --  in for that template's arguments mapping-walk.
+   procedure Qwen3_Coder_Renders_Tool_Calls
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF       : constant Character := Character'Val (10);
+      pragma Unreferenced (LF);
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Defs     : aliased Model_Runner.Tools.Definitions;
+      Asked    : Model_Runner.Tools.Calls;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 4096);
+      Last     : Natural;
+
+      function Has (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Whole'Length < Part'Length then
+            return False;
+         end if;
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+   begin
+      Model_Runner.Tools.Read
+        (Defs,
+         "[{""type"": ""function"", ""function"": {""name"": ""calc"", "
+         & """description"": ""d"", ""parameters"": {""type"": ""object"", "
+         & """properties"": {""a"": {""type"": ""number""}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      Tmpl.Compile
+        (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_Qwen3_Coder)),
+         Status => Status);
+      Assert (E.Is_Ok (Status), "the qwen3-coder format did not compile");
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "hi", Status);
+      Conv.Append_Asking (Messages, "", Status);
+      Model_Runner.Tools.Read_Calls
+        (Asked,
+         "<tool_call>{""name"": ""calc"", ""arguments"": "
+         & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>",
+         Status);
+      Conv.Append_Call
+        (Messages, Model_Runner.Tools.Called (Asked, 1),
+         Model_Runner.Tools.Arguments (Asked, 1), Status);
+      Model_Runner.Tools.Close (Asked);
+
+      Tmpl.Render
+        (Item, Messages, "<s>", "</s>", True, Target, Last, Status,
+         Tools => Defs'Access);
+      Assert (E.Is_Ok (Status),
+              "the qwen3-coder format did not render with tools: "
+              & E.Error_Code'Image (Status.Code));
+
+      declare
+         R : constant String := Target (1 .. Last);
+      begin
+         Assert (Has (R, "<tools>") and then Has (R, """name"": ""calc"""),
+                 "the tools were not offered: " & R);
+         Assert (Has (R, "<function=calc>"),
+                 "the call was not written in the qwen3-coder form: " & R);
+         Assert (Has (R, "<parameter=a>" & Character'Val (10)
+                 & "47" & Character'Val (10) & "</parameter>"),
+                 "a parameter was not written from the arguments: " & R);
+         Assert (Has (R, "<parameter=op>" & Character'Val (10)
+                 & "*" & Character'Val (10) & "</parameter>"),
+                 "the op parameter was not written: " & R);
+         Assert (Has (R, "</function>" & Character'Val (10) & "</tool_call>"),
+                 "the call envelope was not closed: " & R);
+      end;
+
+      Conv.Close (Messages);
+      Tmpl.Close (Item);
+      Model_Runner.Tools.Close (Defs);
+   end Qwen3_Coder_Renders_Tool_Calls;
 
    procedure Ordinary_Template_Renders
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1809,6 +1865,10 @@ package body Tests.Template_Cases is
         (T, MiniCPM_Renders_Tool_Calls'Access,
          "the minicpm format offers tools and writes a call as a function "
          & "element with param children");
+      Register_Routine
+        (T, Qwen3_Coder_Renders_Tool_Calls'Access,
+         "the qwen3-coder format offers tools and writes a call in the "
+         & "<function=..><parameter=..> form");
       Register_Routine
         (T, Built_In_Formats_Render_Their_Turns'Access,
          "each built-in chat format renders the turns its architecture reads");

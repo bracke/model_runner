@@ -123,7 +123,8 @@ package Model_Runner.Tools is
    --  it.
    type Call_Syntax is
      (Tool_Call_JSON,   --  <tool_call>{"name": .., "arguments": {..}}</tool_call>
-      Function_XML);    --  <function name=".."><param name="p">v</param></function>
+      Function_XML,     --  <function name=".."><param name="p">v</param></function>
+      Qwen_XML);        --  <function=..><parameter=p>\nv\n</parameter></function>
 
    --  Read every call a reply carries.
    --

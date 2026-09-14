@@ -198,40 +198,59 @@ package body Model_Runner.Templates is
            & "{% endif %}";
 
       elsif Name = Format_Name (Format_Qwen3_Coder) then
-         --  The one format here carried because the model's own template
-         --  will not compile rather than because the model ships none:
-         --  Qwen3-Coder's opens with a macro, which is a construct this
-         --  engine rejects where it is read. What is written here is the
-         --  rest of that template said in the subset, and it is the same
-         --  bytes for every conversation that has no tools in it.
+         --  Carried because the model's own template will not compile -- it
+         --  opens with a macro and walks the parameters of a tool as a
+         --  mapping. What is written here is that template said in the subset,
+         --  tools and all: the tools offered inside a <tools> block, the exact
+         --  call-format instructions the model was trained on, and a call
+         --  written as <tool_call><function=name>...<parameter=k>v</parameter>
+         --  ...</function></tool_call> by the qwen_params filter, which stands
+         --  in for the arguments mapping-walk. The calls are read back by
+         --  Tools.Read_Calls in its Qwen_XML syntax.
          --
-         --  What it is not is the tool half, and the reason is a shape
-         --  rather than an effort: that template walks the pairs of a
-         --  mapping -- a tool's parameters, a call's arguments -- and
-         --  writes each pair as its own element. Nothing here can walk a
-         --  mapping. A caller offering tools is refused before a prompt is
-         --  built, because this format never names them and the command
-         --  refuses tools that would reach nothing; a turn carrying calls
-         --  is refused where the call would have been written, by a name
-         --  that says so, rather than rendered as though the turn had said
-         --  nothing.
-         --
-         --  Its turns are ChatML's with one difference, and the difference
-         --  is the tool answers: a run of them is folded into one user
-         --  turn, opened before the first and closed after the last, where
-         --  ChatML would open and close one for each.
+         --  The tools are offered as JSON rather than the model's own nested
+         --  parameter XML: the JSON carries the same names, types and
+         --  descriptions, and the call-format instructions carry the shape a
+         --  call must take, which is what the model acts on.
          return
            "{% if messages[0]['role'] == 'system' %}"
+           & "<|im_start|>system" & LF & "{{ messages[0]['content'] }}"
+           & "{% elif tools %}"
            & "<|im_start|>system" & LF
-           & "{{ messages[0]['content'] }}<|im_end|>" & LF
+           & "You are Qwen, a helpful AI assistant that can interact with a "
+           & "computer to solve tasks."
+           & "{% endif %}"
+           & "{% if tools %}"
+           & LF & LF & "# Tools" & LF & LF
+           & "You have access to the following functions:" & LF & LF
+           & "<tools>"
+           & "{% for tool in tools %}" & LF & "{{ tool | tojson }}"
+           & "{% endfor %}" & LF & "</tools>" & LF & LF
+           & "If you choose to call a function ONLY reply in the following "
+           & "format with NO suffix:" & LF & LF
+           & "<tool_call>" & LF & "<function=example_function_name>" & LF
+           & "<parameter=example_parameter_1>" & LF & "value_1" & LF
+           & "</parameter>" & LF & "</function>" & LF & "</tool_call>" & LF & LF
+           & "<IMPORTANT>" & LF & "Reminder:" & LF
+           & "- Function calls MUST follow the specified format: an inner "
+           & "<function=...></function> block must be nested within "
+           & "<tool_call></tool_call> XML tags" & LF
+           & "- Required parameters MUST be specified" & LF
+           & "- You may provide optional reasoning for your function call in "
+           & "natural language BEFORE the function call, but NOT after" & LF
+           & "- If there is no function call available, answer the question "
+           & "like normal with your current knowledge and do not tell the "
+           & "user about function calls" & LF & "</IMPORTANT>"
+           & "{% endif %}"
+           & "{% if messages[0]['role'] == 'system' or tools %}"
+           & "<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% if messages[0]['role'] == 'system' %}"
            & "{% set turns = messages[1:] %}"
            & "{% else %}"
            & "{% set turns = messages %}"
            & "{% endif %}"
            & "{% for message in turns %}"
-           & "{% if message.tool_calls %}"
-           & "{{ this_format_cannot_write_a_tool_call }}"
-           & "{% endif %}"
            & "{% if message.role == 'tool' %}"
            & "{% if not loop.first"
            & " and turns[loop.index0 - 1].role != 'tool' %}"
@@ -244,6 +263,17 @@ package body Model_Runner.Templates is
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<|im_end|>" & LF
            & "{% endif %}"
+           & "{% elif message.role == 'assistant' %}"
+           & "<|im_start|>assistant" & LF
+           & "{{ message.content }}"
+           & "{% if message.tool_calls %}"
+           & "{% for tool_call in message.tool_calls %}"
+           & LF & "<tool_call>" & LF & "<function=" & "{{ tool_call.name }}"
+           & ">" & LF & "{{ tool_call.arguments | qwen_params }}"
+           & "</function>" & LF & "</tool_call>"
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "<|im_end|>" & LF
            & "{% else %}"
            & "<|im_start|>{{ message.role }}" & LF
            & "{{ message.content }}<|im_end|>" & LF
@@ -1432,6 +1462,8 @@ package body Model_Runner.Templates is
                   Result.Filter := Filter_JSON;
                elsif Text (First .. Last) = "params" then
                   Result.Filter := Filter_Params;
+               elsif Text (First .. Last) = "qwen_params" then
+                  Result.Filter := Filter_Qwen_Params;
                else
                   Result :=
                     Refused (Text (First .. Last), E.Template_Unknown_Filter);
@@ -3615,7 +3647,7 @@ package body Model_Runner.Templates is
       --  this reads its top-level pairs and writes a <param name="k">v</param>
       --  for each, the value plain (a JSON string unquoted) and inside a
       --  <![CDATA[..]]> block when it holds a '<', an '&' or a newline.
-      function Params_Of (Value : Term) return String is
+      function Params_Of (Value : Term; Qwen : Boolean := False) return String is
          Src : constant String := Raw_Of (Value);
          Buf : String (1 .. 8 * Src'Length + 256);
          N   : Natural := 0;
@@ -3710,17 +3742,27 @@ package body Model_Runner.Templates is
                     (for some C of Val =>
                        C = '<' or else C = '&' or else C = ASCII.LF);
                begin
-                  Put ("<param name=""");
-                  Put (Key);
-                  Put (""">");
-                  if CDATA then
-                     Put ("<![CDATA[");
+                  if Qwen then
+                     --  Qwen3-Coder: <parameter=k>, the value on its own
+                     --  line, then </parameter>, no CDATA.
+                     Put ("<parameter=");
+                     Put (Key);
+                     Put (">" & ASCII.LF);
                      Put (Val);
-                     Put ("]]>");
+                     Put (ASCII.LF & "</parameter>" & ASCII.LF);
                   else
-                     Put (Val);
+                     Put ("<param name=""");
+                     Put (Key);
+                     Put (""">");
+                     if CDATA then
+                        Put ("<![CDATA[");
+                        Put (Val);
+                        Put ("]]>");
+                     else
+                        Put (Val);
+                     end if;
+                     Put ("</param>");
                   end if;
-                  Put ("</param>");
                end;
             end;
             Skip_Blanks;
@@ -3750,6 +3792,9 @@ package body Model_Runner.Templates is
 
             when Filter_Params =>
                return Params_Of (Value);
+
+            when Filter_Qwen_Params =>
+               return Params_Of (Value, Qwen => True);
 
             when Filter_Length =>
                --  A list's length is the one thing about a list this engine

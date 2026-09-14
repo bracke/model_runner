@@ -1174,6 +1174,120 @@ package body Model_Runner.Tools is
          end;
       end Take_Function;
 
+      --  Read one <function=NAME> ... </function> block, Qwen3-Coder's form:
+      --  the name after the '=', and each <parameter=ARG> ... </parameter>
+      --  whose value stands on its own lines. The value's surrounding
+      --  whitespace is dropped and it is written back as its JSON type.
+      procedure Take_Qwen (First, Last : Natural) is
+         Args  : String (1 .. Max_Call_Bytes);
+         A_Len : Natural := 0;
+         P     : Natural;
+         Count : Natural := 0;
+
+         procedure Add (S : String) is
+         begin
+            Args (A_Len + 1 .. A_Len + S'Length) := S;
+            A_Len := A_Len + S'Length;
+         end Add;
+
+         --  The text after the first '=' up to the next '>', which is the
+         --  name in <function=NAME> and <parameter=ARG>.
+         function After_Equals (From, Stop : Natural) return String is
+            Eq : Natural := From;
+         begin
+            while Eq <= Stop and then Reply (Eq) /= '=' loop
+               Eq := Eq + 1;
+            end loop;
+            if Eq >= Stop then
+               return "";
+            end if;
+            declare
+               V : constant Natural := Eq + 1;
+               Q : Natural := V;
+            begin
+               while Q <= Stop and then Reply (Q) /= '>' loop
+                  Q := Q + 1;
+               end loop;
+               return Reply (V .. Q - 1);
+            end;
+         end After_Equals;
+
+         Head_End : Natural := First;
+      begin
+         while Head_End <= Last and then Reply (Head_End) /= '>' loop
+            Head_End := Head_End + 1;
+         end loop;
+         declare
+            Name : constant String := After_Equals (First, Head_End);
+         begin
+            if Name = "" then
+               Status := E.Make (E.Tools_Call_Malformed);
+               E.Add_Integer
+                 (Status, "index", Long_Long_Integer (Item.Used + 1));
+               return;
+            end if;
+
+            Add ("{");
+            P := Head_End + 1;
+            while P <= Last loop
+               if P + 10 <= Last and then Reply (P .. P + 9) = "<parameter"
+               then
+                  declare
+                     Tag_End : Natural := P;
+                     V_First : Natural;
+                     V_Last  : Natural;
+                  begin
+                     while Tag_End <= Last and then Reply (Tag_End) /= '>' loop
+                        Tag_End := Tag_End + 1;
+                     end loop;
+                     declare
+                        Key : constant String := After_Equals (P, Tag_End);
+                     begin
+                        V_First := Tag_End + 1;
+                        V_Last  := V_First - 1;
+                        while V_Last + 12 <= Last
+                          and then Reply (V_Last + 1 .. V_Last + 12)
+                                   /= "</parameter>"
+                        loop
+                           V_Last := V_Last + 1;
+                        end loop;
+                        --  The value is on its own lines; drop the whitespace
+                        --  around it.
+                        while V_First <= V_Last
+                          and then Reply (V_First) in
+                            ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+                        loop
+                           V_First := V_First + 1;
+                        end loop;
+                        while V_Last >= V_First
+                          and then Reply (V_Last) in
+                            ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+                        loop
+                           V_Last := V_Last - 1;
+                        end loop;
+                        if Key /= "" then
+                           if Count > 0 then
+                              Add (", ");
+                           end if;
+                           Add (As_JSON_String (Key));
+                           Add (": ");
+                           Add (As_JSON_Value
+                                  ((if V_Last >= V_First
+                                    then Reply (V_First .. V_Last) else "")));
+                           Count := Count + 1;
+                        end if;
+                        P := V_Last + 1;
+                     end;
+                  end;
+               else
+                  P := P + 1;
+               end if;
+            end loop;
+            Add ("}");
+            Store (Name, Args (1 .. A_Len));
+         end;
+      end Take_Qwen;
+
    begin
       Close (Item);
       Status := E.Success;
@@ -1241,6 +1355,41 @@ package body Model_Runner.Tools is
                         return;
                      end if;
                      Take_Function (Index, Shut - 1);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                     Index := Shut + Close_Tag'Length;
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
+            end loop;
+         end;
+
+      when Qwen_XML =>
+         declare
+            Open_Tag  : constant String := "<function=";
+            Close_Tag : constant String := "</function>";
+         begin
+            Index := Reply'First;
+            while Index <= Reply'Last loop
+               if Marks (Index, Open_Tag) then
+                  declare
+                     Shut : Natural := Index;
+                  begin
+                     while Shut <= Reply'Last
+                       and then not Marks (Shut, Close_Tag)
+                     loop
+                        Shut := Shut + 1;
+                     end loop;
+                     if Shut > Reply'Last then
+                        Status := E.Make (E.Tools_Call_Malformed);
+                        E.Add_Integer
+                          (Status, "index",
+                           Long_Long_Integer (Item.Used + 1));
+                        return;
+                     end if;
+                     Take_Qwen (Index, Shut - 1);
                      if E.Is_Error (Status) then
                         return;
                      end if;

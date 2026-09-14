@@ -384,7 +384,12 @@ private
       --  '<', an '&' or a newline, as that family's template requires. It is
       --  what lets the built-in minicpm format write a tool call without the
       --  engine having to walk the mapping in a loop of its own.
-      Filter_Params);
+      Filter_Params,
+
+      --  Write a call's arguments as Qwen3-Coder's parameter elements:
+      --  <parameter=k> then the value on its own line then </parameter>, the
+      --  value plain, as that family's template writes them.
+      Filter_Qwen_Params);
 
    --  What a template does to a piece of text after it has it: take
    --  whitespace off one end or both, or cut it at a marker and keep one
