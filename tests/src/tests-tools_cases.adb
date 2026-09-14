@@ -508,6 +508,32 @@ package body Tests.Tools_Cases is
       function Begins (Hay, Head : String) return Boolean
       is (Hay'Length >= Head'Length
           and then Hay (Hay'First .. Hay'First + Head'Length - 1) = Head);
+
+      --  Each character followed by a zero byte -- UTF-16LE, as a .doc keeps
+      --  Unicode text.
+      function Utf16 (S : String) return String is
+         R : String (1 .. S'Length * 2);
+      begin
+         for I in S'Range loop
+            R (2 * (I - S'First) + 1) := S (I);
+            R (2 * (I - S'First) + 2) := ASCII.NUL;
+         end loop;
+         return R;
+      end Utf16;
+
+      --  A legacy .doc: the OLE2 magic, then a single-byte run and a
+      --  UTF-16LE run, the way real ones carry their text.
+      Ole    : constant String :=
+        Character'Val (16#D0#) & Character'Val (16#CF#)
+        & Character'Val (16#11#) & Character'Val (16#E0#)
+        & Character'Val (16#A1#) & Character'Val (16#B1#)
+        & Character'Val (16#1A#) & Character'Val (16#E1#);
+      Doc    : constant String :=
+        Ole & ASCII.NUL & ASCII.NUL
+        & "walrus legacy manuscript"
+        & ASCII.NUL & ASCII.NUL
+        & Utf16 ("moonlight equinox verse")
+        & ASCII.NUL & ASCII.NUL;
    begin
       if Ada.Directories.Exists (Dir) then
          Ada.Directories.Delete_Tree (Dir);
@@ -538,6 +564,8 @@ package body Tests.Tools_Cases is
            ("word/document.xml",
             "<w:document><w:body><w:p><w:r><w:t>kingfisher docx "
             & "paragraph</w:t></w:r></w:p></w:body></w:document>"));
+      --  A legacy .doc, OLE2 with single-byte and UTF-16LE text runs.
+      Write_Bytes ("old.doc", Doc);
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -589,6 +617,24 @@ package body Tests.Tools_Cases is
          Room, Last, Status);
       Assert (Begins (Room (1 .. Last), "[report.docx]"),
               "retrieve did not extract text from the .docx: "
+              & Room (1 .. Last));
+
+      --  The legacy .doc's single-byte run.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""walrus legacy manuscript""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[old.doc]"),
+              "retrieve did not read the legacy .doc's text: "
+              & Room (1 .. Last));
+
+      --  And its UTF-16LE run.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""moonlight equinox verse""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[old.doc]"),
+              "retrieve did not read the .doc's UTF-16 text: "
               & Room (1 .. Last));
 
       --  The binary file's words are searched for: it was skipped, so

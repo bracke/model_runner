@@ -10,6 +10,7 @@ with GNAT.OS_Lib;
 with Http_Client.Clients;
 with Http_Client.Errors;
 
+with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
 with Model_Runner.UTF8;
@@ -1125,6 +1126,26 @@ package body Model_Runner.Tools.Builtin is
                      Text : constant String :=
                        Model_Runner.Tools.OOXML.Extract_Text
                          (Read_Raw (Full, Doc_Bytes), OO_Kind);
+                  begin
+                     if Text'Length > 0 then
+                        Split (Prefix & Name, Text);
+                     end if;
+                  end;
+               elsif Name'Length >= 4
+                 and then Low (Name (Name'Last - 3 .. Name'Last)) = ".doc"
+                 and then Read_Raw (Full, 8)
+                          = Character'Val (16#D0#) & Character'Val (16#CF#)
+                            & Character'Val (16#11#) & Character'Val (16#E0#)
+                            & Character'Val (16#A1#) & Character'Val (16#B1#)
+                            & Character'Val (16#1A#) & Character'Val (16#E1#)
+               then
+                  --  A legacy Word .doc: an OLE2 compound file. Its printable
+                  --  runs are read out and indexed.
+                  Files := Files + 1;
+                  declare
+                     Text : constant String :=
+                       Model_Runner.Tools.DOC.Extract_Text
+                         (Read_Raw (Full, Doc_Bytes));
                   begin
                      if Text'Length > 0 then
                         Split (Prefix & Name, Text);

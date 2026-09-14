@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`retrieve` reads legacy Word `.doc` files.** The old OLE2 compound format
+  keeps its text as runs of single-byte (Windows-1252) or UTF-16LE
+  characters inside its container. `Model_Runner.Tools.DOC` reads those
+  printable runs straight out of the bytes -- both encodings, the longer run
+  winning where they overlap -- rather than parsing the compound-file streams
+  and the piece table, which is a great deal of work for a job a search does
+  not need. It gets the document's words, and some structural noise (stream
+  and style names) that ranks low and does no harm; reading order and layout
+  are not recovered. `retrieve` takes a file with the `.doc` extension and
+  the OLE2 magic, ahead of the binary test, and indexes what it reads. The
+  suite builds an OLE2-magic file with a single-byte run and a UTF-16LE run
+  and confirms a query for the words in each comes back labelled with it.
+
 - **`retrieve` reads Word, Excel, PowerPoint, OpenDocument and EPUB files.**
   These are ZIP archives of XML, so `Model_Runner.Tools.OOXML` reads the
   archive's central directory directly, inflates the parts that hold text
