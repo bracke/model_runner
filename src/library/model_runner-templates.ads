@@ -228,7 +228,7 @@ package Model_Runner.Templates is
    --  here, so none of them can offer a format that is not carried or miss
    --  one that is. The backends are named the same way for the same reason.
    type Chat_Format is (Format_Llama3, Format_ChatML, Format_Gemma,
-                        Format_Phi3, Format_Qwen3_Coder);
+                        Format_Phi3, Format_Qwen3_Coder, Format_MiniCPM);
 
    --  The name a caller asks for a format by.
    --
@@ -240,7 +240,8 @@ package Model_Runner.Templates is
          when Format_ChatML      => "chatml",
          when Format_Gemma       => "gemma",
          when Format_Phi3        => "phi3",
-         when Format_Qwen3_Coder => "qwen3-coder");
+         when Format_Qwen3_Coder => "qwen3-coder",
+         when Format_MiniCPM     => "minicpm");
 
    --  Compile and validate a template.
    --

@@ -143,12 +143,20 @@ package body Tests.Template_Cases is
         & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
         & "<|im_start|>assistant" & LF;
 
-      Wanted : constant array (1 .. 5) of Expectation :=
+      --  MiniCPM's plain turns are ChatML's too; where it differs is the
+      --  folded tool answers, which the case below covers.
+      MiniCPM_Text : aliased constant String :=
+        "<|im_start|>user" & LF & "hi<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
+        & "<|im_start|>assistant" & LF;
+
+      Wanted : constant array (1 .. 6) of Expectation :=
         [(Tmpl.Format_Llama3, Llama3_Text'Access),
          (Tmpl.Format_ChatML, ChatML_Text'Access),
          (Tmpl.Format_Gemma, Gemma_Text'Access),
          (Tmpl.Format_Phi3, Phi3_Text'Access),
-         (Tmpl.Format_Qwen3_Coder, Coder_Text'Access)];
+         (Tmpl.Format_Qwen3_Coder, Coder_Text'Access),
+         (Tmpl.Format_MiniCPM, MiniCPM_Text'Access)];
 
       Item     : Tmpl.Compiled;
       Messages : Conv.History;

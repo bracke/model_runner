@@ -44,6 +44,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A built-in `minicpm` chat format (`--chat-template minicpm`).** MiniCPM5's
+  own chat template will not compile in the engine's supported subset -- it
+  captures blocks into `set`, walks a call's arguments as a mapping, steps a
+  slice backwards and reaches for filters the engine does not carry -- so, as
+  with Qwen3-Coder, the build now carries the format itself: MiniCPM's
+  conversation shape (ChatML turns, a run of tool answers folded into one user
+  turn between `<tool_response>` tags) said in the subset. It renders plain
+  chat; it refuses tools, because writing a MiniCPM tool call means walking
+  the call's arguments as a mapping, which the engine cannot do (the same
+  limit Qwen3-Coder accepts). Reading a MiniCPM tool call back, when one is
+  produced another way, is the separate `Tools.Read_Calls` `Function_XML`
+  syntax added alongside.
+
 - **MiniCPM's `<function>`/`<param>` tool-call format is now a readable
   syntax.** `Tools.Read_Calls` gained a `Syntax` selector (`Tool_Call_JSON`,
   the default and every caller's current behaviour, or `Function_XML`). In the

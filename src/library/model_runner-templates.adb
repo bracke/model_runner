@@ -252,6 +252,58 @@ package body Model_Runner.Templates is
            & "{% if add_generation_prompt %}"
            & "<|im_start|>assistant" & LF
            & "{% endif %}";
+
+      elsif Name = Format_Name (Format_MiniCPM) then
+         --  MiniCPM5, carried for the same reason as Qwen3-Coder: the model's
+         --  own template will not compile -- it captures blocks into set,
+         --  walks the arguments of a call as a mapping, steps a slice
+         --  backwards and reaches for filters this engine does not carry.
+         --  What is written here is that template's conversation shape said
+         --  in the subset: MiniCPM's turns are ChatML's, with a run of tool
+         --  answers folded into one user turn between <tool_response> tags,
+         --  exactly as Qwen3-Coder's are.
+         --
+         --  What it is not is the tool half. MiniCPM writes a call as a
+         --  <function> element with a <param> per argument, which means
+         --  walking the call's arguments as a mapping -- the one thing this
+         --  engine cannot do. So a caller offering tools is refused before a
+         --  prompt is built, and a turn that carries calls is refused where
+         --  the call would have been written rather than rendered as though
+         --  the turn had said nothing. Reading such a call back, when another
+         --  path produces one, is a separate matter the tools reader handles
+         --  (see Tools.Read_Calls, Function_XML).
+         return
+           "{% if messages[0]['role'] == 'system' %}"
+           & "<|im_start|>system" & LF
+           & "{{ messages[0]['content'] }}<|im_end|>" & LF
+           & "{% set turns = messages[1:] %}"
+           & "{% else %}"
+           & "{% set turns = messages %}"
+           & "{% endif %}"
+           & "{% for message in turns %}"
+           & "{% if message.tool_calls %}"
+           & "{{ this_format_cannot_write_a_tool_call }}"
+           & "{% endif %}"
+           & "{% if message.role == 'tool' %}"
+           & "{% if not loop.first"
+           & " and turns[loop.index0 - 1].role != 'tool' %}"
+           & "<|im_start|>user" & LF
+           & "{% endif %}"
+           & "<tool_response>" & LF
+           & "{{ message.content }}" & LF
+           & "</tool_response>" & LF
+           & "{% if loop.last"
+           & " or turns[loop.index0 + 1].role != 'tool' %}"
+           & "<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% else %}"
+           & "<|im_start|>{{ message.role }}" & LF
+           & "{{ message.content }}<|im_end|>" & LF
+           & "{% endif %}"
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|im_start|>assistant" & LF
+           & "{% endif %}";
       else
          return "";
       end if;
