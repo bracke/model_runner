@@ -122,6 +122,45 @@ package body Model_Runner.CLI.Execute is
          [Loc.Named ("detail", Result)]);
    end On_Result;
 
+   --  Asks the operator before each tool call the agent would run. The
+   --  prompt goes to the console (standard error); the answer is read from
+   --  standard input. A line beginning y allows the call, one beginning q
+   --  stops the loop, and anything else -- n, a blank line, an end of input
+   --  -- declines the one call, which the model is told about and may work
+   --  around. This is the hand on the gate for `run --agent`, whose
+   --  built-in tools reach a shell, files and the network.
+   type Confirm_Approver (Screen : access Pres.Console) is
+     limited new Model_Runner.Agent.Approver with null record;
+
+   overriding function Consider
+     (Self : in out Confirm_Approver; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict;
+
+   overriding function Consider
+     (Self : in out Confirm_Approver; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict
+   is
+      Line : String (1 .. 256);
+      Last : Natural := 0;
+   begin
+      Pres.Put_Note
+        (Self.Screen.all, "cli.agent.confirm",
+         [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
+      begin
+         Ada.Text_IO.Get_Line (Line, Last);
+      exception
+         when Ada.Text_IO.End_Error =>
+            return Model_Runner.Agent.Halt;
+      end;
+      if Last >= 1 and then (Line (1) = 'y' or else Line (1) = 'Y') then
+         return Model_Runner.Agent.Allow;
+      elsif Last >= 1 and then (Line (1) = 'q' or else Line (1) = 'Q') then
+         return Model_Runner.Agent.Halt;
+      else
+         return Model_Runner.Agent.Deny;
+      end if;
+   end Consider;
+
    --  Runs a tool call by handing it to an external program: the program is
    --  invoked with the function name and the arguments (as JSON) as its two
    --  arguments, and what it prints to standard output is the tool's answer.
@@ -1994,6 +2033,8 @@ package body Model_Runner.CLI.Execute is
                Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
                Request      : Gen.Request;
                Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
+               Confirmer    : aliased Confirm_Approver
+                                (Screen'Unchecked_Access);
 
                Using_Command : constant Boolean :=
                  Item.Tool_Command /= null
@@ -2021,6 +2062,10 @@ package body Model_Runner.CLI.Execute is
                      Max_Steps  => Positive'Max (1, Item.Max_Steps),
                      Thinking   => Item.Thinking,
                      Watch      => Watcher'Unchecked_Access,
+                     Approve    =>
+                       (if Item.Confirm_Tools then Confirmer'Unchecked_Access
+                        else null),
+                     Max_Retries => Item.Max_Retries,
                      Result     => Loop_Out);
 
                   Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);

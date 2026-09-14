@@ -47,6 +47,8 @@ package body Model_Runner.Agent is
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
+      Approve    : Approver_Reference := null;
+      Max_Retries : Natural := 0;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome)
@@ -84,6 +86,11 @@ package body Model_Runner.Agent is
       --  is not making progress.
       Seen      : array (1 .. Seen_Max) of Interfaces.Unsigned_64;
       Seen_Used : Natural := 0;
+
+      --  Retries left for a generation that ends in a runtime error. Spent
+      --  down as they are used; when none are left, such an error stops the
+      --  loop as it always did.
+      Retries_Left : Natural := Max_Retries;
 
       --  FNV-1a over the name, a separator, and the arguments.
       function Digest (Named : String; Args : String)
@@ -210,8 +217,16 @@ package body Model_Runner.Agent is
 
          if Last_Result.Reason = Gen.Runtime_Error then
             --  An unfinished turn is not committed, and the session is reset
-            --  so the next caller re-evaluates the committed conversation.
+            --  so the next attempt re-evaluates the committed conversation.
             L.Reset (Session);
+            if Retries_Left > 0 then
+               --  A retry: the committed conversation is unchanged, so the
+               --  loop renders it again and generates again. The step is not
+               --  counted, only the retry.
+               Retries_Left := Retries_Left - 1;
+               Result.Retries := Result.Retries + 1;
+               goto Next_Iteration;
+            end if;
             Result.Reason := Generation_Failed;
             Result.Error := Last_Result.Error;
             exit Step_Loop;
@@ -318,30 +333,62 @@ package body Model_Runner.Agent is
                      Remember (Key);
 
                      if Model_Runner.Tools.Offers (Offered, Named) then
-                        Executor.Run (Named, Args, Answer, Filled, Ran);
-                        if E.Is_Error (Ran) then
-                           --  The tool answered with more than fits. The
-                           --  model is told so, in place of an answer it
-                           --  cannot have.
-                           declare
-                              Note : constant String :=
-                                "error: the tool's answer was too large "
-                                & "to return";
-                           begin
-                              Conv.Append
-                                (Messages, Conv.Tool_Role, Note, Status);
-                              if Watch /= null then
-                                 Watch.On_Result (Named, Note);
+                        case (if Approve = null then Allow
+                              else Approve.Consider (Named, Args))
+                        is
+                           when Halt =>
+                              --  The gate stopped the run. This call is not
+                              --  run; the conversation so far stands and the
+                              --  loop ends.
+                              Result.Reason := Declined;
+                              exit Step_Loop;
+
+                           when Deny =>
+                              --  The gate declined this one call. The model
+                              --  is told, and may take another way to the
+                              --  answer rather than the loop breaking.
+                              declare
+                                 Note : constant String :=
+                                   "error: running """ & Named
+                                   & """ was not approved; do not repeat it "
+                                   & "-- take a different approach or answer "
+                                   & "without it";
+                              begin
+                                 Conv.Append
+                                   (Messages, Conv.Tool_Role, Note, Status);
+                                 if Watch /= null then
+                                    Watch.On_Result (Named, Note);
+                                 end if;
+                              end;
+
+                           when Allow =>
+                              Executor.Run (Named, Args, Answer, Filled, Ran);
+                              if E.Is_Error (Ran) then
+                                 --  The tool answered with more than fits.
+                                 --  The model is told so, in place of an
+                                 --  answer it cannot have.
+                                 declare
+                                    Note : constant String :=
+                                      "error: the tool's answer was too "
+                                      & "large to return";
+                                 begin
+                                    Conv.Append
+                                      (Messages, Conv.Tool_Role, Note,
+                                       Status);
+                                    if Watch /= null then
+                                       Watch.On_Result (Named, Note);
+                                    end if;
+                                 end;
+                              else
+                                 Conv.Append
+                                   (Messages, Conv.Tool_Role,
+                                    Answer (1 .. Filled), Status);
+                                 if Watch /= null then
+                                    Watch.On_Result
+                                      (Named, Answer (1 .. Filled));
+                                 end if;
                               end if;
-                           end;
-                        else
-                           Conv.Append
-                             (Messages, Conv.Tool_Role,
-                              Answer (1 .. Filled), Status);
-                           if Watch /= null then
-                              Watch.On_Result (Named, Answer (1 .. Filled));
-                           end if;
-                        end if;
+                        end case;
                      else
                         --  The grammar should have made this impossible; if
                         --  it happens anyway, the model hears the truth and
@@ -378,6 +425,11 @@ package body Model_Runner.Agent is
                exit Step_Loop;
             end if;
          end;
+
+         --  Where a retried generation rejoins the loop, having reset the
+         --  session and left the committed conversation as it was.
+         <<Next_Iteration>>
+         null;
       end loop Step_Loop;
 
       Gen.Release (Last_Result);

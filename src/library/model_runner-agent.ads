@@ -51,7 +51,8 @@ package Model_Runner.Agent is
       Grammar_Failed,     --  the tool grammar would not compile
       Generation_Failed,  --  a generation ended in a runtime error
       History_Failed,     --  a turn would not fit the history
-      Cancelled);         --  the caller cancelled a generation
+      Cancelled,          --  the caller cancelled a generation
+      Declined);          --  an approver stopped the run before a call ran
 
    --  What a run did.
    type Outcome is record
@@ -63,6 +64,10 @@ package Model_Runner.Agent is
 
       --  Tool calls run over the whole loop.
       Calls : Natural := 0;
+
+      --  Generations that failed with a runtime error and were retried. A
+      --  run that never stumbled reports zero.
+      Retries : Natural := 0;
 
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
@@ -103,6 +108,41 @@ package Model_Runner.Agent is
    --  A reference to whatever is watching the loop.
    type Observer_Reference is access all Observer'Class;
 
+   --  What an approver decides about a call the model wants to make.
+   type Verdict is
+     (Allow,    --  run the call
+      Deny,     --  do not run it; the model is told and may try another way
+      Halt);   --  do not run it and stop the whole loop
+
+   --  Something the loop asks before it runs a call.
+   --
+   --  The built-in tools reach the world -- a shell, a file, the network --
+   --  and a caller that wants a hand on that gate passes an approver. The
+   --  loop asks it once for each fresh call the model makes, before the call
+   --  is run, and does what the verdict says: Allow runs it, Deny declines it
+   --  and tells the model so (which may make it try another way), Halt stops
+   --  the run with Reason => Declined. A repeat of a call already made, and a
+   --  call to a tool not offered, are not asked about -- they never run. A
+   --  caller that wants no gate passes null, and every call runs.
+   --
+   --  Task safety: the loop calls this on its own task, once per fresh call,
+   --  after it has announced the call to any observer and before it runs it.
+   type Approver is limited interface;
+
+   --  Decide whether a call may run.
+   --
+   --  @param Self The approver.
+   --  @param Named The function the model called.
+   --  @param Arguments The arguments, as one line of JSON.
+   --  @return Allow to run it, Deny to decline it, Halt to stop the run.
+   function Consider
+     (Self      : in out Approver;
+      Named     : String;
+      Arguments : String) return Verdict is abstract;
+
+   --  A reference to whatever is gating the loop's calls.
+   type Approver_Reference is access all Approver'Class;
+
    --  Run a conversation to an answer.
    --
    --  The history is the caller's to seed and the caller's to read after.
@@ -139,6 +179,14 @@ package Model_Runner.Agent is
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
+   --  @param Approve The gate asked before each fresh call runs, or null to
+   --    run every call. A Deny declines the one call and tells the model; an
+   --    Halt stops the run with Reason => Declined.
+   --  @param Max_Retries How many times a generation that ends in a runtime
+   --    error is reset and tried again before the loop gives up. The retried
+   --    step is not counted against Max_Steps, and the count of retries is in
+   --    the outcome. Zero, the default, fails on the first runtime error as
+   --    the loop always did.
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
@@ -158,6 +206,8 @@ package Model_Runner.Agent is
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
+      Approve    : Approver_Reference := null;
+      Max_Retries : Natural := 0;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome);

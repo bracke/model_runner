@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hand on the gate, and a second try at a stumble.** The agent runs its
+  built-in tools -- a shell, files, the network -- and until now ran every
+  call the model made, unasked. `Model_Runner.Agent.Run` takes an `Approver`
+  now: the loop asks it before each fresh call and does what the verdict
+  says -- Allow runs it, Deny declines the one call and tells the model so
+  (which may make it take another way to the answer), Halt stops the run
+  with `Reason => Declined`. A repeat and a call to a tool not offered are
+  never asked about; they never run. `run --agent --confirm-tools` is the
+  gate from the command line: the call is printed and the answer read from
+  standard input -- y runs it, q stops, anything else declines it. And
+  `Max_Retries` lets a generation that ends in a runtime error be reset and
+  tried again rather than failing the run on the first stumble; the retried
+  step is not counted against the step budget, and the count of retries is
+  in the outcome. `run --agent --max-retries N` sets it. A caller that
+  passes neither an approver nor a retry budget gets the loop it always had.
+
 - **An agentic loop, closing the tool loop this program left open.** The
   tool packages read the definitions a caller offers and the calls a model
   writes back, and said the loop closes outside the program or not at all.

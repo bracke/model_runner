@@ -273,12 +273,18 @@ scratchpad it can write and read, base64, the clock, files, a shell, Python,
 an HTTP fetch, a web search and SQLite -- so unlike the rest of the program
 the agent's built-ins *do* start processes and open files: the ones that
 reach the network or a database run `curl`, `python3`, `sqlite3` or `sh`, and
-say so plainly when that program is not installed. `--tool-command CMD`
+say so plainly when that program is not installed. Because those built-ins
+reach the world, `--confirm-tools` puts a hand on the gate: each call is
+printed and the loop waits on standard input -- y runs it, q stops the run, and
+anything else declines the one call and tells the model, which may then take
+another way to the answer. `--max-retries N` gives a generation that errors a
+second try instead of ending the run on the first stumble. `--tool-command CMD`
 instead runs the tools `--tools`/`--tools-file` describe by handing each call
 to that program, which is a caller's own runner reached from the command
 line. Either way the reply is grammar-constrained, so a call the model writes
-always parses and always names a tool on offer. The library is where this is
-assembled --
+always parses and always names a tool on offer. A caller embedding the library
+passes its own `Approver` for the gate and its own runner for the tools. The
+library is where this is assembled --
 `Model_Runner.Agent` drives the render/generate/parse/run circle over
 `Model_Runner.Tools`, `Model_Runner.Conversation`, `Model_Runner.Templates`
 and `Model_Runner.Generation`, against a `Model_Runner.Tools.Runner` a caller

@@ -304,6 +304,17 @@ package Model_Runner.CLI.Options is
       --  takes two.
       Max_Steps : Natural := 8;
 
+      --  How many times a generation that ends in a runtime error is reset
+      --  and tried again before the loop gives up. Zero, the default, fails
+      --  on the first such error.
+      Max_Retries : Natural := 0;
+
+      --  Whether to ask before each tool call the agent would run. With it,
+      --  the program prints the call and waits on standard input: a line
+      --  starting y runs it, n declines it and tells the model, and q or an
+      --  end of input stops the loop. Without it every call runs unasked.
+      Confirm_Tools : Boolean := False;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is

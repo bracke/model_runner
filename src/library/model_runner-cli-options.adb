@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 88) of Registry_Row :=
+   Registry : constant array (1 .. 90) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -35,6 +35,10 @@ package body Model_Runner.CLI.Options is
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
       (Text ("--agent"), [Command_Run => True, others => False], Text ("agent")),
       (Text ("--max-steps"), [Command_Run => True, others => False], Text ("max_steps")),
+      (Text ("--max-retries"), [Command_Run => True, others => False],
+       Text ("max_retries")),
+      (Text ("--confirm-tools"), [Command_Run => True, others => False],
+       Text ("confirm_tools")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--think"), [Command_Run => True, others => False],
        Text ("think")),
@@ -833,6 +837,7 @@ package body Model_Runner.CLI.Options is
          Flag_Grammar_File,
          Flag_Schema, Flag_Schema_File,
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
+         Flag_Max_Retries,
          Flag_Context_Shift, Flag_Context_Keep,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
@@ -1339,6 +1344,21 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+
+                  elsif Name = "--max-retries" then
+                     Natural_Value (Flag_Max_Retries, 0, 1_000,
+                                    Result.Max_Retries, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--confirm-tools" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Confirm_Tools := True;
 
                   elsif Name = "--repack" then
                      declare
