@@ -196,6 +196,12 @@ package Model_Runner.Agent is
    --    loop, or 0 for none. Like Max_Seconds it is checked between steps, so
    --    the generation in flight when the ceiling is reached finishes before
    --    the loop stops with Token_Limit; a turn that answers is never cut off.
+   --  @param Max_Parallel How many of a turn's calls may run at once. One, the
+   --    default, runs them one after another as before. More lets calls the
+   --    Executor marks parallel-safe (see Runner.Parallel_Safe) overlap on up
+   --    to this many worker tasks; every other call, and every dedup and
+   --    approval decision, stays on this task, and results are appended in
+   --    call order whatever order they finished in.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
@@ -239,6 +245,7 @@ package Model_Runner.Agent is
       Max_Steps  : Positive := 8;
       Max_Seconds : Duration := 0.0;
       Max_Total_Tokens : Natural := 0;
+      Max_Parallel : Positive := 1;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;

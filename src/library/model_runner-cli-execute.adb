@@ -2402,6 +2402,7 @@ package body Model_Runner.CLI.Execute is
                         else null),
                      Max_Retries => Item.Max_Retries,
                      Max_Total_Tokens => Item.Max_Total_Tokens,
+                     Max_Parallel => Positive'Max (1, Item.Max_Parallel),
                      Compact     => Item.Compact,
                      Answer_Schema =>
                        (if Answer /= null then Answer.all else ""),

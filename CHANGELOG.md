@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Parallel tool execution: `--max-parallel N` (`Agent.Run`'s
+  `Max_Parallel`).** When the model makes several calls in one turn, the ones
+  safe to run beside each other now overlap on up to N worker tasks instead of
+  running one after another. Safety is a contract, not a guess:
+  `Tools.Runner.Instance` gained `Parallel_Safe (Named)` (default False, so
+  every existing runner is unchanged and serial), and `Tools.Builtin` marks as
+  safe only the tools that touch none of its state and no shared resource --
+  the pure ones, the reads, the network fetches (each its own request), and
+  `retrieve` when it ranks by words alone. The rest stay serial: the memory
+  notes (one scratchpad), `write_file`, `shell`/`run_python`/`sql` (this
+  program's process wait reaps whichever child ended, not a chosen one, so two
+  at once would cross), `delegate`/`ask_user` (a single session or the one
+  console), and `retrieve` when it embeds (one embedding session). Every dedup
+  and approval decision, and every appended result, stays on the main task and
+  in call order, so a run's transcript is the same whatever finished first;
+  only the waiting overlaps. One, the default, is the previous behaviour.
+
 - **Mid-loop user clarification: an `ask_user` built-in tool.** The agent can
   pause to put a question to the user -- a missing detail, a choice, a
   go-ahead -- and carry on with the answer, so a run is a conversation where

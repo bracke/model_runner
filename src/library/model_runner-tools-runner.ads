@@ -50,4 +50,22 @@ package Model_Runner.Tools.Runner is
       Last      : out Natural;
       Status    : out Model_Runner.Errors.Error_Info) is abstract;
 
+   --  Whether a call to the named tool may run beside other calls the model
+   --  made in the same turn, on another task. The loop runs a runner's calls
+   --  one after another unless the runner marks a tool safe to overlap, so the
+   --  default is False and a runner opts in tool by tool. Answer True only for
+   --  a tool that, run beside another, touches nothing the other does -- none
+   --  of the runner's own mutable state and no single resource two calls would
+   --  share -- so the two may proceed at once; True is then also a promise
+   --  that Run may be entered from more than one task at a time for that tool.
+   --  A tool whose work is a process this program waits on is a common
+   --  counter-example: waiting reaps whichever child ended, not a chosen one,
+   --  so two such calls at once cross their results.
+   --
+   --  @param Self The runner.
+   --  @param Named The function the model called.
+   --  @return Whether a call to it may overlap another call in the turn.
+   function Parallel_Safe
+     (Self : Instance; Named : String) return Boolean is (False);
+
 end Model_Runner.Tools.Runner;

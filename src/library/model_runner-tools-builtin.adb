@@ -1583,6 +1583,15 @@ package body Model_Runner.Tools.Builtin is
    -- Run --
    ---------
 
+   overriding function Parallel_Safe
+     (Self : Instance; Named : String) return Boolean
+   is
+     (Named in "calculator" | "string_length" | "reverse_text" | "lookup"
+        | "base64_encode" | "base64_decode" | "now"
+        | "read_file" | "list_directory"
+        | "http_get" | "web_search"
+      or else (Named = "retrieve" and then Self.Embed = null));
+
    overriding procedure Run
      (Self      : in out Instance;
       Named     : String;

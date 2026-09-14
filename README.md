@@ -300,7 +300,18 @@ apart from the caller's -- and only the sub-agent's final answer comes back,
 so the detail of the piece never fills the caller's context. A sub-agent is
 given no delegator of its own, so delegation goes one level deep and no
 further; when a second session will not open (most often for want of memory)
-`delegate` declines and the run goes on with the other tools. The `ask_user`
+`delegate` declines and the run goes on with the other tools.
+`--max-parallel N` lets a turn's calls overlap: when the model makes several
+calls at once, the ones that are safe to run beside each other -- a read, a
+network fetch, a search that ranks by words -- run together on up to N worker
+tasks, while the rest, and every dedup and approval decision, stay in order
+on the main task, and results are handed back to the model in call order
+whatever order they finished in. The tools that must not overlap stay serial:
+the memory notes (one scratchpad), `write_file`, the tools that run a process
+this program waits on (`shell`, `run_python`, `sql` -- one wait would reap
+another's child), `delegate` and `ask_user` (a single session, the one
+console), and `retrieve` when it embeds (one embedding session). One, the
+default, keeps every run one after another. The `ask_user`
 tool lets the model pause to ask for what only the user knows -- a missing
 detail, a choice, a go-ahead: the question goes to the console and the
 answer is read from standard input as one line, so a run is a conversation

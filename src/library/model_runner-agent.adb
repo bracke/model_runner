@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
@@ -8,6 +9,7 @@ with Model_Runner.Tools.Constraint;
 package body Model_Runner.Agent is
 
    package Conv renames Model_Runner.Conversation;
+   package U renames Ada.Strings.Unbounded;
    package E renames Model_Runner.Errors;
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
@@ -45,6 +47,7 @@ package body Model_Runner.Agent is
       Max_Steps  : Positive := 8;
       Max_Seconds : Duration := 0.0;
       Max_Total_Tokens : Natural := 0;
+      Max_Parallel : Positive := 1;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
@@ -336,130 +339,232 @@ package body Model_Runner.Agent is
                exit Step_Loop;
             end if;
 
-            --  Run each call and hand its answer back as a tool turn.
-            for Call in 1 .. Asked loop
-               declare
-                  Named : constant String :=
-                    Conv.Call_Name (Messages, Turn, Call);
-                  Args  : constant String :=
-                    Conv.Call_Arguments (Messages, Turn, Call);
-                  Key   : constant Interfaces.Unsigned_64 :=
-                    Digest (Named, Args);
-                  Answer : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
-                  Filled : Natural;
-                  Status : E.Error_Info;
-                  Ran    : E.Error_Info;
-               begin
-                  if Watch /= null then
-                     Watch.On_Call (Named, Args);
-                  end if;
+            --  Decide, run and report the turn's calls. The decisions --
+            --  dedup and approval -- and every result appended stay on this
+            --  task and in call order; the runs of calls the Executor marks
+            --  parallel-safe may overlap on worker tasks in between. A real
+            --  tool need not be safe to run twice, so a call the model already
+            --  made is not run again: the model is told it repeated itself and
+            --  pointed back at the answer it has.
+            declare
+               type Plan_Kind is (As_Note, As_Serial, As_Parallel);
+               type Item_Rec is record
+                  Named  : U.Unbounded_String;
+                  Args   : U.Unbounded_String;
+                  Kind   : Plan_Kind := As_Note;
+                  Text   : U.Unbounded_String;  --  a note, or a run's answer
+                  Failed : Boolean := False;     --  the answer would not fit
+                  Done   : Boolean := False;     --  the run has happened
+               end record;
 
-                  if Already_Seen (Key) then
-                     --  A call the model has already made. A real tool need
-                     --  not be safe to run twice, and running it again buys
-                     --  nothing, so it is not run: the model is told it
-                     --  repeated itself and pointed back at the answer it
-                     --  already has.
-                     declare
-                        Note : constant String :=
-                          "error: this exact call was already made in this "
-                          & "conversation; use its earlier result rather "
-                          & "than repeating the call";
-                     begin
-                        Conv.Append (Messages, Conv.Tool_Role, Note, Status);
-                        if Watch /= null then
-                           Watch.On_Result (Named, Note);
-                        end if;
-                     end;
+               Items   : array (1 .. Asked) of Item_Rec;
+               Planned : Natural := 0;  --  calls decided before an approval halt
+               Halted  : Boolean := False;
 
-                  else
-                     Progressed := True;
-                     Remember (Key);
+               Repeat_Note : constant String :=
+                 "error: this exact call was already made in this "
+                 & "conversation; use its earlier result rather than "
+                 & "repeating the call";
+            begin
+               --  Decide each call in order: dedup, then approval.
+               Plan_Calls :
+               for Call in 1 .. Asked loop
+                  declare
+                     Named : constant String :=
+                       Conv.Call_Name (Messages, Turn, Call);
+                     Args  : constant String :=
+                       Conv.Call_Arguments (Messages, Turn, Call);
+                     Key   : constant Interfaces.Unsigned_64 :=
+                       Digest (Named, Args);
+                  begin
+                     Items (Call).Named := U.To_Unbounded_String (Named);
+                     Items (Call).Args  := U.To_Unbounded_String (Args);
+                     if Watch /= null then
+                        Watch.On_Call (Named, Args);
+                     end if;
 
-                     if Model_Runner.Tools.Offers (Offered, Named) then
-                        case (if Approve = null then Allow
-                              else Approve.Consider (Named, Args))
-                        is
-                           when Halt =>
-                              --  The gate stopped the run. This call is not
-                              --  run; the conversation so far stands and the
-                              --  loop ends.
-                              Result.Reason := Declined;
-                              exit Step_Loop;
-
-                           when Deny =>
-                              --  The gate declined this one call. The model
-                              --  is told, and may take another way to the
-                              --  answer rather than the loop breaking.
-                              declare
-                                 Note : constant String :=
-                                   "error: running """ & Named
-                                   & """ was not approved; do not repeat it "
-                                   & "-- take a different approach or answer "
-                                   & "without it";
-                              begin
-                                 Conv.Append
-                                   (Messages, Conv.Tool_Role, Note, Status);
-                                 if Watch /= null then
-                                    Watch.On_Result (Named, Note);
-                                 end if;
-                              end;
-
-                           when Allow =>
-                              Executor.Run (Named, Args, Answer, Filled, Ran);
-                              if E.Is_Error (Ran) then
-                                 --  The tool answered with more than fits.
-                                 --  The model is told so, in place of an
-                                 --  answer it cannot have.
-                                 declare
-                                    Note : constant String :=
-                                      "error: the tool's answer was too "
-                                      & "large to return";
-                                 begin
-                                    Conv.Append
-                                      (Messages, Conv.Tool_Role, Note,
-                                       Status);
-                                    if Watch /= null then
-                                       Watch.On_Result (Named, Note);
-                                    end if;
-                                 end;
-                              else
-                                 Conv.Append
-                                   (Messages, Conv.Tool_Role,
-                                    Answer (1 .. Filled), Status);
-                                 if Watch /= null then
-                                    Watch.On_Result
-                                      (Named, Answer (1 .. Filled));
-                                 end if;
-                              end if;
-                        end case;
+                     if Already_Seen (Key) then
+                        Items (Call).Text :=
+                          U.To_Unbounded_String (Repeat_Note);
                      else
-                        --  The grammar should have made this impossible; if
-                        --  it happens anyway, the model hears the truth and
-                        --  may correct itself rather than the loop breaking.
-                        declare
-                           Note : constant String :=
-                             "error: no tool named """ & Named & """";
+                        Progressed := True;
+                        Remember (Key);
+                        if not Model_Runner.Tools.Offers (Offered, Named) then
+                           --  The grammar should have made this impossible;
+                           --  if it happens anyway, the model hears the truth
+                           --  and may correct itself.
+                           Items (Call).Text := U.To_Unbounded_String
+                             ("error: no tool named """ & Named & """");
+                        else
+                           case (if Approve = null then Allow
+                                 else Approve.Consider (Named, Args))
+                           is
+                              when Halt =>
+                                 --  The gate stopped the run: the calls so far
+                                 --  stand and the loop ends after they report.
+                                 Halted := True;
+                                 exit Plan_Calls;
+
+                              when Deny =>
+                                 --  The gate declined this one call. The model
+                                 --  is told and may take another way.
+                                 Items (Call).Text := U.To_Unbounded_String
+                                   ("error: running """ & Named
+                                    & """ was not approved; do not repeat it "
+                                    & "-- take a different approach or answer "
+                                    & "without it");
+
+                              when Allow =>
+                                 if Executor.Parallel_Safe (Named) then
+                                    Items (Call).Kind := As_Parallel;
+                                 else
+                                    Items (Call).Kind := As_Serial;
+                                 end if;
+                           end case;
+                        end if;
+                     end if;
+                     Planned := Call;
+                  end;
+               end loop Plan_Calls;
+
+               --  Overlap the parallel-safe runs when there is more than one
+               --  and room to. Each worker takes the next such call, runs it
+               --  into its own buffer, and leaves the answer in its slot; the
+               --  block's end waits for them all.
+               declare
+                  P_Index : array (1 .. Planned) of Positive;
+                  P_Count : Natural := 0;
+               begin
+                  for I in 1 .. Planned loop
+                     if Items (I).Kind = As_Parallel then
+                        P_Count := P_Count + 1;
+                        P_Index (P_Count) := I;
+                     end if;
+                  end loop;
+
+                  if Max_Parallel > 1 and then P_Count > 1 then
+                     declare
+                        protected Dispatch is
+                           procedure Next (Slot : out Natural);
+                        private
+                           Cursor : Natural := 0;
+                        end Dispatch;
+
+                        protected body Dispatch is
+                           procedure Next (Slot : out Natural) is
+                           begin
+                              if Cursor < P_Count then
+                                 Cursor := Cursor + 1;
+                                 Slot   := Cursor;
+                              else
+                                 Slot := 0;
+                              end if;
+                           end Next;
+                        end Dispatch;
+
+                        task type Worker;
+                        task body Worker is
+                           Slot : Natural;
                         begin
-                           Conv.Append
-                             (Messages, Conv.Tool_Role, Note, Status);
-                           if Watch /= null then
-                              Watch.On_Result (Named, Note);
+                           loop
+                              Dispatch.Next (Slot);
+                              exit when Slot = 0;
+                              declare
+                                 Idx  : constant Positive := P_Index (Slot);
+                                 Buf  : String
+                                   (1 .. Model_Runner.Tools.Max_Call_Bytes);
+                                 Fill : Natural;
+                                 Ran  : E.Error_Info;
+                              begin
+                                 Executor.Run
+                                   (U.To_String (Items (Idx).Named),
+                                    U.To_String (Items (Idx).Args),
+                                    Buf, Fill, Ran);
+                                 if E.Is_Error (Ran) then
+                                    Items (Idx).Failed := True;
+                                 else
+                                    Items (Idx).Text :=
+                                      U.To_Unbounded_String (Buf (1 .. Fill));
+                                 end if;
+                                 Items (Idx).Done := True;
+                              exception
+                                 when others =>
+                                    Items (Idx).Failed := True;
+                                    Items (Idx).Done   := True;
+                              end;
+                           end loop;
+                        end Worker;
+
+                        Crew : array
+                          (1 .. Positive'Min (Max_Parallel, P_Count))
+                          of Worker;
+                     begin
+                        null;  --  the block's end waits for every Worker
+                     end;
+                  end if;
+               end;
+
+               --  Report every decided call, in order. A parallel run's answer
+               --  is already in hand; a serial run -- and a parallel one no
+               --  worker took (Max_Parallel one, or the turn's only such call)
+               --  -- happens here on this task.
+               Report_Calls :
+               for Call in 1 .. Planned loop
+                  declare
+                     Named  : constant String :=
+                       U.To_String (Items (Call).Named);
+                     Status : E.Error_Info;
+                  begin
+                     if Items (Call).Kind = As_Serial
+                       or else (Items (Call).Kind = As_Parallel
+                                and then not Items (Call).Done)
+                     then
+                        declare
+                           Buf  : String
+                             (1 .. Model_Runner.Tools.Max_Call_Bytes);
+                           Fill : Natural;
+                           Ran  : E.Error_Info;
+                        begin
+                           Executor.Run
+                             (Named, U.To_String (Items (Call).Args),
+                              Buf, Fill, Ran);
+                           if E.Is_Error (Ran) then
+                              Items (Call).Failed := True;
+                           else
+                              Items (Call).Text :=
+                                U.To_Unbounded_String (Buf (1 .. Fill));
                            end if;
                         end;
                      end if;
-                  end if;
 
-                  Result.Calls := Result.Calls + 1;
+                     declare
+                        Reply : constant String :=
+                          (if Items (Call).Failed
+                           then "error: the tool's answer was too large to "
+                                & "return"
+                           else U.To_String (Items (Call).Text));
+                     begin
+                        Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
+                        if Watch /= null then
+                           Watch.On_Result (Named, Reply);
+                        end if;
+                     end;
 
-                  if E.Is_Error (Status) then
-                     L.Reset (Session);
-                     Result.Reason := History_Failed;
-                     Result.Error := Status;
-                     exit Step_Loop;
-                  end if;
-               end;
-            end loop;
+                     Result.Calls := Result.Calls + 1;
+                     if E.Is_Error (Status) then
+                        L.Reset (Session);
+                        Result.Reason := History_Failed;
+                        Result.Error := Status;
+                        exit Step_Loop;
+                     end if;
+                  end;
+               end loop Report_Calls;
+
+               if Halted then
+                  Result.Reason := Declined;
+                  exit Step_Loop;
+               end if;
+            end;
 
             --  A turn that only repeated calls it had already made is going
             --  in circles. Stop rather than let it spend the step budget on

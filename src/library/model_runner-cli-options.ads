@@ -314,6 +314,11 @@ package Model_Runner.CLI.Options is
       --  default, sets no ceiling.
       Max_Total_Tokens : Natural := 0;
 
+      --  How many of a turn's calls may run at once. One, the default, runs
+      --  them one after another; more lets the parallel-safe ones overlap on
+      --  that many worker tasks.
+      Max_Parallel : Natural := 1;
+
       --  Whether to ask before each tool call the agent would run. With it,
       --  the program prints the call and waits on standard input: a line
       --  starting y runs it, n declines it and tells the model, and q or an

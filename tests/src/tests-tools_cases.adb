@@ -343,6 +343,41 @@ package body Tests.Tools_Cases is
               "ask_user with no inquirer did not decline as an error");
    end Ask_User_Declines_Unwired;
 
+   --  The runner marks the tools that may overlap and the tools that may not:
+   --  reads and network fetches and lexical retrieve overlap; a shared
+   --  scratchpad, a waited-on process, a single session or the console do not.
+   procedure Parallel_Safety_Is_Marked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Runner : Builtin.Instance;
+   begin
+      Assert (Runner.Parallel_Safe ("http_get"),
+              "http_get should be parallel-safe");
+      Assert (Runner.Parallel_Safe ("web_search"),
+              "web_search should be parallel-safe");
+      Assert (Runner.Parallel_Safe ("read_file"),
+              "read_file should be parallel-safe");
+      Assert (Runner.Parallel_Safe ("calculator"),
+              "calculator should be parallel-safe");
+      Assert (Runner.Parallel_Safe ("retrieve"),
+              "lexical retrieve (no embedder) should be parallel-safe");
+      Assert (not Runner.Parallel_Safe ("shell"),
+              "shell must not be parallel-safe (it waits on a process)");
+      Assert (not Runner.Parallel_Safe ("run_python"),
+              "run_python must not be parallel-safe");
+      Assert (not Runner.Parallel_Safe ("sql"),
+              "sql must not be parallel-safe");
+      Assert (not Runner.Parallel_Safe ("memory_put"),
+              "memory_put must not be parallel-safe (shared scratchpad)");
+      Assert (not Runner.Parallel_Safe ("write_file"),
+              "write_file must not be parallel-safe");
+      Assert (not Runner.Parallel_Safe ("delegate"),
+              "delegate must not be parallel-safe (one sub-session)");
+      Assert (not Runner.Parallel_Safe ("ask_user"),
+              "ask_user must not be parallel-safe (one console)");
+   end Parallel_Safety_Is_Marked;
+
    --  The grammar takes a well-formed call to an offered tool, takes prose,
    --  and refuses a call to a tool nobody offered.
    procedure Grammar_Constrains
@@ -781,6 +816,9 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Ask_User_Declines_Unwired'Access,
          "ask_user with no inquirer declines rather than blocking on input");
+      Register_Routine
+        (T, Parallel_Safety_Is_Marked'Access,
+         "the runner marks which tools may overlap and which may not");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "

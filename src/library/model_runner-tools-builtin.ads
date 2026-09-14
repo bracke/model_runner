@@ -178,6 +178,19 @@ package Model_Runner.Tools.Builtin is
       Last      : out Natural;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  Which built-in tools are safe to run beside another call in the turn.
+   --  True for the tools that touch none of this runner's state and no shared
+   --  resource: the pure ones, the reads (read_file, list_directory), the
+   --  network fetches (http_get, web_search, each its own request), and
+   --  retrieve when it ranks by words alone. False for the rest -- the memory
+   --  notes (shared scratchpad), write_file (a shared file tree), the tools
+   --  that run a process this program waits on (shell, run_python, sql, whose
+   --  wait would reap each other's children), delegate and ask_user (each a
+   --  single session or the one console), and retrieve when it embeds (the
+   --  one embedding session) -- so those run one at a time.
+   overriding function Parallel_Safe
+     (Self : Instance; Named : String) return Boolean;
+
 private
 
    --  The scratchpad: a bounded set of key-value notes the memory tools

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 93) of Registry_Row :=
+   Registry : constant array (1 .. 94) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -39,6 +39,8 @@ package body Model_Runner.CLI.Options is
        Text ("max_retries")),
       (Text ("--max-total-tokens"), [Command_Run => True, others => False],
        Text ("max_total_tokens")),
+      (Text ("--max-parallel"), [Command_Run => True, others => False],
+       Text ("max_parallel")),
       (Text ("--confirm-tools"), [Command_Run => True, others => False],
        Text ("confirm_tools")),
       (Text ("--compact"), [Command_Run => True, others => False],
@@ -843,7 +845,7 @@ package body Model_Runner.CLI.Options is
          Flag_Grammar_File,
          Flag_Schema, Flag_Schema_File,
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
-         Flag_Max_Retries, Flag_Max_Total_Tokens,
+         Flag_Max_Retries, Flag_Max_Total_Tokens, Flag_Max_Parallel,
          Flag_Context_Shift, Flag_Context_Keep,
          Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
@@ -1361,6 +1363,13 @@ package body Model_Runner.CLI.Options is
                   elsif Name = "--max-total-tokens" then
                      Natural_Value (Flag_Max_Total_Tokens, 0, 100_000_000,
                                     Result.Max_Total_Tokens, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--max-parallel" then
+                     Natural_Value (Flag_Max_Parallel, 1, 64,
+                                    Result.Max_Parallel, Good);
                      if not Good then
                         return;
                      end if;
