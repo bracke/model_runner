@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Trace export: `--trace-file PATH`.** An agent run can now write a
+  machine-readable record of itself to a file as JSON -- the model, the final
+  tally (reason, steps, calls, retries, generated and prompt tokens,
+  compactions, elapsed milliseconds), and every tool call and result in order,
+  each stamped with the milliseconds since the run began. The observer that
+  already prints the loop to the console records the events too when a trace
+  is asked for, so no change to the loop itself was needed; arguments and
+  results are JSON-escaped, so a tool's own JSON sits in the trace as a
+  string. Writing is best effort -- a trace that will not write (a bad path,
+  say) does not fail the run.
+
 - **Durable agent memory: `--memory-file PATH`.** The `memory_put`/`memory_get`
   scratchpad lived only for the run; a file behind it now lets what one run
   remembers a later run recall. `Tools.Builtin` gained `Use_Memory_File`: the

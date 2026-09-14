@@ -313,7 +313,13 @@ at the start and each `memory_put` writes the whole set back, so what one run
 remembers a later run recalls. Without it, memory lasts only for the run. The
 file is the run's own -- a fanned-out sub-agent keeps its memory to itself
 rather than sharing it -- and its format is length-prefixed, so a value with
-any byte in it, a newline included, reads back whole.
+any byte in it, a newline included, reads back whole. `--trace-file PATH`
+writes a machine-readable record of the run as JSON: the model, the final
+tally (why it stopped, steps, calls, retries, tokens, elapsed milliseconds),
+and every call and result in order, each with the time since the run began.
+It is best effort -- a trace that will not write does not fail the run -- and
+arguments and results are escaped, so a tool's own JSON sits in the trace as
+a string.
 `--max-parallel N` lets a turn's calls overlap: when the model makes several
 calls at once, the ones that are safe to run beside each other -- a read, a
 network fetch, a search that ranks by words -- run together on up to N worker

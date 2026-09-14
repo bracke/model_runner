@@ -342,6 +342,11 @@ package Model_Runner.CLI.Options is
       --  lives only for the run.
       Memory_File_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
+      --  A file to write a machine-readable trace of the agent run to -- its
+      --  calls and their results in order, with timings and the final tally,
+      --  as JSON. Empty writes none.
+      Trace_File_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is

@@ -1,6 +1,8 @@
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
@@ -88,22 +90,81 @@ package body Model_Runner.CLI.Execute is
    package Pres renames Model_Runner.Presentation;
    package Workers_CPU renames Model_Runner.Backend.CPU;
    package T renames Model_Runner.Text;
+   package US renames Ada.Strings.Unbounded;
    package Vocab renames Model_Runner.Tokenizer;
 
    procedure Free_Text is
      new Ada.Unchecked_Deallocation (String, Opt.Text_Access);
 
+   --  A string as a JSON string body: the characters JSON must not carry raw
+   --  -- the quote, the backslash, the control characters -- become escapes,
+   --  so any tool argument or result drops into a trace as valid JSON.
+   function JSON_Escape (S : String) return String is
+      Out_S : US.Unbounded_String;
+
+      procedure Hex4 (C : Character) is
+         Nibble : constant String := "0123456789abcdef";
+         Code   : constant Natural := Character'Pos (C);
+      begin
+         US.Append (Out_S, "\u00");
+         US.Append (Out_S, Nibble (Nibble'First + Code / 16));
+         US.Append (Out_S, Nibble (Nibble'First + Code mod 16));
+      end Hex4;
+   begin
+      for C of S loop
+         case C is
+            when '"'      => US.Append (Out_S, "\""");
+            when '\'      => US.Append (Out_S, "\\");
+            when ASCII.LF => US.Append (Out_S, "\n");
+            when ASCII.CR => US.Append (Out_S, "\r");
+            when ASCII.HT => US.Append (Out_S, "\t");
+            when Character'Val (0) .. Character'Val (8)
+               | Character'Val (11) .. Character'Val (12)
+               | Character'Val (14) .. Character'Val (31) => Hex4 (C);
+            when others   => US.Append (Out_S, C);
+         end case;
+      end loop;
+      return US.To_String (Out_S);
+   end JSON_Escape;
+
    --  Prints the agent loop's calls and tool results to the console as they
    --  happen, so `run --agent` shows the loop unfolding rather than only its
    --  end. The console goes to standard error, so standard output stays the
-   --  model's own text.
-   type Agent_Watch (Screen : access Pres.Console) is
-     limited new Model_Runner.Agent.Observer with null record;
+   --  model's own text. When Trace is on it also records each call and result,
+   --  with the milliseconds since it started, as JSON objects, which the run
+   --  writes out as a trace when it ends.
+   type Agent_Watch (Screen : access Pres.Console; Trace : Boolean) is
+     limited new Model_Runner.Agent.Observer with record
+        Started : Ada.Calendar.Time := Ada.Calendar.Clock;
+        Events  : US.Unbounded_String;
+        Count   : Natural := 0;
+     end record;
 
    overriding procedure On_Call
      (Self : in out Agent_Watch; Named : String; Arguments : String);
    overriding procedure On_Result
      (Self : in out Agent_Watch; Named : String; Result : String);
+
+   --  Milliseconds from the watch's start to now, as a decimal with no sign.
+   function Elapsed_Ms (Self : Agent_Watch) return String is
+      use type Ada.Calendar.Time;
+      Ms : constant Long_Long_Integer :=
+        Long_Long_Integer (1000.0 * (Ada.Calendar.Clock - Self.Started));
+      Raw : constant String := Long_Long_Integer'Image (Ms);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Elapsed_Ms;
+
+   --  Add one event object to the trace, comma-separated from the last.
+   procedure Record_Event (Self : in out Agent_Watch; Body_Text : String) is
+   begin
+      if Self.Count > 0 then
+         US.Append (Self.Events, ",");
+      end if;
+      US.Append (Self.Events, "{""t_ms"":" & Elapsed_Ms (Self) & ","
+                 & Body_Text & "}");
+      Self.Count := Self.Count + 1;
+   end Record_Event;
 
    overriding procedure On_Call
      (Self : in out Agent_Watch; Named : String; Arguments : String) is
@@ -111,15 +172,26 @@ package body Model_Runner.CLI.Execute is
       Pres.Put_Note
         (Self.Screen.all, "cli.interactive.tool_call",
          [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
+      if Self.Trace then
+         Record_Event
+           (Self,
+            """event"":""call"",""name"":""" & JSON_Escape (Named)
+            & """,""arguments"":""" & JSON_Escape (Arguments) & """");
+      end if;
    end On_Call;
 
    overriding procedure On_Result
      (Self : in out Agent_Watch; Named : String; Result : String) is
-      pragma Unreferenced (Named);
    begin
       Pres.Put_Note
         (Self.Screen.all, "cli.agent.tool_result",
          [Loc.Named ("detail", Result)]);
+      if Self.Trace then
+         Record_Event
+           (Self,
+            """event"":""result"",""name"":""" & JSON_Escape (Named)
+            & """,""result"":""" & JSON_Escape (Result) & """");
+      end if;
    end On_Result;
 
    --  Asks the operator before each tool call the agent would run. The
@@ -2399,7 +2471,9 @@ package body Model_Runner.CLI.Execute is
                Built_Runner : aliased Model_Runner.Tools.Builtin.Instance;
                Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
                Request      : aliased Gen.Request;
-               Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
+               Watcher      : aliased Agent_Watch
+                 (Screen'Unchecked_Access,
+                  Trace => not T.Is_Empty (Item.Trace_File_Path));
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
                --  Asks the user a question for the ask_user tool.
@@ -2511,6 +2585,44 @@ package body Model_Runner.CLI.Execute is
                   then
                      Pres.Report (Screen, Loop_Out.Error);
                      Status := E.Exit_Status (Loop_Out.Error);
+                  end if;
+
+                  --  Write the run's trace, if one was asked for: the calls
+                  --  and results the watcher recorded, wrapped in the run's
+                  --  tally. Best effort -- a trace that will not write does
+                  --  not fail the run.
+                  if Watcher.Trace then
+                     declare
+                        File : Ada.Text_IO.File_Type;
+                        function N (V : Natural) return String
+                        is (T.Image (Long_Long_Integer (V)));
+                     begin
+                        Ada.Text_IO.Create
+                          (File, Ada.Text_IO.Out_File,
+                           T.To_String (Item.Trace_File_Path));
+                        Ada.Text_IO.Put (File,
+                           "{""model"":""" & JSON_Escape
+                             (T.To_String (Item.Model_Path))
+                           & """,""reason"":"""
+                           & Model_Runner.Agent.Stop_Reason'Image
+                               (Loop_Out.Reason)
+                           & """,""steps"":" & N (Loop_Out.Steps)
+                           & ",""calls"":" & N (Loop_Out.Calls)
+                           & ",""retries"":" & N (Loop_Out.Retries)
+                           & ",""generated_tokens"":"
+                           & N (Loop_Out.Generated_Tokens)
+                           & ",""prompt_tokens"":" & N (Loop_Out.Prompt_Tokens)
+                           & ",""compactions"":" & N (Loop_Out.Compactions)
+                           & ",""elapsed_ms"":" & Elapsed_Ms (Watcher)
+                           & ",""events"":[" & US.To_String (Watcher.Events)
+                           & "]}");
+                        Ada.Text_IO.Close (File);
+                     exception
+                        when others =>
+                           if Ada.Text_IO.Is_Open (File) then
+                              Ada.Text_IO.Close (File);
+                           end if;
+                     end;
                   end if;
                end Drive;
             begin
