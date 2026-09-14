@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`retrieve` searches a folder tree, not only its top level.** It descends
+  into subdirectories now, labelling each passage with its path under the
+  folder given (`notes/ocean.txt`, not just `ocean.txt`); a name beginning
+  with a dot -- `.git` and the like -- is skipped, and the file and passage
+  caps bound the whole walk. The suite writes a nested file and confirms a
+  query for it comes back labelled with its subdirectory.
+
 - **A `retrieve` tool that searches a folder of text files, by meaning when
   a model is at hand.** The agent could read one named file and list a
   directory, but not find where in a folder an answer lived. `retrieve` takes

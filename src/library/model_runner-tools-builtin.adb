@@ -926,6 +926,9 @@ package body Model_Runner.Tools.Builtin is
       end record;
       Chunks   : array (1 .. Max_Chunks) of Chunk;
       N_Chunks : Natural := 0;
+      Files    : Natural := 0;   --  files read, over the whole tree
+
+      use type Ada.Directories.File_Kind;
 
       --  Take a lowercased query into its distinct words, longest first come
       --  first served, ignoring one-character noise.
@@ -1002,6 +1005,57 @@ package body Model_Runner.Tools.Builtin is
          end if;
       end Split;
 
+      --  Read a directory and its subdirectories into passages, each
+      --  labelled with its path under the folder the tool was given. A name
+      --  beginning with a dot is skipped -- "." and ".." and hidden trees
+      --  like .git -- and the file and passage caps bound the whole walk.
+      procedure Walk (Dir : String; Prefix : String) is
+         Search : Ada.Directories.Search_Type;
+         Item   : Ada.Directories.Directory_Entry_Type;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Dir, "",
+            [Ada.Directories.Ordinary_File => True,
+             Ada.Directories.Directory     => True,
+             others                        => False]);
+         while Ada.Directories.More_Entries (Search)
+           and then Files < Max_Files
+           and then N_Chunks < Max_Chunks
+         loop
+            Ada.Directories.Get_Next_Entry (Search, Item);
+            declare
+               Name : constant String := Ada.Directories.Simple_Name (Item);
+               Full : constant String := Ada.Directories.Full_Name (Item);
+            begin
+               if Name'Length = 0 or else Name (Name'First) = '.' then
+                  null;
+               elsif Ada.Directories.Kind (Item)
+                       = Ada.Directories.Directory
+               then
+                  Walk (Full, Prefix & Name & "/");
+               else
+                  Files := Files + 1;
+                  declare
+                     Body_Text  : constant String := Read_Capped (Full);
+                     Unreadable : constant Boolean :=
+                       Body_Text'Length >= 6
+                       and then Body_Text
+                                  (Body_Text'First .. Body_Text'First + 5)
+                                = "error:";
+                  begin
+                     if not Unreadable then
+                        Split (Prefix & Name, Body_Text);
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         Ada.Directories.End_Search (Search);
+      exception
+         when others =>
+            null;
+      end Walk;
+
    begin
       if not (Have_F and then Have_Q) then
          return "error: retrieve needs a folder and a query";
@@ -1014,40 +1068,8 @@ package body Model_Runner.Tools.Builtin is
          return "error: the query has no words to search for";
       end if;
 
-      --  Read the folder's files into passages.
-      declare
-         Search : Ada.Directories.Search_Type;
-         Item   : Ada.Directories.Directory_Entry_Type;
-         Files  : Natural := 0;
-      begin
-         Ada.Directories.Start_Search
-           (Search, Folder, "",
-            [Ada.Directories.Ordinary_File => True, others => False]);
-         while Ada.Directories.More_Entries (Search)
-           and then Files < Max_Files
-           and then N_Chunks < Max_Chunks
-         loop
-            Ada.Directories.Get_Next_Entry (Search, Item);
-            Files := Files + 1;
-            declare
-               Name : constant String := Ada.Directories.Simple_Name (Item);
-               Full : constant String := Ada.Directories.Full_Name (Item);
-               Body_Text : constant String := Read_Capped (Full);
-               Unreadable : constant Boolean :=
-                 Body_Text'Length >= 6
-                 and then Body_Text (Body_Text'First .. Body_Text'First + 5)
-                          = "error:";
-            begin
-               if not Unreadable then
-                  Split (Name, Body_Text);
-               end if;
-            end;
-         end loop;
-         Ada.Directories.End_Search (Search);
-      exception
-         when others =>
-            null;
-      end;
+      --  Read the folder tree's files into passages.
+      Walk (Folder, "");
 
       if N_Chunks = 0 then
          return "no readable text files in that folder";

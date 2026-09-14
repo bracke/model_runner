@@ -406,6 +406,11 @@ package body Tests.Tools_Cases is
         ("dogs.txt",
          "Dogs are loyal domestic animals that bark and guard the home.");
       Write_File ("space.txt", "A planet orbits a star within a galaxy.");
+      --  A file in a subdirectory, to prove the walk descends into it.
+      Ada.Directories.Create_Path (Dir & "/notes");
+      Write_File
+        ("notes/ocean.txt",
+         "The ocean is a vast body of saltwater covering most of the earth.");
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -416,6 +421,16 @@ package body Tests.Tools_Cases is
       Assert (E.Is_Ok (Status), "retrieve did not answer");
       Assert (Begins (Room (1 .. Last), "[dogs.txt]"),
               "retrieve did not rank the dogs passage first: "
+              & Room (1 .. Last));
+
+      --  A query whose words are in the nested file: retrieve descended into
+      --  the subdirectory and labelled the passage with its path.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""vast saltwater ocean""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[notes/ocean.txt]"),
+              "retrieve did not find the passage in the subdirectory: "
               & Room (1 .. Last));
 
       --  A query whose words are in no file: nothing matches.
@@ -463,8 +478,8 @@ package body Tests.Tools_Cases is
          & "fallback");
       Register_Routine
         (T, Retrieve_Ranks_The_Folder'Access,
-         "retrieve ranks a folder's passages against a query and finds "
-         & "nothing for words in no file");
+         "retrieve ranks a folder tree's passages against a query, descends "
+         & "into subfolders, and finds nothing for words in no file");
    end Register_Tests;
 
 end Tests.Tools_Cases;
