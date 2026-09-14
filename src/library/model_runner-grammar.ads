@@ -54,8 +54,14 @@ with Model_Runner.Errors;
 --  read concurrently. A Matcher holds the state of one generation.
 package Model_Runner.Grammar is
 
-   --  Largest number of rules a grammar may define.
-   Max_Rules : constant := 256;
+   --  Largest number of rules a grammar may define, counting the internal
+   --  rules the compiler makes for grouped, repeated and optional parts, not
+   --  only the named ones. A tight tool-call grammar over a broad tool set
+   --  reaches several hundred: the whole built-in set of seventeen tools,
+   --  each with its own argument schema, needs more than the first bound of
+   --  256 and fits inside this one. A rule entry is a few words, so this
+   --  costs a few kilobytes in a compiled grammar and nothing in a matcher.
+   Max_Rules : constant := 512;
 
    --  Largest number of compiled elements, across every rule.
    Max_Elements : constant := 8192;

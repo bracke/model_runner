@@ -138,6 +138,59 @@ package body Tests.Tools_Cases is
          "an answer missing a required field was taken");
    end Answer_Schema_Shapes_The_Answer;
 
+   --  Whether the grammar compiled from the whole built-in set accepts a
+   --  text whole. The full set must build the tight grammar -- one that
+   --  pins each tool's arguments -- and not fall back to the loose one.
+   function Full_Set_Takes (Text : String) return Boolean is
+      Defs   : Tools.Definitions;
+      Rules  : G.Compiled;
+      State  : G.Matcher;
+      Status : E.Error_Info;
+      Held   : Boolean;
+   begin
+      Tools.Read (Defs, Builtin.All_Definitions_Text, Status);
+      Assert (E.Is_Ok (Status), "the full definitions would not read");
+      Constraint.Compile_Call_Grammar (Defs, Rules, Status);
+      Assert (E.Is_Ok (Status) and then G.Is_Ready (Rules),
+              "the full-set call grammar would not compile");
+      G.Start (Rules, State, Status);
+      G.Advance (Rules, State, Text, Status);
+      if E.Is_Error (Status) then
+         G.Close (Rules);
+         Tools.Close (Defs);
+         return False;
+      end if;
+      Held := G.Is_Complete (Rules, State);
+      G.Close (Rules);
+      Tools.Close (Defs);
+      return Held;
+   end Full_Set_Takes;
+
+   --  The whole built-in set -- all seventeen tools -- builds the tight
+   --  grammar: a call names a tool and its arguments match that tool's
+   --  schema. It must not outgrow the grammar and fall back to the loose
+   --  form, which would leave arguments (and an answer schema) unconstrained.
+   procedure Full_Set_Is_Tight
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      --  A well-formed calculator call is taken.
+      Assert
+        (Full_Set_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":47,""op"":""*"",""b"":89}}</tool_call>"),
+         "the full set refused a well-formed calculator call");
+      --  A call missing required arguments is refused -- which only the
+      --  tight grammar does; the loose one would take it.
+      Assert
+        (not Full_Set_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":47}}</tool_call>"),
+         "the full set took a calculator call missing arguments "
+         & "(it fell back to the loose grammar)");
+   end Full_Set_Is_Tight;
+
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -204,8 +257,8 @@ package body Tests.Tools_Cases is
          Assert (Tools.Offers (All_Defs, "memory_put"),
                  "memory_put is not offered");
 
-         --  The grammar still compiles over the full set (a no-argument tool
-         --  makes it fall back to the looser form, which must still build).
+         --  The grammar compiles over the full set (the tight form, which
+         --  the rule bound is now wide enough to hold -- see Full_Set_Is_Tight).
          Constraint.Compile_Call_Grammar (All_Defs, Rules, G_Status);
          Assert (E.Is_Ok (G_Status) and then G.Is_Ready (Rules),
                  "the call grammar would not compile over the full set");
@@ -340,6 +393,10 @@ package body Tests.Tools_Cases is
         (T, Answer_Schema_Shapes_The_Answer'Access,
          "an answer schema makes the reply a call or an answer in that "
          & "shape, not prose");
+      Register_Routine
+        (T, Full_Set_Is_Tight'Access,
+         "the whole built-in set builds the tight grammar, not the loose "
+         & "fallback");
    end Register_Tests;
 
 end Tests.Tools_Cases;

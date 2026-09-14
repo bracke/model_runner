@@ -19,12 +19,22 @@ Keep a Changelog and the project uses semantic versioning.
   whole reply. `run --agent --json-schema ...` (or `--json-schema-file`)
   turns it on -- the schema that constrains a plain run's whole output
   constrains an agent run's answer. It is honoured when the offered tools
-  are few enough to build one tight grammar together; a tool that will not
-  fit -- or a set as large as the whole built-in bunch, which outgrows the
-  grammar -- falls back to the looser call grammar and leaves the answer
-  free. The grammar is covered in the mandatory suite: with a schema set it
-  takes a call and a schema-valid answer, and refuses prose and an answer of
-  the wrong shape.
+  build one tight grammar together -- which now includes the whole built-in
+  set (see below); a tool whose schema will not compile still falls back to
+  the looser call grammar and leaves the answer free. The grammar is covered
+  in the mandatory suite: with a schema set it takes a call and a
+  schema-valid answer, and refuses prose and an answer of the wrong shape.
+
+- **The tight tool-call grammar now holds the whole built-in set.** Compiling
+  a grammar that pins each tool's arguments (and, with a schema, the answer)
+  makes internal rules for every grouped, repeated and optional part, and the
+  seventeen built-in tools together reached past the compiler's rule bound of
+  256 -- so the whole set quietly fell back to the loose grammar, leaving
+  arguments unconstrained. The bound is 512 now, which the set fits with room
+  to spare; the cost is a few kilobytes in a compiled grammar and nothing in
+  a matcher. A new suite case holds the line: the full set builds the tight
+  grammar and refuses a call missing its arguments, which only the tight
+  grammar does.
 
 - **A conversation that will not render is made to fit, not abandoned.** A
   long tool-using run grows until the whole conversation no longer renders

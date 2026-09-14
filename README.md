@@ -285,10 +285,8 @@ turns kept. `--json-schema` (or `--json-schema-file`), which constrains a
 plain run's whole output, here constrains the agent's final answer: the
 reply becomes a tool call or an object in that shape, so the answer the loop
 ends on is valid against the schema rather than prose to be parsed. It holds
-when the offered tools are few enough to build one grammar together -- a
-handful, offered through `--tool-command`, or none -- since a large set (the
-whole built-in bunch among them) outgrows the grammar and falls back to a
-free-text answer. `--tool-command CMD`
+whenever the offered tools build the tight call grammar, which the whole
+built-in set does. `--tool-command CMD`
 instead runs the tools `--tools`/`--tools-file` describe by handing each call
 to that program, which is a caller's own runner reached from the command
 line. Either way the reply is grammar-constrained, so a call the model writes
