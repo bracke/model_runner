@@ -363,6 +363,13 @@ package Model_Runner.CLI.Options is
       --  as JSON. Empty writes none.
       Trace_File_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
+      --  A file the agent run checkpoints its conversation to at the end and
+      --  resumes from at the start: when it already holds a conversation, the
+      --  run continues that one rather than starting from the prompt, so a run
+      --  stopped at a limit can be taken up again. Empty checkpoints nothing.
+      Checkpoint_File_Path : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is
