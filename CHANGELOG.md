@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A `retrieve` tool that searches a folder of text files.** The agent could
+  read one named file and list a directory, but not find where in a folder an
+  answer lived. `retrieve` takes a `folder` and a `query`, reads the folder's
+  files, splits each into passages at blank lines, and returns the few that
+  best match -- each labelled with its file. The ranking is lexical: a
+  passage scores by how often the query's words occur in it, each word
+  weighted down by how many passages carry it, so a rare word counts for more
+  than a common one. It matches the words a query used, not their meaning; a
+  semantic ranking would embed the query and the passages and compare, which
+  needs the model this tool does not hold, and is left for later. It reads
+  files only -- no process, no network -- and is covered in the mandatory
+  suite: over a folder it writes itself, it ranks the passage carrying the
+  query's words first and finds nothing for words in no file.
+
 - **`http_get` and `web_search` fetch through an Ada HTTP client, not curl.**
   Both ran `curl` in a subprocess; they now call `httpclient`'s streaming
   `Download_To_File` in process -- the response body streamed to a temporary

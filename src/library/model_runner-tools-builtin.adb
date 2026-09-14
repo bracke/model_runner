@@ -1,4 +1,5 @@
 with Ada.Calendar.Formatting;
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Text_IO;
 
@@ -103,6 +104,11 @@ package body Model_Runner.Tools.Builtin is
      & ", "
      & Tool ("list_directory", "List the entries of a directory.",
              Str1 ("path"))
+     & ", "
+     & Tool ("retrieve",
+             "Search a folder of text files for the passages most relevant "
+             & "to a query, ranked.",
+             Str2 ("folder", "query"))
      & ", "
      & Tool ("shell", "Run a shell command and return its output.",
              Str1 ("command"))
@@ -846,6 +852,264 @@ package body Model_Runner.Tools.Builtin is
       end;
    end Download;
 
+   --  Rank the passages of a folder's text files against a query and return
+   --  the best few. This is lexical retrieval: a passage scores by how often
+   --  the query's words appear in it, each word weighted down by how many
+   --  passages carry it, so a rare word counts for more than a common one.
+   --  It finds the words the query used, not their meaning -- a semantic
+   --  ranking would embed both and compare, which needs the model this tool
+   --  does not hold.
+   function Retrieve (Args : String) return String is
+      Max_Chunks : constant := 256;   --  passages held across the folder
+      Max_Terms  : constant := 24;    --  distinct query words scored
+      Max_Files  : constant := 128;   --  files read from the folder
+      Snippet    : constant := 600;   --  characters kept of a passage
+      Top        : constant := 3;     --  passages returned
+
+      Have_F, Have_Q : Boolean;
+      Folder : constant String := Text_Argument (Args, "folder", Have_F);
+      Query  : constant String := Text_Argument (Args, "query", Have_Q);
+
+      function Low (S : String) return String
+        renames Ada.Characters.Handling.To_Lower;
+
+      function Word (C : Character) return Boolean
+      is (C in 'a' .. 'z' | '0' .. '9');
+
+      --  Whole-word occurrences of Term (lowercased) in Hay (lowercased).
+      function Occurrences (Hay, Term : String) return Natural is
+         N : Natural := 0;
+         I : Integer := Hay'First;
+      begin
+         if Term'Length = 0 or else Hay'Length < Term'Length then
+            return 0;
+         end if;
+         while I <= Hay'Last - Term'Length + 1 loop
+            if Hay (I .. I + Term'Length - 1) = Term
+              and then (I = Hay'First or else not Word (Hay (I - 1)))
+              and then (I + Term'Length - 1 = Hay'Last
+                        or else not Word (Hay (I + Term'Length)))
+            then
+               N := N + 1;
+               I := I + Term'Length;
+            else
+               I := I + 1;
+            end if;
+         end loop;
+         return N;
+      end Occurrences;
+
+      Terms  : array (1 .. Max_Terms) of U.Unbounded_String;
+      DF     : array (1 .. Max_Terms) of Natural := [others => 0];
+      N_Term : Natural := 0;
+
+      type Chunk is record
+         Source : U.Unbounded_String;   --  the file it came from
+         Shown  : U.Unbounded_String;   --  the passage as written
+         Lower  : U.Unbounded_String;   --  the passage lowercased, to match
+         Score  : Float := 0.0;
+         Taken  : Boolean := False;
+      end record;
+      Chunks   : array (1 .. Max_Chunks) of Chunk;
+      N_Chunks : Natural := 0;
+
+      --  Take a lowercased query into its distinct words, longest first come
+      --  first served, ignoring one-character noise.
+      procedure Read_Terms (Q : String) is
+         I : Integer := Q'First;
+      begin
+         while I <= Q'Last and then N_Term < Max_Terms loop
+            if Word (Q (I)) then
+               declare
+                  First : constant Integer := I;
+               begin
+                  while I <= Q'Last and then Word (Q (I)) loop
+                     I := I + 1;
+                  end loop;
+                  if I - First >= 2 then
+                     declare
+                        W : constant String := Q (First .. I - 1);
+                        Seen : Boolean := False;
+                     begin
+                        for T in 1 .. N_Term loop
+                           if U.To_String (Terms (T)) = W then
+                              Seen := True;
+                           end if;
+                        end loop;
+                        if not Seen then
+                           N_Term := N_Term + 1;
+                           Terms (N_Term) := U.To_Unbounded_String (W);
+                        end if;
+                     end;
+                  end if;
+               end;
+            else
+               I := I + 1;
+            end if;
+         end loop;
+      end Read_Terms;
+
+      --  Add a passage, lowercased once for matching, kept short for return.
+      procedure Add_Chunk (From : String; Text : String) is
+      begin
+         if N_Chunks >= Max_Chunks or else Text'Length = 0 then
+            return;
+         end if;
+         N_Chunks := N_Chunks + 1;
+         Chunks (N_Chunks).Source := U.To_Unbounded_String (From);
+         declare
+            Kept : constant String :=
+              (if Text'Length <= Snippet then Text
+               else Text (Text'First .. Text'First + Snippet - 1));
+         begin
+            Chunks (N_Chunks).Shown := U.To_Unbounded_String (Kept);
+            Chunks (N_Chunks).Lower := U.To_Unbounded_String (Low (Kept));
+         end;
+      end Add_Chunk;
+
+      --  Split a file's text into passages at blank lines.
+      procedure Split (From : String; Text : String) is
+         I     : Integer := Text'First;
+         Start : Integer := Text'First;
+      begin
+         while I <= Text'Last loop
+            if I < Text'Last and then Text (I) = ASCII.LF
+              and then Text (I + 1) = ASCII.LF
+            then
+               Add_Chunk (From, Text (Start .. I - 1));
+               I := I + 2;
+               Start := I;
+            else
+               I := I + 1;
+            end if;
+         end loop;
+         if Start <= Text'Last then
+            Add_Chunk (From, Text (Start .. Text'Last));
+         end if;
+      end Split;
+
+   begin
+      if not (Have_F and then Have_Q) then
+         return "error: retrieve needs a folder and a query";
+      elsif not Ada.Directories.Exists (Folder) then
+         return "error: no folder at that path";
+      end if;
+
+      Read_Terms (Low (Query));
+      if N_Term = 0 then
+         return "error: the query has no words to search for";
+      end if;
+
+      --  Read the folder's files into passages.
+      declare
+         Search : Ada.Directories.Search_Type;
+         Item   : Ada.Directories.Directory_Entry_Type;
+         Files  : Natural := 0;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Folder, "",
+            [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Search)
+           and then Files < Max_Files
+           and then N_Chunks < Max_Chunks
+         loop
+            Ada.Directories.Get_Next_Entry (Search, Item);
+            Files := Files + 1;
+            declare
+               Name : constant String := Ada.Directories.Simple_Name (Item);
+               Full : constant String := Ada.Directories.Full_Name (Item);
+               Body_Text : constant String := Read_Capped (Full);
+               Unreadable : constant Boolean :=
+                 Body_Text'Length >= 6
+                 and then Body_Text (Body_Text'First .. Body_Text'First + 5)
+                          = "error:";
+            begin
+               if not Unreadable then
+                  Split (Name, Body_Text);
+               end if;
+            end;
+         end loop;
+         Ada.Directories.End_Search (Search);
+      exception
+         when others =>
+            null;
+      end;
+
+      if N_Chunks = 0 then
+         return "no readable text files in that folder";
+      end if;
+
+      --  Document frequency of each term across the passages.
+      for T in 1 .. N_Term loop
+         declare
+            Term : constant String := U.To_String (Terms (T));
+         begin
+            for C in 1 .. N_Chunks loop
+               if Occurrences (U.To_String (Chunks (C).Lower), Term) > 0 then
+                  DF (T) := DF (T) + 1;
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      --  Score each passage: term frequency times a rarity weight, so a word
+      --  in few passages counts for more than one in many.
+      for C in 1 .. N_Chunks loop
+         declare
+            Hay   : constant String := U.To_String (Chunks (C).Lower);
+            Total : Float := 0.0;
+         begin
+            for T in 1 .. N_Term loop
+               declare
+                  TF : constant Natural :=
+                    Occurrences (Hay, U.To_String (Terms (T)));
+               begin
+                  if TF > 0 then
+                     Total := Total
+                       + Float (TF) * (1.0 / (1.0 + Float (DF (T))));
+                  end if;
+               end;
+            end loop;
+            Chunks (C).Score := Total;
+         end;
+      end loop;
+
+      --  The best few, in order, each labelled with its file.
+      declare
+         Out_S : U.Unbounded_String;
+         Found : Natural := 0;
+      begin
+         for Rank in 1 .. Top loop
+            declare
+               Best  : Natural := 0;
+               Top_S : Float := 0.0;
+            begin
+               for C in 1 .. N_Chunks loop
+                  if not Chunks (C).Taken
+                    and then Chunks (C).Score > Top_S
+                  then
+                     Best := C;
+                     Top_S := Chunks (C).Score;
+                  end if;
+               end loop;
+               exit when Best = 0;
+               Chunks (Best).Taken := True;
+               Found := Found + 1;
+               if U.Length (Out_S) > 0 then
+                  U.Append (Out_S, ASCII.LF & ASCII.LF);
+               end if;
+               U.Append (Out_S, "[" & U.To_String (Chunks (Best).Source)
+                         & "] " & U.To_String (Chunks (Best).Shown));
+            end;
+         end loop;
+
+         if Found = 0 then
+            return "no passage in that folder matched the query";
+         end if;
+         return Capped (U.To_String (Out_S));
+      end;
+   end Retrieve;
+
    function Http_Get (Args : String) return String is
       Have : Boolean;
       Url  : constant String := Text_Argument (Args, "url", Have);
@@ -956,6 +1220,8 @@ package body Model_Runner.Tools.Builtin is
             return Web_Search (Arguments);
          elsif Named = "sql" then
             return Sql (Arguments);
+         elsif Named = "retrieve" then
+            return Retrieve (Arguments);
          else
             return "error: no tool by the name """ & Named & """";
          end if;

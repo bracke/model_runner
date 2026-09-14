@@ -1,5 +1,8 @@
 with AUnit.Assertions; use AUnit.Assertions;
 
+with Ada.Directories;
+with Ada.Text_IO;
+
 with Model_Runner.Errors;
 with Model_Runner.Grammar;
 with Model_Runner.Tools;
@@ -166,7 +169,7 @@ package body Tests.Tools_Cases is
       return Held;
    end Full_Set_Takes;
 
-   --  The whole built-in set -- all seventeen tools -- builds the tight
+   --  The whole built-in set -- all eighteen tools -- builds the tight
    --  grammar: a call names a tool and its arguments match that tool's
    --  schema. It must not outgrow the grammar and fall back to the loose
    --  form, which would leave arguments (and an answer schema) unconstrained.
@@ -249,13 +252,15 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 17,
-                 "the full set is not seventeen tools");
+         Assert (Tools.Count (All_Defs) = 18,
+                 "the full set is not eighteen tools");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");
          Assert (Tools.Offers (All_Defs, "memory_put"),
                  "memory_put is not offered");
+         Assert (Tools.Offers (All_Defs, "retrieve"),
+                 "retrieve is not offered");
 
          --  The grammar compiles over the full set (the tight form, which
          --  the rule bound is now wide enough to hold -- see Full_Set_Is_Tight).
@@ -366,6 +371,65 @@ package body Tests.Tools_Cases is
          "the grammar took a lookup call with a key outside its enum");
    end Grammar_Constrains;
 
+   --  retrieve ranks a folder's passages against a query: the file that
+   --  carries the query's words comes back first, and a query whose words
+   --  are nowhere finds nothing. Deterministic, so it is scored here rather
+   --  than left to a model.
+   procedure Retrieve_Ranks_The_Folder
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Dir    : constant String := "obj/retrieve_case";
+      Runner : Builtin.Instance;
+      Room   : String (1 .. Tools.Max_Call_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+
+      procedure Write_File (Name, Text : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Dir & "/" & Name);
+         Ada.Text_IO.Put_Line (F, Text);
+         Ada.Text_IO.Close (F);
+      end Write_File;
+
+      function Begins (Hay, Head : String) return Boolean
+      is (Hay'Length >= Head'Length
+          and then Hay (Hay'First .. Hay'First + Head'Length - 1) = Head);
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Write_File ("cats.txt", "Cats are small carnivorous mammals that purr.");
+      Write_File
+        ("dogs.txt",
+         "Dogs are loyal domestic animals that bark and guard the home.");
+      Write_File ("space.txt", "A planet orbits a star within a galaxy.");
+
+      --  A query whose words are in the dogs file: it ranks first.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""loyal domestic guard "
+         & "dogs""}",
+         Room, Last, Status);
+      Assert (E.Is_Ok (Status), "retrieve did not answer");
+      Assert (Begins (Room (1 .. Last), "[dogs.txt]"),
+              "retrieve did not rank the dogs passage first: "
+              & Room (1 .. Last));
+
+      --  A query whose words are in no file: nothing matches.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""xylophone zebra""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "no passage"),
+              "retrieve found a match for words in no file: "
+              & Room (1 .. Last));
+
+      Ada.Directories.Delete_Tree (Dir);
+   end Retrieve_Ranks_The_Folder;
+
    -------------------
    -- Register_Tests --
    -------------------
@@ -397,6 +461,10 @@ package body Tests.Tools_Cases is
         (T, Full_Set_Is_Tight'Access,
          "the whole built-in set builds the tight grammar, not the loose "
          & "fallback");
+      Register_Routine
+        (T, Retrieve_Ranks_The_Folder'Access,
+         "retrieve ranks a folder's passages against a query and finds "
+         & "nothing for words in no file");
    end Register_Tests;
 
 end Tests.Tools_Cases;
