@@ -942,12 +942,14 @@ package body Model_Runner.Tools.Builtin is
    function Retrieve
      (Args : String; Embed : Embedder_Reference) return String
    is
-      Max_Chunks : constant := 256;   --  passages held across the folder
+      Max_Chunks : constant := 2048;  --  passages held across the folder
       Max_Terms  : constant := 24;    --  distinct query words scored
-      Max_Files  : constant := 128;   --  files read from the folder
-      Snippet    : constant := 600;   --  characters kept of a passage
+      Max_Files  : constant := 1024;  --  files read from the folder
+      Snippet    : constant := 600;   --  characters in a passage window
+      Front      : constant := 1200;  --  leading bytes of a long document
+                                      --  dropped as front matter
       Top        : constant := 3;     --  passages returned
-      Embed_Cap  : constant := 48;    --  most passages embedded in one call
+      Embed_Cap  : constant := 64;    --  most passages embedded in one call
       Max_Width  : constant := 8192;  --  widest embedding vector held
 
       Have_F, Have_Q : Boolean;
@@ -997,6 +999,7 @@ package body Model_Runner.Tools.Builtin is
       Chunks   : array (1 .. Max_Chunks) of Chunk;
       N_Chunks : Natural := 0;
       Files    : Natural := 0;   --  files read, over the whole tree
+      Semantic : Boolean := False;   --  whether meaning-ranking was applied
 
       use type Ada.Directories.File_Kind;
 
@@ -1045,16 +1048,38 @@ package body Model_Runner.Tools.Builtin is
          N_Chunks := N_Chunks + 1;
          Chunks (N_Chunks).Source := U.To_Unbounded_String (From);
          declare
+            --  Made valid UTF-8: a window may cut a multi-byte character, and
+            --  a PDF or a legacy Word file is not UTF-8 at all -- either would
+            --  be refused by the embedder's tokenizer and by the model the
+            --  passage is handed back to.
             Kept : constant String :=
-              (if Text'Length <= Snippet then Text
-               else Text (Text'First .. Text'First + Snippet - 1));
+              Model_Runner.Tools.Text_Util.To_Valid_Utf8
+                (if Text'Length <= Snippet then Text
+                 else Text (Text'First .. Text'First + Snippet - 1));
          begin
             Chunks (N_Chunks).Shown := U.To_Unbounded_String (Kept);
             Chunks (N_Chunks).Lower := U.To_Unbounded_String (Low (Kept));
          end;
       end Add_Chunk;
 
-      --  Split a file's text into passages at blank lines.
+      --  Add a passage, breaking one longer than a window into several so a
+      --  long stretch of text is indexed whole rather than truncated to its
+      --  first window.
+      procedure Add_Windows (From : String; Para : String) is
+         P : Integer := Para'First;
+      begin
+         while P <= Para'Last and then N_Chunks < Max_Chunks loop
+            declare
+               Stop : constant Integer :=
+                 Integer'Min (P + Snippet - 1, Para'Last);
+            begin
+               Add_Chunk (From, Para (P .. Stop));
+               P := Stop + 1;
+            end;
+         end loop;
+      end Add_Windows;
+
+      --  Split a file's text into passages at blank lines, each windowed.
       procedure Split (From : String; Text : String) is
          I     : Integer := Text'First;
          Start : Integer := Text'First;
@@ -1063,7 +1088,7 @@ package body Model_Runner.Tools.Builtin is
             if I < Text'Last and then Text (I) = ASCII.LF
               and then Text (I + 1) = ASCII.LF
             then
-               Add_Chunk (From, Text (Start .. I - 1));
+               Add_Windows (From, Text (Start .. I - 1));
                I := I + 2;
                Start := I;
             else
@@ -1071,9 +1096,17 @@ package body Model_Runner.Tools.Builtin is
             end if;
          end loop;
          if Start <= Text'Last then
-            Add_Chunk (From, Text (Start .. Text'Last));
+            Add_Windows (From, Text (Start .. Text'Last));
          end if;
       end Split;
+
+      --  Drop the leading bytes of a long document's extracted text -- the
+      --  title, author, copyright and table of contents a book opens with,
+      --  which are not what a search is usually after. A short document keeps
+      --  all of its text; only a long one has front matter to spare.
+      function Skip_Front (Text : String) return String
+      is (if Text'Length > 3 * Front
+          then Text (Text'First + Front .. Text'Last) else Text);
 
       --  Read a directory and its subdirectories into passages, each
       --  labelled with its path under the folder the tool was given. A name
@@ -1126,7 +1159,7 @@ package body Model_Runner.Tools.Builtin is
                          (Read_Raw (Full, Doc_Bytes));
                   begin
                      if Text'Length > 0 then
-                        Split (Prefix & Name, Text);
+                        Split (Prefix & Name, Skip_Front (Text));
                      end if;
                   end;
                elsif OO_Found and then Read_Raw (Full, 2) = "PK" then
@@ -1139,7 +1172,7 @@ package body Model_Runner.Tools.Builtin is
                          (Read_Raw (Full, Doc_Bytes), OO_Kind);
                   begin
                      if Text'Length > 0 then
-                        Split (Prefix & Name, Text);
+                        Split (Prefix & Name, Skip_Front (Text));
                      end if;
                   end;
                elsif (Ext4 = ".doc" or else Ext4 = ".xls"
@@ -1160,7 +1193,7 @@ package body Model_Runner.Tools.Builtin is
                          (Read_Raw (Full, Doc_Bytes));
                   begin
                      if Text'Length > 0 then
-                        Split (Prefix & Name, Text);
+                        Split (Prefix & Name, Skip_Front (Text));
                      end if;
                   end;
                elsif Ext4 = ".rtf" and then Read_Raw (Full, 5) = "{\rtf" then
@@ -1173,7 +1206,7 @@ package body Model_Runner.Tools.Builtin is
                          (Read_Raw (Full, Doc_Bytes));
                   begin
                      if Text'Length > 0 then
-                        Split (Prefix & Name, Text);
+                        Split (Prefix & Name, Skip_Front (Text));
                      end if;
                   end;
                elsif Ext4 = ".htm" or else Ext4 = ".xml"
@@ -1187,7 +1220,7 @@ package body Model_Runner.Tools.Builtin is
                          (Read_Capped (Full));
                   begin
                      if Text'Length > 0 then
-                        Split (Prefix & Name, Text);
+                        Split (Prefix & Name, Skip_Front (Text));
                      end if;
                   end;
                elsif Is_Binary (Full) then
@@ -1290,6 +1323,7 @@ package body Model_Runner.Tools.Builtin is
          begin
             Embed.Embed (Query, Q, Q_Last, St);
             if E.Is_Ok (St) then
+               Semantic := True;
                declare
                   Used  : array (1 .. N_Chunks) of Boolean :=
                     [others => False];
@@ -1318,9 +1352,10 @@ package body Model_Runner.Tools.Builtin is
                   end loop;
 
                   --  Every passage out of the running until its meaning earns
-                  --  it back.
+                  --  it back. The sentinel is below any cosine, so a passage
+                  --  that was not embedded never outranks one that was.
                   for C in 1 .. N_Chunks loop
-                     Chunks (C).Score := 0.0;
+                     Chunks (C).Score := -2.0;
                   end loop;
 
                   for K in Cand'Range loop
@@ -1347,11 +1382,18 @@ package body Model_Runner.Tools.Builtin is
       declare
          Out_S : U.Unbounded_String;
          Found : Natural := 0;
+
+         --  Lexical ranking requires a positive score -- a word the query
+         --  and the passage share. Semantic ranking returns its best
+         --  candidates whatever their cosine, since a shared meaning need
+         --  not be a shared word; only the sentinel non-candidates are shut
+         --  out.
+         Floor : constant Float := (if Semantic then -1.5 else 0.0);
       begin
          for Rank in 1 .. Top loop
             declare
                Best  : Natural := 0;
-               Top_S : Float := 0.0;
+               Top_S : Float := Floor;
             begin
                for C in 1 .. N_Chunks loop
                   if not Chunks (C).Taken

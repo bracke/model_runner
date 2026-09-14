@@ -1,5 +1,7 @@
 with Ada.Strings.Unbounded;
 
+with Model_Runner.UTF8;
+
 package body Model_Runner.Tools.Text_Util is
 
    package U renames Ada.Strings.Unbounded;
@@ -142,5 +144,32 @@ package body Model_Runner.Tools.Text_Util is
 
       return Collapse_Blanks (U.To_String (Out_Buf));
    end Strip_Tags;
+
+   -------------------
+   -- To_Valid_Utf8 --
+   -------------------
+
+   function To_Valid_Utf8 (S : String) return String is
+      R    : String (1 .. S'Length);
+      N    : Natural := 0;
+      I    : Integer := S'First;
+      Code : Natural;
+      Len  : Natural;
+   begin
+      while I <= S'Last loop
+         Model_Runner.UTF8.Decode_First (S (I .. S'Last), Code, Len);
+         if Len > 0 then
+            R (N + 1 .. N + Len) := S (I .. I + Len - 1);
+            N := N + Len;
+            I := I + Len;
+         else
+            --  A byte that begins no valid sequence: a space in its place.
+            N := N + 1;
+            R (N) := ' ';
+            I := I + 1;
+         end if;
+      end loop;
+      return R (1 .. N);
+   end To_Valid_Utf8;
 
 end Model_Runner.Tools.Text_Util;

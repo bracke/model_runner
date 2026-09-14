@@ -223,6 +223,12 @@ package body Model_Runner.CLI.Execute is
          return;
       end if;
 
+      --  Embed at most this many tokens. An embedding model that attends
+      --  both ways -- a BERT sentence model -- has a fixed position limit
+      --  (512 for all-MiniLM), and a passage longer than that would fail the
+      --  whole batch; the leading tokens carry the meaning a search needs.
+      Count := Natural'Min (Count, 480);
+
       Room := new N.Real_Array (0 .. N.Element_Count (Count) * Width - 1);
       L.Evaluate_Batch
         (Self.Sess.all, Self.Src.all, Tokens (1 .. Count), Logits,

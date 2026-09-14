@@ -9,6 +9,7 @@ with Zlib;
 with Model_Runner.Errors;
 with Model_Runner.Grammar;
 with Model_Runner.Tools;
+with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Constraint;
 
@@ -587,6 +588,11 @@ package body Tests.Tools_Cases is
       Write_Bytes ("book.xls", Xls);
       Write_File ("note.rtf", Rtf);
       Write_File ("page.html", Html);
+      --  A file with a byte that is not valid UTF-8 (Latin-1 e-acute) among
+      --  ASCII words -- what a PDF or a cut window can produce.
+      Write_Bytes
+        ("latin.txt",
+         "kestrel" & Character'Val (16#E9#) & " headland manuscript");
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -681,6 +687,18 @@ package body Tests.Tools_Cases is
          Room, Last, Status);
       Assert (Begins (Room (1 .. Last), "[page.html]"),
               "retrieve did not strip the .html tags: " & Room (1 .. Last));
+
+      --  A passage with an invalid byte is found by its ASCII words, and
+      --  what comes back is valid UTF-8 -- the byte scrubbed to a space, so
+      --  the embedder and the model it is handed to both accept it.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""kestrel headland""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[latin.txt]"),
+              "retrieve did not find the Latin-1 file: " & Room (1 .. Last));
+      Assert (Model_Runner.UTF8.Is_Valid (Room (1 .. Last)),
+              "retrieve returned bytes that are not valid UTF-8");
 
       --  The binary file's words are searched for: it was skipped, so
       --  nothing matches even though the bytes are there.

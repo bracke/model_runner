@@ -5,7 +5,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A retrieve passage is now valid UTF-8, so semantic ranking works over
+  real documents.** A passage window could cut a multi-byte character in two,
+  and a PDF or a legacy Word file yields Latin-1, not UTF-8 -- either of which
+  the embedding tokenizer refuses, so over a real library every candidate
+  embed failed and a semantic search fell to "no passage matched". Each
+  passage is made valid UTF-8 as it is stored (`Text_Util.To_Valid_Utf8`:
+  bytes that begin no valid sequence become a space), which the embedder and
+  the model the passage is handed back to both accept; the ASCII words a
+  search leans on are kept. This surfaced only on a real folder -- a
+  pure-ASCII test passage was always valid -- which is why it took a run over
+  an actual library to find; the suite now indexes a Latin-1 byte among ASCII
+  words and checks that the passage is found and comes back valid UTF-8.
+
 ### Added
+
+- **`retrieve` indexes whole documents, not just their front matter.** A
+  document's extracted text, once its tags were stripped and its blanks
+  collapsed, was one long line with no blank lines to split on -- so it
+  became a single passage, truncated to the first window, which for a book is
+  its title page and table of contents. Now a passage longer than a window is
+  broken into as many windows as it takes, so the body of a document is
+  searchable and not only its opening; the leading bytes of a long document
+  (its front matter) are dropped before indexing; and the folder and passage
+  caps are raised (a thousand files, two thousand passages) so a real library
+  in a deep tree is covered rather than filled by its first few books. A
+  search over a folder now ranks on what the documents say, not on what is
+  printed on their first page.
 
 - **`retrieve` reads RTF, HTML/XML, and legacy `.xls`/`.ppt`.** RTF
   (`Model_Runner.Tools.RTF`) is stripped of its control words and groups --
