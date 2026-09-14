@@ -7868,6 +7868,14 @@ package body Tests.CLI_Cases is
       Reads ("/system ", I.Set_System);
       Reads ("/system      ", I.Set_System);
 
+      --  /save and /load take a file path, kept whole -- inner spaces and a
+      --  slash and all -- with the surrounding padding trimmed.
+      Reads ("/save session.ckpt", I.Save_Conversation, "session.ckpt");
+      Reads ("/save   /tmp/a b.ckpt  ", I.Save_Conversation, "/tmp/a b.ckpt");
+      Reads ("/save", I.Save_Conversation);
+      Reads ("/load run.ckpt", I.Load_Conversation, "run.ckpt");
+      Reads ("/load", I.Load_Conversation);
+
       --  What the empty argument then means, at the layer that acts on it.
       --  Reading the command and carrying out the removal are two things and
       --  this test owns only the first, so it checks the second is there to

@@ -42,7 +42,9 @@ with Model_Runner.Tools;
 --  conversation is re-evaluated on the next turn. Text that was already
 --  streamed stays visible.
 --
---  Nothing is written to disk: the conversation is not persisted.
+--  Persistence. The conversation is not written to disk on its own; /save
+--  writes it to a file the user names and /load replaces it with one, and
+--  nothing else touches the disk.
 --
 --  Task safety: the loop runs on the calling task.
 package Model_Runner.CLI.Interactive is
@@ -59,6 +61,8 @@ package Model_Runner.CLI.Interactive is
       Set_System,
       Show_Tools,
       Tool_Result,
+      Save_Conversation,
+      Load_Conversation,
       Unknown);
 
    --  The word a caller types for an interactive command.

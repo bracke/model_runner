@@ -1,6 +1,7 @@
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.CLI.Checkpoint;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
@@ -30,7 +31,9 @@ package body Model_Runner.CLI.Interactive is
          when Context    => "/context",
          when Set_System => "/system",
          when Show_Tools => "/tools",
-         when Tool_Result => "/tool");
+         when Tool_Result => "/tool",
+         when Save_Conversation => "/save",
+         when Load_Conversation => "/load");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -191,7 +194,9 @@ package body Model_Runner.CLI.Interactive is
          for Kind in Command_Kind loop
             if Command_Word (Kind) /= "" and then Word = Command_Word (Kind)
             then
-               if Kind in Set_System | Tool_Result then
+               if Kind in Set_System | Tool_Result
+                            | Save_Conversation | Load_Conversation
+               then
                   return (Kind, First, Last);
                else
                   return (Kind, 0, 0);
@@ -405,6 +410,50 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.tool_unasked");
             else
                Take_Turn (Line (Asked.First .. Asked.Last), Conv.Tool_Role);
+            end if;
+
+         elsif Asked.Kind = Save_Conversation then
+            if Asked.First = 0 then
+               Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            else
+               declare
+                  Path : constant String := Line (Asked.First .. Asked.Last);
+               begin
+                  Model_Runner.CLI.Checkpoint.Save (Path, Messages);
+                  Pres.Put_Note
+                    (Screen, "cli.interactive.saved",
+                     [Loc.Named ("detail", Path)]);
+               end;
+            end if;
+
+         elsif Asked.Kind = Load_Conversation then
+            if Asked.First = 0 then
+               Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            else
+               declare
+                  Path    : constant String := Line (Asked.First .. Asked.Last);
+                  Loaded  : Boolean;
+                  Outcome : E.Error_Info;
+               begin
+                  --  Loading replaces the conversation, so the old one goes
+                  --  and the cached positions with it.
+                  Conv.Clear (Messages);
+                  Model_Runner.CLI.Checkpoint.Load
+                    (Path, Messages, Loaded, Outcome);
+                  L.Reset (Session);
+                  Have_Stats := False;
+                  if E.Is_Error (Outcome) then
+                     Pres.Report (Screen, Outcome);
+                  elsif not Loaded then
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.load_empty",
+                        [Loc.Named ("detail", Path)]);
+                  else
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.loaded",
+                        [Loc.Named ("detail", Path)]);
+                  end if;
+               end;
             end if;
 
          else

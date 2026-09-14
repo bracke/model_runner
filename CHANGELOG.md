@@ -44,6 +44,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`/save PATH` and `/load PATH` in interactive mode.** `/save` writes the
+  conversation to a file and `/load` replaces it with one, so a session can be
+  kept and taken up later. They use the same conversation serializer as the
+  agent's `--checkpoint-file`, now factored into `Model_Runner.CLI.Checkpoint`
+  and shared by both. `/load` clears the current conversation first and resets
+  the context, so the loaded one stands on its own; a missing or empty file
+  leaves the session as it was. Interactive mode, which said it wrote nothing
+  to disk, now does so only through these two commands.
+
 - **Checkpoint and resume an agent run: `--checkpoint-file PATH`.** The
   conversation is written to the file at the close of every step and once more
   at the end; at the start, when the file already holds a conversation, the
