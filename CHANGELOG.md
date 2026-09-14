@@ -5,6 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **An over-long tool result now keeps its head and its tail, not only its
+  head.** A result past the call buffer was cut at the head with a
+  `...(truncated)` note, losing the end -- often where a summary, a total, or
+  an error sits. It now keeps a head and a tail with the middle dropped and
+  its byte count noted (`...[N bytes elided]...`), so both the start and the
+  conclusion reach the model and it can ask again for a narrower slice. The
+  file reader was rewritten to read a big file's head and tail by seeking past
+  the middle, so it keeps the true end (the old line reader stopped at the cap
+  and never saw it) and an enormous file costs no more memory than a fitting
+  one.
+
 ### Added
 
 - **Trace export: `--trace-file PATH`.** An agent run can now write a

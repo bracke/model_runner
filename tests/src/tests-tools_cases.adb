@@ -388,6 +388,70 @@ package body Tests.Tools_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Memory_Persists_To_A_File;
 
+   --  A result too big for the call buffer keeps its head and its tail, with
+   --  the middle dropped and its size noted, rather than losing everything
+   --  past the head. read_file over an oversized file shows it: the file's
+   --  first bytes and last bytes both come back, inside the buffer.
+   procedure Large_Result_Keeps_Head_And_Tail
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Dir    : constant String := "obj/cap_case";
+      Path   : constant String := Dir & "/big.txt";
+      Filler : constant String (1 .. 50_000) := [others => 'x'];
+      Big    : constant String := "HEAD-MARKER-START" & Filler & "TAIL-MARKER-END";
+      Room   : String (1 .. Tools.Max_Call_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      --  Write the bytes exactly, so no trailing newline creeps onto the
+      --  tail and the test can check the file's true last bytes.
+      declare
+         use Ada.Streams;
+         F     : Stream_IO.File_Type;
+         Block : Stream_Element_Array (1 .. Stream_Element_Offset (Big'Length));
+      begin
+         for I in Big'Range loop
+            Block (Stream_Element_Offset (I - Big'First + 1)) :=
+              Stream_Element (Character'Pos (Big (I)));
+         end loop;
+         Stream_IO.Create (F, Stream_IO.Out_File, Path);
+         Stream_IO.Write (F, Block);
+         Stream_IO.Close (F);
+      end;
+
+      declare
+         Runner : Builtin.Instance;
+      begin
+         Runner.Run ("read_file", "{""path"":""" & Path & """}",
+                     Room, Last, Status);
+      end;
+      Assert (E.Is_Ok (Status), "read_file would not answer");
+
+      declare
+         Result : constant String := Room (1 .. Last);
+      begin
+         Assert (Result'Length <= Tools.Max_Call_Bytes,
+                 "the kept result does not fit the call buffer");
+         Assert (Result'Length < Big'Length,
+                 "an oversized result was not cut down at all");
+         Assert (Result'Length >= 17
+                 and then Result (Result'First .. Result'First + 16)
+                   = "HEAD-MARKER-START",
+                 "the head of the oversized result was lost");
+         Assert (Result'Length >= 15
+                 and then Result (Result'Last - 14 .. Result'Last)
+                   = "TAIL-MARKER-END",
+                 "the tail of the oversized result was lost");
+      end;
+
+      Ada.Directories.Delete_Tree (Dir);
+   end Large_Result_Keeps_Head_And_Tail;
+
    --  The runner marks the tools that may overlap and the tools that may not:
    --  reads and network fetches and lexical retrieve overlap; a shared
    --  scratchpad, a waited-on process, a single session or the console do not.
@@ -868,6 +932,10 @@ package body Tests.Tools_Cases is
         (T, Memory_Persists_To_A_File'Access,
          "a note written with a memory file behind it is read back by a "
          & "later runner");
+      Register_Routine
+        (T, Large_Result_Keeps_Head_And_Tail'Access,
+         "a result too big for the buffer keeps its head and its tail, "
+         & "not only its head");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "

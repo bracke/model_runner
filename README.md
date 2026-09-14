@@ -283,7 +283,14 @@ percent-encodes its query into a GET to the DuckDuckGo lite endpoint);
 `run_python`, `sql` and `shell` run `python3`, `sqlite3` or `sh`, and say so
 plainly when that program is not installed. Each spawned command runs
 under a watchdog that stops it after thirty seconds, so one that hangs
-answers the model with a timeout rather than stalling the loop. Because those
+answers the model with a timeout rather than stalling the loop. An answer too
+big for the call buffer -- a long file, a chatty command -- keeps its head
+and its tail with the middle dropped and its size noted (`...[N bytes
+elided]...`), rather than losing everything past the head, so the start of a
+file and the summary or error a run ends with both reach the model, and it
+can ask again for a narrower slice if it needs the rest; a file is read head
+and tail directly, never through its middle, so an enormous one costs no more
+than a small one. Because those
 built-ins reach the world, `--confirm-tools` puts a hand on the gate: each
 call is
 printed and the loop waits on standard input -- y runs it, q stops the run, and

@@ -376,13 +376,29 @@ package body Model_Runner.Tools.Builtin is
       end if;
    end Image;
 
-   --  Cut an answer to what the call buffer holds, noting where it was cut.
+   --  Fit an answer to what the call buffer holds by keeping its head and its
+   --  tail, with the bytes between them dropped and their count noted. The
+   --  answer to a call and the summary or error a long output ends with both
+   --  survive, and the model is told how much of the middle it is not seeing,
+   --  so it can ask again for a narrower slice if it needs the rest.
+   function Head_And_Tail (Text : String) return String is
+      Head_Budget : constant Natural := (Cap * 3) / 5;
+      Tail_Budget : constant Natural := Cap / 4;
+      Dropped     : constant Natural := Text'Length - Head_Budget - Tail_Budget;
+   begin
+      return Text (Text'First .. Text'First + Head_Budget - 1)
+        & ASCII.LF & "...[" & Image (Long_Long_Integer (Dropped))
+        & " bytes elided]..." & ASCII.LF
+        & Text (Text'Last - Tail_Budget + 1 .. Text'Last);
+   end Head_And_Tail;
+
+   --  Cut an answer to what the call buffer holds, keeping head and tail.
    function Capped (Text : String) return String is
    begin
       if Text'Length <= Cap then
          return Text;
       end if;
-      return Text (Text'First .. Text'First + Cap - 1) & " ...(truncated)";
+      return Head_And_Tail (Text);
    end Capped;
 
    ---------------------------------------------------------------------------
@@ -821,26 +837,73 @@ package body Model_Runner.Tools.Builtin is
    end Read_Raw;
 
    function Read_Capped (Path : String) return String is
-      File  : Ada.Text_IO.File_Type;
-      Out_S : U.Unbounded_String;
-      First : Boolean := True;
+      use Ada.Streams;
+      use Ada.Streams.Stream_IO;
+      File : Stream_IO.File_Type;
+
+      function As_String
+        (Block : Stream_Element_Array; Last : Stream_Element_Offset)
+         return String
+      is
+         Result : String (1 .. Natural (Last));
+      begin
+         for I in 1 .. Natural (Last) loop
+            Result (I) := Character'Val (Block (Stream_Element_Offset (I)));
+         end loop;
+         return Result;
+      end As_String;
    begin
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
-      while not Ada.Text_IO.End_Of_File (File)
-        and then U.Length (Out_S) <= Cap
-      loop
-         if not First then
-            U.Append (Out_S, ASCII.LF);
+      Open (File, In_File, Path);
+      declare
+         Total : constant Natural := Natural (Size (File));
+      begin
+         if Total = 0 then
+            Close (File);
+            return "";
+         elsif Total <= Cap then
+            --  It fits: return the file whole, byte for byte.
+            declare
+               Block : Stream_Element_Array (1 .. Stream_Element_Offset (Total));
+               Last  : Stream_Element_Offset;
+            begin
+               Read (File, Block, Last);
+               Close (File);
+               return As_String (Block, Last);
+            end;
+         else
+            --  Too big for the buffer: read only the head and the tail --
+            --  never the middle -- so a huge file costs no more memory than
+            --  a fitting one, and note the bytes dropped between them.
+            declare
+               Head_Budget : constant Natural := (Cap * 3) / 5;
+               Tail_Budget : constant Natural := Cap / 4;
+               Head_Block  : Stream_Element_Array
+                 (1 .. Stream_Element_Offset (Head_Budget));
+               Tail_Block  : Stream_Element_Array
+                 (1 .. Stream_Element_Offset (Tail_Budget));
+               Head_Last, Tail_Last : Stream_Element_Offset;
+            begin
+               Set_Index (File, 1);
+               Read (File, Head_Block, Head_Last);
+               Set_Index (File, Positive_Count (Total - Tail_Budget + 1));
+               Read (File, Tail_Block, Tail_Last);
+               Close (File);
+               declare
+                  Dropped : constant Natural :=
+                    Total - Natural (Head_Last) - Natural (Tail_Last);
+               begin
+                  return As_String (Head_Block, Head_Last)
+                    & ASCII.LF & "...[" & Image (Long_Long_Integer (Dropped))
+                    & " bytes elided]..." & ASCII.LF
+                    & As_String (Tail_Block, Tail_Last);
+               end;
+            end;
          end if;
-         U.Append (Out_S, Ada.Text_IO.Get_Line (File));
-         First := False;
-      end loop;
-      Ada.Text_IO.Close (File);
-      return Capped (U.To_String (Out_S));
+      end;
    exception
       when others =>
-         if Ada.Text_IO.Is_Open (File) then
-            Ada.Text_IO.Close (File);
+         if Is_Open (File) then
+            Close (File);
          end if;
          return "error: could not read the file";
    end Read_Capped;
