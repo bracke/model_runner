@@ -273,6 +273,9 @@ package body Model_Runner.Agent is
          end;
 
          Result.Steps := Result.Steps + 1;
+         Result.Generated_Tokens :=
+           Result.Generated_Tokens + Last_Result.Generated_Tokens;
+         Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
 
          declare
             Turn  : constant Positive := Conv.Length (Messages);

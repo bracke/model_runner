@@ -35,6 +35,9 @@ package Agent_Eval is
       Steps : Natural := 0;
       Calls : Natural := 0;
 
+      --  Tokens the model generated over every task's loop.
+      Tokens : Natural := 0;
+
       --  A line about what happened, for the summary.
       Detail    : String (1 .. 256) := [others => ' '];
       Detail_Up : Natural := 0;

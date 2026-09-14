@@ -69,6 +69,16 @@ package Model_Runner.Agent is
       --  run that never stumbled reports zero.
       Retries : Natural := 0;
 
+      --  Tokens the model generated over the whole loop, summed across the
+      --  turns it took. The decode cost of the run in one number.
+      Generated_Tokens : Natural := 0;
+
+      --  The prompt token count of the last turn -- the whole conversation,
+      --  tools and all, as it stood when the loop ended. How much of the
+      --  context the run came to occupy, rather than a sum that would count
+      --  the reused prefix once per turn.
+      Prompt_Tokens : Natural := 0;
+
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
    end record;

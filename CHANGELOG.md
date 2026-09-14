@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the loop cost, counted.** A run of the agent now reports the tokens
+  the model generated across all its turns and the prompt token count of the
+  last turn -- the decode cost of the run in one number, and how much of the
+  context the conversation came to occupy in another (the last turn's prompt
+  rather than a sum, which would count the reused prefix once per turn).
+  `Model_Runner.Agent.Outcome` carries `Generated_Tokens` and `Prompt_Tokens`;
+  `tests agent-eval` adds `tokens` to its summary line and per-task `retries`,
+  `generated_tokens` and `prompt_tokens` to the JSON report, and `--trace`
+  shows a task's tokens beside its calls.
+
 - **A hand on the gate, and a second try at a stumble.** The agent runs its
   built-in tools -- a shell, files, the network -- and until now ran every
   call the model made, unasked. `Model_Runner.Agent.Run` takes an `Approver`

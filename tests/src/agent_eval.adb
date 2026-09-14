@@ -222,6 +222,7 @@ package body Agent_Eval is
             & "  reason=" & Model_Runner.Agent.Stop_Reason'Image
                               (Outcome.Reason)
             & "  calls=" & Natural'Image (Outcome.Calls)
+            & "  tokens=" & Natural'Image (Outcome.Generated_Tokens)
             & "  wants=""" & Spec.Wants.all & """"
             & (if Spec.Also.all /= "" then " +""" & Spec.Also.all & """"
                else "")
@@ -326,6 +327,9 @@ package body Agent_Eval is
          & Q (Model_Runner.Agent.Stop_Reason'Image (Outcome.Reason)));
       A (",""steps"":" & Num (Outcome.Steps));
       A (",""calls"":" & Num (Outcome.Calls));
+      A (",""retries"":" & Num (Outcome.Retries));
+      A (",""generated_tokens"":" & Num (Outcome.Generated_Tokens));
+      A (",""prompt_tokens"":" & Num (Outcome.Prompt_Tokens));
       A (",""final"":" & Q (Final_Answer (Messages)));
       A (",""transcript"":[");
       for I in 1 .. Conv.Length (Messages) loop
@@ -522,6 +526,7 @@ package body Agent_Eval is
 
                Result.Steps := Result.Steps + Loop_Out.Steps;
                Result.Calls := Result.Calls + Loop_Out.Calls;
+               Result.Tokens := Result.Tokens + Loop_Out.Generated_Tokens;
 
                --  A pass is the answer the task's tools make true, the tools
                --  it needs having been the ones that answered it, and -- for
@@ -590,6 +595,7 @@ package body Agent_Eval is
             Ada.Text_IO.Put (File, ",""passed"":" & Num (Result.Passed));
             Ada.Text_IO.Put (File, ",""steps"":" & Num (Result.Steps));
             Ada.Text_IO.Put (File, ",""calls"":" & Num (Result.Calls));
+            Ada.Text_IO.Put (File, ",""tokens"":" & Num (Result.Tokens));
             Ada.Text_IO.Put
               (File, ",""results"":["
                & Ada.Strings.Unbounded.To_String (Report_Buf) & "]}");
@@ -625,7 +631,8 @@ package body Agent_Eval is
       return "agent-eval: tasks " & Count (Item.Tasks)
         & ", passed " & Count (Item.Passed)
         & ", steps " & Count (Item.Steps)
-        & ", calls " & Count (Item.Calls);
+        & ", calls " & Count (Item.Calls)
+        & ", tokens " & Count (Item.Tokens);
    end Summary;
 
 end Agent_Eval;
