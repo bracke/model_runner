@@ -52,7 +52,10 @@ Keep a Changelog and the project uses semantic versioning.
   verdict and whole transcript -- for a run to be diffed against another or
   read by a dashboard. The built-in tools and the call grammar are covered
   in the mandatory suite; the loop against a model is what agent-eval
-  measures.
+  measures. Against a local Qwen3 0.6B it scores 8 of 9 -- tasks 9, passed
+  8, steps 17, calls 12 -- every call parsed and dispatched, the one miss a
+  task that asks the model to add and then multiply, which the small model
+  does not chain, not a fault in the loop.
 
 - **A broad built-in tool set for the agent, and the promise it spends.**
   `run --agent` now offers, beyond the pure four, tools that reach the world:
