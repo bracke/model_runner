@@ -134,7 +134,16 @@ package body Model_Runner.Tools.Builtin is
              Str1 ("query"))
      & ", "
      & Tool ("sql", "Run a query against a SQLite database file.",
-             Str2 ("database", "query"));
+             Str2 ("database", "query"))
+     & ", "
+     & Tool ("delegate",
+             "Hand a self-contained subtask to a fresh sub-agent that has "
+             & "the same tools and a budget of its own, and get back only its "
+             & "final answer. Use it to keep the detail of a large job out of "
+             & "your own context: describe the whole subtask in one task "
+             & "string, as the sub-agent starts with no memory of this "
+             & "conversation.",
+             Str1 ("task"));
 
    Definitions     : constant String := "[" & Pure_Body & "]";
    All_Definitions : constant String := "[" & Pure_Body & ", " & More_Body
@@ -939,6 +948,46 @@ package body Model_Runner.Tools.Builtin is
       Self.Embed := Source;
    end Use_Embedder;
 
+   procedure Use_Delegator
+     (Self : in out Instance; Source : Delegator_Reference) is
+   begin
+      Self.Sub := Source;
+   end Use_Delegator;
+
+   --  The delegate tool: run one subtask on a sub-agent and return its
+   --  answer. With no delegator wired -- which is how a sub-agent's own
+   --  runner is left -- the call is declined in words the model reads, so
+   --  delegation cannot recurse and the loop goes on.
+   function Delegate
+     (Self : in out Instance; Args : String) return String
+   is
+      Have : Boolean;
+      Job  : constant String := Text_Argument (Args, "task", Have);
+   begin
+      if not Have then
+         return "error: delegate needs a task string";
+      end if;
+      if Self.Sub = null then
+         return "error: delegation is not available here -- a sub-agent "
+                & "cannot delegate further; do the work with the other tools";
+      end if;
+
+      declare
+         Buffer : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Self.Sub.Run_Sub (Job, Buffer, Last, Status);
+         if E.Is_Error (Status) then
+            return "error: the sub-agent could not finish the task";
+         elsif Last = 0 then
+            return "the sub-agent returned no answer";
+         else
+            return Buffer (1 .. Last);
+         end if;
+      end;
+   end Delegate;
+
    function Retrieve
      (Args : String; Embed : Embedder_Reference) return String
    is
@@ -1532,6 +1581,8 @@ package body Model_Runner.Tools.Builtin is
             return Sql (Arguments);
          elsif Named = "retrieve" then
             return Retrieve (Arguments, Self.Embed);
+         elsif Named = "delegate" then
+            return Delegate (Self, Arguments);
          else
             return "error: no tool by the name """ & Named & """";
          end if;

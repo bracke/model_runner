@@ -272,6 +272,118 @@ package body Model_Runner.CLI.Execute is
       Last := Natural (Width) - 1;
    end Embed;
 
+   --  Runs a delegated subtask for the agent's delegate tool, on a fresh
+   --  agent loop of its own. It keeps a session apart from the caller's, so
+   --  the caller's loop -- suspended on this very call -- is undisturbed, and
+   --  it gives the sub-agent no delegator, so a sub-agent's own delegate call
+   --  is declined and delegation cannot recurse without bound. The sub-agent
+   --  starts a conversation of its own, seeded with the task, runs to an
+   --  answer under its own step and token budget, and hands back only that
+   --  answer -- the caller never sees the sub-agent's steps.
+   type Model_Delegator
+     (Src    : access constant L.Model'Class;
+      Sess   : access L.Session;
+      Req    : access constant Gen.Request;
+      Stops  : access Model_Runner.Stops.Set;
+      Time   : Model_Runner.Clocks.Clock_Reference;
+      Seed   : Model_Runner.Entropy.Source_Reference;
+      Steps  : Positive;
+      Budget : Natural) is
+     limited new Model_Runner.Tools.Builtin.Delegator with null record;
+
+   overriding procedure Run_Sub
+     (Self        : in out Model_Delegator;
+      Instruction : String;
+      Result      : out String;
+      Last        : out Natural;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Sub
+     (Self        : in out Model_Delegator;
+      Instruction : String;
+      Result      : out String;
+      Last        : out Natural;
+      Status      : out E.Error_Info)
+   is
+      Sub_Msgs   : Conv.History;
+      Sub_Tools  : Model_Runner.Tools.Definitions;
+      Sub_Runner : aliased Model_Runner.Tools.Builtin.Instance;
+      Loop_Out   : Model_Runner.Agent.Outcome;
+      Cond       : E.Error_Info;
+
+      System_Prompt : constant String :=
+        "You are a sub-agent handed one self-contained task. Use the tools "
+        & "to complete it, then reply with a direct, complete answer that "
+        & "stands on its own -- the caller sees only your final answer, not "
+        & "your steps, and you keep no memory of it once you answer.";
+   begin
+      Last   := 0;
+      Status := E.Success;
+
+      --  Clear the sub-agent's session so the task starts from nothing and no
+      --  earlier subtask's state leaks in.
+      L.Reset (Self.Sess.all);
+
+      Model_Runner.Tools.Read
+        (Sub_Tools, Model_Runner.Tools.Builtin.All_Definitions_Text, Cond);
+      if E.Is_Error (Cond) then
+         Status := Cond;
+         return;
+      end if;
+
+      --  Sub_Runner is left with no delegator, so it declines a delegate
+      --  call: delegation goes one level deep and no further.
+
+      Conv.Open (Sub_Msgs, Status => Cond);
+      if E.Is_Error (Cond) then
+         Status := Cond;
+         return;
+      end if;
+      Conv.Set_System (Sub_Msgs, System_Prompt, Cond);
+      Conv.Append (Sub_Msgs, Conv.User_Role, Instruction, Cond);
+      if E.Is_Error (Cond) then
+         Conv.Close (Sub_Msgs);
+         Status := Cond;
+         return;
+      end if;
+
+      Model_Runner.Agent.Run
+        (Source           => Self.Src.all,
+         Session          => Self.Sess.all,
+         Messages         => Sub_Msgs,
+         Offered          => Sub_Tools,
+         Executor         => Sub_Runner,
+         Generation       => Self.Req.all,
+         Stop_Set         => Self.Stops.all,
+         Sink             => null,
+         Time             => Self.Time,
+         Seeds            => Self.Seed,
+         Max_Steps        => Self.Steps,
+         Max_Total_Tokens => Self.Budget,
+         Compact          => True,
+         Result           => Loop_Out);
+
+      --  The answer is the last assistant turn's text.
+      for I in reverse 1 .. Conv.Length (Sub_Msgs) loop
+         if Conv.Sender_At (Sub_Msgs, I) = Conv.Assistant_Role then
+            declare
+               Answer : constant String := Conv.Content_At (Sub_Msgs, I);
+               Take   : constant Natural :=
+                 Natural'Min (Answer'Length, Result'Length);
+            begin
+               if Take > 0 then
+                  Result (Result'First .. Result'First + Take - 1) :=
+                    Answer (Answer'First .. Answer'First + Take - 1);
+                  Last := Take;
+               end if;
+            end;
+            exit;
+         end if;
+      end loop;
+
+      Conv.Close (Sub_Msgs);
+   end Run_Sub;
+
    --  Runs a tool call by handing it to an external program: the program is
    --  invoked with the function name and the arguments (as JSON) as its two
    --  arguments, and what it prints to standard output is the tool's answer.
@@ -1699,7 +1811,7 @@ package body Model_Runner.CLI.Execute is
       --  the generation session's committed conversation.
       Embed_Session : aliased L.Session;
 
-      Stop_Set  : Model_Runner.Stops.Set;
+      Stop_Set  : aliased Model_Runner.Stops.Set;
       Sink      : aliased Pres.Standard_Output_Sink;
       Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
       Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
@@ -2176,7 +2288,7 @@ package body Model_Runner.CLI.Execute is
                Agent_Tools  : aliased Model_Runner.Tools.Definitions;
                Built_Runner : aliased Model_Runner.Tools.Builtin.Instance;
                Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
-               Request      : Gen.Request;
+               Request      : aliased Gen.Request;
                Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
@@ -2187,6 +2299,25 @@ package body Model_Runner.CLI.Execute is
                    else Prepared'Access),
                   Embed_Session'Access);
                Embed_Open   : Boolean := False;
+
+               --  A session apart from the run's own, on which a delegated
+               --  subtask runs its sub-agent, so the run's loop is undisturbed.
+               --  Its context is the run's, or a bounded default when the run
+               --  left the context to the model, so a second session does not
+               --  double an unbounded one.
+               Sub_Session  : aliased L.Session;
+               Sub_Open     : Boolean := False;
+               Sub_Context  : constant Natural :=
+                 (if Item.Context_Size = 0 then 8192 else Item.Context_Size);
+               Delegate_Runner : aliased Model_Delegator
+                 (Src    => Prepared'Access,
+                  Sess   => Sub_Session'Access,
+                  Req    => Request'Access,
+                  Stops  => Stop_Set'Access,
+                  Time   => Clock'Unchecked_Access,
+                  Seed   => Seeds'Unchecked_Access,
+                  Steps  => Positive'Max (1, Item.Max_Steps),
+                  Budget => Item.Max_Total_Tokens);
 
                --  The schema the final answer must match, from --json-schema
                --  or --json-schema-file, or null for a free-text answer.
@@ -2395,10 +2526,28 @@ package body Model_Runner.CLI.Execute is
                      Built_Runner.Use_Embedder (Embedder'Unchecked_Access);
                   end if;
 
+                  --  Open the sub-agent session and give the delegate tool a
+                  --  delegator. If it will not open -- most likely for want of
+                  --  memory for a second session -- delegate declines and the
+                  --  run goes on with the other tools.
+                  L.Open
+                    (Sub_Session, Prepared, Sub_Context,
+                     Session_Bounds => Session_Bounds (Item),
+                     Workers => Team, Cache => Item.Cache,
+                     Status => Condition);
+                  if E.Is_Ok (Condition) then
+                     Sub_Open := True;
+                     Built_Runner.Use_Delegator
+                       (Delegate_Runner'Unchecked_Access);
+                  end if;
+
                   Drive (Agent_Tools, Built_Runner);
 
                   if Embed_Open then
                      L.Close (Embed_Session);
+                  end if;
+                  if Sub_Open then
+                     L.Close (Sub_Session);
                   end if;
                end if;
 

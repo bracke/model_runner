@@ -273,8 +273,8 @@ already made. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a ranked search
 over a folder of text files, PDFs, Office documents (modern and legacy),
 OpenDocument, EPUB, RTF and HTML, a shell, Python, an HTTP fetch, a web
-search and
-SQLite -- so unlike the rest of the program
+search, SQLite, and a `delegate` that hands a subtask to a sub-agent
+-- so unlike the rest of the program
 the agent's built-ins *do* start processes and open files. `http_get` and
 `web_search` fetch through an in-process HTTP/HTTPS client (the `httpclient`
 crate, the body streamed to a file rather than held in memory -- `web_search`
@@ -292,7 +292,14 @@ second try instead of ending the run on the first stumble.
 `--max-total-tokens N` caps the tokens generated over the whole loop, not just
 one reply: it is checked between steps, so the reply in flight finishes and
 then the loop stops rather than running the next round of calls -- a turn that
-answers is never cut off. `--compact` keeps a
+answers is never cut off. The `delegate` tool splits a large job into pieces:
+it hands one self-contained subtask to a sub-agent that runs a loop of its
+own -- same tools, its own step and token budget, a session and conversation
+apart from the caller's -- and only the sub-agent's final answer comes back,
+so the detail of the piece never fills the caller's context. A sub-agent is
+given no delegator of its own, so delegation goes one level deep and no
+further; when a second session will not open (most often for want of memory)
+`delegate` declines and the run goes on with the other tools. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
 turns kept. `--embed-model PATH` gives the `retrieve` tool a model trained to

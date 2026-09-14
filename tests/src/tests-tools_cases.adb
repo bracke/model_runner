@@ -256,8 +256,8 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 18,
-                 "the full set is not eighteen tools");
+         Assert (Tools.Count (All_Defs) = 19,
+                 "the full set is not nineteen tools");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");
@@ -265,6 +265,8 @@ package body Tests.Tools_Cases is
                  "memory_put is not offered");
          Assert (Tools.Offers (All_Defs, "retrieve"),
                  "retrieve is not offered");
+         Assert (Tools.Offers (All_Defs, "delegate"),
+                 "delegate is not offered");
 
          --  The grammar compiles over the full set (the tight form, which
          --  the rule bound is now wide enough to hold -- see Full_Set_Is_Tight).
@@ -309,6 +311,20 @@ package body Tests.Tools_Cases is
       Assert (Room (1 .. Last) (1 .. 5) = "error",
               "memory_get invented a value for an unknown key");
    end Memory_Round_Trips;
+
+   --  With no delegator wired -- the state of a runner given none, and of a
+   --  sub-agent's own runner -- delegate declines in words the model reads,
+   --  rather than crashing or recursing, so the loop goes on.
+   procedure Delegate_Declines_Undelegated
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Reply : constant String := Answer ("delegate", "{""task"":""do it""}");
+   begin
+      Assert (Reply'Length >= 5 and then Reply (Reply'First .. Reply'First + 4)
+              = "error",
+              "delegate with no delegator did not decline as an error");
+   end Delegate_Declines_Undelegated;
 
    --  The grammar takes a well-formed call to an offered tool, takes prose,
    --  and refuses a call to a tool nobody offered.
@@ -741,6 +757,10 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Memory_Round_Trips'Access,
          "memory keeps what one call wrote for a later call to read");
+      Register_Routine
+        (T, Delegate_Declines_Undelegated'Access,
+         "delegate with no delegator declines rather than crashing or "
+         & "recursing");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "

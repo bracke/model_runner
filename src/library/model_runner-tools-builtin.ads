@@ -67,6 +67,36 @@ package Model_Runner.Tools.Builtin is
    --  A reference to whatever embeds for the retrieve tool.
    type Embedder_Reference is access all Embedder'Class;
 
+   --  Something that runs one self-contained subtask on a fresh agent loop of
+   --  its own and hands back its answer, for the delegate tool. A caller that
+   --  has a model loaded supplies one (see Use_Delegator); with it, the model
+   --  can split a large job into pieces, each run by a sub-agent with its own
+   --  budget and its own conversation, so the detail of a piece never fills
+   --  the caller's own context -- only the answer comes back.
+   --
+   --  The sub-agent runs on a session of its own, so the caller's loop is not
+   --  disturbed, and it is itself given no delegator, so delegation cannot
+   --  recurse without bound: a sub-agent's own delegate call is declined.
+   type Delegator is limited interface;
+
+   --  Run Instruction as a subtask and return the sub-agent's final answer.
+   --
+   --  @param Self The delegator.
+   --  @param Instruction The subtask, in the words the sub-agent is given as
+   --    its task.
+   --  @param Result Buffer receiving the sub-agent's answer.
+   --  @param Last Number of bytes written.
+   --  @param Status Success, or a diagnostic when the subtask could not run.
+   procedure Run_Sub
+     (Self        : in out Delegator;
+      Instruction : String;
+      Result      : out String;
+      Last        : out Natural;
+      Status      : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  A reference to whatever runs a delegated subtask.
+   type Delegator_Reference is access all Delegator'Class;
+
    --  A runner over the built-in tools. It carries the scratchpad the memory
    --  tools write and read, so a call to remember something is seen by a
    --  later call to recall it, for the life of this runner.
@@ -79,6 +109,16 @@ package Model_Runner.Tools.Builtin is
    --  @param Source What retrieve will embed with, or null.
    procedure Use_Embedder
      (Self : in out Instance; Source : Embedder_Reference);
+
+   --  Give this runner a delegator, so its delegate tool runs a subtask on a
+   --  sub-agent. Passing null (the default state) leaves delegate declining,
+   --  which is also how a sub-agent's own runner is left, so delegation does
+   --  not recurse without bound.
+   --
+   --  @param Self The runner.
+   --  @param Source What delegate will run a subtask with, or null.
+   procedure Use_Delegator
+     (Self : in out Instance; Source : Delegator_Reference);
 
    --  Answer one call to a built-in tool.
    --
@@ -123,6 +163,9 @@ private
 
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;
+
+      --  What delegate runs a subtask with, or null to decline delegation.
+      Sub    : Delegator_Reference := null;
    end record;
 
 end Model_Runner.Tools.Builtin;

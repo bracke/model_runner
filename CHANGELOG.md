@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Sub-agent delegation: a `delegate` built-in tool.** The agent can hand a
+  self-contained subtask to a sub-agent that runs a full loop of its own --
+  the same tools, its own step and token budget, and a session and
+  conversation apart from the caller's -- and gets back only the sub-agent's
+  final answer, so the detail of a piece never fills the caller's context.
+  `Tools.Builtin` gained a `Delegator` limited interface and `Use_Delegator`,
+  mirroring the `Embedder` injection so the library keeps its no-loop promise:
+  the concrete delegator (which calls `Agent.Run` on a dedicated sub-session)
+  lives in the CLI, outside the library boundary. Recursion is bounded by
+  giving the sub-agent's runner no delegator, so delegation goes one level
+  deep and a sub-agent's own `delegate` call is declined; when the second
+  session will not open (most often for want of memory) `delegate` declines
+  and the run goes on. The full built-in set is now nineteen tools.
+
 - **A total token budget for the agent loop (`--max-total-tokens N`).** The
   loop was bounded by its step count (`--max-steps`) and, with a clock, its
   wall-clock time; each reply was bounded by its own token budget; but nothing
