@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A conversation that will not render is made to fit, not abandoned.** A
+  long tool-using run grows until the whole conversation no longer renders
+  into the space it is given, and the loop used to stop there
+  (Render_Failed). `Model_Runner.Conversation.Compact` drops the oldest
+  turns to make room while keeping the shape a model can still read: the
+  system message, the first user turn -- the task -- and the most recent
+  turns, with the recent boundary pulled back past a leading tool turn so a
+  kept result still has the call that asked for it. What survives is a
+  coherent prefix and a coherent tail with the middle gone, lossy on purpose
+  because the alternative is a run that cannot continue. `Agent.Run` takes
+  `Compact` and `Keep_Recent`: with `Compact` on, a render that overflows
+  compacts and renders again rather than stopping, counting each compaction
+  in the outcome; off, the default, it stops as before. `run --agent
+  --compact` turns it on from the command line. The compaction is covered in
+  the mandatory suite -- it keeps the system message, the task and a
+  coherent tail, and drops nothing from a history that already fits.
+
 - **What the loop cost, counted.** A run of the agent now reports the tokens
   the model generated across all its turns and the prompt token count of the
   last turn -- the decode cost of the run in one number, and how much of the

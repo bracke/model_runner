@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 90) of Registry_Row :=
+   Registry : constant array (1 .. 91) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -39,6 +39,8 @@ package body Model_Runner.CLI.Options is
        Text ("max_retries")),
       (Text ("--confirm-tools"), [Command_Run => True, others => False],
        Text ("confirm_tools")),
+      (Text ("--compact"), [Command_Run => True, others => False],
+       Text ("compact")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--think"), [Command_Run => True, others => False],
        Text ("think")),
@@ -1359,6 +1361,14 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Confirm_Tools := True;
+
+                  elsif Name = "--compact" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Compact := True;
 
                   elsif Name = "--repack" then
                      declare

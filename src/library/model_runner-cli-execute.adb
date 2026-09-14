@@ -2066,6 +2066,7 @@ package body Model_Runner.CLI.Execute is
                        (if Item.Confirm_Tools then Confirmer'Unchecked_Access
                         else null),
                      Max_Retries => Item.Max_Retries,
+                     Compact     => Item.Compact,
                      Result     => Loop_Out);
 
                   Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);

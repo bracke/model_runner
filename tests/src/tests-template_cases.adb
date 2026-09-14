@@ -1614,6 +1614,78 @@ package body Tests.Template_Cases is
       Tools.Close (Asked);
    end Tool_Definitions_Are_Read_Or_Refused;
 
+   --  Compaction drops the oldest turns and keeps the shape a model reads:
+   --  the system message, the task, and a coherent recent tail whose calls
+   --  and results still belong together.
+   procedure Compaction_Keeps_The_Shape
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Conv.Role;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Dropped  : Natural;
+   begin
+      Conv.Open (Messages, Status => Status);
+      Assert (E.Is_Ok (Status), "the history would not open");
+
+      --  A system message, the task, then five rounds of an assistant call
+      --  and a tool answer.
+      Conv.Append (Messages, Conv.System_Role, "Be brief.", Status);
+      Conv.Append (Messages, Conv.User_Role, "the task", Status);
+      for Round in 1 .. 5 loop
+         Conv.Append_Asking
+           (Messages, "step" & Integer'Image (Round), Status);
+         Conv.Append_Call
+           (Messages, "calc", "{""n"":" & Integer'Image (Round) & "}",
+            Status);
+         Conv.Append
+           (Messages, Conv.Tool_Role, "result" & Integer'Image (Round),
+            Status);
+      end loop;
+      Assert (Conv.Length (Messages) = 12, "the history is not twelve turns");
+
+      --  Keep a recent tail; the boundary lands on a tool answer and is
+      --  pulled back to the assistant turn that produced it, so no orphan
+      --  result leads the tail.
+      Conv.Compact (Messages, Keep_Recent => 3, Dropped => Dropped);
+      Assert (Dropped > 0, "compaction dropped nothing from a full history");
+
+      Assert (Conv.Sender_At (Messages, 1) = Conv.System_Role
+              and then Conv.Content_At (Messages, 1) = "Be brief.",
+              "compaction lost the system message");
+      Assert (Conv.Sender_At (Messages, 2) = Conv.User_Role
+              and then Conv.Content_At (Messages, 2) = "the task",
+              "compaction lost the task");
+
+      declare
+         N     : constant Positive := Conv.Length (Messages);
+         Found : Boolean := False;
+      begin
+         Assert (Conv.Sender_At (Messages, N) = Conv.Tool_Role
+                 and then Conv.Content_At (Messages, N) = "result 5",
+                 "the last tool answer did not survive: "
+                 & Conv.Content_At (Messages, N));
+         Assert (Conv.Sender_At (Messages, 3) = Conv.Assistant_Role,
+                 "the recent tail begins on an orphaned tool answer");
+         for I in 1 .. N loop
+            if Conv.Sender_At (Messages, I) = Conv.Assistant_Role
+              and then Conv.Call_Count (Messages, I) = 1
+              and then Conv.Call_Name (Messages, I, 1) = "calc"
+            then
+               Found := True;
+            end if;
+         end loop;
+         Assert (Found, "no kept assistant turn kept its call");
+      end;
+
+      --  A history that already fits the keep window loses nothing.
+      Conv.Compact (Messages, Keep_Recent => 100, Dropped => Dropped);
+      Assert (Dropped = 0, "compaction dropped from a history that fit");
+
+      Conv.Close (Messages);
+   end Compaction_Keeps_The_Shape;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -1657,6 +1729,10 @@ package body Tests.Template_Cases is
         (T, A_Copied_Name_Keeps_What_It_Copied'Access,
          "a name given another name's value keeps it after the other "
          & "changes");
+      Register_Routine
+        (T, Compaction_Keeps_The_Shape'Access,
+         "compacting a history drops the oldest turns and keeps the system "
+         & "message, the task and a coherent recent tail");
    end Register_Tests;
 
 end Tests.Template_Cases;

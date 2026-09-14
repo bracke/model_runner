@@ -49,6 +49,8 @@ package body Model_Runner.Agent is
       Watch      : Observer_Reference := null;
       Approve    : Approver_Reference := null;
       Max_Retries : Natural := 0;
+      Compact     : Boolean := False;
+      Keep_Recent : Positive := 6;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome)
@@ -191,6 +193,28 @@ package body Model_Runner.Agent is
             Status   : E.Error_Info;
          begin
             Render (Rendered, Status);
+
+            --  A conversation too large to render is made to fit by dropping
+            --  its oldest turns, rather than ending the loop -- when the
+            --  caller asked for that. Each compaction that drops something
+            --  invalidates the committed positions, so the session is reset
+            --  before rendering again.
+            while Compact
+              and then E.Is_Error (Status)
+              and then Status.Code = E.Template_Output_Too_Large
+            loop
+               declare
+                  Gone : Natural;
+               begin
+                  Conv.Compact (Messages, Keep_Recent, Gone);
+                  exit when Gone = 0;
+                  L.Reset (Session);
+                  Result.Compactions := Result.Compactions + 1;
+                  Free (Rendered);
+                  Render (Rendered, Status);
+               end;
+            end loop;
+
             if E.Is_Error (Status) then
                Result.Reason := Render_Failed;
                Result.Error := Status;

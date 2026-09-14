@@ -160,6 +160,30 @@ package Model_Runner.Conversation is
    --  @param Count Number of trailing messages to remove.
    procedure Drop_Last (Item : in out History; Count : Natural);
 
+   --  Drop the oldest turns to make room, keeping the shape a model can
+   --  still read.
+   --
+   --  A long tool-using conversation grows until it will not render into the
+   --  space it is given. This makes room by dropping the oldest turns in the
+   --  middle, and keeps three things whole: the system message, the first
+   --  user turn -- the task, which the loop must not forget -- and the most
+   --  recent Keep_Recent turns. The recent boundary is pulled back past a
+   --  leading tool turn so a kept result still has the call that asked for
+   --  it. What survives is a coherent prefix and a coherent tail with the
+   --  middle removed, which is lossy on purpose: the alternative is a
+   --  conversation that cannot be rendered at all.
+   --
+   --  It does not touch the pool's size, only what fills it, and it leaves
+   --  the model positions meaningless, so a caller resets the session after.
+   --
+   --  @param Item History to compact.
+   --  @param Keep_Recent How many of the most recent turns to keep whole.
+   --  @param Dropped How many turns were removed; zero when nothing could be.
+   procedure Compact
+     (Item        : in out History;
+      Keep_Recent : Natural;
+      Dropped     : out Natural);
+
    --  Number of messages.
    --
    --  @param Item History to inspect.

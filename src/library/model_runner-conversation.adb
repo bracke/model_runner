@@ -405,6 +405,137 @@ package body Model_Runner.Conversation is
       end loop;
    end Drop_Last;
 
+   -------------
+   -- Compact --
+   -------------
+
+   procedure Compact
+     (Item        : in out History;
+      Keep_Recent : Natural;
+      Dropped     : out Natural)
+   is
+      N : constant Natural := Item.Used;
+      Has_Sys : constant Boolean :=
+        N > 0 and then Item.Messages (1).Sender = System_Role;
+      First_User : Natural := 0;
+      Keep       : array (1 .. Max_Messages) of Boolean := [others => False];
+   begin
+      Dropped := 0;
+      if N = 0 or else Item.Storage = null then
+         return;
+      end if;
+
+      --  The first user turn -- the task -- is kept whatever else goes.
+      for I in 1 .. N loop
+         if Item.Messages (I).Sender = User_Role then
+            First_User := I;
+            exit;
+         end if;
+      end loop;
+
+      if Has_Sys then
+         Keep (1) := True;
+      end if;
+      if First_User /= 0 then
+         Keep (First_User) := True;
+      end if;
+
+      --  The most recent turns, with the boundary pulled back past a leading
+      --  tool turn so a kept result still has its call.
+      declare
+         Tail_Start : Natural := Natural'Max (1, N - Keep_Recent + 1);
+      begin
+         while Tail_Start > 1
+           and then Item.Messages (Tail_Start).Sender = Tool_Role
+         loop
+            Tail_Start := Tail_Start - 1;
+         end loop;
+         for I in Tail_Start .. N loop
+            Keep (I) := True;
+         end loop;
+      end;
+
+      for I in 1 .. N loop
+         if not Keep (I) then
+            Dropped := Dropped + 1;
+         end if;
+      end loop;
+      if Dropped = 0 then
+         return;
+      end if;
+
+      --  Rebuild the pool and tables into fresh storage, keeping order. Each
+      --  kept message's content is copied to the front, then its calls' name
+      --  and argument slices after it, the way they were first laid down.
+      declare
+         New_Storage  : Storage_Access :=
+           new String (Item.Storage.all'Range);
+         New_Messages : Message_Array := [others => <>];
+         New_Calls    : Call_Array := [others => <>];
+         Fill         : Natural := 0;
+         Call_Fill    : Natural := 0;
+         M            : Natural := 0;
+      begin
+         for I in 1 .. N loop
+            if Keep (I) then
+               declare
+                  Src     : Message renames Item.Messages (I);
+                  New_Off : constant Natural := Fill;
+               begin
+                  New_Storage.all (Fill + 1 .. Fill + Src.Length) :=
+                    Item.Storage.all (Src.Offset + 1 .. Src.Offset + Src.Length);
+                  Fill := Fill + Src.Length;
+                  M := M + 1;
+                  New_Messages (M) :=
+                    (Sender     => Src.Sender,
+                     Offset     => New_Off,
+                     Length     => Src.Length,
+                     First_Call =>
+                       (if Src.Calls > 0 then Call_Fill + 1 else 0),
+                     Calls      => Src.Calls);
+
+                  for K in 0 .. Src.Calls - 1 loop
+                     declare
+                        Row      : Call_Row renames
+                          Item.Calls (Src.First_Call + K);
+                        Name_Off : constant Natural := Fill;
+                        Args_Off : Natural;
+                     begin
+                        New_Storage.all
+                          (Fill + 1 .. Fill + Row.Name_Length) :=
+                          Item.Storage.all
+                            (Row.Name_Offset + 1
+                             .. Row.Name_Offset + Row.Name_Length);
+                        Fill := Fill + Row.Name_Length;
+                        Args_Off := Fill;
+                        New_Storage.all
+                          (Fill + 1 .. Fill + Row.Args_Length) :=
+                          Item.Storage.all
+                            (Row.Args_Offset + 1
+                             .. Row.Args_Offset + Row.Args_Length);
+                        Fill := Fill + Row.Args_Length;
+                        Call_Fill := Call_Fill + 1;
+                        New_Calls (Call_Fill) :=
+                          (Name_Offset => Name_Off,
+                           Name_Length => Row.Name_Length,
+                           Args_Offset => Args_Off,
+                           Args_Length => Row.Args_Length);
+                     end;
+                  end loop;
+               end;
+            end if;
+         end loop;
+
+         Free_Storage (Item.Storage);
+         Item.Storage   := New_Storage;
+         Item.Messages  := New_Messages;
+         Item.Calls     := New_Calls;
+         Item.Used      := M;
+         Item.Filled    := Fill;
+         Item.Call_Used := Call_Fill;
+      end;
+   end Compact;
+
    ------------
    -- Length --
    ------------

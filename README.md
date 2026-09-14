@@ -278,7 +278,10 @@ reach the world, `--confirm-tools` puts a hand on the gate: each call is
 printed and the loop waits on standard input -- y runs it, q stops the run, and
 anything else declines the one call and tells the model, which may then take
 another way to the answer. `--max-retries N` gives a generation that errors a
-second try instead of ending the run on the first stumble. `--tool-command CMD`
+second try instead of ending the run on the first stumble. `--compact` keeps a
+long tool-using run going when the conversation outgrows what will render:
+the oldest turns are dropped, the system message, the task and the recent
+turns kept. `--tool-command CMD`
 instead runs the tools `--tools`/`--tools-file` describe by handing each call
 to that program, which is a caller's own runner reached from the command
 line. Either way the reply is grammar-constrained, so a call the model writes

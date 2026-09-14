@@ -315,6 +315,11 @@ package Model_Runner.CLI.Options is
       --  end of input stops the loop. Without it every call runs unasked.
       Confirm_Tools : Boolean := False;
 
+      --  Whether to compact the conversation and carry on when it grows too
+      --  large to render, rather than stopping. The oldest turns are dropped,
+      --  keeping the system message, the task, and the most recent turns.
+      Compact : Boolean := False;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is

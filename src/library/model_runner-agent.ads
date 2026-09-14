@@ -79,6 +79,11 @@ package Model_Runner.Agent is
       --  the reused prefix once per turn.
       Prompt_Tokens : Natural := 0;
 
+      --  How many times the conversation was compacted to keep rendering --
+      --  the oldest turns dropped to make room. Zero for a run that stayed
+      --  within its space, or one that was not asked to compact.
+      Compactions : Natural := 0;
+
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
    end record;
@@ -197,6 +202,14 @@ package Model_Runner.Agent is
    --    step is not counted against Max_Steps, and the count of retries is in
    --    the outcome. Zero, the default, fails on the first runtime error as
    --    the loop always did.
+   --  @param Compact Whether to compact the conversation and carry on when it
+   --    grows too large to render, rather than stopping. With it on, a render
+   --    that overflows drops the oldest turns -- keeping the system message,
+   --    the task, and the most recent Keep_Recent turns -- and renders again;
+   --    off, the default, such an overflow stops the loop with Render_Failed
+   --    as it always did.
+   --  @param Keep_Recent How many recent turns compaction keeps whole. Only
+   --    consulted when Compact is on.
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
@@ -218,6 +231,8 @@ package Model_Runner.Agent is
       Watch      : Observer_Reference := null;
       Approve    : Approver_Reference := null;
       Max_Retries : Natural := 0;
+      Compact     : Boolean := False;
+      Keep_Recent : Positive := 6;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome);
