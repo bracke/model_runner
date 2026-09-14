@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The eval scores structured answers too.** `tests agent-eval` gains a
+  task that asks a question needing no tool but holds the answer to a JSON
+  schema -- an object with an integer -- and passes only when the model
+  reaches the right value in that shape. The check compiles the schema to a
+  grammar and matches the whole answer against it, independently of the
+  loop's own answer grammar, and the schema is recorded per task in the JSON
+  report. Against the local Qwen3 0.6B it answers `{ "days": 7 }` and passes;
+  the run is tasks 10, passed 9 (the one miss is still the add-then-multiply
+  chain the small model does not carry).
+
 - **A final answer in a shape you asked for, not only prose.** The reply
   grammar kept a tool-calling model to prose or a readable call. Now a
   caller may name a JSON schema the answer must match, and the grammar

@@ -15,9 +15,11 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Generation;
+with Model_Runner.Grammar;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Sampling;
+with Model_Runner.Schema;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Tools;
@@ -32,6 +34,8 @@ package body Agent_Eval is
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
    package Shards renames Model_Runner.GGUF.Shards;
+   package G renames Model_Runner.Grammar;
+   package Schema renames Model_Runner.Schema;
 
    use type Model_Runner.Backend.Backend_Kind;
    use type Conv.Role;
@@ -114,6 +118,17 @@ package body Agent_Eval is
    W9A : aliased constant String := "42";
    W9B : aliased constant String := "21";
 
+   --  A structured-answer task: no tool is needed, but the final answer must
+   --  come back in a shape -- an object with an integer "days" -- which the
+   --  answer schema constrains the reply to. It scores whether the model
+   --  reaches the right answer while held to that shape.
+   P10 : aliased constant String :=
+     "How many days are in a week? Give me the final answer.";
+   W10 : aliased constant String := "7";
+   S10 : aliased constant String :=
+     "{""type"":""object"",""properties"":"
+     & "{""days"":{""type"":""integer""}},""required"":[""days""]}";
+
    type Task_Spec is record
       System    : access constant String;
       Prompt    : access constant String;
@@ -123,27 +138,31 @@ package body Agent_Eval is
       Also      : access constant String;   --  a second one, or Empty
       Min_Calls : Natural;                   --  fewest tool calls the task
                                              --  must make
+      Answer    : access constant String;   --  a JSON schema the answer must
+                                             --  match, or Empty for free text
    end record;
 
    Tasks : constant array (Positive range <>) of Task_Spec :=
      [(Sys_Tools'Access, P1'Access, T1'Access, Empty'Access,
-       W1'Access, Empty'Access, 1),
+       W1'Access, Empty'Access, 1, Empty'Access),
       (Sys_Tools'Access, P2'Access, T2'Access, Empty'Access,
-       W2'Access, Empty'Access, 1),
+       W2'Access, Empty'Access, 1, Empty'Access),
       (Sys_Tools'Access, P3'Access, T3'Access, Empty'Access,
-       W3'Access, Empty'Access, 1),
+       W3'Access, Empty'Access, 1, Empty'Access),
       (Sys_Tools'Access, P4'Access, T4'Access, Empty'Access,
-       W4'Access, Empty'Access, 1),
+       W4'Access, Empty'Access, 1, Empty'Access),
       (Sys_Plain'Access, P5'Access, Empty'Access, Empty'Access,
-       W5'Access, Empty'Access, 0),
+       W5'Access, Empty'Access, 0, Empty'Access),
       (Sys_Tools'Access, P6'Access, T1'Access, Empty'Access,
-       W6'Access, Empty'Access, 2),
+       W6'Access, Empty'Access, 2, Empty'Access),
       (Sys_Tools'Access, P7'Access, T3'Access, T7B'Access,
-       W7'Access, Empty'Access, 2),
+       W7'Access, Empty'Access, 2, Empty'Access),
       (Sys_Tools'Access, P8'Access, T4'Access, Empty'Access,
-       W8A'Access, W8B'Access, 2),
+       W8A'Access, W8B'Access, 2, Empty'Access),
       (Sys_Tools'Access, P9'Access, T1'Access, Empty'Access,
-       W9A'Access, W9B'Access, 2)];
+       W9A'Access, W9B'Access, 2, Empty'Access),
+      (Sys_Plain'Access, P10'Access, Empty'Access, Empty'Access,
+       W10'Access, Empty'Access, 0, S10'Access)];
 
    ---------------------------------------------------------------------------
    --  Checking a transcript
@@ -181,6 +200,36 @@ package body Agent_Eval is
       end loop;
       return "";
    end Final_Answer;
+
+   --  Whether the answer matches the schema it was asked to take. Compiles
+   --  the schema to a grammar and matches the whole answer against it: what
+   --  the loop's own answer grammar guarantees, checked here independently.
+   --  An empty schema constrains nothing, so anything fits it.
+   function Answer_Fits_Schema (Text, Schema_Text : String) return Boolean is
+      Buffer : String (1 .. Schema.Max_Grammar_Bytes);
+      Last   : Natural;
+      Rules  : G.Compiled;
+      State  : G.Matcher;
+      St     : E.Error_Info;
+      Held   : Boolean;
+   begin
+      if Schema_Text = "" then
+         return True;
+      end if;
+      Schema.To_Grammar (Schema_Text, Buffer, Last, St);
+      if E.Is_Error (St) or else Last = 0 then
+         return False;
+      end if;
+      G.Compile (Rules, Buffer (1 .. Last), St);
+      if E.Is_Error (St) then
+         return False;
+      end if;
+      G.Start (Rules, State, St);
+      G.Advance (Rules, State, Text, St);
+      Held := E.Is_Ok (St) and then G.Is_Complete (Rules, State);
+      G.Close (Rules);
+      return Held;
+   end Answer_Fits_Schema;
 
    --  Whether any assistant turn asked for the named tool.
    function Called_Tool (Messages : Conv.History; Named : String)
@@ -322,6 +371,9 @@ package body Agent_Eval is
       Need (Spec.Tool_Two.all);
       A ("]");
       A (",""min_calls"":" & Num (Spec.Min_Calls));
+      if Spec.Answer.all /= "" then
+         A (",""answer_schema"":" & Q (Spec.Answer.all));
+      end if;
       A (",""passed"":" & (if Passed then "true" else "false"));
       A (",""reason"":"
          & Q (Model_Runner.Agent.Stop_Reason'Image (Outcome.Reason)));
@@ -521,6 +573,7 @@ package body Agent_Eval is
                   --  the same character and be refused. A reasoning model
                   --  scored here answers without the block.
                   Thinking   => Model_Runner.Templates.Thinking_Off,
+                  Answer_Schema => Spec.Answer.all,
                   Bounds     => Bounds,
                   Result     => Loop_Out);
 
@@ -542,7 +595,9 @@ package body Agent_Eval is
                            or else Called_Tool (Messages, Spec.Tool.all))
                  and then (Spec.Tool_Two.all = ""
                            or else Called_Tool (Messages, Spec.Tool_Two.all))
-                 and then Loop_Out.Calls >= Spec.Min_Calls;
+                 and then Loop_Out.Calls >= Spec.Min_Calls
+                 and then Answer_Fits_Schema
+                            (Final_Answer (Messages), Spec.Answer.all);
 
                if Passed then
                   Result.Passed := Result.Passed + 1;
