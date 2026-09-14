@@ -1,6 +1,7 @@
 private with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Numerics;
 with Model_Runner.Tools.Runner;
 
 --  The runner of the built-in tools.
@@ -37,10 +38,47 @@ package Model_Runner.Tools.Builtin is
    --  @return A JSON array of function definitions.
    function All_Definitions_Text return String;
 
+   --  Something that turns a text into one vector, for the retrieve tool's
+   --  semantic ranking. A caller that has a model loaded supplies one (see
+   --  Use_Embedder); with it, retrieve ranks a folder's passages by how close
+   --  their meaning is to the query rather than by the words they share.
+   --  Without one, retrieve ranks by words alone.
+   --
+   --  The vector is unit length, so the similarity of two texts is the dot
+   --  product of their vectors.
+   type Embedder is limited interface;
+
+   --  Reduce Text to one unit-length vector.
+   --
+   --  @param Self The embedder.
+   --  @param Text The text to embed.
+   --  @param Vector Receives the vector in 0 .. Last; must be at least the
+   --    model's embedding width wide, or Status fails.
+   --  @param Last The last index written -- the embedding width minus one.
+   --  @param Status Success, or a diagnostic when the text cannot be embedded
+   --    or the buffer is too small.
+   procedure Embed
+     (Self   : in out Embedder;
+      Text   : String;
+      Vector : out Model_Runner.Numerics.Real_Array;
+      Last   : out Natural;
+      Status : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  A reference to whatever embeds for the retrieve tool.
+   type Embedder_Reference is access all Embedder'Class;
+
    --  A runner over the built-in tools. It carries the scratchpad the memory
    --  tools write and read, so a call to remember something is seen by a
    --  later call to recall it, for the life of this runner.
    type Instance is new Model_Runner.Tools.Runner.Instance with private;
+
+   --  Give this runner an embedder, so its retrieve tool ranks by meaning.
+   --  Passing null (the default state) leaves retrieve ranking by words.
+   --
+   --  @param Self The runner.
+   --  @param Source What retrieve will embed with, or null.
+   procedure Use_Embedder
+     (Self : in out Instance; Source : Embedder_Reference);
 
    --  Answer one call to a built-in tool.
    --
@@ -82,6 +120,9 @@ private
    type Instance is new Model_Runner.Tools.Runner.Instance with record
       Memory : Notes;
       Used   : Natural := 0;
+
+      --  What retrieve embeds with, or null to rank by words alone.
+      Embed  : Embedder_Reference := null;
    end record;
 
 end Model_Runner.Tools.Builtin;

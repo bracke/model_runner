@@ -7,19 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **A `retrieve` tool that searches a folder of text files.** The agent could
-  read one named file and list a directory, but not find where in a folder an
-  answer lived. `retrieve` takes a `folder` and a `query`, reads the folder's
-  files, splits each into passages at blank lines, and returns the few that
-  best match -- each labelled with its file. The ranking is lexical: a
-  passage scores by how often the query's words occur in it, each word
-  weighted down by how many passages carry it, so a rare word counts for more
-  than a common one. It matches the words a query used, not their meaning; a
-  semantic ranking would embed the query and the passages and compare, which
-  needs the model this tool does not hold, and is left for later. It reads
-  files only -- no process, no network -- and is covered in the mandatory
-  suite: over a folder it writes itself, it ranks the passage carrying the
-  query's words first and finds nothing for words in no file.
+- **A `retrieve` tool that searches a folder of text files, by meaning when
+  a model is at hand.** The agent could read one named file and list a
+  directory, but not find where in a folder an answer lived. `retrieve` takes
+  a `folder` and a `query`, reads the folder's files, splits each into
+  passages at blank lines, and returns the few that best match -- each
+  labelled with its file. It always scores lexically first: a passage by how
+  often the query's words occur in it, each word weighted down by how many
+  passages carry it, so a rare word counts for more than a common one. When
+  `run --agent` has a model loaded, it then re-scores by meaning -- the tool
+  embeds the query and the candidate passages on a second session (so the
+  conversation's own session is never disturbed) and ranks by cosine
+  similarity, which finds a passage that shares the query's sense even where
+  it shares few of its words. Embedding is a pass over the model, so it is
+  bounded: the whole set of passages when small, otherwise the ones the
+  lexical score already liked. Without an embedder -- the library used on its
+  own, or a folder too large -- the lexical ranking stands. The lexical path
+  reads files only and is covered in the mandatory suite (it ranks the
+  passage carrying the query's words first and finds nothing for words in no
+  file); the semantic re-ranking was exercised by hand against a local model.
 
 - **`http_get` and `web_search` fetch through an Ada HTTP client, not curl.**
   Both ran `curl` in a subprocess; they now call `httpclient`'s streaming

@@ -161,6 +161,111 @@ package body Model_Runner.CLI.Execute is
       end if;
    end Consider;
 
+   --  Embeds text for the agent's retrieve tool, using the loaded model on a
+   --  session of its own. What the model has made of a text lives in its
+   --  hidden state; this reduces that to one mean-pooled, unit-length vector,
+   --  the way `embed` does, resetting the session first so each text is
+   --  embedded on its own.
+   type Model_Embedder
+     (Src  : access constant L.Model'Class;
+      Sess : access L.Session) is
+     limited new Model_Runner.Tools.Builtin.Embedder with null record;
+
+   overriding procedure Embed
+     (Self   : in out Model_Embedder;
+      Text   : String;
+      Vector : out N.Real_Array;
+      Last   : out Natural;
+      Status : out E.Error_Info);
+
+   overriding procedure Embed
+     (Self   : in out Model_Embedder;
+      Text   : String;
+      Vector : out N.Real_Array;
+      Last   : out Natural;
+      Status : out E.Error_Info)
+   is
+      Settings : constant L.Configuration := L.Config (Self.Src.all);
+      Width    : constant N.Element_Count := N.Element_Count (Settings.Embedding);
+      Words    : constant access constant Vocab.Vocabulary :=
+        L.Vocabulary (Self.Src.all);
+
+      Tokens : Vocab.Token_Array
+        (1 .. Model_Runner.Limits.Default_Session_Limits.Max_Batch);
+      Count  : Natural;
+
+      Logits : N.Real_Array
+        (0 .. (if Settings.Has_Head
+               then N.Element_Count (Settings.Vocabulary) - 1
+               else -1));
+      Room   : Model_Runner.Tensors.Real_Array_Access := null;
+   begin
+      Last := 0;
+      Status := E.Success;
+
+      if Width = 0 or else N.Element_Count (Vector'Length) < Width then
+         Status := E.Make (E.Internal_Unexpected_Exception);
+         return;
+      end if;
+
+      --  Each text stands alone: the session's positions are cleared so one
+      --  passage's state never leaks into the next.
+      L.Reset (Self.Sess.all);
+
+      Vocab.Encode
+        (Words.all, Text, Vocab.Adds_Beginning (Words.all),
+         not Settings.Causal and then Vocab.Adds_End (Words.all),
+         Tokens, Count, Status);
+      if E.Is_Error (Status) then
+         return;
+      elsif Count = 0 then
+         Status := E.Make (E.CLI_No_Prompt_Available);
+         return;
+      end if;
+
+      Room := new N.Real_Array (0 .. N.Element_Count (Count) * Width - 1);
+      L.Evaluate_Batch
+        (Self.Sess.all, Self.Src.all, Tokens (1 .. Count), Logits,
+         States => Room, Status => Status);
+      if E.Is_Error (Status) then
+         Free_Reals (Room);
+         return;
+      end if;
+
+      declare
+         Acc   : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+         Total : N.Wide_Real := 0.0;
+      begin
+         for Pos in 0 .. N.Element_Count (Count) - 1 loop
+            for Elem in 0 .. Width - 1 loop
+               Acc (Elem) := Acc (Elem) + Room.all (Pos * Width + Elem);
+            end loop;
+         end loop;
+         Free_Reals (Room);
+
+         for Elem in 0 .. Width - 1 loop
+            Acc (Elem) := Acc (Elem) / N.Real (Count);
+            Total := Total + N.Wide_Real (Acc (Elem)) * N.Wide_Real (Acc (Elem));
+         end loop;
+
+         if Total > 0.0 then
+            declare
+               Scale : constant N.Real := N.Real (1.0 / N.Sqrt (Total));
+            begin
+               for Elem in 0 .. Width - 1 loop
+                  Vector (Elem) := Acc (Elem) * Scale;
+               end loop;
+            end;
+         else
+            for Elem in 0 .. Width - 1 loop
+               Vector (Elem) := Acc (Elem);
+            end loop;
+         end if;
+      end;
+
+      Last := Natural (Width) - 1;
+   end Embed;
+
    --  Runs a tool call by handing it to an external program: the program is
    --  invoked with the function name and the arguments (as JSON) as its two
    --  arguments, and what it prints to standard output is the tool's answer.
@@ -1580,8 +1685,14 @@ package body Model_Runner.CLI.Execute is
 
       Source    : Shards.Shard_Set;
       Container : Containers.Container;
-      Prepared  : L.Model;
+      Prepared  : aliased L.Model;
       Session   : L.Session;
+
+      --  A second session on the same model, opened only for the agent's
+      --  retrieve tool to embed with, so embedding a passage never disturbs
+      --  the generation session's committed conversation.
+      Embed_Session : aliased L.Session;
+
       Stop_Set  : Model_Runner.Stops.Set;
       Sink      : aliased Pres.Standard_Output_Sink;
       Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
@@ -2035,6 +2146,9 @@ package body Model_Runner.CLI.Execute is
                Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
+               Embedder     : aliased Model_Embedder
+                                (Prepared'Access, Embed_Session'Access);
+               Embed_Open   : Boolean := False;
 
                --  The schema the final answer must match, from --json-schema
                --  or --json-schema-file, or null for a free-text answer.
@@ -2217,7 +2331,25 @@ package body Model_Runner.CLI.Execute is
                      Fail (Condition);
                      return;
                   end if;
+
+                  --  Open the embedding session and give it to retrieve, so
+                  --  it ranks a folder's passages by meaning. If it will not
+                  --  open, retrieve stays lexical -- the run goes on either
+                  --  way. A small context is enough: one short text at a time.
+                  L.Open
+                    (Embed_Session, Prepared, 2048,
+                     Session_Bounds => Session_Bounds (Item),
+                     Workers => Team, Cache => Item.Cache, Status => Condition);
+                  if E.Is_Ok (Condition) then
+                     Embed_Open := True;
+                     Built_Runner.Use_Embedder (Embedder'Unchecked_Access);
+                  end if;
+
                   Drive (Agent_Tools, Built_Runner);
+
+                  if Embed_Open then
+                     L.Close (Embed_Session);
+                  end if;
                end if;
 
                Free_Text (Answer);

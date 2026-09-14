@@ -13,7 +13,11 @@ with Model_Runner.UTF8;
 package body Model_Runner.Tools.Builtin is
 
    package E renames Model_Runner.Errors;
+   package N renames Model_Runner.Numerics;
    package U renames Ada.Strings.Unbounded;
+
+   use type N.Real;
+   use type N.Element_Count;
 
    --  The most a tool answers with, leaving room under the call buffer for
    --  a truncation note.
@@ -859,12 +863,22 @@ package body Model_Runner.Tools.Builtin is
    --  It finds the words the query used, not their meaning -- a semantic
    --  ranking would embed both and compare, which needs the model this tool
    --  does not hold.
-   function Retrieve (Args : String) return String is
+   procedure Use_Embedder
+     (Self : in out Instance; Source : Embedder_Reference) is
+   begin
+      Self.Embed := Source;
+   end Use_Embedder;
+
+   function Retrieve
+     (Args : String; Embed : Embedder_Reference) return String
+   is
       Max_Chunks : constant := 256;   --  passages held across the folder
       Max_Terms  : constant := 24;    --  distinct query words scored
       Max_Files  : constant := 128;   --  files read from the folder
       Snippet    : constant := 600;   --  characters kept of a passage
       Top        : constant := 3;     --  passages returned
+      Embed_Cap  : constant := 48;    --  most passages embedded in one call
+      Max_Width  : constant := 8192;  --  widest embedding vector held
 
       Have_F, Have_Q : Boolean;
       Folder : constant String := Text_Argument (Args, "folder", Have_F);
@@ -1074,6 +1088,79 @@ package body Model_Runner.Tools.Builtin is
          end;
       end loop;
 
+      --  With an embedder at hand, re-score by meaning: embed the query and
+      --  the candidate passages and rank by how close each is to the query,
+      --  which finds a passage that shares the query's sense even where it
+      --  shares few of its words. Only a bounded number are embedded -- the
+      --  whole set when it is small, otherwise the ones the lexical score
+      --  already liked -- because each embedding is a pass over the model.
+      --  A candidate's cosine (in -1 .. 1) is shifted into 0 .. 2 so the
+      --  selection below, which keeps a positive score, still reads it; a
+      --  passage not embedded is left at zero and drops out. If the query
+      --  will not embed, the lexical scores stand.
+      if Embed /= null then
+         declare
+            Q      : N.Real_Array (0 .. Max_Width - 1);
+            P      : N.Real_Array (0 .. Max_Width - 1);
+            Q_Last : Natural;
+            P_Last : Natural;
+            St     : E.Error_Info;
+         begin
+            Embed.Embed (Query, Q, Q_Last, St);
+            if E.Is_Ok (St) then
+               declare
+                  Used  : array (1 .. N_Chunks) of Boolean :=
+                    [others => False];
+                  Count : constant Natural :=
+                    Natural'Min (N_Chunks, Embed_Cap);
+                  Cand  : array (1 .. Count) of Positive;
+               begin
+                  --  The Count passages the lexical score liked most.
+                  for K in 1 .. Count loop
+                     declare
+                        Best   : Natural := 0;
+                        Best_S : Float := Float'First;
+                     begin
+                        for C in 1 .. N_Chunks loop
+                           if not Used (C)
+                             and then Chunks (C).Score >= Best_S
+                           then
+                              Best := C;
+                              Best_S := Chunks (C).Score;
+                           end if;
+                        end loop;
+                        exit when Best = 0;
+                        Used (Best) := True;
+                        Cand (K) := Best;
+                     end;
+                  end loop;
+
+                  --  Every passage out of the running until its meaning earns
+                  --  it back.
+                  for C in 1 .. N_Chunks loop
+                     Chunks (C).Score := 0.0;
+                  end loop;
+
+                  for K in Cand'Range loop
+                     Embed.Embed
+                       (U.To_String (Chunks (Cand (K)).Shown),
+                        P, P_Last, St);
+                     if E.Is_Ok (St) and then P_Last = Q_Last then
+                        declare
+                           Dot : N.Real := 0.0;
+                        begin
+                           for I in 0 .. N.Element_Index (Q_Last) loop
+                              Dot := Dot + Q (I) * P (I);
+                           end loop;
+                           Chunks (Cand (K)).Score := Float (Dot) + 1.0;
+                        end;
+                     end if;
+                  end loop;
+               end;
+            end if;
+         end;
+      end if;
+
       --  The best few, in order, each labelled with its file.
       declare
          Out_S : U.Unbounded_String;
@@ -1221,7 +1308,7 @@ package body Model_Runner.Tools.Builtin is
          elsif Named = "sql" then
             return Sql (Arguments);
          elsif Named = "retrieve" then
-            return Retrieve (Arguments);
+            return Retrieve (Arguments, Self.Embed);
          else
             return "error: no tool by the name """ & Named & """";
          end if;
