@@ -343,6 +343,51 @@ package body Tests.Tools_Cases is
               "ask_user with no inquirer did not decline as an error");
    end Ask_User_Declines_Unwired;
 
+   --  A note written with a memory file behind it is there for a later run:
+   --  a fresh runner pointed at the same file reads it back, value and all,
+   --  a space in the value included (the store is length-prefixed, so no byte
+   --  of a value is a delimiter).
+   procedure Memory_Persists_To_A_File
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Dir    : constant String := "obj/memory_case";
+      Store  : constant String := Dir & "/notes.mem";
+      Room   : String (1 .. Tools.Max_Call_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+
+      --  One runner writes a note; the file now holds it.
+      declare
+         Writer : Builtin.Instance;
+      begin
+         Writer.Use_Memory_File (Store);
+         Writer.Run
+           ("memory_put", "{""key"":""greeting"",""value"":""hello world""}",
+            Room, Last, Status);
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "ok",
+                 "memory_put did not accept the note");
+      end;
+
+      --  A fresh runner, as a later run would be, reads it back.
+      declare
+         Reader : Builtin.Instance;
+      begin
+         Reader.Use_Memory_File (Store);
+         Reader.Run ("memory_get", "{""key"":""greeting""}",
+                     Room, Last, Status);
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "hello world",
+                 "memory_get did not read the persisted note back whole");
+      end;
+
+      Ada.Directories.Delete_Tree (Dir);
+   end Memory_Persists_To_A_File;
+
    --  The runner marks the tools that may overlap and the tools that may not:
    --  reads and network fetches and lexical retrieve overlap; a shared
    --  scratchpad, a waited-on process, a single session or the console do not.
@@ -819,6 +864,10 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Parallel_Safety_Is_Marked'Access,
          "the runner marks which tools may overlap and which may not");
+      Register_Routine
+        (T, Memory_Persists_To_A_File'Access,
+         "a note written with a memory file behind it is read back by a "
+         & "later runner");
       Register_Routine
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "

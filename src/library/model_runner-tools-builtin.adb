@@ -566,6 +566,147 @@ package body Model_Runner.Tools.Builtin is
       return Ada.Calendar.Formatting.Image (Ada.Calendar.Clock);
    end Now_Text;
 
+   --  Read a whole file as its raw bytes, so the memory store round-trips
+   --  exactly (Read_Capped would rewrite line endings). Returns "" on any
+   --  trouble, which reads as an empty store.
+   function Read_Bytes (Path : String) return String is
+      use Ada.Streams;
+      use Ada.Streams.Stream_IO;
+      File : Stream_IO.File_Type;
+   begin
+      Open (File, In_File, Path);
+      declare
+         Length : constant Natural := Natural (Size (File));
+         Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Length));
+         Last   : Stream_Element_Offset;
+         Result : String (1 .. Length);
+      begin
+         Read (File, Block, Last);
+         Close (File);
+         for I in 1 .. Natural (Last) loop
+            Result (I) :=
+              Character'Val (Block (Stream_Element_Offset (I)));
+         end loop;
+         return Result (1 .. Natural (Last));
+      end;
+   exception
+      when others =>
+         if Is_Open (File) then
+            Close (File);
+         end if;
+         return "";
+   end Read_Bytes;
+
+   --  Write the runner's notes to its store file, each note as its key length
+   --  and key then its value length and value, so a value with any byte in it
+   --  -- a newline, a brace -- reads back whole with no escaping.
+   procedure Save_Store (Self : Instance) is
+      use Ada.Streams;
+      use Ada.Streams.Stream_IO;
+      File : Stream_IO.File_Type;
+
+      procedure Put (S : String) is
+         Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
+      begin
+         for I in S'Range loop
+            Block (Stream_Element_Offset (I - S'First + 1)) :=
+              Stream_Element (Character'Pos (S (I)));
+         end loop;
+         Write (File, Block);
+      end Put;
+   begin
+      Create (File, Out_File, U.To_String (Self.Store));
+      for I in 1 .. Self.Used loop
+         declare
+            Key   : constant String := U.To_String (Self.Memory (I).Key);
+            Value : constant String := U.To_String (Self.Memory (I).Value);
+         begin
+            Put (Image (Long_Long_Integer (Key'Length)) & " " & Key
+                 & Image (Long_Long_Integer (Value'Length)) & " " & Value);
+         end;
+      end loop;
+      Close (File);
+   exception
+      when others =>
+         if Is_Open (File) then
+            Close (File);
+         end if;
+   end Save_Store;
+
+   --  Read the notes from the store into the runner. A file that is missing
+   --  or will not parse leaves the runner with no notes rather than failing.
+   procedure Load_Store (Self : in out Instance) is
+      Path : constant String := U.To_String (Self.Store);
+   begin
+      Self.Used := 0;
+      if Path = "" or else not Ada.Directories.Exists (Path) then
+         return;
+      end if;
+
+      declare
+         Data : constant String := Read_Bytes (Path);
+         Pos  : Natural := Data'First;
+
+         --  A decimal length followed by one space; Ok is false when what is
+         --  there is not that shape, which ends the parse.
+         function Read_Length (Ok : out Boolean) return Natural is
+            N    : Natural := 0;
+            Seen : Boolean := False;
+         begin
+            Ok := False;
+            while Pos <= Data'Last and then Data (Pos) in '0' .. '9' loop
+               N := N * 10 + (Character'Pos (Data (Pos))
+                              - Character'Pos ('0'));
+               Pos  := Pos + 1;
+               Seen := True;
+            end loop;
+            if Seen and then Pos <= Data'Last and then Data (Pos) = ' ' then
+               Pos := Pos + 1;
+               Ok  := True;
+            end if;
+            return N;
+         end Read_Length;
+      begin
+         Read_Notes :
+         while Pos <= Data'Last loop
+            declare
+               Good_K : Boolean;
+               K_Len  : constant Natural := Read_Length (Good_K);
+            begin
+               exit Read_Notes when not Good_K
+                 or else Pos + K_Len - 1 > Data'Last;
+               declare
+                  Key    : constant String := Data (Pos .. Pos + K_Len - 1);
+                  Good_V : Boolean;
+                  V_Len  : Natural;
+               begin
+                  Pos   := Pos + K_Len;
+                  V_Len := Read_Length (Good_V);
+                  exit Read_Notes when not Good_V
+                    or else Pos + V_Len - 1 > Data'Last;
+                  declare
+                     Value : constant String := Data (Pos .. Pos + V_Len - 1);
+                  begin
+                     Pos := Pos + V_Len;
+                     if Self.Used < Max_Notes then
+                        Self.Used := Self.Used + 1;
+                        Self.Memory (Self.Used) :=
+                          (Key   => U.To_Unbounded_String (Key),
+                           Value => U.To_Unbounded_String (Value));
+                     end if;
+                  end;
+               end;
+            end;
+         end loop Read_Notes;
+      end;
+   end Load_Store;
+
+   procedure Use_Memory_File (Self : in out Instance; Path : String) is
+   begin
+      Self.Store := U.To_Unbounded_String (Path);
+      Load_Store (Self);
+   end Use_Memory_File;
+
    function Memory_Put (Self : in out Instance; Args : String) return String is
       Have_K, Have_V : Boolean;
       Key   : constant String := Text_Argument (Args, "key", Have_K);
@@ -577,6 +718,9 @@ package body Model_Runner.Tools.Builtin is
       for I in 1 .. Self.Used loop
          if U.To_String (Self.Memory (I).Key) = Key then
             Self.Memory (I).Value := U.To_Unbounded_String (Value);
+            if U.Length (Self.Store) > 0 then
+               Save_Store (Self);
+            end if;
             return "ok";
          end if;
       end loop;
@@ -587,6 +731,9 @@ package body Model_Runner.Tools.Builtin is
       Self.Memory (Self.Used) :=
         (Key => U.To_Unbounded_String (Key),
          Value => U.To_Unbounded_String (Value));
+      if U.Length (Self.Store) > 0 then
+         Save_Store (Self);
+      end if;
       return "ok";
    end Memory_Put;
 

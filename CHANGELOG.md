@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Durable agent memory: `--memory-file PATH`.** The `memory_put`/`memory_get`
+  scratchpad lived only for the run; a file behind it now lets what one run
+  remembers a later run recall. `Tools.Builtin` gained `Use_Memory_File`: the
+  notes in the file are read in when it is set, and each `memory_put` writes
+  the whole set back, so a note survives the process. The store is
+  length-prefixed (each note its key length and key, then its value length and
+  value), so a value with any byte in it -- a newline, a brace -- round-trips
+  with no escaping; a missing or unparsable file just leaves memory empty.
+  The file is a runner's own, not shared with a fanned-out sub-agent (whose
+  memory calls would otherwise race on it), so concurrent writers never
+  collide. Without the flag, memory stays in the run alone as before.
+
 - **Fan-out delegation: several `delegate` calls in a turn now run at once.**
   Delegation kept one sub-agent session, so `delegate` was serial; it now
   keeps a small pool (up to four) opened when `--max-parallel` is above one on

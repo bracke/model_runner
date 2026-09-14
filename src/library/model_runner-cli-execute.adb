@@ -2682,6 +2682,13 @@ package body Model_Runner.CLI.Execute is
                   --  the user; an end of input is answered as no answer.
                   Built_Runner.Use_Inquirer (Asker'Unchecked_Access);
 
+                  --  Back memory with a file when one was named, so what the
+                  --  run writes with memory_put is there for a later run.
+                  if not T.Is_Empty (Item.Memory_File_Path) then
+                     Built_Runner.Use_Memory_File
+                       (T.To_String (Item.Memory_File_Path));
+                  end if;
+
                   Drive (Agent_Tools, Built_Runner);
 
                   if Embed_Open then

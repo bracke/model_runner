@@ -307,7 +307,13 @@ calls in a turn fan out -- each subtask on a session of its own, running at
 the same time -- which is the map half of a map-reduce: split a job across
 sub-agents, then combine what they return. (The device backend evaluates one
 session at a time, so there delegation stays one subtask at a time whatever
-`--max-parallel` says.)
+`--max-parallel` says.) `--memory-file PATH` backs the
+`memory_put`/`memory_get` scratchpad with a file: the notes in it are read in
+at the start and each `memory_put` writes the whole set back, so what one run
+remembers a later run recalls. Without it, memory lasts only for the run. The
+file is the run's own -- a fanned-out sub-agent keeps its memory to itself
+rather than sharing it -- and its format is length-prefixed, so a value with
+any byte in it, a newline included, reads back whole.
 `--max-parallel N` lets a turn's calls overlap: when the model makes several
 calls at once, the ones that are safe to run beside each other -- a read, a
 network fetch, a search that ranks by words -- run together on up to N worker

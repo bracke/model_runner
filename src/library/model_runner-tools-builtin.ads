@@ -164,6 +164,20 @@ package Model_Runner.Tools.Builtin is
    procedure Use_Inquirer
      (Self : in out Instance; Source : Inquirer_Reference);
 
+   --  Back this runner's memory with a file, so what memory_put writes
+   --  outlives the run: the notes already in the file are read in now, and
+   --  each later memory_put writes the whole set back. Passing an empty path
+   --  (the default state) keeps memory in this runner alone, gone when it is.
+   --  The file is this runner's own -- two runs sharing one, or a fanned-out
+   --  sub-agent sharing the caller's, would race on it -- so the caller gives
+   --  it only to a runner whose memory calls do not overlap.
+   --
+   --  @param Self The runner.
+   --  @param Path The file to keep the notes in, or "" for memory in this
+   --    runner alone.
+   procedure Use_Memory_File
+     (Self : in out Instance; Path : String);
+
    --  Answer one call to a built-in tool.
    --
    --  A call to a tool not in the set, or with an argument it cannot read,
@@ -226,6 +240,10 @@ private
 
       --  What ask_user asks through, or null to decline the question.
       Asker  : Inquirer_Reference := null;
+
+      --  The file the notes are kept in, or empty for memory in this runner
+      --  alone. When set, memory_put writes the whole set back after a change.
+      Store  : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Tools.Builtin;

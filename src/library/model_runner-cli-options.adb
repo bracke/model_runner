@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 94) of Registry_Row :=
+   Registry : constant array (1 .. 95) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -165,6 +165,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--embed-model"),
        [Command_Run => True, others => False], Text ("embed_model")),
+      (Text ("--memory-file"),
+       [Command_Run => True, others => False], Text ("memory_file")),
       (Text ("--draft-tokens"),
        [Command_Run => True, others => False], Text ("draft_tokens")),
       (Text ("--draft-lookup"),
@@ -832,6 +834,7 @@ package body Model_Runner.CLI.Options is
          Flag_Device_Index,
          Flag_Logprobs,
          Flag_Draft_Model, Flag_Draft_Tokens, Flag_Embed_Model,
+         Flag_Memory_File,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
@@ -1946,6 +1949,19 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Embed_Model_Path := T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--memory-file" then
+                     Mark (Flag_Memory_File, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Memory_File_Path := T.To_Bounded (Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--draft-lookup" then
