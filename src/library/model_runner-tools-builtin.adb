@@ -3,12 +3,14 @@ with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
+with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 
 with Http_Client.Clients;
 with Http_Client.Errors;
 
+with Model_Runner.Tools.PDF;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tools.Builtin is
@@ -616,6 +618,41 @@ package body Model_Runner.Tools.Builtin is
          return True;
    end Is_Binary;
 
+   --  The most of a PDF's bytes read to pull text from -- a whole document,
+   --  bounded so a huge file cannot fill memory.
+   PDF_Limit : constant := 4 * 1024 * 1024;
+
+   --  Up to Limit of a file's raw bytes, as a String, or the empty string
+   --  when it will not open. Unlike Read_Capped, this reads bytes as they
+   --  are -- for a binary format like PDF, where a line reader would stop or
+   --  mangle at the first NUL.
+   function Read_Raw (Path : String; Limit : Positive) return String is
+      use Ada.Streams;
+      type Buffer is access Stream_Element_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Stream_Element_Array,
+                                                         Buffer);
+      File : Stream_IO.File_Type;
+      Buf  : Buffer := new Stream_Element_Array (1 .. Stream_Element_Offset (Limit));
+      Last : Stream_Element_Offset := 0;
+   begin
+      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Read (File, Buf.all, Last);
+      Stream_IO.Close (File);
+      return Result : String (1 .. Natural (Last)) do
+         for I in 1 .. Last loop
+            Result (Natural (I)) := Character'Val (Integer (Buf (I)));
+         end loop;
+         Free (Buf);
+      end return;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
+         end if;
+         Free (Buf);
+         return "";
+   end Read_Raw;
+
    function Read_Capped (Path : String) return String is
       File  : Ada.Text_IO.File_Type;
       Out_S : U.Unbounded_String;
@@ -1062,8 +1099,22 @@ package body Model_Runner.Tools.Builtin is
                        = Ada.Directories.Directory
                then
                   Walk (Full, Prefix & Name & "/");
+               elsif Read_Raw (Full, 5) = "%PDF-" then
+                  --  A PDF: binary, but its text is pulled out and indexed
+                  --  from the file's own bytes. Checked before the binary
+                  --  test so a PDF is read as a PDF, never as raw text.
+                  Files := Files + 1;
+                  declare
+                     Text : constant String :=
+                       Model_Runner.Tools.PDF.Extract_Text
+                         (Read_Raw (Full, PDF_Limit));
+                  begin
+                     if Text'Length > 0 then
+                        Split (Prefix & Name, Text);
+                     end if;
+                  end;
                elsif Is_Binary (Full) then
-                  --  An image, a PDF, an archive -- not text to search.
+                  --  An image, an archive -- not text to search.
                   null;
                else
                   Files := Files + 1;

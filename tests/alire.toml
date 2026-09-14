@@ -33,6 +33,11 @@ hostkit = "*"
 [[depends-on]]
 tarlib = "*"
 
+# For the retrieve PDF test: it deflates a content stream so the extractor's
+# FlateDecode path is exercised, not only the uncompressed one.
+[[depends-on]]
+zlib = "*"
+
 [[pins]]
 terminal_styles = { path = "../../terminal_styles" }
 

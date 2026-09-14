@@ -7,16 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **`retrieve` searches a folder tree, not only its top level, and skips
+- **`retrieve` searches a folder tree, reads PDFs, and skips other
   binaries.** It descends into subdirectories now, labelling each passage
   with its path under the folder given (`notes/ocean.txt`, not just
   `ocean.txt`); a name beginning with a dot -- `.git` and the like -- is
   skipped, and the file and passage caps bound the whole walk. It reads text
-  files of any kind (`.md`, source, JSON, logs -- extension does not matter),
-  but a file whose first bytes carry a NUL is taken for binary -- an image, a
-  PDF, an archive -- and left out rather than turned into noise. The suite
-  writes a nested file and a binary file and confirms the nested one comes
-  back labelled with its subdirectory while the binary is not searched.
+  files of any kind (`.md`, source, JSON, logs -- extension does not matter).
+  A PDF, though binary, has its text pulled out -- `Model_Runner.Tools.PDF`
+  finds the content streams, inflates the FlateDecode ones with the pure-Ada
+  `zlib`, and reads the strings their text operators show (enough for the
+  standard fonts most prose uses; CID fonts, encryption and object streams
+  are not handled and simply yield nothing). Every other binary -- a file
+  whose first bytes carry a NUL and is not a PDF -- is left out rather than
+  turned into noise. The suite writes a nested file, a NUL-bearing binary,
+  and two PDFs (one plain, one FlateDecode-compressed) and confirms the
+  nested file is found by its subpath, the PDFs' stream text is extracted
+  and ranked, and the binary is not searched.
 
 - **A `retrieve` tool that searches a folder of text files, by meaning when
   a model is at hand.** The agent could read one named file and list a

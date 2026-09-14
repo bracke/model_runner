@@ -31,6 +31,13 @@ hostkit = "*"
 [[depends-on]]
 httpclient = "*"
 
+# The agent's retrieve tool extracts text from PDFs in a folder, inflating
+# their FlateDecode streams with this pure-Ada zlib. Already in the build
+# graph (httpclient decompresses with it); this compiles the library against
+# it directly.
+[[depends-on]]
+zlib = "*"
+
 [[pins]]
 terminal_styles = { path = "../terminal_styles" }
 

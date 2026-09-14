@@ -1,7 +1,10 @@
 with AUnit.Assertions; use AUnit.Assertions;
 
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
+
+with Zlib;
 
 with Model_Runner.Errors;
 with Model_Runner.Grammar;
@@ -384,6 +387,20 @@ package body Tests.Tools_Cases is
       Room   : String (1 .. Tools.Max_Call_Bytes);
       Last   : Natural;
       Status : E.Error_Info;
+      LF     : constant Character := ASCII.LF;
+
+      --  A minimal PDF: a header, one uncompressed content stream showing a
+      --  line of text, and a trailer. Enough for the extractor to find the
+      --  stream, see the text block, and read the shown string.
+      PDF    : constant String :=
+        "%PDF-1.4" & LF
+        & "1 0 obj" & LF
+        & "<< /Length 51 >>" & LF
+        & "stream" & LF
+        & "BT /F1 12 Tf (neptune tides fill the document) Tj ET" & LF
+        & "endstream" & LF
+        & "endobj" & LF
+        & "%%EOF" & LF;
 
       procedure Write_File (Name, Text : String) is
          F : Ada.Text_IO.File_Type;
@@ -392,6 +409,53 @@ package body Tests.Tools_Cases is
          Ada.Text_IO.Put_Line (F, Text);
          Ada.Text_IO.Close (F);
       end Write_File;
+
+      --  Write exact bytes, for a file that carries binary (a compressed
+      --  PDF stream) a line writer would mangle.
+      procedure Write_Bytes (Name, Content : String) is
+         use Ada.Streams;
+         F   : Stream_IO.File_Type;
+         Buf : Stream_Element_Array (1 .. Content'Length);
+      begin
+         for I in Content'Range loop
+            Buf (Stream_Element_Offset (I - Content'First + 1)) :=
+              Stream_Element (Character'Pos (Content (I)));
+         end loop;
+         Stream_IO.Create (F, Stream_IO.Out_File, Dir & "/" & Name);
+         Stream_IO.Write (F, Buf);
+         Stream_IO.Close (F);
+      end Write_Bytes;
+
+      --  A PDF whose content stream is FlateDecode-compressed, built by
+      --  deflating the stream here so the extractor's inflate path is tried.
+      function Compressed_PDF return String is
+         use Zlib;
+         Content : constant String :=
+           "BT /F1 12 Tf (kraken lurks in the compressed deep) Tj ET";
+         Raw     : Byte_Array (0 .. Content'Length - 1);
+         Status  : Status_Code;
+      begin
+         for I in Raw'Range loop
+            Raw (I) := Byte (Character'Pos (Content (Content'First + I)));
+         end loop;
+         declare
+            Comp : constant Byte_Array := Deflate_Stored (Raw, Status);
+            Bytes : String (1 .. Comp'Length);
+         begin
+            for I in Comp'Range loop
+               Bytes (Bytes'First + (I - Comp'First)) :=
+                 Character'Val (Integer (Comp (I)));
+            end loop;
+            return "%PDF-1.4" & LF
+              & "1 0 obj" & LF
+              & "<< /Filter /FlateDecode >>" & LF
+              & "stream" & LF
+              & Bytes & LF
+              & "endstream" & LF
+              & "endobj" & LF
+              & "%%EOF" & LF;
+         end;
+      end Compressed_PDF;
 
       function Begins (Hay, Head : String) return Boolean
       is (Hay'Length >= Head'Length
@@ -415,6 +479,10 @@ package body Tests.Tools_Cases is
       --  be skipped, so a query for those words finds nothing.
       Write_File
         ("blob.bin", "xyzzy" & Character'Val (0) & "hidden treasure trove");
+      --  A PDF, whose text lives in a content stream, not in the source.
+      Write_File ("paper.pdf", PDF);
+      --  A PDF whose stream is compressed, to exercise the inflate path.
+      Write_Bytes ("deep.pdf", Compressed_PDF);
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -435,6 +503,27 @@ package body Tests.Tools_Cases is
          Room, Last, Status);
       Assert (Begins (Room (1 .. Last), "[notes/ocean.txt]"),
               "retrieve did not find the passage in the subdirectory: "
+              & Room (1 .. Last));
+
+      --  A query for words that live only inside the PDF's content stream:
+      --  the extractor pulled them out of the compressed-format file, so the
+      --  passage comes back labelled with the .pdf.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""neptune tides document""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[paper.pdf]"),
+              "retrieve did not extract text from the PDF: "
+              & Room (1 .. Last));
+
+      --  Words that live only inside the compressed PDF's stream: the
+      --  extractor inflated it and read them out.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""kraken compressed deep""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[deep.pdf]"),
+              "retrieve did not inflate and extract the compressed PDF: "
               & Room (1 .. Last));
 
       --  The binary file's words are searched for: it was skipped, so
