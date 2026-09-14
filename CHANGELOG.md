@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A final answer in a shape you asked for, not only prose.** The reply
+  grammar kept a tool-calling model to prose or a readable call. Now a
+  caller may name a JSON schema the answer must match, and the grammar
+  becomes a call or an object in that shape -- so the turn the loop ends on
+  is valid against the schema, not free text a caller must then parse.
+  `Model_Runner.Tools.Constraint.Compile_Call_Grammar` takes an
+  `Answer_Schema`, and `Model_Runner.Agent.Run` passes one through; with
+  tools it is the answer alternative beside the calls (sharing the same
+  helper rules the tool schemas already emit), and with no tools it is the
+  whole reply. `run --agent --json-schema ...` (or `--json-schema-file`)
+  turns it on -- the schema that constrains a plain run's whole output
+  constrains an agent run's answer. It is honoured when the offered tools
+  are few enough to build one tight grammar together; a tool that will not
+  fit -- or a set as large as the whole built-in bunch, which outgrows the
+  grammar -- falls back to the looser call grammar and leaves the answer
+  free. The grammar is covered in the mandatory suite: with a schema set it
+  takes a call and a schema-valid answer, and refuses prose and an answer of
+  the wrong shape.
+
 - **A conversation that will not render is made to fit, not abandoned.** A
   long tool-using run grows until the whole conversation no longer renders
   into the space it is given, and the loop used to stop there

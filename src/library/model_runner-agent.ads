@@ -210,6 +210,13 @@ package Model_Runner.Agent is
    --    as it always did.
    --  @param Keep_Recent How many recent turns compaction keeps whole. Only
    --    consulted when Compact is on.
+   --  @param Answer_Schema A JSON schema the model's final answer must match,
+   --    or the empty string for a free-text answer. When given, every reply
+   --    is constrained to a tool call or an object in this shape, so the
+   --    answer the loop ends on is valid against the schema. Honoured when
+   --    the tools' own schema grammar can be built, or when no tools are
+   --    offered; a tool that forces the looser call grammar leaves the answer
+   --    free. Left as the empty string, the answer is prose as before.
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
@@ -233,6 +240,7 @@ package Model_Runner.Agent is
       Max_Retries : Natural := 0;
       Compact     : Boolean := False;
       Keep_Recent : Positive := 6;
+      Answer_Schema : String := "";
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome);

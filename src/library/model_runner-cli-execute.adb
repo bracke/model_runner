@@ -2036,6 +2036,10 @@ package body Model_Runner.CLI.Execute is
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
 
+               --  The schema the final answer must match, from --json-schema
+               --  or --json-schema-file, or null for a free-text answer.
+               Answer : Opt.Text_Access := null;
+
                Using_Command : constant Boolean :=
                  Item.Tool_Command /= null
                  and then Item.Tool_Command.all /= "";
@@ -2067,6 +2071,8 @@ package body Model_Runner.CLI.Execute is
                         else null),
                      Max_Retries => Item.Max_Retries,
                      Compact     => Item.Compact,
+                     Answer_Schema =>
+                       (if Answer /= null then Answer.all else ""),
                      Result     => Loop_Out);
 
                   Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
@@ -2180,6 +2186,22 @@ package body Model_Runner.CLI.Execute is
                Request.Has_Seed := Item.Has_Seed;
                Request.Batch_Size := Item.Batch_Size;
 
+               --  A JSON schema, if one was named, becomes the shape the
+               --  final answer must take: --json-schema means the whole
+               --  output on a plain run, and the answer of an agent run.
+               if Item.Schema_Text /= null then
+                  Answer := new String'(Item.Schema_Text.all);
+               elsif not T.Is_Empty (Item.Schema_Path) then
+                  Read_File
+                    (T.To_String (Item.Schema_Path),
+                     Model_Runner.Schema.Max_Schema_Bytes, Answer, Condition);
+                  if E.Is_Error (Condition) then
+                     Conv.Close (Messages);
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+
                --  The caller's tools run by the named program, or the
                --  built-in ones. Either way the loop is the same; only what
                --  it offers and what runs a call differ.
@@ -2198,6 +2220,7 @@ package body Model_Runner.CLI.Execute is
                   Drive (Agent_Tools, Built_Runner);
                end if;
 
+               Free_Text (Answer);
                Conv.Close (Messages);
             end;
 

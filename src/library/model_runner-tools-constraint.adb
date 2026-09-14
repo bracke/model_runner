@@ -180,13 +180,45 @@ package body Model_Runner.Tools.Constraint is
    --  match that tool's parameters. Ok is false when any tool's schema
    --  cannot be read or turned into a grammar, and the caller then builds
    --  the loose grammar instead.
-   procedure Build_Tight
-     (Offered : Definitions;
-      Scratch : Text_Access;
-      B       : in out Builder;
-      Ok      : out Boolean)
+   --  Given a Schema.To_Grammar output filling Text, the slice of its first
+   --  line that follows "root ::= " -- the body every helper below leans on.
+   --  Found is false when the output is not shaped "root ::= <body>".
+   procedure Schema_Body
+     (Text  : String;
+      First : out Natural;
+      Last  : out Natural;
+      Found : out Boolean)
    is
-      Count_Of : constant Natural := Count (Offered);
+      Head       : constant String := "root ::= ";
+      Break      : Natural := Text'First;
+      Body_First : constant Natural := Text'First + Head'Length;
+   begin
+      First := 0;
+      Last  := 0;
+      Found := False;
+      while Break <= Text'Last and then Text (Break) /= ASCII.LF loop
+         Break := Break + 1;
+      end loop;
+      if Break - 1 < Body_First
+        or else Text'Length < Head'Length
+        or else Text (Text'First .. Body_First - 1) /= Head
+      then
+         return;
+      end if;
+      First := Body_First;
+      Last  := Break - 1;
+      Found := True;
+   end Schema_Body;
+
+   procedure Build_Tight
+     (Offered       : Definitions;
+      Answer_Schema : String;
+      Scratch       : Text_Access;
+      B             : in out Builder;
+      Ok            : out Boolean)
+   is
+      Count_Of     : constant Natural := Count (Offered);
+      Typed_Answer : constant Boolean := Answer_Schema /= "";
    begin
       Ok := True;
 
@@ -194,8 +226,15 @@ package body Model_Runner.Tools.Constraint is
       --  it (Model_Runner.Schema emits a shared ws rule), and those helpers
       --  are emitted once below; defining it here too would be a duplicate
       --  rule and refuse the grammar.
-      Put (B, "root ::= prose calls?" & ASCII.LF);
-      Put (B, "prose ::= [^<]*" & ASCII.LF);
+      if Typed_Answer then
+         --  A reply is a call or the answer, in the shape asked for -- no
+         --  free prose. The answer rule is defined after the tools, from the
+         --  same shared helpers.
+         Put (B, "root ::= calls | answer" & ASCII.LF);
+      else
+         Put (B, "root ::= prose calls?" & ASCII.LF);
+         Put (B, "prose ::= [^<]*" & ASCII.LF);
+      end if;
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
 
       Put (B, "call ::= ");
@@ -277,6 +316,35 @@ package body Model_Runner.Tools.Constraint is
          end;
       end loop;
 
+      --  The answer rule, from the answer schema, sharing the helpers the
+      --  tools above already emitted. Its own helpers are discarded; only
+      --  its body becomes the answer.
+      if Typed_Answer then
+         declare
+            Grammar_Last : Natural;
+            St           : E.Error_Info;
+         begin
+            Model_Runner.Schema.To_Grammar
+              (Answer_Schema, Scratch.all, Grammar_Last, St);
+            if E.Is_Error (St) or else Grammar_Last = 0 then
+               Ok := False;
+               return;
+            end if;
+            declare
+               Text        : String renames Scratch.all (1 .. Grammar_Last);
+               First, Last : Natural;
+               Found       : Boolean;
+            begin
+               Schema_Body (Text, First, Last, Found);
+               if not Found then
+                  Ok := False;
+                  return;
+               end if;
+               Put (B, "answer ::= " & Text (First .. Last) & ASCII.LF);
+            end;
+         end;
+      end if;
+
       if B.Full then
          Ok := False;
       end if;
@@ -287,14 +355,41 @@ package body Model_Runner.Tools.Constraint is
    ------------------------
 
    procedure Compile_Call_Grammar
-     (Offered : Model_Runner.Tools.Definitions;
-      Into    : in out Model_Runner.Grammar.Compiled;
-      Status  : out Model_Runner.Errors.Error_Info)
+     (Offered       : Model_Runner.Tools.Definitions;
+      Into          : in out Model_Runner.Grammar.Compiled;
+      Status        : out Model_Runner.Errors.Error_Info;
+      Answer_Schema : String := "")
    is
       Tool_Count : constant Natural := Count (Offered);
    begin
       if Tool_Count = 0 then
-         Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+         if Answer_Schema = "" then
+            Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+            return;
+         end if;
+
+         --  No tools, but an answer to shape: the whole reply is that
+         --  answer, so the schema grammar stands on its own. A schema that
+         --  will not compile falls back to prose rather than failing.
+         declare
+            Scratch : Text_Access :=
+              new String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+            Last    : Natural;
+            St      : E.Error_Info;
+         begin
+            Model_Runner.Schema.To_Grammar
+              (Answer_Schema, Scratch.all, Last, St);
+            if E.Is_Error (St) or else Last = 0 then
+               Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+            else
+               Model_Runner.Grammar.Compile
+                 (Into, Scratch.all (1 .. Last), Status);
+               if E.Is_Error (Status) then
+                  Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+               end if;
+            end if;
+            Free (Scratch);
+         end;
          return;
       end if;
 
@@ -309,8 +404,10 @@ package body Model_Runner.Tools.Constraint is
          Ok      : Boolean;
       begin
          --  Try the tight grammar first; fall back to the loose one when a
-         --  tool's schema cannot be read or the result will not compile.
-         Build_Tight (Offered, Scratch, Tight, Ok);
+         --  tool's schema cannot be read or the result will not compile. The
+         --  answer schema is honoured only on the tight path; the loose
+         --  fallback leaves the answer as free text.
+         Build_Tight (Offered, Answer_Schema, Scratch, Tight, Ok);
          if Ok then
             Model_Runner.Grammar.Compile
               (Into, Tight.Room (1 .. Tight.Used), Status);

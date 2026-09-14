@@ -281,7 +281,14 @@ another way to the answer. `--max-retries N` gives a generation that errors a
 second try instead of ending the run on the first stumble. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
-turns kept. `--tool-command CMD`
+turns kept. `--json-schema` (or `--json-schema-file`), which constrains a
+plain run's whole output, here constrains the agent's final answer: the
+reply becomes a tool call or an object in that shape, so the answer the loop
+ends on is valid against the schema rather than prose to be parsed. It holds
+when the offered tools are few enough to build one grammar together -- a
+handful, offered through `--tool-command`, or none -- since a large set (the
+whole built-in bunch among them) outgrows the grammar and falls back to a
+free-text answer. `--tool-command CMD`
 instead runs the tools `--tools`/`--tools-file` describe by handing each call
 to that program, which is a caller's own runner reached from the command
 line. Either way the reply is grammar-constrained, so a call the model writes

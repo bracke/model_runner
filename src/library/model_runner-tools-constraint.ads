@@ -43,14 +43,24 @@ package Model_Runner.Tools.Constraint is
    --
    --  @param Offered The tools the caller is offering. Its names become the
    --    calls the grammar allows; a name it does not carry cannot be
-   --    written. Offering nothing yields a grammar of prose alone.
+   --    written. Offering nothing yields a grammar of prose alone -- or, with
+   --    an answer schema, of that answer alone.
    --  @param Into Receives the compiled grammar; released first.
    --  @param Status Success, Tools_Too_Large when the names would not fit
    --    the grammar buffer, or a grammar diagnostic when the assembled
    --    source will not compile.
+   --  @param Answer_Schema A JSON schema the final answer must match, or the
+   --    empty string for a free-text answer. When given, the reply is no
+   --    longer prose or a call but a call or an object matching this schema:
+   --    a model that is not calling a tool must answer in the shape asked
+   --    for. It is honoured when the per-tool schema grammar can be built
+   --    (or when no tools are offered); when the tools force the looser
+   --    fallback, or when the answer schema itself will not compile, the
+   --    answer falls back to free text.
    procedure Compile_Call_Grammar
-     (Offered : Model_Runner.Tools.Definitions;
-      Into    : in out Model_Runner.Grammar.Compiled;
-      Status  : out Model_Runner.Errors.Error_Info);
+     (Offered       : Model_Runner.Tools.Definitions;
+      Into          : in out Model_Runner.Grammar.Compiled;
+      Status        : out Model_Runner.Errors.Error_Info;
+      Answer_Schema : String := "");
 
 end Model_Runner.Tools.Constraint;

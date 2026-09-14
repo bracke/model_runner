@@ -68,6 +68,76 @@ package body Tests.Tools_Cases is
       return Held;
    end Grammar_Takes;
 
+   --  Whether the call grammar, compiled with an answer schema, accepts a
+   --  text whole and calls it complete.
+   function Grammar_Takes_Answer (Text, Schema : String) return Boolean is
+      Defs   : Tools.Definitions;
+      Rules  : G.Compiled;
+      State  : G.Matcher;
+      Status : E.Error_Info;
+      Held   : Boolean;
+   begin
+      Tools.Read (Defs, Builtin.Definitions_Text, Status);
+      Assert (E.Is_Ok (Status), "the built-in definitions would not read");
+
+      Constraint.Compile_Call_Grammar
+        (Defs, Rules, Status, Answer_Schema => Schema);
+      Assert (E.Is_Ok (Status),
+              "the call grammar would not compile with an answer schema: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (G.Is_Ready (Rules), "the answer-schema grammar is not ready");
+
+      G.Start (Rules, State, Status);
+      Assert (E.Is_Ok (Status), "the answer-schema grammar would not start");
+
+      G.Advance (Rules, State, Text, Status);
+      if E.Is_Error (Status) then
+         G.Close (Rules);
+         Tools.Close (Defs);
+         return False;
+      end if;
+
+      Held := G.Is_Complete (Rules, State);
+      G.Close (Rules);
+      Tools.Close (Defs);
+      return Held;
+   end Grammar_Takes_Answer;
+
+   --  With an answer schema, a reply is a tool call or an answer in that
+   --  shape -- never free prose and never an answer of the wrong shape.
+   procedure Answer_Schema_Shapes_The_Answer
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Schema : constant String :=
+        "{""type"":""object"",""properties"":"
+        & "{""answer"":{""type"":""integer""}},""required"":[""answer""]}";
+   begin
+      --  A well-formed call is still taken: the loop must still be able to
+      --  reach a tool on the way to the answer.
+      Assert
+        (Grammar_Takes_Answer
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"":47,""op"":""*"",""b"":89}}</tool_call>", Schema),
+         "a call was refused once an answer schema was set");
+      --  An answer object in the schema's shape is taken whole.
+      Assert
+        (Grammar_Takes_Answer ("{""answer"":4183}", Schema),
+         "a schema-valid answer was refused");
+      --  Prose is no longer an answer.
+      Assert
+        (not Grammar_Takes_Answer ("The answer is 4183.", Schema),
+         "prose was taken where a shaped answer was required");
+      --  An answer of the wrong type is refused.
+      Assert
+        (not Grammar_Takes_Answer ("{""answer"":""x""}", Schema),
+         "an answer whose type did not match the schema was taken");
+      --  An answer missing the required field is refused.
+      Assert
+        (not Grammar_Takes_Answer ("{}", Schema),
+         "an answer missing a required field was taken");
+   end Answer_Schema_Shapes_The_Answer;
+
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -266,6 +336,10 @@ package body Tests.Tools_Cases is
         (T, Grammar_Constrains'Access,
          "the call grammar takes a readable call and prose and refuses the "
          & "rest");
+      Register_Routine
+        (T, Answer_Schema_Shapes_The_Answer'Access,
+         "an answer schema makes the reply a call or an answer in that "
+         & "shape, not prose");
    end Register_Tests;
 
 end Tests.Tools_Cases;

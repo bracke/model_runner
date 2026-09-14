@@ -51,6 +51,7 @@ package body Model_Runner.Agent is
       Max_Retries : Natural := 0;
       Compact     : Boolean := False;
       Keep_Recent : Positive := 6;
+      Answer_Schema : String := "";
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome)
@@ -60,6 +61,12 @@ package body Model_Runner.Agent is
 
       Have_Tools : constant Boolean :=
         Model_Runner.Tools.Count (Offered) > 0;
+
+      --  Whether generation is grammar-constrained at all: whenever there
+      --  are tools to call, and also when a final answer must take a shape,
+      --  even with no tools.
+      Constrain : constant Boolean :=
+        Have_Tools or else Answer_Schema /= "";
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
@@ -166,9 +173,10 @@ package body Model_Runner.Agent is
          Request.Batch_Size := 1;
       end if;
 
-      if Have_Tools then
+      if Constrain then
          Model_Runner.Tools.Constraint.Compile_Call_Grammar
-           (Offered, Rules_Grammar, Result.Error);
+           (Offered, Rules_Grammar, Result.Error,
+            Answer_Schema => Answer_Schema);
          if E.Is_Error (Result.Error) then
             Result.Reason := Grammar_Failed;
             return;
