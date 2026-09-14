@@ -1047,6 +1047,61 @@ package body Model_Runner.Tools is
          return Out_S (1 .. N);
       end As_JSON_String;
 
+      --  Whether S is a JSON number, so a param value written as digits feeds
+      --  a tool that wants a number rather than a quoted string.
+      function Is_JSON_Number (S : String) return Boolean is
+         I : Natural := S'First;
+      begin
+         if S'Length = 0 then
+            return False;
+         end if;
+         if S (I) = '-' then
+            I := I + 1;
+         end if;
+         if I > S'Last or else S (I) not in '0' .. '9' then
+            return False;
+         end if;
+         while I <= S'Last and then S (I) in '0' .. '9' loop
+            I := I + 1;
+         end loop;
+         if I <= S'Last and then S (I) = '.' then
+            I := I + 1;
+            if I > S'Last or else S (I) not in '0' .. '9' then
+               return False;
+            end if;
+            while I <= S'Last and then S (I) in '0' .. '9' loop
+               I := I + 1;
+            end loop;
+         end if;
+         if I <= S'Last and then (S (I) = 'e' or else S (I) = 'E') then
+            I := I + 1;
+            if I <= S'Last and then (S (I) = '+' or else S (I) = '-') then
+               I := I + 1;
+            end if;
+            if I > S'Last or else S (I) not in '0' .. '9' then
+               return False;
+            end if;
+            while I <= S'Last and then S (I) in '0' .. '9' loop
+               I := I + 1;
+            end loop;
+         end if;
+         return I > S'Last;
+      end Is_JSON_Number;
+
+      --  A param value as its JSON form: a number, true, false or null bare,
+      --  so a typed tool gets a typed argument; anything else -- including a
+      --  CDATA-wrapped value, which never looks like a number -- as a string.
+      function As_JSON_Value (Raw : String) return String is
+      begin
+         if Raw = "true" or else Raw = "false" or else Raw = "null"
+           or else Is_JSON_Number (Raw)
+         then
+            return Raw;
+         else
+            return As_JSON_String (Raw);
+         end if;
+      end As_JSON_Value;
+
       --  Read one <function ...> ... </function> block into a call: its name
       --  from the function's attribute, its arguments from a JSON object
       --  built of the <param name="p">v</param> children.
@@ -1103,7 +1158,7 @@ package body Model_Runner.Tools is
                         end if;
                         Add (As_JSON_String (Key));
                         Add (": ");
-                        Add (As_JSON_String
+                        Add (As_JSON_Value
                                ((if V_Last >= V_First
                                  then Reply (V_First .. V_Last) else "")));
                         Count := Count + 1;

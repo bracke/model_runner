@@ -48,6 +48,8 @@ package body Model_Runner.Agent is
       Max_Seconds : Duration := 0.0;
       Max_Total_Tokens : Natural := 0;
       Max_Parallel : Positive := 1;
+      Tool_Syntax : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;
@@ -69,8 +71,15 @@ package body Model_Runner.Agent is
       --  Whether generation is grammar-constrained at all: whenever there
       --  are tools to call, and also when a final answer must take a shape,
       --  even with no tools.
+      use type Model_Runner.Tools.Call_Syntax;
+
+      --  The call grammar shapes the <tool_call> convention. MiniCPM's
+      --  <function> form is read but not shaped: that family reasons in
+      --  <think> blocks, whose '<' a call grammar's prose could not carry, so
+      --  its output is left free and the calls are read out of it.
       Constrain : constant Boolean :=
-        Have_Tools or else Answer_Schema /= "";
+        (Have_Tools or else Answer_Schema /= "")
+        and then Tool_Syntax = Model_Runner.Tools.Tool_Call_JSON;
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
@@ -283,7 +292,8 @@ package body Model_Runner.Agent is
          begin
             if Have_Tools then
                Conv.Append_Reply
-                 (Messages, Gen.Generated_Text (Last_Result), Status, Reading);
+                 (Messages, Gen.Generated_Text (Last_Result), Status, Reading,
+                  Syntax => Tool_Syntax);
             else
                Conv.Append
                  (Messages, Conv.Assistant_Role,

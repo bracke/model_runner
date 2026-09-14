@@ -210,6 +210,12 @@ package Model_Runner.Agent is
    --    to this many worker tasks; every other call, and every dedup and
    --    approval decision, stays on this task, and results are appended in
    --    call order whatever order they finished in.
+   --  @param Tool_Syntax The shape the model writes its calls in, which the
+   --    loop reads them back by. The default, Tool_Call_JSON, is the
+   --    <tool_call> convention and is shaped by the call grammar; Function_XML
+   --    (MiniCPM's <function>/<param>) is read but not grammar-shaped, since
+   --    that family reasons in <think> blocks a call grammar could not admit,
+   --    so the loop leaves its output free and reads the calls out of it.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
@@ -254,6 +260,8 @@ package Model_Runner.Agent is
       Max_Seconds : Duration := 0.0;
       Max_Total_Tokens : Natural := 0;
       Max_Parallel : Positive := 1;
+      Tool_Syntax : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
       Watch      : Observer_Reference := null;

@@ -1,7 +1,5 @@
 with Ada.Unchecked_Deallocation;
 
-with Model_Runner.Tools;
-
 package body Model_Runner.Conversation is
 
    package E renames Model_Runner.Errors;
@@ -257,11 +255,13 @@ package body Model_Runner.Conversation is
      (Item    : in out History;
       Reply   : String;
       Status  : out E.Error_Info;
-      Reading : out E.Error_Info)
+      Reading : out E.Error_Info;
+      Syntax  : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON)
    is
       Asked : Model_Runner.Tools.Calls;
    begin
-      Model_Runner.Tools.Read_Calls (Asked, Reply, Reading);
+      Model_Runner.Tools.Read_Calls (Asked, Reply, Reading, Syntax => Syntax);
 
       if E.Is_Error (Reading)
         or else Model_Runner.Tools.Count (Asked) = 0

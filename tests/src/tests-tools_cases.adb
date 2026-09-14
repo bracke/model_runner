@@ -922,8 +922,10 @@ package body Tests.Tools_Cases is
       Assert (Tools.Count (Asked) = 1, "not one call");
       Assert (Tools.Called (Asked, 1) = "calculator",
               "wrong name: " & Tools.Called (Asked, 1));
+      --  A numeric param value becomes a JSON number, so a typed tool gets a
+      --  number; a non-numeric one (the op) stays a string.
       Assert (Tools.Arguments (Asked, 1)
-              = "{""a"": ""47"", ""op"": ""*"", ""b"": ""89""}",
+              = "{""a"": 47, ""op"": ""*"", ""b"": 89}",
               "wrong arguments: " & Tools.Arguments (Asked, 1));
       Tools.Close (Asked);
 

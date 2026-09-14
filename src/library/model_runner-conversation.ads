@@ -2,6 +2,7 @@ private with Ada.Finalization;
 
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Tools;
 
 --  Structured conversation history.
 --
@@ -132,11 +133,15 @@ package Model_Runner.Conversation is
    --    read leaves the reply appended whole, as text: a reply half taken
    --    apart is worse than one not taken apart at all, and the caller is
    --    told which of the two it has.
+   --  @param Syntax The shape the reply's calls are written in, passed to the
+   --    tools reader (see Model_Runner.Tools.Read_Calls).
    procedure Append_Reply
      (Item    : in out History;
       Reply   : String;
       Status  : out Model_Runner.Errors.Error_Info;
-      Reading : out Model_Runner.Errors.Error_Info);
+      Reading : out Model_Runner.Errors.Error_Info;
+      Syntax  : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON);
 
    --  Set or replace the system message, which is always message 1.
    --

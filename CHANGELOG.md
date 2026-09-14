@@ -44,6 +44,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM tool calls work end to end in the agent loop.** With
+  `--chat-template minicpm --agent`, the loop offers tools through the minicpm
+  format's `<tools>` block, reads the model's `<function>/<param>` calls
+  (`Tools.Read_Calls` `Function_XML`, threaded through `Conversation.Append_Reply`
+  and `Agent.Run`), runs them, and renders prior calls back with the `params`
+  filter. Because that family reasons in `<think>` blocks -- whose `<` a call
+  grammar's prose cannot carry -- the loop leaves a MiniCPM run's output free
+  rather than shaping it, and reads the calls out of it; the model emits them
+  reliably. A `<param>` value that reads as a number, `true`, `false` or
+  `null` is passed to the tool as that JSON type rather than a string, so a
+  tool expecting an integer gets one. Verified against the real
+  openbmb/MiniCPM5-1B: asked to add 47 and 89, the model called the calculator
+  tool, which returned 136, and the model answered from it.
+
 - **A built-in `minicpm` chat format (`--chat-template minicpm`).** MiniCPM5's
   own chat template will not compile in the engine's supported subset -- it
   captures blocks into `set`, walks a call's arguments as a mapping, steps a

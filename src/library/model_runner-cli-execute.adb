@@ -2629,6 +2629,13 @@ package body Model_Runner.CLI.Execute is
                      Max_Retries => Item.Max_Retries,
                      Max_Total_Tokens => Item.Max_Total_Tokens,
                      Max_Parallel => Positive'Max (1, Item.Max_Parallel),
+                     --  A model rendered with the minicpm format writes its
+                     --  calls in the <function> form, so the loop reads them
+                     --  that way; every other format uses <tool_call>.
+                     Tool_Syntax =>
+                       (if T.To_String (Item.Chat_Template) = "minicpm"
+                        then Model_Runner.Tools.Function_XML
+                        else Model_Runner.Tools.Tool_Call_JSON),
                      Compact     => Item.Compact,
                      Answer_Schema =>
                        (if Answer /= null then Answer.all else ""),
