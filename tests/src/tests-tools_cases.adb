@@ -534,6 +534,23 @@ package body Tests.Tools_Cases is
         & ASCII.NUL & ASCII.NUL
         & Utf16 ("moonlight equinox verse")
         & ASCII.NUL & ASCII.NUL;
+
+      --  A legacy .xls: OLE2, like the .doc, with a run of cell text.
+      Xls    : constant String :=
+        Ole & ASCII.NUL & ASCII.NUL
+        & "xlsledger quarterly figures"
+        & ASCII.NUL & ASCII.NUL;
+
+      --  An RTF document: a font table to skip, then the body text.
+      Rtf    : constant String :=
+        "{\rtf1\ansi {\fonttbl{\f0\froman Times;}} "
+        & "\b0 salmontrout lighthouse manuscript\par }";
+
+      --  An HTML page: tags around the text.
+      Html   : constant String :=
+        "<html><head><title>t</title></head><body>"
+        & "<h1>peregrine beacon heading</h1>"
+        & "<p>and some more prose</p></body></html>";
    begin
       if Ada.Directories.Exists (Dir) then
          Ada.Directories.Delete_Tree (Dir);
@@ -566,6 +583,10 @@ package body Tests.Tools_Cases is
             & "paragraph</w:t></w:r></w:p></w:body></w:document>"));
       --  A legacy .doc, OLE2 with single-byte and UTF-16LE text runs.
       Write_Bytes ("old.doc", Doc);
+      --  A legacy .xls (OLE2), an .rtf, and an .html.
+      Write_Bytes ("book.xls", Xls);
+      Write_File ("note.rtf", Rtf);
+      Write_File ("page.html", Html);
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -636,6 +657,30 @@ package body Tests.Tools_Cases is
       Assert (Begins (Room (1 .. Last), "[old.doc]"),
               "retrieve did not read the .doc's UTF-16 text: "
               & Room (1 .. Last));
+
+      --  The legacy .xls (OLE2), read the same way as the .doc.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""xlsledger quarterly""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[book.xls]"),
+              "retrieve did not read the legacy .xls: " & Room (1 .. Last));
+
+      --  The RTF's body text, its font table skipped.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""salmontrout lighthouse""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[note.rtf]"),
+              "retrieve did not read the .rtf's text: " & Room (1 .. Last));
+
+      --  The HTML page's text, its tags stripped.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""peregrine beacon""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[page.html]"),
+              "retrieve did not strip the .html tags: " & Room (1 .. Last));
 
       --  The binary file's words are searched for: it was skipped, so
       --  nothing matches even though the bytes are there.

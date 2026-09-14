@@ -1,4 +1,10 @@
+with Ada.Strings.Unbounded;
+
 package body Model_Runner.Tools.Text_Util is
+
+   package U renames Ada.Strings.Unbounded;
+
+   Max_Output : constant := 512 * 1024;
 
    function Collapse_Blanks (S : String) return String is
       R          : String (1 .. S'Length);
@@ -28,5 +34,113 @@ package body Model_Runner.Tools.Text_Util is
       end if;
       return R (1 .. N);
    end Collapse_Blanks;
+
+   ----------------
+   -- Strip_Tags --
+   ----------------
+
+   function Strip_Tags (S : String) return String is
+      Out_Buf : U.Unbounded_String;
+      I       : Integer := S'First;
+
+      function Room return Boolean is (U.Length (Out_Buf) < Max_Output);
+
+      procedure Put (C : Character) is
+      begin
+         if Room then
+            U.Append (Out_Buf, C);
+         end if;
+      end Put;
+   begin
+      while I <= S'Last and then Room loop
+         if S (I) = '<' then
+            while I <= S'Last and then S (I) /= '>' loop
+               I := I + 1;
+            end loop;
+            I := I + 1;
+            Put (' ');
+
+         elsif S (I) = '&' then
+            declare
+               J : Integer := I + 1;
+            begin
+               while J <= S'Last and then J < I + 12
+                 and then S (J) /= ';'
+               loop
+                  J := J + 1;
+               end loop;
+               if J <= S'Last and then S (J) = ';' then
+                  declare
+                     Name : constant String := S (I + 1 .. J - 1);
+                  begin
+                     if Name = "amp" then
+                        Put ('&');
+                     elsif Name = "lt" then
+                        Put ('<');
+                     elsif Name = "gt" then
+                        Put ('>');
+                     elsif Name = "quot" then
+                        Put ('"');
+                     elsif Name = "apos" or else Name = "#39" then
+                        Put (''');
+                     elsif Name = "nbsp" then
+                        Put (' ');
+                     elsif Name'Length >= 2 and then Name (Name'First) = '#'
+                     then
+                        declare
+                           Code : Integer := 0;
+                        begin
+                           if Name (Name'First + 1) in 'x' | 'X' then
+                              for K in Name'First + 2 .. Name'Last loop
+                                 case Name (K) is
+                                    when '0' .. '9' =>
+                                       Code := Code * 16
+                                         + (Character'Pos (Name (K))
+                                            - Character'Pos ('0'));
+                                    when 'a' .. 'f' =>
+                                       Code := Code * 16 + 10
+                                         + (Character'Pos (Name (K))
+                                            - Character'Pos ('a'));
+                                    when 'A' .. 'F' =>
+                                       Code := Code * 16 + 10
+                                         + (Character'Pos (Name (K))
+                                            - Character'Pos ('A'));
+                                    when others => null;
+                                 end case;
+                              end loop;
+                           else
+                              for K in Name'First + 1 .. Name'Last loop
+                                 if Name (K) in '0' .. '9' then
+                                    Code := Code * 10
+                                      + (Character'Pos (Name (K))
+                                         - Character'Pos ('0'));
+                                 end if;
+                              end loop;
+                           end if;
+                           if Code in 1 .. 127 then
+                              Put (Character'Val (Code));
+                           else
+                              Put (' ');
+                           end if;
+                        end;
+                     else
+                        Put (' ');
+                     end if;
+                  end;
+                  I := J + 1;
+               else
+                  Put ('&');
+                  I := I + 1;
+               end if;
+            end;
+
+         else
+            Put (S (I));
+            I := I + 1;
+         end if;
+      end loop;
+
+      return Collapse_Blanks (U.To_String (Out_Buf));
+   end Strip_Tags;
 
 end Model_Runner.Tools.Text_Util;

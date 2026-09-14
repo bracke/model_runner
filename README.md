@@ -270,8 +270,9 @@ model's calls are run and the answers fed back until it answers, a step
 budget (`--max-steps N`, eight by default) runs out, or a call repeats one
 already made. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a ranked search
-over a folder of text files, PDFs and Office documents (modern and legacy),
-OpenDocument and EPUB, a shell, Python, an HTTP fetch, a web search and
+over a folder of text files, PDFs, Office documents (modern and legacy),
+OpenDocument, EPUB, RTF and HTML, a shell, Python, an HTTP fetch, a web
+search and
 SQLite -- so unlike the rest of the program
 the agent's built-ins *do* start processes and open files. `http_get` and
 `web_search` fetch through an in-process HTTP/HTTPS client (the `httpclient`

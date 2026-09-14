@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`retrieve` reads RTF, HTML/XML, and legacy `.xls`/`.ppt`.** RTF
+  (`Model_Runner.Tools.RTF`) is stripped of its control words and groups --
+  the font, colour and style tables and the `\*` destinations skipped, the
+  `\'xx` and `\uN` escapes decoded -- to the text. HTML, XHTML and XML files
+  have their tags stripped by `Model_Runner.Tools.Text_Util.Strip_Tags`
+  (shared with the tag work the Office reader already did), entities decoded
+  and blanks collapsed. And `.xls` and `.ppt`, being OLE2 compound files like
+  `.doc`, go through the same printable-run reader. With these, `retrieve`
+  spans the common office and web formats end to end. The suite builds an RTF
+  with a font table to skip, an HTML page, and an OLE2 `.xls`, and confirms a
+  query for words only in each comes back labelled with the file.
+
 - **The document extractors collapse whitespace.** Stripping tags out of a
   PDF, an Office or OpenDocument file or an EPUB left long runs of the spaces
   and newlines the tags had stood between, so a returned passage read as

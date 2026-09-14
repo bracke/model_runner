@@ -13,6 +13,8 @@ with Http_Client.Errors;
 with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
+with Model_Runner.Tools.RTF;
+with Model_Runner.Tools.Text_Util;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tools.Builtin is
@@ -1097,6 +1099,15 @@ package body Model_Runner.Tools.Builtin is
                OO_Found : Boolean;
                OO_Kind  : constant Model_Runner.Tools.OOXML.Document_Kind :=
                  Model_Runner.Tools.OOXML.Kind_Of (Name, OO_Found);
+
+               --  The last four and five characters, lowercased, for reading
+               --  a file's kind off its name.
+               Ext4 : constant String :=
+                 (if Name'Length >= 4
+                  then Low (Name (Name'Last - 3 .. Name'Last)) else "");
+               Ext5 : constant String :=
+                 (if Name'Length >= 5
+                  then Low (Name (Name'Last - 4 .. Name'Last)) else "");
             begin
                if Name'Length = 0 or else Name (Name'First) = '.' then
                   null;
@@ -1131,21 +1142,49 @@ package body Model_Runner.Tools.Builtin is
                         Split (Prefix & Name, Text);
                      end if;
                   end;
-               elsif Name'Length >= 4
-                 and then Low (Name (Name'Last - 3 .. Name'Last)) = ".doc"
+               elsif (Ext4 = ".doc" or else Ext4 = ".xls"
+                      or else Ext4 = ".ppt")
                  and then Read_Raw (Full, 8)
                           = Character'Val (16#D0#) & Character'Val (16#CF#)
                             & Character'Val (16#11#) & Character'Val (16#E0#)
                             & Character'Val (16#A1#) & Character'Val (16#B1#)
                             & Character'Val (16#1A#) & Character'Val (16#E1#)
                then
-                  --  A legacy Word .doc: an OLE2 compound file. Its printable
-                  --  runs are read out and indexed.
+                  --  A legacy Word, Excel or PowerPoint file: an OLE2
+                  --  compound file. Its printable runs are read out and
+                  --  indexed.
                   Files := Files + 1;
                   declare
                      Text : constant String :=
                        Model_Runner.Tools.DOC.Extract_Text
                          (Read_Raw (Full, Doc_Bytes));
+                  begin
+                     if Text'Length > 0 then
+                        Split (Prefix & Name, Text);
+                     end if;
+                  end;
+               elsif Ext4 = ".rtf" and then Read_Raw (Full, 5) = "{\rtf" then
+                  --  An RTF document: its control words and groups stripped
+                  --  to the text.
+                  Files := Files + 1;
+                  declare
+                     Text : constant String :=
+                       Model_Runner.Tools.RTF.Extract_Text
+                         (Read_Raw (Full, Doc_Bytes));
+                  begin
+                     if Text'Length > 0 then
+                        Split (Prefix & Name, Text);
+                     end if;
+                  end;
+               elsif Ext4 = ".htm" or else Ext4 = ".xml"
+                 or else Ext5 = ".html"
+               then
+                  --  An HTML or XML file: its tags stripped to the text.
+                  Files := Files + 1;
+                  declare
+                     Text : constant String :=
+                       Model_Runner.Tools.Text_Util.Strip_Tags
+                         (Read_Capped (Full));
                   begin
                      if Text'Length > 0 then
                         Split (Prefix & Name, Text);
