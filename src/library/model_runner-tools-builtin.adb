@@ -10,6 +10,7 @@ with GNAT.OS_Lib;
 with Http_Client.Clients;
 with Http_Client.Errors;
 
+with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
 with Model_Runner.UTF8;
 
@@ -620,7 +621,7 @@ package body Model_Runner.Tools.Builtin is
 
    --  The most of a PDF's bytes read to pull text from -- a whole document,
    --  bounded so a huge file cannot fill memory.
-   PDF_Limit : constant := 4 * 1024 * 1024;
+   Doc_Bytes : constant := 4 * 1024 * 1024;
 
    --  Up to Limit of a file's raw bytes, as a String, or the empty string
    --  when it will not open. Unlike Read_Capped, this reads bytes as they
@@ -1092,6 +1093,9 @@ package body Model_Runner.Tools.Builtin is
             declare
                Name : constant String := Ada.Directories.Simple_Name (Item);
                Full : constant String := Ada.Directories.Full_Name (Item);
+               OO_Found : Boolean;
+               OO_Kind  : constant Model_Runner.Tools.OOXML.Document_Kind :=
+                 Model_Runner.Tools.OOXML.Kind_Of (Name, OO_Found);
             begin
                if Name'Length = 0 or else Name (Name'First) = '.' then
                   null;
@@ -1107,7 +1111,20 @@ package body Model_Runner.Tools.Builtin is
                   declare
                      Text : constant String :=
                        Model_Runner.Tools.PDF.Extract_Text
-                         (Read_Raw (Full, PDF_Limit));
+                         (Read_Raw (Full, Doc_Bytes));
+                  begin
+                     if Text'Length > 0 then
+                        Split (Prefix & Name, Text);
+                     end if;
+                  end;
+               elsif OO_Found and then Read_Raw (Full, 2) = "PK" then
+                  --  A Word, Excel, PowerPoint, OpenDocument or EPUB file:
+                  --  a ZIP of XML, whose text is pulled from the right parts.
+                  Files := Files + 1;
+                  declare
+                     Text : constant String :=
+                       Model_Runner.Tools.OOXML.Extract_Text
+                         (Read_Raw (Full, Doc_Bytes), OO_Kind);
                   begin
                      if Text'Length > 0 then
                         Split (Prefix & Name, Text);

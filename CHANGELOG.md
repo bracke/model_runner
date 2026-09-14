@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`retrieve` reads Word, Excel, PowerPoint, OpenDocument and EPUB files.**
+  These are ZIP archives of XML, so `Model_Runner.Tools.OOXML` reads the
+  archive's central directory directly, inflates the parts that hold text
+  for the format -- `word/document.xml` for a `.docx`, `xl/sharedStrings.xml`
+  for a `.xlsx`, the `ppt/slides/slide*.xml` for a `.pptx`, `content.xml` for
+  OpenDocument, the XHTML parts for an EPUB -- with the pure-Ada `zlib`, and
+  strips the XML to the words between the tags (named and numeric entities
+  decoded, each tag a word boundary). `retrieve` recognises them by extension
+  and the ZIP magic, ahead of the binary test, and indexes the extracted text
+  under the file's path. It gathers the words, not the layout: styling,
+  tables-as-tables and reading order are not preserved, which is all a search
+  needs. The suite builds a real `.docx` -- a ZIP with a deflate-compressed
+  `word/document.xml` -- and confirms a query for words only inside it comes
+  back labelled with the file.
+
 - **`retrieve` searches a folder tree, reads PDFs, and skips other
   binaries.** It descends into subdirectories now, labelling each passage
   with its path under the folder given (`notes/ocean.txt`, not just

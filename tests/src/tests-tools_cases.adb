@@ -457,6 +457,54 @@ package body Tests.Tools_Cases is
          end;
       end Compressed_PDF;
 
+      --  Little-endian fields for a hand-built ZIP.
+      function LE16 (V : Natural) return String
+      is (Character'Val (V mod 256) & Character'Val (V / 256 mod 256));
+      function LE32 (V : Natural) return String
+      is (LE16 (V mod 65536) & LE16 (V / 65536));
+
+      --  A one-entry ZIP holding Entry_Name with Xml, deflate-compressed --
+      --  the shape a .docx or .pptx has. CRC is left zero; the extractor
+      --  reads the sizes and the data, not the checksum.
+      function Zip_One (Entry_Name, Xml : String) return String is
+         use Zlib;
+         In_B   : Byte_Array (0 .. Xml'Length - 1);
+         Status : Status_Code;
+      begin
+         for I in In_B'Range loop
+            In_B (I) := Byte (Character'Pos (Xml (Xml'First + I)));
+         end loop;
+         declare
+            Comp_B : constant Byte_Array :=
+              Deflate_Raw (In_B, Status => Status);
+            Comp   : String (1 .. Comp_B'Length);
+            Nm     : constant Natural := Entry_Name'Length;
+         begin
+            for I in Comp_B'Range loop
+               Comp (Comp'First + (I - Comp_B'First)) :=
+                 Character'Val (Integer (Comp_B (I)));
+            end loop;
+            declare
+               Local : constant String :=
+                 "PK" & Character'Val (3) & Character'Val (4)
+                 & LE16 (20) & LE16 (0) & LE16 (8) & LE16 (0) & LE16 (0)
+                 & LE32 (0) & LE32 (Comp'Length) & LE32 (Xml'Length)
+                 & LE16 (Nm) & LE16 (0) & Entry_Name & Comp;
+               Central : constant String :=
+                 "PK" & Character'Val (1) & Character'Val (2)
+                 & LE16 (20) & LE16 (20) & LE16 (0) & LE16 (8) & LE16 (0)
+                 & LE16 (0) & LE32 (0) & LE32 (Comp'Length) & LE32 (Xml'Length)
+                 & LE16 (Nm) & LE16 (0) & LE16 (0) & LE16 (0) & LE16 (0)
+                 & LE32 (0) & LE32 (0) & Entry_Name;
+            begin
+               return Local & Central
+                 & "PK" & Character'Val (5) & Character'Val (6)
+                 & LE16 (0) & LE16 (0) & LE16 (1) & LE16 (1)
+                 & LE32 (Central'Length) & LE32 (Local'Length) & LE16 (0);
+            end;
+         end;
+      end Zip_One;
+
       function Begins (Hay, Head : String) return Boolean
       is (Hay'Length >= Head'Length
           and then Hay (Hay'First .. Hay'First + Head'Length - 1) = Head);
@@ -483,6 +531,13 @@ package body Tests.Tools_Cases is
       Write_File ("paper.pdf", PDF);
       --  A PDF whose stream is compressed, to exercise the inflate path.
       Write_Bytes ("deep.pdf", Compressed_PDF);
+      --  A .docx: a ZIP whose word/document.xml holds the text.
+      Write_Bytes
+        ("report.docx",
+         Zip_One
+           ("word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>kingfisher docx "
+            & "paragraph</w:t></w:r></w:p></w:body></w:document>"));
 
       --  A query whose words are in the dogs file: it ranks first.
       Runner.Run
@@ -524,6 +579,16 @@ package body Tests.Tools_Cases is
          Room, Last, Status);
       Assert (Begins (Room (1 .. Last), "[deep.pdf]"),
               "retrieve did not inflate and extract the compressed PDF: "
+              & Room (1 .. Last));
+
+      --  Words that live only inside the .docx's XML part: the ZIP was read,
+      --  the part inflated, and the tags stripped to the text.
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""kingfisher docx""}",
+         Room, Last, Status);
+      Assert (Begins (Room (1 .. Last), "[report.docx]"),
+              "retrieve did not extract text from the .docx: "
               & Room (1 .. Last));
 
       --  The binary file's words are searched for: it was skipped, so
