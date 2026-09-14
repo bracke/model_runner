@@ -238,9 +238,7 @@ package body Model_Runner.CLI.Execute is
    overriding procedure On_Call
      (Self : in out Agent_Watch; Named : String; Arguments : String) is
    begin
-      Pres.Put_Note
-        (Self.Screen.all, "cli.interactive.tool_call",
-         [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
+      Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
       if Self.Trace then
          Record_Event
            (Self,
@@ -252,9 +250,7 @@ package body Model_Runner.CLI.Execute is
    overriding procedure On_Result
      (Self : in out Agent_Watch; Named : String; Result : String) is
    begin
-      Pres.Put_Note
-        (Self.Screen.all, "cli.agent.tool_result",
-         [Loc.Named ("detail", Result)]);
+      Pres.Put_Tool_Result (Self.Screen.all, Result);
       if Self.Trace then
          Record_Event
            (Self,
@@ -2818,19 +2814,25 @@ package body Model_Runner.CLI.Execute is
                   Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
 
                   --  The calls and their results were shown as they happened
-                  --  by the watcher; here only the outcome is left to note.
-                  Pres.Put_Note
-                    (Screen, "cli.agent.stopped",
-                     [Loc.Named
-                        ("state",
-                         Model_Runner.Agent.Stop_Reason'Image
-                           (Loop_Out.Reason)),
-                      Loc.Named
-                        ("count",
-                         T.Image (Long_Long_Integer (Loop_Out.Steps))),
-                      Loc.Named
-                        ("total",
-                         T.Image (Long_Long_Integer (Loop_Out.Calls)))]);
+                  --  by the watcher; here only the outcome is left to note --
+                  --  a clean answer, a stop short of one, or a failure.
+                  Pres.Put_Agent_Outcome
+                    (Screen,
+                     State => Model_Runner.Agent.Stop_Reason'Image
+                                (Loop_Out.Reason),
+                     Steps => Loop_Out.Steps,
+                     Calls => Loop_Out.Calls,
+                     Result =>
+                       (case Loop_Out.Reason is
+                          when Model_Runner.Agent.Answered =>
+                            Pres.Answered_Well,
+                          when Model_Runner.Agent.Step_Limit
+                             | Model_Runner.Agent.Timed_Out
+                             | Model_Runner.Agent.Token_Limit
+                             | Model_Runner.Agent.Repeating
+                             | Model_Runner.Agent.Declined =>
+                            Pres.Stopped_Short,
+                          when others => Pres.Failed));
 
                   Status := E.Exit_Success;
                   if Loop_Out.Reason /= Model_Runner.Agent.Answered

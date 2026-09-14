@@ -223,6 +223,42 @@ package Model_Runner.Presentation is
    --  @param Key Stable message identifier of the marker.
    procedure Put_Prompt (Item : in out Console; Key : String);
 
+   --  The agent trace: the calls a run makes, their results, and how it ended,
+   --  written to standard error as the loop unfolds. These read as a flow --
+   --  a call, its result, the outcome -- rather than a column of identical
+   --  diagnostic lines, so a glyph leads each (an arrow in, an arrow out, a
+   --  mark for the end) and colour carries the tool name and the outcome's
+   --  kind. When the stream is not styled the glyph is plain ASCII and there
+   --  is no colour, so a redirected trace stays readable. The name and the
+   --  arguments are data, already escaped by the caller; nothing here is
+   --  localized but the leading glyph and the words are the same everywhere.
+
+   --  A call the model made, about to run.
+   procedure Put_Tool_Call
+     (Item : in out Console; Named : String; Arguments : String);
+
+   --  What running a call returned.
+   procedure Put_Tool_Result (Item : in out Console; Result : String);
+
+   --  How the agent loop ended, for the outcome line's glyph and colour: a
+   --  clean answer, a stop short of one (a budget, a repeat, a decline), or a
+   --  failure.
+   type Agent_Result is (Answered_Well, Stopped_Short, Failed);
+
+   --  The agent loop's final tally.
+   --
+   --  @param Item Console to write through.
+   --  @param State The stop reason, as its name.
+   --  @param Steps Model turns taken.
+   --  @param Calls Tool calls run.
+   --  @param Result Which kind of ending it was.
+   procedure Put_Agent_Outcome
+     (Item   : in out Console;
+      State  : String;
+      Steps  : Natural;
+      Calls  : Natural;
+      Result : Agent_Result);
+
    --  Write an indented help line to standard output.
    --
    --  Indentation is layout, so it lives here rather than inside a translated

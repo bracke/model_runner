@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The agent trace reads as a flow now, not a column of identical diagnostic
+  lines.** `run --agent` printed each call, result and outcome as a flat
+  `model_runner: ...` line. Each is now led by a glyph -- an arrow in for a
+  call, an arrow out for a result, a check, a warning sign or a cross for the
+  three kinds of ending -- and colour carries the tool name (accent), the
+  arguments and results (muted), and the outcome by kind: green for a clean
+  answer, yellow for a stop short of one (a budget, a repeat, a decline), red
+  for a failure, so an answered run and a failed one no longer look alike. It
+  goes through the presentation layer's existing style policy, so a
+  not-a-terminal, `NO_COLOR`, or `--color never` stream gets plain ASCII
+  markers (`->`, `<-`, `ok`/`!`/`x`) and no colour, and stays readable when
+  redirected.
+
 - **Compaction now leaves a digest of the turns it drops, instead of dropping
   them without a trace.** `--compact` kept the system message, the task, and
   the recent turns and dropped the rest; on a long run the agent lost its

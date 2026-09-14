@@ -21,6 +21,20 @@ package body Model_Runner.Presentation is
    package Opt renames Model_Runner.CLI.Options;
    package T renames Model_Runner.Text;
 
+   --  The agent-trace glyphs as their UTF-8 bytes, so this source stays plain
+   --  ASCII: an arrow in for a call, an arrow out for a result, a check, a
+   --  warning sign and a cross for the three kinds of ending.
+   Glyph_Call   : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#92#);
+   Glyph_Result : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#90#);
+   Glyph_Ok     : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#9C#) & Character'Val (16#93#);
+   Glyph_Warn   : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#9A#) & Character'Val (16#A0#);
+   Glyph_Fail   : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#9C#) & Character'Val (16#97#);
+
    ----------
    -- Open --
    ----------
@@ -277,6 +291,93 @@ package body Model_Runner.Presentation is
            (Item, "diagnostic.note",
             [Loc.Named ("detail", Message (Item, Key, Arguments))]));
    end Put_Note;
+
+   -------------------
+   -- Put_Tool_Call --
+   -------------------
+
+   procedure Put_Tool_Call
+     (Item : in out Console; Named : String; Arguments : String)
+   is
+      Styled : constant Boolean := Styles_Diagnostics (Item);
+   begin
+      if Item.Level = Opt.Quiet then
+         return;
+      end if;
+      Error_Line
+        (Item,
+         (if Styled then Glyph_Call & " " else "-> ")
+         & (if Styled
+            then Terminal_Styles.Decorate (Named, Terminal_Styles.Role_Header)
+            else Named)
+         & " "
+         & (if Styled
+            then Terminal_Styles.Decorate
+                   (Arguments, Terminal_Styles.Role_Muted)
+            else Arguments));
+   end Put_Tool_Call;
+
+   ---------------------
+   -- Put_Tool_Result --
+   ---------------------
+
+   procedure Put_Tool_Result (Item : in out Console; Result : String) is
+      Styled : constant Boolean := Styles_Diagnostics (Item);
+   begin
+      if Item.Level = Opt.Quiet then
+         return;
+      end if;
+      Error_Line
+        (Item,
+         (if Styled then Glyph_Result & " " else "<- ")
+         & (if Styled
+            then Terminal_Styles.Decorate (Result, Terminal_Styles.Role_Muted)
+            else Result));
+   end Put_Tool_Result;
+
+   -----------------------
+   -- Put_Agent_Outcome --
+   -----------------------
+
+   procedure Put_Agent_Outcome
+     (Item   : in out Console;
+      State  : String;
+      Steps  : Natural;
+      Calls  : Natural;
+      Result : Agent_Result)
+   is
+      Styled : constant Boolean := Styles_Diagnostics (Item);
+      Role   : constant Terminal_Styles.Style_Role :=
+        (case Result is
+           when Answered_Well => Terminal_Styles.Role_Success,
+           when Stopped_Short => Terminal_Styles.Role_Warning,
+           when Failed        => Terminal_Styles.Role_Error);
+      Glyph  : constant String :=
+        (if Styled
+         then (case Result is
+                 when Answered_Well => Glyph_Ok,
+                 when Stopped_Short => Glyph_Warn,
+                 when Failed        => Glyph_Fail)
+         else (case Result is
+                 when Answered_Well => "ok",
+                 when Stopped_Short => "!",
+                 when Failed        => "x"));
+   begin
+      if Item.Level = Opt.Quiet then
+         return;
+      end if;
+      Error_Line
+        (Item,
+         Glyph & " "
+         & Message
+             (Item, "cli.agent.stopped",
+              [Loc.Named ("state",
+                          (if Styled
+                           then Terminal_Styles.Decorate (State, Role)
+                           else State)),
+               Loc.Named ("count", T.Image (Long_Long_Integer (Steps))),
+               Loc.Named ("total", T.Image (Long_Long_Integer (Calls)))]));
+   end Put_Agent_Outcome;
 
    ------------------
    -- Put_Prompt --
