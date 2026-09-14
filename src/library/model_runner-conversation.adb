@@ -419,6 +419,89 @@ package body Model_Runner.Conversation is
         N > 0 and then Item.Messages (1).Sender = System_Role;
       First_User : Natural := 0;
       Keep       : array (1 .. Max_Messages) of Boolean := [others => False];
+
+      --  A short digest of the turns being dropped is folded into the task,
+      --  after a marker, so a long run keeps the thread of what it has done
+      --  even as its oldest turns go. It is bounded and carried forward: each
+      --  compaction adds to it and keeps only the most recent Synopsis_Cap
+      --  characters, so it can never grow the task without limit.
+      Synopsis_Cap : constant := 2560;
+      Marker       : constant String :=
+        ASCII.LF & ASCII.LF & "[earlier turns this run, compacted:]" & ASCII.LF;
+      Digest       : String (1 .. Synopsis_Cap);
+      D_Len        : Natural := 0;
+
+      procedure Add (S : String) is
+         Take : constant Natural := Natural'Min (S'Length, Synopsis_Cap - D_Len);
+      begin
+         if Take > 0 then
+            Digest (D_Len + 1 .. D_Len + Take) := S (S'First .. S'First + Take - 1);
+            D_Len := D_Len + Take;
+         end if;
+      end Add;
+
+      --  A message's text on one line, blanks collapsed, cut to Cap.
+      function One_Line (S : String; Cap : Positive) return String is
+         R          : String (1 .. Natural'Min (S'Length, Cap));
+         J          : Natural := 0;
+         Prev_Space : Boolean := False;
+      begin
+         for C of S loop
+            exit when J >= R'Length;
+            if C in ' ' | ASCII.LF | ASCII.CR | ASCII.HT then
+               if not Prev_Space and then J > 0 then
+                  J := J + 1;
+                  R (J) := ' ';
+                  Prev_Space := True;
+               end if;
+            else
+               J := J + 1;
+               R (J) := C;
+               Prev_Space := False;
+            end if;
+         end loop;
+         return R (1 .. J);
+      end One_Line;
+
+      --  Add the digest line for one dropped message.
+      procedure Digest_Message (I : Positive) is
+         Src : Message renames Item.Messages (I);
+      begin
+         case Src.Sender is
+            when Assistant_Role =>
+               if Src.Calls > 0 then
+                  Add ("- called");
+                  for K in 0 .. Src.Calls - 1 loop
+                     declare
+                        Row : Call_Row renames Item.Calls (Src.First_Call + K);
+                     begin
+                        Add ((if K = 0 then " " else ", ")
+                             & Item.Storage.all
+                                 (Row.Name_Offset + 1
+                                  .. Row.Name_Offset + Row.Name_Length));
+                     end;
+                  end loop;
+                  Add ([1 => ASCII.LF]);
+               elsif Src.Length > 0 then
+                  Add ("- said: " & One_Line
+                         (Item.Storage.all
+                            (Src.Offset + 1 .. Src.Offset + Src.Length), 100)
+                       & ASCII.LF);
+               end if;
+            when Tool_Role =>
+               Add ("- result: " & One_Line
+                      (Item.Storage.all
+                         (Src.Offset + 1 .. Src.Offset + Src.Length), 100)
+                    & ASCII.LF);
+            when User_Role =>
+               Add ("- asked: " & One_Line
+                      (Item.Storage.all
+                         (Src.Offset + 1 .. Src.Offset + Src.Length), 100)
+                    & ASCII.LF);
+            when System_Role =>
+               null;
+         end case;
+      end Digest_Message;
    begin
       Dropped := 0;
       if N = 0 or else Item.Storage = null then
@@ -464,11 +547,20 @@ package body Model_Runner.Conversation is
          return;
       end if;
 
+      --  Digest the turns about to go, in order, for the task to carry.
+      if First_User /= 0 then
+         for I in 1 .. N loop
+            if not Keep (I) then
+               Digest_Message (I);
+            end if;
+         end loop;
+      end if;
+
       --  Rebuild the pool and tables into fresh storage, keeping order. Each
       --  kept message's content is copied to the front, then its calls' name
       --  and argument slices after it, the way they were first laid down.
       declare
-         New_Storage  : Storage_Access :=
+         New_Storage  : constant Storage_Access :=
            new String (Item.Storage.all'Range);
          New_Messages : Message_Array := [others => <>];
          New_Calls    : Call_Array := [others => <>];
@@ -482,6 +574,75 @@ package body Model_Runner.Conversation is
                   Src     : Message renames Item.Messages (I);
                   New_Off : constant Natural := Fill;
                begin
+                  if I = First_User and then D_Len > 0 then
+                     --  The task carries the digest. Its stored content is the
+                     --  task, then the marker, then the synopsis so far; split
+                     --  it back into base and old synopsis, add the new lines,
+                     --  and keep only the last Synopsis_Cap characters of the
+                     --  synopsis so it stays bounded run after run.
+                     declare
+                        Old : String renames Item.Storage.all
+                          (Src.Offset + 1 .. Src.Offset + Src.Length);
+                        M_At : Natural := 0;
+                     begin
+                        for P in Old'First .. Old'Last - Marker'Length + 1 loop
+                           if Old (P .. P + Marker'Length - 1) = Marker then
+                              M_At := P;
+                              exit;
+                           end if;
+                        end loop;
+                        declare
+                           Base_Last : constant Natural :=
+                             (if M_At = 0 then Old'Last else M_At - 1);
+                           Syn_First : constant Natural :=
+                             (if M_At = 0 then Old'Last + 1
+                              else M_At + Marker'Length);
+                           Old_Syn   : String renames Old (Syn_First .. Old'Last);
+                           Combined  : constant Natural := Old_Syn'Length + D_Len;
+                           Kept      : constant Natural :=
+                             Natural'Min (Combined, Synopsis_Cap);
+                           Skip      : constant Natural := Combined - Kept;
+                        begin
+                           --  Base, then the marker.
+                           New_Storage.all (Fill + 1 .. Fill + Base_Last
+                                            - Old'First + 1) :=
+                             Old (Old'First .. Base_Last);
+                           Fill := Fill + Base_Last - Old'First + 1;
+                           New_Storage.all (Fill + 1 .. Fill + Marker'Length) :=
+                             Marker;
+                           Fill := Fill + Marker'Length;
+                           --  The last Kept characters of Old_Syn & Digest.
+                           if Skip < Old_Syn'Length then
+                              New_Storage.all
+                                (Fill + 1 .. Fill + Old_Syn'Length - Skip) :=
+                                Old_Syn (Old_Syn'First + Skip .. Old_Syn'Last);
+                              Fill := Fill + Old_Syn'Length - Skip;
+                              New_Storage.all (Fill + 1 .. Fill + D_Len) :=
+                                Digest (1 .. D_Len);
+                              Fill := Fill + D_Len;
+                           else
+                              declare
+                                 D_Skip : constant Natural :=
+                                   Skip - Old_Syn'Length;
+                              begin
+                                 New_Storage.all
+                                   (Fill + 1 .. Fill + D_Len - D_Skip) :=
+                                   Digest (D_Skip + 1 .. D_Len);
+                                 Fill := Fill + D_Len - D_Skip;
+                              end;
+                           end if;
+                        end;
+                     end;
+                     M := M + 1;
+                     New_Messages (M) :=
+                       (Sender     => Src.Sender,
+                        Offset     => New_Off,
+                        Length     => Fill - New_Off,
+                        First_Call => 0,
+                        Calls      => 0);
+                     goto Next_Message;
+                  end if;
+
                   New_Storage.all (Fill + 1 .. Fill + Src.Length) :=
                     Item.Storage.all (Src.Offset + 1 .. Src.Offset + Src.Length);
                   Fill := Fill + Src.Length;
@@ -523,6 +684,8 @@ package body Model_Runner.Conversation is
                      end;
                   end loop;
                end;
+               <<Next_Message>>
+               null;
             end if;
          end loop;
 

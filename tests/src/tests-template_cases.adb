@@ -1654,9 +1654,33 @@ package body Tests.Template_Cases is
       Assert (Conv.Sender_At (Messages, 1) = Conv.System_Role
               and then Conv.Content_At (Messages, 1) = "Be brief.",
               "compaction lost the system message");
-      Assert (Conv.Sender_At (Messages, 2) = Conv.User_Role
-              and then Conv.Content_At (Messages, 2) = "the task",
-              "compaction lost the task");
+      declare
+         Task_Text : constant String := Conv.Content_At (Messages, 2);
+
+         function Contains (Whole, Part : String) return Boolean is
+         begin
+            if Part'Length = 0 or else Whole'Length < Part'Length then
+               return Part'Length = 0;
+            end if;
+            for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+               if Whole (P .. P + Part'Length - 1) = Part then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Contains;
+      begin
+         Assert (Conv.Sender_At (Messages, 2) = Conv.User_Role
+                 and then Task_Text'Length >= 8
+                 and then Task_Text (Task_Text'First .. Task_Text'First + 7)
+                   = "the task",
+                 "compaction lost the task");
+         --  The dropped turns leave a digest folded into the task, so the run
+         --  keeps the thread of what it did -- including the calls it made.
+         Assert (Contains (Task_Text, "calc"),
+                 "compaction folded no digest of the dropped calls into "
+                 & "the task");
+      end;
 
       declare
          N     : constant Positive := Conv.Length (Messages);

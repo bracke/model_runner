@@ -346,7 +346,11 @@ eval, a library embedding, a closed input -- `ask_user` gets no answer
 rather than blocking, and the loop goes on. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
-turns kept. `--embed-model PATH` gives the `retrieve` tool a model trained to
+turns kept, and a short digest of what was dropped -- the calls made and what
+they returned, in a line each -- is folded into the task, so the run keeps
+the thread of what it has already done rather than losing it outright. The
+digest is bounded and carried forward, so it never grows the task without
+limit. `--embed-model PATH` gives the `retrieve` tool a model trained to
 embed, so it ranks a folder's passages by meaning rather than by the words
 they share (without it, the model being run embeds, or the ranking stays
 lexical). `--json-schema` (or `--json-schema-file`), which constrains a

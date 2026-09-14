@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Compaction now leaves a digest of the turns it drops, instead of dropping
+  them without a trace.** `--compact` kept the system message, the task, and
+  the recent turns and dropped the rest; on a long run the agent lost its
+  early context entirely. `Conversation.Compact` now folds a short digest of
+  the dropped turns -- the calls made and what they returned, a line each --
+  into the task, after a marker, so the run keeps the thread of what it has
+  done. The digest is bounded (the most recent 2560 characters) and carried
+  forward across compactions, so it never grows the task without limit. This
+  is the conversation counterpart to the head-and-tail keep for an over-long
+  single result.
+
 - **An over-long tool result now keeps its head and its tail, not only its
   head.** A result past the call buffer was cut at the head with a
   `...(truncated)` note, losing the end -- often where a summary, a total, or
