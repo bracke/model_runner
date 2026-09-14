@@ -299,8 +299,15 @@ own -- same tools, its own step and token budget, a session and conversation
 apart from the caller's -- and only the sub-agent's final answer comes back,
 so the detail of the piece never fills the caller's context. A sub-agent is
 given no delegator of its own, so delegation goes one level deep and no
-further; when a second session will not open (most often for want of memory)
-`delegate` declines and the run goes on with the other tools.
+further; when no sub-agent session will open (most often for want of memory)
+`delegate` declines and the run goes on with the other tools. With
+`--max-parallel` above one, on a processor backend, the delegator opens a
+small pool of sub-agent sessions rather than one, and several `delegate`
+calls in a turn fan out -- each subtask on a session of its own, running at
+the same time -- which is the map half of a map-reduce: split a job across
+sub-agents, then combine what they return. (The device backend evaluates one
+session at a time, so there delegation stays one subtask at a time whatever
+`--max-parallel` says.)
 `--max-parallel N` lets a turn's calls overlap: when the model makes several
 calls at once, the ones that are safe to run beside each other -- a read, a
 network fetch, a search that ranks by words -- run together on up to N worker

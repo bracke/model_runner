@@ -1584,13 +1584,19 @@ package body Model_Runner.Tools.Builtin is
    ---------
 
    overriding function Parallel_Safe
-     (Self : Instance; Named : String) return Boolean
-   is
-     (Named in "calculator" | "string_length" | "reverse_text" | "lookup"
-        | "base64_encode" | "base64_decode" | "now"
-        | "read_file" | "list_directory"
-        | "http_get" | "web_search"
-      or else (Named = "retrieve" and then Self.Embed = null));
+     (Self : Instance; Named : String) return Boolean is
+   begin
+      --  delegate overlaps only when its delegator can run two subtasks at
+      --  once -- more than one sub-session, on a backend that allows it.
+      if Named = "delegate" then
+         return Self.Sub /= null and then Self.Sub.Parallel_Delegates;
+      end if;
+      return Named in "calculator" | "string_length" | "reverse_text"
+          | "lookup" | "base64_encode" | "base64_decode" | "now"
+          | "read_file" | "list_directory"
+          | "http_get" | "web_search"
+        or else (Named = "retrieve" and then Self.Embed = null);
+   end Parallel_Safe;
 
    overriding procedure Run
      (Self      : in out Instance;

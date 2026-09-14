@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Fan-out delegation: several `delegate` calls in a turn now run at once.**
+  Delegation kept one sub-agent session, so `delegate` was serial; it now
+  keeps a small pool (up to four) opened when `--max-parallel` is above one on
+  a processor backend, and `Builtin.Parallel_Safe` marks `delegate` safe to
+  overlap when the delegator reports (through the new `Delegator`-interface
+  `Parallel_Delegates`) that it has more than one session. A subtask leases a
+  session for its sub-agent's run and gives it back after, so as many subtasks
+  as there are sessions run at the same time -- the map half of a map-reduce.
+  Each pool session computes on its own worker task (opened with no shared
+  worker pool), which llama's processor backends allow for two sessions at
+  once; the device backend evaluates one session at a time, so there
+  delegation stays serial whatever `--max-parallel` says. Sessions that fail
+  to open (usually for memory) are simply not leased -- with none, `delegate`
+  declines; with one, it runs one subtask at a time.
+
 - **Parallel tool execution: `--max-parallel N` (`Agent.Run`'s
   `Max_Parallel`).** When the model makes several calls in one turn, the ones
   safe to run beside each other now overlap on up to N worker tasks instead of

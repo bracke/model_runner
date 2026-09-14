@@ -317,24 +317,80 @@ package body Model_Runner.CLI.Execute is
       Last := Natural (Width) - 1;
    end Embed;
 
+   --  A lease over a pool of sub-agent sessions, so several delegated
+   --  subtasks run at once, each on a session of its own. Acquire waits when
+   --  every session is busy; Open makes the sessions that opened leasable.
+   type Availability is array (Positive range <>) of Boolean;
+
+   protected type Session_Leaser (Count : Positive) is
+      procedure Open (Ready : Natural);
+      entry Acquire (Slot : out Positive);
+      procedure Release (Slot : Positive);
+   private
+      Available  : Availability (1 .. Count) := [others => False];
+      Free_Count : Natural := 0;
+   end Session_Leaser;
+
+   protected body Session_Leaser is
+      procedure Open (Ready : Natural) is
+      begin
+         for I in 1 .. Ready loop
+            Available (I) := True;
+         end loop;
+         Free_Count := Ready;
+      end Open;
+
+      entry Acquire (Slot : out Positive) when Free_Count > 0 is
+      begin
+         Slot := 1;
+         for I in Available'Range loop
+            if Available (I) then
+               Available (I) := False;
+               Free_Count    := Free_Count - 1;
+               Slot          := I;
+               exit;
+            end if;
+         end loop;
+      end Acquire;
+
+      procedure Release (Slot : Positive) is
+      begin
+         Available (Slot) := True;
+         Free_Count       := Free_Count + 1;
+      end Release;
+   end Session_Leaser;
+
+   type Session_Pool is array (Positive range <>) of L.Session;
+
    --  Runs a delegated subtask for the agent's delegate tool, on a fresh
-   --  agent loop of its own. It keeps a session apart from the caller's, so
-   --  the caller's loop -- suspended on this very call -- is undisturbed, and
-   --  it gives the sub-agent no delegator, so a sub-agent's own delegate call
-   --  is declined and delegation cannot recurse without bound. The sub-agent
-   --  starts a conversation of its own, seeded with the task, runs to an
-   --  answer under its own step and token budget, and hands back only that
-   --  answer -- the caller never sees the sub-agent's steps.
+   --  agent loop of its own. It leases a session from a pool kept apart from
+   --  the caller's, so the caller's loop -- suspended on this very call -- is
+   --  undisturbed, and several subtasks may run at once, each on a session of
+   --  its own; it gives the sub-agent no delegator, so a sub-agent's own
+   --  delegate call is declined and delegation cannot recurse without bound.
+   --  The sub-agent starts a conversation of its own, seeded with the task,
+   --  runs to an answer under its own step and token budget, and hands back
+   --  only that answer -- the caller never sees the sub-agent's steps.
    type Model_Delegator
      (Src    : access constant L.Model'Class;
-      Sess   : access L.Session;
       Req    : access constant Gen.Request;
       Stops  : access Model_Runner.Stops.Set;
       Time   : Model_Runner.Clocks.Clock_Reference;
       Seed   : Model_Runner.Entropy.Source_Reference;
       Steps  : Positive;
-      Budget : Natural) is
-     limited new Model_Runner.Tools.Builtin.Delegator with null record;
+      Budget : Natural;
+      Count  : Positive) is
+     limited new Model_Runner.Tools.Builtin.Delegator with record
+        Sessions : Session_Pool (1 .. Count);
+        Leases   : Session_Leaser (Count);
+        Ready    : Natural := 0;   --  sessions that opened; 0 until Open
+     end record;
+
+   --  Two subtasks may overlap when the pool holds more than one open
+   --  session (which the CLI opens only on a backend that evaluates two at
+   --  once, so this need not check the backend again).
+   overriding function Parallel_Delegates
+     (Self : Model_Delegator) return Boolean is (Self.Ready > 1);
 
    overriding procedure Run_Sub
      (Self        : in out Model_Delegator;
@@ -350,11 +406,7 @@ package body Model_Runner.CLI.Execute is
       Last        : out Natural;
       Status      : out E.Error_Info)
    is
-      Sub_Msgs   : Conv.History;
-      Sub_Tools  : Model_Runner.Tools.Definitions;
-      Sub_Runner : aliased Model_Runner.Tools.Builtin.Instance;
-      Loop_Out   : Model_Runner.Agent.Outcome;
-      Cond       : E.Error_Info;
+      Slot : Positive;
 
       System_Prompt : constant String :=
         "You are a sub-agent handed one self-contained task. Use the tools "
@@ -365,68 +417,81 @@ package body Model_Runner.CLI.Execute is
       Last   := 0;
       Status := E.Success;
 
-      --  Clear the sub-agent's session so the task starts from nothing and no
-      --  earlier subtask's state leaks in.
-      L.Reset (Self.Sess.all);
+      --  Take a session of our own; wait if every one is busy.
+      Self.Leases.Acquire (Slot);
 
-      Model_Runner.Tools.Read
-        (Sub_Tools, Model_Runner.Tools.Builtin.All_Definitions_Text, Cond);
-      if E.Is_Error (Cond) then
-         Status := Cond;
-         return;
-      end if;
+      declare
+         Sub_Msgs   : Conv.History;
+         Sub_Tools  : Model_Runner.Tools.Definitions;
+         Sub_Runner : aliased Model_Runner.Tools.Builtin.Instance;
+         Loop_Out   : Model_Runner.Agent.Outcome;
+         Cond       : E.Error_Info;
+      begin
+         Model_Runner.Tools.Read
+           (Sub_Tools, Model_Runner.Tools.Builtin.All_Definitions_Text, Cond);
+         if E.Is_Error (Cond) then
+            Status := Cond;
+         else
+            Conv.Open (Sub_Msgs, Status => Cond);
+            if E.Is_Error (Cond) then
+               Status := Cond;
+            else
+               Conv.Set_System (Sub_Msgs, System_Prompt, Cond);
+               Conv.Append (Sub_Msgs, Conv.User_Role, Instruction, Cond);
+               if E.Is_Error (Cond) then
+                  Status := Cond;
+               else
+                  --  Clear the session so the task starts from nothing, no
+                  --  earlier subtask's state leaking in. Sub_Runner is left
+                  --  with no delegator, so it declines a delegate call:
+                  --  delegation goes one level deep and no further.
+                  L.Reset (Self.Sessions (Slot));
+                  Model_Runner.Agent.Run
+                    (Source           => Self.Src.all,
+                     Session          => Self.Sessions (Slot),
+                     Messages         => Sub_Msgs,
+                     Offered          => Sub_Tools,
+                     Executor         => Sub_Runner,
+                     Generation       => Self.Req.all,
+                     Stop_Set         => Self.Stops.all,
+                     Sink             => null,
+                     Time             => Self.Time,
+                     Seeds            => Self.Seed,
+                     Max_Steps        => Self.Steps,
+                     Max_Total_Tokens => Self.Budget,
+                     Compact          => True,
+                     Result           => Loop_Out);
 
-      --  Sub_Runner is left with no delegator, so it declines a delegate
-      --  call: delegation goes one level deep and no further.
-
-      Conv.Open (Sub_Msgs, Status => Cond);
-      if E.Is_Error (Cond) then
-         Status := Cond;
-         return;
-      end if;
-      Conv.Set_System (Sub_Msgs, System_Prompt, Cond);
-      Conv.Append (Sub_Msgs, Conv.User_Role, Instruction, Cond);
-      if E.Is_Error (Cond) then
-         Conv.Close (Sub_Msgs);
-         Status := Cond;
-         return;
-      end if;
-
-      Model_Runner.Agent.Run
-        (Source           => Self.Src.all,
-         Session          => Self.Sess.all,
-         Messages         => Sub_Msgs,
-         Offered          => Sub_Tools,
-         Executor         => Sub_Runner,
-         Generation       => Self.Req.all,
-         Stop_Set         => Self.Stops.all,
-         Sink             => null,
-         Time             => Self.Time,
-         Seeds            => Self.Seed,
-         Max_Steps        => Self.Steps,
-         Max_Total_Tokens => Self.Budget,
-         Compact          => True,
-         Result           => Loop_Out);
-
-      --  The answer is the last assistant turn's text.
-      for I in reverse 1 .. Conv.Length (Sub_Msgs) loop
-         if Conv.Sender_At (Sub_Msgs, I) = Conv.Assistant_Role then
-            declare
-               Answer : constant String := Conv.Content_At (Sub_Msgs, I);
-               Take   : constant Natural :=
-                 Natural'Min (Answer'Length, Result'Length);
-            begin
-               if Take > 0 then
-                  Result (Result'First .. Result'First + Take - 1) :=
-                    Answer (Answer'First .. Answer'First + Take - 1);
-                  Last := Take;
+                  --  The answer is the last assistant turn's text.
+                  for I in reverse 1 .. Conv.Length (Sub_Msgs) loop
+                     if Conv.Sender_At (Sub_Msgs, I) = Conv.Assistant_Role then
+                        declare
+                           Answer : constant String :=
+                             Conv.Content_At (Sub_Msgs, I);
+                           Take   : constant Natural :=
+                             Natural'Min (Answer'Length, Result'Length);
+                        begin
+                           if Take > 0 then
+                              Result (Result'First .. Result'First + Take - 1)
+                                := Answer (Answer'First .. Answer'First
+                                           + Take - 1);
+                              Last := Take;
+                           end if;
+                        end;
+                        exit;
+                     end if;
+                  end loop;
                end if;
-            end;
-            exit;
+               Conv.Close (Sub_Msgs);
+            end if;
          end if;
-      end loop;
+      exception
+         when others =>
+            Status := E.Make (E.Internal_Unexpected_Exception);
+      end;
 
-      Conv.Close (Sub_Msgs);
+      --  Always give the session back, whatever happened.
+      Self.Leases.Release (Slot);
    end Run_Sub;
 
    --  Runs a tool call by handing it to an external program: the program is
@@ -2348,24 +2413,39 @@ package body Model_Runner.CLI.Execute is
                   Embed_Session'Access);
                Embed_Open   : Boolean := False;
 
-               --  A session apart from the run's own, on which a delegated
-               --  subtask runs its sub-agent, so the run's loop is undisturbed.
-               --  Its context is the run's, or a bounded default when the run
-               --  left the context to the model, so a second session does not
-               --  double an unbounded one.
-               Sub_Session  : aliased L.Session;
-               Sub_Open     : Boolean := False;
+               --  Sessions apart from the run's own, on which delegated
+               --  subtasks run their sub-agents, so the run's loop is
+               --  undisturbed. Their context is the run's, or a bounded
+               --  default when the run left the context to the model, so a
+               --  second session does not double an unbounded one. One when
+               --  the loop runs calls one at a time or the backend evaluates
+               --  one session at a time (the device backend); otherwise a
+               --  small pool, so several subtasks may run at once.
+               Sub_Ready    : Natural := 0;
                Sub_Context  : constant Natural :=
                  (if Item.Context_Size = 0 then 8192 else Item.Context_Size);
+               Sub_Count    : constant Positive :=
+                 (if Item.Max_Parallel > 1
+                    and then Model_Runner.Backend."/="
+                               (Item.Backend,
+                                Model_Runner.Backend.Backend_Device)
+                  then Positive'Min (Item.Max_Parallel, 4)
+                  else 1);
+               --  A shared pool is safe only when one session evaluates at a
+               --  time; when several run at once each session computes on its
+               --  own worker task instead (null), which the processor backends
+               --  allow.
+               Sub_Workers  : constant Model_Runner.Backend.CPU.Pool_Reference :=
+                 (if Sub_Count > 1 then null else Team);
                Delegate_Runner : aliased Model_Delegator
                  (Src    => Prepared'Access,
-                  Sess   => Sub_Session'Access,
                   Req    => Request'Access,
                   Stops  => Stop_Set'Access,
                   Time   => Clock'Unchecked_Access,
                   Seed   => Seeds'Unchecked_Access,
                   Steps  => Positive'Max (1, Item.Max_Steps),
-                  Budget => Item.Max_Total_Tokens);
+                  Budget => Item.Max_Total_Tokens,
+                  Count  => Sub_Count);
 
                --  The schema the final answer must match, from --json-schema
                --  or --json-schema-file, or null for a free-text answer.
@@ -2575,17 +2655,25 @@ package body Model_Runner.CLI.Execute is
                      Built_Runner.Use_Embedder (Embedder'Unchecked_Access);
                   end if;
 
-                  --  Open the sub-agent session and give the delegate tool a
-                  --  delegator. If it will not open -- most likely for want of
-                  --  memory for a second session -- delegate declines and the
-                  --  run goes on with the other tools.
-                  L.Open
-                    (Sub_Session, Prepared, Sub_Context,
-                     Session_Bounds => Session_Bounds (Item),
-                     Workers => Team, Cache => Item.Cache,
-                     Status => Condition);
-                  if E.Is_Ok (Condition) then
-                     Sub_Open := True;
+                  --  Open the sub-agent sessions and give the delegate tool a
+                  --  delegator. Open as many as will -- a second session most
+                  --  often fails for want of memory -- and stop at the first
+                  --  that does not; the ones that opened are leasable. With
+                  --  none, delegate declines and the run goes on with the
+                  --  other tools; with one, delegation runs one subtask at a
+                  --  time; with more, subtasks overlap.
+                  for I in 1 .. Sub_Count loop
+                     L.Open
+                       (Delegate_Runner.Sessions (I), Prepared, Sub_Context,
+                        Session_Bounds => Session_Bounds (Item),
+                        Workers => Sub_Workers, Cache => Item.Cache,
+                        Status => Condition);
+                     exit when E.Is_Error (Condition);
+                     Sub_Ready := Sub_Ready + 1;
+                  end loop;
+                  Delegate_Runner.Leases.Open (Sub_Ready);
+                  Delegate_Runner.Ready := Sub_Ready;
+                  if Sub_Ready >= 1 then
                      Built_Runner.Use_Delegator
                        (Delegate_Runner'Unchecked_Access);
                   end if;
@@ -2599,9 +2687,9 @@ package body Model_Runner.CLI.Execute is
                   if Embed_Open then
                      L.Close (Embed_Session);
                   end if;
-                  if Sub_Open then
-                     L.Close (Sub_Session);
-                  end if;
+                  for I in 1 .. Sub_Ready loop
+                     L.Close (Delegate_Runner.Sessions (I));
+                  end loop;
                end if;
 
                Free_Text (Answer);

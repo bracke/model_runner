@@ -94,6 +94,16 @@ package Model_Runner.Tools.Builtin is
       Last        : out Natural;
       Status      : out Model_Runner.Errors.Error_Info) is abstract;
 
+   --  Whether two delegated subtasks may run at the same time. Delegation
+   --  runs each sub-agent on a session of its own; a delegator with more than
+   --  one such session, on a backend that evaluates two at once, says True,
+   --  and the delegate tool is then parallel-safe (see Instance's
+   --  Parallel_Safe). The default is False: one subtask at a time.
+   --
+   --  @param Self The delegator.
+   --  @return Whether two subtasks may overlap.
+   function Parallel_Delegates (Self : Delegator) return Boolean is abstract;
+
    --  A reference to whatever runs a delegated subtask.
    type Delegator_Reference is access all Delegator'Class;
 
