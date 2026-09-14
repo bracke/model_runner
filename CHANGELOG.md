@@ -15,17 +15,20 @@ Keep a Changelog and the project uses semantic versioning.
   labelled with its file. It always scores lexically first: a passage by how
   often the query's words occur in it, each word weighted down by how many
   passages carry it, so a rare word counts for more than a common one. When
-  `run --agent` has a model loaded, it then re-scores by meaning -- the tool
-  embeds the query and the candidate passages on a second session (so the
-  conversation's own session is never disturbed) and ranks by cosine
-  similarity, which finds a passage that shares the query's sense even where
-  it shares few of its words. Embedding is a pass over the model, so it is
-  bounded: the whole set of passages when small, otherwise the ones the
-  lexical score already liked. Without an embedder -- the library used on its
-  own, or a folder too large -- the lexical ranking stands. The lexical path
-  reads files only and is covered in the mandatory suite (it ranks the
-  passage carrying the query's words first and finds nothing for words in no
-  file); the semantic re-ranking was exercised by hand against a local model.
+  `run --agent` can embed, it then re-scores by meaning -- the tool embeds the
+  query and the candidate passages on a second session (so the conversation's
+  own session is never disturbed) and ranks by cosine similarity, which finds
+  a passage that shares the query's sense even where it shares few of its
+  words. `--embed-model PATH` names a model trained to embed for this, which
+  ranks better than a generation model asked to; without it the model being
+  run embeds, and without any model the ranking stays lexical. Embedding is a
+  pass over the model, so it is bounded: the whole set of passages when small,
+  otherwise the ones the lexical score already liked. The lexical path reads
+  files only and is covered in the mandatory suite (it ranks the passage
+  carrying the query's words first and finds nothing for words in no file);
+  the semantic re-ranking was exercised by hand, with `all-MiniLM-L6-v2` as
+  the embedding model, ranking a cat passage first for the query "which feline
+  animal meows" -- which shares no word with it.
 
 - **`http_get` and `web_search` fetch through an Ada HTTP client, not curl.**
   Both ran `curl` in a subprocess; they now call `httpclient`'s streaming

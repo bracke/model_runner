@@ -288,7 +288,10 @@ another way to the answer. `--max-retries N` gives a generation that errors a
 second try instead of ending the run on the first stumble. `--compact` keeps a
 long tool-using run going when the conversation outgrows what will render:
 the oldest turns are dropped, the system message, the task and the recent
-turns kept. `--json-schema` (or `--json-schema-file`), which constrains a
+turns kept. `--embed-model PATH` gives the `retrieve` tool a model trained to
+embed, so it ranks a folder's passages by meaning rather than by the words
+they share (without it, the model being run embeds, or the ranking stays
+lexical). `--json-schema` (or `--json-schema-file`), which constrains a
 plain run's whole output, here constrains the agent's final answer: the
 reply becomes a tool call or an object in that shape, so the answer the loop
 ends on is valid against the schema rather than prose to be parsed. It holds

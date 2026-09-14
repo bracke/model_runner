@@ -320,6 +320,13 @@ package Model_Runner.CLI.Options is
       --  keeping the system message, the task, and the most recent turns.
       Compact : Boolean := False;
 
+      --  A model to embed with for the agent's retrieve tool, so it ranks a
+      --  folder's passages by meaning. Empty means retrieve embeds with the
+      --  model being run, or, if that is set aside, ranks by words alone. A
+      --  model trained to embed ranks better than a generation model asked
+      --  to.
+      Embed_Model_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
       --  What the caller asks of the rotation, over what the file states.
       --
       --  A model is trained at one context length and its rotation is

@@ -1706,6 +1706,13 @@ package body Model_Runner.CLI.Execute is
       Draft_Session   : aliased L.Session;
       Draft_Ready     : Boolean := False;
 
+      --  A model loaded only to embed with, for the agent's retrieve tool,
+      --  when --embed-model named one. Held here so it outlives the loop.
+      Embed_Source    : Shards.Shard_Set;
+      Embed_Container : Containers.Container;
+      Embed_Model     : aliased L.Model;
+      Embed_Model_Ready : Boolean := False;
+
       --  Two models that do not number their tokens alike.
       function Draft_Mismatch (Draft, Wanted : Natural) return E.Error_Info is
          Result : E.Error_Info := E.Make (E.Arch_Unsupported_Feature);
@@ -1751,6 +1758,12 @@ package body Model_Runner.CLI.Execute is
          L.Close (Prepared, Ignored);
          Containers.Close (Container);
          Shards.Close (Source);
+         if Embed_Model_Ready then
+            L.Close (Embed_Model, Ignored);
+            Containers.Close (Embed_Container);
+            Shards.Close (Embed_Source);
+            Embed_Model_Ready := False;
+         end if;
          Gen.Release (Outcome);
          Free_Text (Prompt);
       end Cleanup;
@@ -1930,6 +1943,21 @@ package body Model_Runner.CLI.Execute is
             end if;
 
             Draft_Ready := True;
+         end if;
+
+         --  A model to embed with for the agent's retrieve tool, loaded like
+         --  any other and used on its own session. It need not number its
+         --  tokens like the model being run -- it only reads text and reports
+         --  a vector -- so, unlike the draft, no vocabulary check is due.
+         if Item.Agent and then not T.Is_Empty (Item.Embed_Model_Path) then
+            Load (Item, Screen, Embed_Source, Embed_Container, Embed_Model,
+                  True, null, Cancel'Unchecked_Access, Condition,
+                  Instead => T.To_String (Item.Embed_Model_Path));
+            if E.Is_Error (Condition) then
+               Fail (Condition);
+               return;
+            end if;
+            Embed_Model_Ready := True;
          end if;
 
          --  A schema is a grammar written in another notation, so it
@@ -2146,8 +2174,12 @@ package body Model_Runner.CLI.Execute is
                Watcher      : aliased Agent_Watch (Screen'Unchecked_Access);
                Confirmer    : aliased Confirm_Approver
                                 (Screen'Unchecked_Access);
+               --  Embed with the dedicated model when one was loaded, else
+               --  with the model being run.
                Embedder     : aliased Model_Embedder
-                                (Prepared'Access, Embed_Session'Access);
+                 ((if Embed_Model_Ready then Embed_Model'Access
+                   else Prepared'Access),
+                  Embed_Session'Access);
                Embed_Open   : Boolean := False;
 
                --  The schema the final answer must match, from --json-schema
@@ -2332,14 +2364,25 @@ package body Model_Runner.CLI.Execute is
                      return;
                   end if;
 
-                  --  Open the embedding session and give it to retrieve, so
-                  --  it ranks a folder's passages by meaning. If it will not
-                  --  open, retrieve stays lexical -- the run goes on either
-                  --  way. A small context is enough: one short text at a time.
-                  L.Open
-                    (Embed_Session, Prepared, 2048,
-                     Session_Bounds => Session_Bounds (Item),
-                     Workers => Team, Cache => Item.Cache, Status => Condition);
+                  --  Open the embedding session -- on the dedicated model
+                  --  when one was loaded, else on the model being run -- and
+                  --  give it to retrieve, so it ranks a folder's passages by
+                  --  meaning. If it will not open, retrieve stays lexical --
+                  --  the run goes on either way. A small context is enough:
+                  --  one short text at a time.
+                  if Embed_Model_Ready then
+                     L.Open
+                       (Embed_Session, Embed_Model, 512,
+                        Session_Bounds => Session_Bounds (Item),
+                        Workers => Team, Cache => Item.Cache,
+                        Status => Condition);
+                  else
+                     L.Open
+                       (Embed_Session, Prepared, 512,
+                        Session_Bounds => Session_Bounds (Item),
+                        Workers => Team, Cache => Item.Cache,
+                        Status => Condition);
+                  end if;
                   if E.Is_Ok (Condition) then
                      Embed_Open := True;
                      Built_Runner.Use_Embedder (Embedder'Unchecked_Access);
