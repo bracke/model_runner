@@ -388,6 +388,30 @@ supplies -- and `tests agent-eval --model MODEL --anyway` scores it on a table
 of tool-use tasks against a real model, the way `tests speed` and `tests
 perplexity` measure behind the same gate.
 
+**What the campaign scores, on published models.** Ten tasks: four that
+need one tool, three that chain two, one that must answer to a schema, and
+two that must not call anything. Greedy, seeded, so a score is the same
+run to run; each model at the arithmetic `run` gives it unasked -- int8,
+and for Gemma 2 mixed -- rendered with the carried format its own template
+is written in, since none of these five templates compiles; eight threads,
+an 8,192-token context, 2026-09-15.
+
+| Model | Passed | Steps | Calls | Tokens | Wall | Peak RSS |
+|---|---|---|---|---|---|---|
+| Qwen3.5-4B Q8_0 | **10** / 10 | 20 | 12 | 735 | 3:46 | 5.3 GB |
+| Qwen3.5-0.8B Q8_0 | **9** / 10 | 19 | 10 | 501 | 0:38 | 1.3 GB |
+| MiniCPM5-1B Q4_K_M | **9** / 10 | 19 | 10 | 1238 | 0:51 | 1.1 GB |
+| Gemma2-2B | **8** / 10 | 19 | 12 | 612 | 2:28 | 3.2 GB |
+| Gemma3-1B Q4_K_M | **3** / 10 | 17 | 11 | 947 | 3:12 | 1.1 GB |
+
+Gemma 2 is the one whose score the arithmetic decides: 7 at f32, 3 at int8,
+8 with its attention projections left in f32 and the rest rounded, which is
+what `--arith mixed` is and why it is that family's default. Gemma 3 scores
+3 at every arithmetic; a one-billion-parameter model pastes a parameter
+schema where the arguments go, and no format fixes that. The table is
+what `tests agent-eval` printed, not a claim about the models beyond these
+ten tasks.
+
 **What sampling costs.** It runs once per token and over as many candidates
 as the model has tokens, which every fixture here has sixteen of. Measured
 over 32,000: **0.062 ms** greedy, and **0.18 ms** with top-k 40, top-p 0.95,
