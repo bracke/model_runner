@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Directories;
 
 with Ada.IO_Exceptions;
@@ -6,6 +7,7 @@ with Interfaces;
 
 package body Model_Runner.Byte_Sources.Files is
 
+   use type Ada.Calendar.Time;
    use type Ada.Directories.File_Kind;
    use type Ada.Streams.Stream_Element_Offset;
    use type Model_Runner.Bytes.Byte_Count;
@@ -54,6 +56,7 @@ package body Model_Runner.Byte_Sources.Files is
             return;
          end if;
          Item.Length := B.Byte_Count (Ada.Directories.Size (Path));
+         Item.Written := Ada.Directories.Modification_Time (Path);
       exception
          when others =>
             Status := E.Make (E.IO_Open_Failed);
@@ -162,6 +165,23 @@ package body Model_Runner.Byte_Sources.Files is
       when others =>
          return True;
    end Size_Changed;
+
+   -------------------
+   -- Written_Since --
+   -------------------
+
+   function Written_Since (Item : File_Source) return Boolean is
+   begin
+      if not Item.Opened or else Item.Path_Last = 0 then
+         return False;
+      end if;
+
+      return Ada.Directories.Modification_Time
+        (Item.Path_Text (1 .. Item.Path_Last)) /= Item.Written;
+   exception
+      when others =>
+         return True;
+   end Written_Since;
 
    ----------
    -- Size --

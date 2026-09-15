@@ -662,15 +662,41 @@ package body Tests.Catalog_Cases is
       Loc.Close (Pseudo);
    end Pseudo_Locale;
 
-   --  A real second locale renders its own messages and inherits the rest,
-   --  which is what makes a partial translation usable.
+   --  A real second locale renders its own messages, and a partial one
+   --  inherits the rest, which is what makes a translation usable before it
+   --  is finished.
+   --
+   --  Danish was that partial locale for as long as it carried half the
+   --  keys, and this test leaned on it for the fallback half. It carries
+   --  every key now, so the fallback is exercised on a catalog written
+   --  here with a hole in it, and the shipped locale is held to being
+   --  whole: a key Danish inherits from English is a key somebody forgot.
    procedure Second_Locale (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T2);
+      use Ada.Text_IO;
       Danish  : Loc.Catalog;
       English : Loc.Catalog;
       Own     : Natural := 0;
       Shared  : Natural := 0;
+      Path    : constant String := "obj/partial-catalog.txt";
+      Handle  : File_Type;
+      Partial : Loc.Catalog;
    begin
+      Create (Handle, Out_File, Path);
+      Put_Line (Handle, "default_locale = en");
+      Put_Line (Handle, "en.diagnostic.label.error = error");
+      Put_Line (Handle, "en.diagnostic.label.warning = warning");
+      Put_Line (Handle, "da.diagnostic.label.error = fejl");
+      Close (Handle);
+
+      Loc.Open (Partial, Path, "da");
+      Assert (Loc.Is_Ready (Partial), "the partial catalog did not load");
+      Assert (Loc.Text (Partial, "diagnostic.label.error") = "fejl",
+              "a key the partial locale carries was not translated");
+      Assert (Loc.Text (Partial, "diagnostic.label.warning") = "warning",
+              "a key the partial locale lacks did not fall back to English");
+      Loc.Close (Partial);
+
       Loc.Open (Danish, Model_Runner.Platform.Catalog_Path, "da");
       Loc.Open (English, Model_Runner.Platform.Catalog_Path, "en");
       Assert (Loc.Is_Ready (Danish), "the catalog did not load");
@@ -702,8 +728,9 @@ package body Tests.Catalog_Cases is
       end loop;
 
       Assert (Own > 0, "the second locale translated nothing");
-      Assert (Shared > 0,
-              "the second locale is complete, so per-key fallback is untested");
+      Assert (Shared = 0,
+              "the second locale inherits" & Shared'Image
+              & " diagnostics from English, and it is meant to be whole");
 
       Loc.Close (Danish);
       Loc.Close (English);

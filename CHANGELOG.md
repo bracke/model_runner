@@ -55,6 +55,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A model file edited in place is refused as a replaced one is.** The
+  check before the tensors are read compared the size on disk with the
+  size at open, which sees a file replaced by a longer or shorter one and
+  not one written over at the same length -- a quantization rewritten to
+  the same path with the same shape keeps its inode and its byte count,
+  and the open handle reads the new bytes as readily as the old. The
+  file's modification time is recorded at open now and asked again beside
+  the size; the host stamps it to the nanosecond, and a write between
+  validation and reading moves it. `MR-GGUF-0029` names the case as it
+  named the other. The test stages it through the operating system's own
+  descriptor, because the language's stream library will not open a file
+  this program already has open in another mode.
+- **The Danish locale is whole.** It carried 273 of the 510 keys and
+  inherited the rest from English per key -- the command surface and the
+  common diagnostics translated, the agent, the device, the mixture
+  labels, the progress stages, the statistics and two hundred diagnostics
+  not. Every key has a Danish line now, each holding the placeholders the
+  English one holds, checked before the catalog took them. The
+  second-locale test used the gap to exercise per-key fallback and now
+  exercises it on a catalog written with a hole in it, and holds the
+  shipped Danish to being whole: a diagnostic Danish inherits is a
+  diagnostic somebody forgot. The interactive-command check that let
+  Danish lack a help line no longer does.
+
 - **A sixth fixture shape, a window and a stretch at once.** The Gemma 3
   stretch bug lived exactly where the sweep had no shape: the stretched
   fixtures did not window and the windowed ones did not stretch, so an

@@ -48,6 +48,7 @@ with Model_Runner.Tokenizer;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with GNAT.OS_Lib;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
@@ -3854,6 +3855,57 @@ package body Tests.CLI_Cases is
 
             L.Close (Ready, Status);
          end if;
+         Containers.Close (Parsed);
+         Files.Close (Source);
+      end;
+
+      --  Edited in place at the same length, it is not either.
+      --
+      --  This is the case the size check could not see: the inode is the
+      --  same, the length is the same, and the open handle reads the new
+      --  bytes as readily as the old. The modification time is what moved.
+      --  Written through the operating system's own descriptor rather than
+      --  a second stream, because the language's stream library refuses to
+      --  open in another mode a file this program already has open. The
+      --  last byte is what changes, so the header the parser already
+      --  validated is not what the difference rests on.
+      declare
+         Source : Files.File_Source;
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+         Editor : GNAT.OS_Lib.File_Descriptor;
+         Last   : Character := 'Z';
+         Wrote  : Integer;
+         use type GNAT.OS_Lib.File_Descriptor;
+      begin
+         Tiny_Model.Write (Path, Room => 256);
+
+         Files.Open (Source, Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not open a third time");
+
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse a third time");
+
+         --  A write within the same tick as the open would leave the same
+         --  stamp; the host stamps to the nanosecond, and the parse above
+         --  has already spent more than one.
+         Editor := GNAT.OS_Lib.Open_Read_Write (Path, GNAT.OS_Lib.Binary);
+         Assert (Editor /= GNAT.OS_Lib.Invalid_FD,
+                 "the fixture could not be opened for editing");
+         GNAT.OS_Lib.Lseek (Editor, -1, GNAT.OS_Lib.Seek_End);
+         Wrote := GNAT.OS_Lib.Write (Editor, Last'Address, 1);
+         GNAT.OS_Lib.Close (Editor);
+         Assert (Wrote = 1, "the fixture's last byte was not written");
+
+         Assert (Source.Changed, "a file edited in place reported no change");
+
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (Status.Code = E.GGUF_File_Changed,
+                 "a file edited in place after validation was read anyway: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Close (Ready, Status);
          Containers.Close (Parsed);
          Files.Close (Source);
       end;

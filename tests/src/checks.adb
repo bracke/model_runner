@@ -1287,16 +1287,14 @@ package body Checks is
                                 when others => "qps");
                            Shown : constant String := Line_Of (Name, Key);
                         begin
-                           --  Danish carries a subset and inherits the
-                           --  rest, so a line it does not have is not
-                           --  missing. English and the pseudo-locale carry
-                           --  everything.
+                           --  Every locale carries every line. Danish
+                           --  used to carry a subset and inherit the rest,
+                           --  and this check let it; it is whole now, and
+                           --  a line it lacks is missing.
                            Result.Performed := Result.Performed + 1;
                            if Shown = "" then
-                              if Name /= "da" then
-                                 Fail ("the interactive command " & Word
-                                       & " has no help line in " & Name);
-                              end if;
+                              Fail ("the interactive command " & Word
+                                    & " has no help line in " & Name);
                            elsif not Holds (Shown, Word) then
                               Fail ("the " & Name & " help line for " & Word
                                     & " does not name it: " & Shown);

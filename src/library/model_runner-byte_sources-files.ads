@@ -1,4 +1,5 @@
 with System;
+private with Ada.Calendar;
 private with Ada.Streams.Stream_IO;
 
 private with Model_Runner.Platform.Mapping;
@@ -54,23 +55,34 @@ package Model_Runner.Byte_Sources.Files is
 
    --  Report whether the file has changed size since it was opened.
    --
-   --  This is the file's answer to Byte_Sources.Changed, which model
+   --  Half of the file's answer to Byte_Sources.Changed, which model
    --  preparation asks before it reads the tensors -- a cheap check that the
    --  file was not replaced between validation and preparation. It cannot
-   --  detect an in-place edit of the same length; the open handle covers
-   --  that case on hosts where a replaced path leaves the original inode
-   --  reachable.
+   --  detect an edit of the same length; Written_Since covers that.
    --
    --  @param Item Source to inspect.
    --  @return True when the size on disk differs from the size at Open.
    function Size_Changed (Item : File_Source) return Boolean;
 
+   --  Report whether the file was written since it was opened.
+   --
+   --  The other half of Changed: the modification time the path carries now
+   --  against the one it carried at Open. A file edited in place keeps its
+   --  length and its inode, so the size does not move and the open handle
+   --  reads the new bytes as readily as the old; what does move is the
+   --  time, which the host stamps on every write and this host stamps to
+   --  the nanosecond.
+   --
+   --  @param Item Source to inspect.
+   --  @return True when the modification time differs from the one at Open.
+   function Written_Since (Item : File_Source) return Boolean;
+
    --  See Byte_Sources.Changed.
    --
    --  @param Self Source to inspect.
-   --  @return True when the file has changed size since it was opened.
+   --  @return True when the file changed size or was written since Open.
    overriding function Changed (Self : File_Source) return Boolean
-   is (Size_Changed (Self));
+   is (Size_Changed (Self) or else Written_Since (Self));
 
    --  Size of the open file.
    --
@@ -120,6 +132,7 @@ private
       Mapped      : Boolean := False;
       Opened      : Boolean := False;
       Length      : Model_Runner.Bytes.Byte_Count := 0;
+      Written     : Ada.Calendar.Time := Ada.Calendar.Time_Of (1901, 1, 1);
       Path_Text   : String (1 .. Max_Path_Length) := [others => ' '];
       Path_Last   : Natural := 0;
    end record;
