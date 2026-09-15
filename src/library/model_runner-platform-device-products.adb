@@ -6364,7 +6364,6 @@ package body Model_Runner.Platform.Device.Products is
       Epsilon   : Model_Runner.Numerics.Real;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Lifted    : Boolean := False;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
       Groups    : Positive := 1)
@@ -6391,7 +6390,7 @@ package body Model_Runner.Platform.Device.Products is
          Packing => Weight_Packing'First,
          Rows => Width, Columns => Width, Key => Key,
          Chained => Source /= 0, Reads => Source,
-         Kept => Kept, Norms => True, Lifted => Lifted, Groups => Groups,
+         Kept => Kept, Norms => True, Groups => Groups,
          Epsilon => Epsilon, Attends => False, Blends => False,
          others => <>);
       Added := True;
@@ -8273,7 +8272,9 @@ package body Model_Runner.Platform.Device.Products is
                      --  one after another exactly as positions do.
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Rows / This.Groups),
-                        Columns => (if This.Lifted then 1 else 0),
+                        --  The slot the shape shares with the products,
+                        --  which this shader does not read.
+                        Columns => 0,
                         Count   => C.unsigned (Count * This.Groups),
                         First   => Bits (This.Epsilon),
 

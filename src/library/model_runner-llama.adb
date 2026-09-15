@@ -1939,8 +1939,8 @@ package body Model_Runner.Llama is
    --  the trained weight, and a runtime that lifts it again normalizes to
    --  two plus the weight. This engine did, for the whole family: every
    --  Gemma answered in fluent nonsense, and the fixtures and the reference
-   --  agreed with it because they shared the belief. The kernels keep their
-   --  Lifted option; nothing in a GGUF asks for it.
+   --  agreed with it because they shared the belief. The kernels had an
+   --  option to lift, and it is gone: nothing in a GGUF asks for it.
 
    -------------
    -- Account --

@@ -306,14 +306,9 @@ package body Tiny_Model is
          Values : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
          Drawn  : constant N.Real_Array :=
            Next (N.Element_Count (Embedding));
-
-         --  Around zero where the architecture's gain is one plus the
-         --  weight, as in Gain_Of and for the same reason.
-         Middle : constant N.Real :=
-           (if Kind in Gemma | Gemma2 | Gemma3 then 0.0 else 1.0);
       begin
          for Index in Values'Range loop
-            Values (Index) := Middle + Drawn (Index) * 0.25;
+            Values (Index) := 1.0 + Drawn (Index) * 0.25;
          end loop;
          Fixtures.Add_Tensor
            (Builder, Name, [G.U64 (Embedding)], G.Type_F32,
@@ -327,18 +322,15 @@ package body Tiny_Model is
       procedure Gain_Of (Name : String; Width : Positive) is
          Values : N.Real_Array (0 .. N.Element_Count (Width) - 1);
          Drawn  : constant N.Real_Array := Next (N.Element_Count (Width));
-
-         --  Around zero for Gemma and around one for everything else,
-         --  because that is what the two conventions mean. Written this way
-         --  on purpose: a Gemma fixture whose weights sat around one would
-         --  answer nearly the same whether the reader lifted the gain or
-         --  not, and a fixture that cannot tell two readings apart is a
-         --  fixture that proves neither.
-         Middle : constant N.Real :=
-           (if Kind in Gemma | Gemma2 | Gemma3 then 0.0 else 1.0);
       begin
+         --  Around one for Gemma as for everything else. It was around
+         --  zero for Gemma, so that a fixture could tell a reader that
+         --  lifted the gain from one that did not -- and both the engine
+         --  and the reference lifted it, so the fixture told nothing, and
+         --  a Gemma file holds its gains around one in any case, the
+         --  converter having added the one as it wrote.
          for Index in Values'Range loop
-            Values (Index) := Middle + Drawn (Index) * 0.25;
+            Values (Index) := 1.0 + Drawn (Index) * 0.25;
          end loop;
          Fixtures.Add_Tensor
            (Builder, Name, [G.U64 (Width)], G.Type_F32,

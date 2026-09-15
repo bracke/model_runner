@@ -372,20 +372,11 @@ package Model_Runner.Kernels is
    --  @param Epsilon Positive stabilizer from the model metadata.
    --  @param Target Output vector; must have Source's length. May alias
    --    Source.
-   --  @param Lifted Take the gain as one plus the stored weight rather than
-   --    as the weight. Gemma trains its normalization weights around zero
-   --    where every other architecture here trains them around one, so a
-   --    file read the wrong way is scaled by roughly nothing and answers
-   --    nonsense rather than refusing. A parameter rather than a second
-   --    kernel, and rather than adding one to the weights at load: the
-   --    weights are the file's own bytes, mapped read-only, and this program
-   --    does not write to a model.
    procedure RMS_Norm
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array;
-      Lifted  : Boolean := False);
+      Target  : out Real_Array);
 
    --  Layer normalization: centre, scale, then gain and bias.
    --

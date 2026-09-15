@@ -1029,7 +1029,6 @@ package Model_Runner.Platform.Device.Products is
    --    weight it carries is one head wide.
    --  @param From_Step Step whose result to normalize, or zero for the step
    --    before this one.
-   --  @param Lifted True where the weight is lifted by one first.
    --  @param Key Identifies the weight so the device may keep it.
    --  @param Kept False when nothing on the host reads this step's answer.
    procedure Add_Norm
@@ -1041,7 +1040,6 @@ package Model_Runner.Platform.Device.Products is
       Epsilon   : Model_Runner.Numerics.Real;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Lifted    : Boolean := False;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
       Groups    : Positive := 1);
@@ -2077,10 +2075,6 @@ private
       --  device keeps as it keeps a matrix. The weight is named by the
       --  Base, Span, At_Byte and Key above.
       Norms   : Boolean := False;
-
-      --  Whether that weight is lifted by one before it multiplies, which
-      --  is what gemma states and no other architecture here does.
-      Lifted  : Boolean := False;
 
       --  How many stretches a position is normalized as, each its own
       --  Rows / Groups wide, as Add_Norm describes it. One for a whole

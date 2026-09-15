@@ -162,8 +162,10 @@ Keep a Changelog and the project uses semantic versioning.
   already lifted and the engine normalized to two plus the weight, twenty-six
   times a token. Found by writing the model out a second time in numpy from
   the dequantized file and toggling one thing at a time until the top logit
-  was `Paris`. `Llama.Lifted_Norms` is gone and the reference's lift with it;
-  the kernels keep their `Lifted` option, which nothing in a GGUF asks for.
+  was `Paris`. `Llama.Lifted_Norms` is gone, the reference's lift with it,
+  and the kernels' `Lifted` option and the norm shader's flag after both:
+  nothing in a GGUF asks for a lift, and an option nothing asks for is a
+  belief waiting to be held again.
   All three now answer "Paris." greedily, gemma2 token for token with the
   reference runtime. Recorded: `tests/fixtures/gemma3-1b.expect`, against
   llama.cpp b10595 on a published Gemma-3-1B-It Q4_K_M -- tokens, greedy text

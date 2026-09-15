@@ -483,7 +483,6 @@ package Model_Runner.Backend.Device is
    --  @param Positions How many positions the layer is given.
    --  @param Norm_Weight The feed-forward normalization's weight.
    --  @param Epsilon The floor under its mean square.
-   --  @param Lifted True where that weight is lifted by one first.
    --  @param Gate The gating arm of the feed-forward.
    --  @param Up The other arm, which the gate multiplies.
    --  @param Down The projection back down to the layer's width.
@@ -524,7 +523,6 @@ package Model_Runner.Backend.Device is
       Positions   : Natural := 1;
       Window      : Natural := 0;
       Causal      : Boolean := True;
-      Lifted      : Boolean := False;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0);
 
@@ -589,7 +587,6 @@ package Model_Runner.Backend.Device is
    --  @param Vector The layer's input, Spread positions of it.
    --  @param Norm_Weight The normalization's weight.
    --  @param Epsilon The floor under its mean square.
-   --  @param Lifted True where that weight is lifted by one first.
    --  @param Spread How many positions the input holds.
    --  @param Into Receives each matrix's result, one array apiece and in the
    --    same order, Spread positions of each.
@@ -615,7 +612,6 @@ package Model_Runner.Backend.Device is
       Into        : Model_Runner.Tensors.Target_Group;
       Ok          : out Boolean;
       Spread      : Model_Runner.Numerics.Element_Count := 1;
-      Lifted      : Boolean := False;
       Turns       : Model_Runner.Numerics.Wide_Real_Array := No_Turns;
       Turned      : Natural := 0;
       Head_Size   : Natural := 0;
@@ -647,7 +643,6 @@ package Model_Runner.Backend.Device is
    --  @param Attention_Norm The normalization on the way in.
    --  @param Feed_Norm The normalization before the feed-forward.
    --  @param Epsilon The floor under both mean squares.
-   --  @param Lifted True where those weights are lifted by one first.
    --  @param Query The query projection.
    --  @param Key The key projection.
    --  @param Value The value projection.
@@ -770,7 +765,6 @@ package Model_Runner.Backend.Device is
       Positions      : Natural := 1;
       Window         : Natural := 0;
       Causal         : Boolean := True;
-      Lifted         : Boolean := False;
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;

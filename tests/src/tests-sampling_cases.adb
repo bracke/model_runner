@@ -2030,25 +2030,20 @@ package body Tests.Sampling_Cases is
                  & N.Real'Image (Large (1)));
       end;
 
-      --  And the lifted normalization gain, which is one plus the stored
-      --  weight. A weight of zero is then a gain of one, which is what
-      --  makes reading a Gemma file the ordinary way so quiet: it does not
-      --  fail, it scales everything by nothing.
+      --  And the normalization gain, which is the stored weight and
+      --  nothing added to it: a Gemma file already holds the one its
+      --  architecture adds, so a gain of zero scales to nothing here, as
+      --  it would for any other file. The kernel used to take a flag that
+      --  added the one again.
       declare
          Source : constant N.Real_Array (0 .. 3) := [1.0, 1.0, 1.0, 1.0];
          Zeroed : constant N.Real_Array (0 .. 3) := [others => 0.0];
          Plain  : N.Real_Array (0 .. 3) := [others => 9.0];
-         Raised : N.Real_Array (0 .. 3) := [others => 9.0];
       begin
          K.RMS_Norm (Source, Zeroed, 1.0E-5, Plain);
-         K.RMS_Norm (Source, Zeroed, 1.0E-5, Raised, Lifted => True);
-
          for Index in Plain'Range loop
             Assert (Plain (Index) = 0.0,
-                    "a gain of zero read plainly did not scale to nothing");
-            Assert (abs (Raised (Index) - 1.0) < 1.0E-4,
-                    "a gain of zero read as one plus it did not scale to "
-                    & "one:" & N.Real'Image (Raised (Index)));
+                    "a gain of zero did not scale to nothing");
          end loop;
       end;
    end Gemma_Differs_Where_It_Says_It_Does;

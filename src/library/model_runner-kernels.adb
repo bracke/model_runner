@@ -1108,8 +1108,7 @@ package body Model_Runner.Kernels is
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array;
-      Lifted  : Boolean := False)
+      Target  : out Real_Array)
    is
       Sum   : Wide_Real := 0.0;
       Gain  : Wide_Real;
@@ -1148,21 +1147,16 @@ package body Model_Runner.Kernels is
          Gain := 1.0 / Gain;
       end if;
 
-      --  Two loops rather than one with a test in it: the test is the same
-      --  every element, and this one is read once per token per layer.
-      if Lifted then
-         for Index in 0 .. Element_Count (Source'Length) - 1 loop
-            Target (Target'First + Index) :=
-              Real (Wide_Real (Source (Source'First + Index)) * Gain)
-              * (1.0 + Weight (Weight'First + Index));
-         end loop;
-      else
-         for Index in 0 .. Element_Count (Source'Length) - 1 loop
-            Target (Target'First + Index) :=
-              Real (Wide_Real (Source (Source'First + Index)) * Gain)
-              * Weight (Weight'First + Index);
-         end loop;
-      end if;
+      --  The gain as the file stores it, for every architecture. This once
+      --  took a flag to read it as one plus the weight, for Gemma, whose
+      --  trained gains sit around zero -- and a Gemma GGUF already holds
+      --  the one added, so the flag doubled it and every Gemma answered in
+      --  nonsense for a month. Nothing in a GGUF asks for a lift.
+      for Index in 0 .. Element_Count (Source'Length) - 1 loop
+         Target (Target'First + Index) :=
+           Real (Wide_Real (Source (Source'First + Index)) * Gain)
+           * Weight (Weight'First + Index);
+      end loop;
    end RMS_Norm;
 
    -----------------

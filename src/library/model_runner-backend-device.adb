@@ -1046,7 +1046,6 @@ package body Model_Runner.Backend.Device is
       Positions   : Natural := 1;
       Window      : Natural := 0;
       Causal      : Boolean := True;
-      Lifted      : Boolean := False;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0)
    is
@@ -1164,7 +1163,7 @@ package body Model_Runner.Backend.Device is
            (Steps, At_Norm,
             Model_Runner.Bytes.Byte_Count (Norm_Weight'Length) * 4, 0,
             Natural (Weight.Rows), Epsilon, Added,
-            From_Step => 3, Lifted => Lifted, Key => At_Norm,
+            From_Step => 3, Key => At_Norm,
             Kept => False);
       end;
       if not Added then
@@ -1427,7 +1426,6 @@ package body Model_Runner.Backend.Device is
       Into        : T.Target_Group;
       Ok          : out Boolean;
       Spread      : Model_Runner.Numerics.Element_Count := 1;
-      Lifted      : Boolean := False;
       Turns       : Model_Runner.Numerics.Wide_Real_Array := No_Turns;
       Turned      : Natural := 0;
       Head_Size   : Natural := 0;
@@ -1490,7 +1488,7 @@ package body Model_Runner.Backend.Device is
            (Steps, At_Norm,
             Model_Runner.Bytes.Byte_Count (Norm_Weight'Length) * 4, 0,
             Natural (Width), Epsilon, Added,
-            Lifted => Lifted, Key => At_Norm, Kept => False);
+            Key => At_Norm, Kept => False);
       end;
 
       if not Added then
@@ -1683,7 +1681,6 @@ package body Model_Runner.Backend.Device is
       Positions      : Natural := 1;
       Window         : Natural := 0;
       Causal         : Boolean := True;
-      Lifted         : Boolean := False;
       Max_Bias       : Model_Runner.Numerics.Real := 0.0;
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In       : Boolean := False;
@@ -1865,7 +1862,7 @@ package body Model_Runner.Backend.Device is
            (Steps, At_Norm,
             Model_Runner.Bytes.Byte_Count (Attention_Norm'Length) * 4, 0,
             Natural (Width), Epsilon, Added,
-            Lifted => Lifted, Key => At_Norm, Kept => False);
+            Key => At_Norm, Kept => False);
       end;
       if not Added then
          return;
@@ -2106,7 +2103,7 @@ package body Model_Runner.Backend.Device is
            (Steps, At_Feed,
             Model_Runner.Bytes.Byte_Count (Feed_Norm'Length) * 4, 0,
             Natural (Width), Epsilon, Added,
-            From_Step => Step_Join, Lifted => Lifted, Key => At_Feed,
+            From_Step => Step_Join, Key => At_Feed,
             Kept => False);
       end;
       if not Added then

@@ -148,11 +148,14 @@ private
    --  different functions and blames the engine for the difference.
    --  Gemma is here for the same reason the others are: it is this shape
    --  with a difference, and the differences are worked out from what the
-   --  architecture says rather than read out of the engine. Three of them --
-   --  the lifted normalization gain, the embedding scale and the Gaussian
-   --  gate -- and each is written here in the form the paper gives rather
-   --  than the form the engine uses, which is the whole point of a second
-   --  implementation.
+   --  architecture says rather than read out of the engine. Two of them --
+   --  the embedding scale and the Gaussian gate -- and each is written here
+   --  in the form the paper gives rather than the form the engine uses,
+   --  which is the whole point of a second implementation. The third the
+   --  paper states, one plus the weight as the normalization gain, is not
+   --  here on purpose: the converter adds that one as it writes the file,
+   --  and a reference that added it again agreed with an engine that did
+   --  the same for a month.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE);

@@ -63,9 +63,10 @@ layout(push_constant) uniform Shape {
     //  Components a position holds.
     uint width;
 
-    //  Whether the weight is lifted by one before it multiplies, which is
-    //  what gemma states and no other architecture here does.
-    uint lifted;
+    //  The slot the shape shares with the products, which this shader
+    //  does not read. It once said whether to lift the gain by one, for
+    //  Gemma -- and a Gemma file already holds that one, so nothing asks.
+    uint unused;
 
     //  Positions in this batch.
     uint count;
@@ -156,9 +157,7 @@ void main() {
     for (uint c = lane; c < shape.width; c += LANES) {
         float scaled = x[at + c] * gain;
 
-        float made = shape.lifted != 0u
-                     ? scaled * (1.0 + g[shape.base + c])
-                     : scaled * g[shape.base + c];
+        float made = scaled * g[shape.base + c];
 
         if (halved) {
             h[at + c] = float16_t (made);
