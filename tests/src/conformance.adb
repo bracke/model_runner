@@ -1026,7 +1026,9 @@ package body Conformance is
                            goto Next_Repack;
                         end if;
 
-                        if Shape = Windowed and then Repack = L.To_BF16 then
+                        if Shape in Windowed | Reaching
+                          and then Repack = L.To_BF16
+                        then
                            goto Next_Repack;
                         end if;
 
@@ -1356,8 +1358,10 @@ package body Conformance is
               Backends * 4 + Batching * 3 + Sharing * 2
               + (if Batching > 0 and then Sharing > 0 then 2 else 0);
 
-            --  Every shape runs every repack mode except the four that run
-            --  one fewer, for the reasons written where each is skipped.
+            --  Every shape runs every repack mode except the five that run
+            --  one fewer, for the reasons written where each is skipped --
+            --  the reaching shape for the windowed one's reason and the
+            --  stretched one's at once.
             --  Only the plain shape is compared under brain floats, and that
             --  is the finding rather than a gap: the published lossy figure
             --  describes a dense model with full attention and heads the
@@ -1408,7 +1412,7 @@ package body Conformance is
             --  which is skipped for every architecture; an ungated one runs
             --  none of them at all.
             Expected :=
-              Formats * Arches * (Shapes * Repacks - 4) * Per_Model + Cached
+              Formats * Arches * (Shapes * Repacks - 5) * Per_Model + Cached
               + On_Device
               - Formats * Skipped * (Repacks - 1) * Per_Model
               + Also_Ran;

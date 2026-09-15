@@ -53,6 +53,22 @@ Keep a Changelog and the project uses semantic versioning.
   and never saw it) and an enormous file costs no more memory than a fitting
   one.
 
+### Added
+
+- **A sixth fixture shape, a window and a stretch at once.** The Gemma 3
+  stretch bug lived exactly where the sweep had no shape: the stretched
+  fixtures did not window and the windowed ones did not stretch, so an
+  engine that stretched every layer agreed with a reference that did the
+  same on every fixture either could build. `Reaching` builds the two
+  together, with the divisor table the stretched shape carries, for every
+  architecture that can hold both, and the sweep crosses it as it crosses
+  the rest: 52,519 sequences now against 45,319, none outside tolerance.
+  With the old rule put back in the engine, 810 comparisons fall outside
+  tolerance and the first is gemma3's -- so it is a check and not a shape.
+  The seven measured-figure groups that list `llama.adb` are restamped
+  with the argument in `docs/measured-figures.txt`; the change is one
+  per-layer choice on a path only a windowed Gemma 3 takes.
+
 ### Fixed
 
 - **Gemma 3's rotary stretch reaches the global layers alone.** The 4B and

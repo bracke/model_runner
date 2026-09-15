@@ -45,11 +45,11 @@ package body Tiny_Model is
    begin
       Build
         (Result, Format, Kind => Kind,
-         Window => (if Shape = Windowed then 3 else 0),
+         Window => (if Shape in Windowed | Reaching then 3 else 0),
          Experts => (if Shape = Mixed then 4 else 0),
          Experts_Used => (if Shape = Mixed then 2 else 0),
-         Stretch => (if Shape = Stretched then Yarn else Plain),
-         Rope_Table => Shape = Stretched,
+         Stretch => (if Shape in Stretched | Reaching then Yarn else Plain),
+         Rope_Table => Shape in Stretched | Reaching,
          Apart_Widths => Shape = Apart);
    end Build_Shaped;
 
@@ -1349,11 +1349,11 @@ package body Tiny_Model is
       --  one wants to inspect.
       Build (Image, Format => Format,
              Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind,
-             Window => (if Shape = Windowed then 3 else 0),
+             Window => (if Shape in Windowed | Reaching then 3 else 0),
              Experts => (if Shape = Mixed then 4 else 0),
              Experts_Used => (if Shape = Mixed then 2 else 0),
-             Stretch => (if Shape = Stretched then Yarn else Plain),
-             Rope_Table => Shape = Stretched,
+             Stretch => (if Shape in Stretched | Reaching then Yarn else Plain),
+             Rope_Table => Shape in Stretched | Reaching,
              Apart_Widths => Shape = Apart);
 
       Stream_IO.Create (Handle, Stream_IO.Out_File, Path);

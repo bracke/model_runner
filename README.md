@@ -963,7 +963,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 45319, logits compared 1751992,
+conformance: sequences 52519, logits compared 1869752,
              worst absolute 6.04463587507986E-05,
              worst relative 7.02625907667919E-02,
              rounded logits compared 166360,
@@ -974,7 +974,7 @@ conformance: sequences 45319, logits compared 1751992,
              cached worst relative 1.47282761332370E+00,
              quantized logits compared 1296,
              quantized worst absolute 9.14943609165273E-02,
-             quantized worst relative 1.92312698956764E+00,
+             quantized worst relative 1.62615771202601E+00,
              byte logits compared 71696,
              byte worst absolute 3.02784067592779E-01,
              byte worst relative 1.99904656218687E+00,
@@ -991,24 +991,24 @@ the sweep ran none of that kind -- which is what a mode that quietly fell
 back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
-The run above crossed 14 architectures, in 16 formats and 5 shapes,
+The run above crossed 14 architectures, in 16 formats and 6 shapes,
 of which 1344 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
 Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
-`gpt2`, `bert`, `nomic-bert`, `jina-bert-v2` and `qwen35`, each of which has also been read from a file somebody else published -- in each of the five shapes a supported model comes in: dense, sliding-window, a mixture of
-experts, a stretched rotation, and heads wider than the embedding implies with
-keys and values different widths again. Eleven of the fourteen are compared on the
+`gpt2`, `bert`, `nomic-bert`, `jina-bert-v2` and `qwen35`, each of which has also been read from a file somebody else published -- in each of the six shapes a supported model comes in: dense, sliding-window, a mixture of
+experts, a stretched rotation, heads wider than the embedding implies with
+keys and values different widths again, and a window and a stretch at once -- the shape a Gemma 3 of the 4B and up comes in, which stretches the rotation for the layers that see everything and turns its windowed layers as trained, and which the sweep did not have until a published 4B showed the engine stretching every layer. Eleven of the fourteen are compared on the
 last position's logits and in every shape they can hold; the three that
 produce states rather than a distribution are compared on
 what the model made of every position, which is the only answer they have and a
 stronger one -- a logit is the last state through one more matrix, and these
-are every state before that matrix. `bert` holds two of the five shapes: a
+are every state before that matrix. `bert` holds two of the six shapes: a
 mixture wants a gate it has not got, a stretched rotation wants a rotation it
 has not got, and a window is a bound on how far back a position may look,
 which a model that looks both ways has not got. `nomic-bert` rotates and
-gates, so it holds all but the window; `jina-bert-v2` gates but rotates
-nothing at all, so it holds all but the window and the stretch. `qwen35` holds all but
+gates, so it holds all but the two that window; `jina-bert-v2` gates but rotates
+nothing at all, so it holds all but the window, the stretch and the two at once. `qwen35` holds all but
 the widths apart: the gate beside each of its attention heads has the head's
 width and scales the head's blend, so a value width that is not the head size
 is a model the architecture does not define, and the engine refuses it by name. They answer fewer of the
@@ -1080,7 +1080,7 @@ changing. The exact repacking modes agree everywhere in that table -- 2.2e-05
 at a window of three and on the mixture, against 3.5e-06 dense -- so none of
 this says the window or the routing is wrong, and all of it says what
 `--repack bf16` costs on those models. Comparing them in the sweep would mean
-asserting a tolerance nobody has grounds for. Four of the five shapes sit outside that
+asserting a tolerance nobody has grounds for. Five of the six shapes sit outside that
 tolerance, which is worth saying plainly rather than burying in a table:
 **0.137 is what `--repack bf16` costs a dense model with full attention and
 heads the width its embedding implies, and it does not carry over to a model

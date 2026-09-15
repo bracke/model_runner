@@ -155,7 +155,16 @@ package Tiny_Model is
    --  refused, and four hundred and fifty comparisons went missing while
    --  both halves reported themselves clean. One mapping, used by both, is
    --  the only version of this that cannot drift.
-   type Fixture_Shape is (Plain, Windowed, Mixed, Stretched, Apart);
+   --
+   --  Reaching is the windowed shape and the stretched one at once, and it
+   --  is there for a rule neither alone can reach: a Gemma 3 of the 4B and
+   --  up stretches its rotation for the layers that see the whole context
+   --  and turns its windowed layers as trained, while GPT-OSS stretches
+   --  every layer. The engine stretched every Gemma 3 layer for a month
+   --  and every crossing agreed, because no fixture windowed and stretched
+   --  at once; a published 4B found it. What this shape asks of each
+   --  architecture that windows is which of the two it does.
+   type Fixture_Shape is (Plain, Windowed, Mixed, Stretched, Apart, Reaching);
 
    --  Whether an architecture can be built in a shape at all.
    --
@@ -201,6 +210,8 @@ package Tiny_Model is
          when Stretched => Kind in GPT2 | Bert | Jina_Bert_V2,
          when Windowed => Kind in Bert | Nomic_Bert | Jina_Bert_V2,
          when Apart => Kind = Qwen35,
+         when Reaching =>
+           Kind in GPT2 | Bert | Nomic_Bert | Jina_Bert_V2,
          when Plain => False);
 
    --  Write a fixture in one of those shapes.
