@@ -55,6 +55,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The Qwen3-Coder and MiniCPM call syntaxes are shaped by the grammar,
+  and a grammar no longer costs seconds a token.** Both tag forms were left
+  unconstrained because the `<think>` block those families open a reply
+  with carries a `<` the grammar's prose rule refuses -- and unconstrained,
+  Qwen3.5-0.8B wrote `<parameter/op>` for `<parameter=op>`, lost the
+  argument, and had the calculator refuse it twice. `Schema.To_Tag_Grammar`
+  now turns a tool's parameter schema into the tag shape -- a tag per
+  property in schema order, a required one mandatory, a string as text up
+  to the next tag, an enum's words bare, an object or array as JSON --
+  and `Tools.Constraint.Compile_Call_Grammar` takes the syntax, emitting
+  `<function=name>`/`<parameter=`, or `<function name="">`/`<param name="">`,
+  with an optional `<think>…</think>` admitted ahead of the reply; the
+  loose fallback has a tag form too. The agent loop constrains both. The
+  0.8B now writes `<parameter=op>` and answers 136.
+
+  Constraining them showed what the filter cost: on a 248k-token Qwen3.5
+  vocabulary, 3.8 s a step where the grammar stands at prose-or-any-call,
+  since every candidate is tried against every branch -- a cost the JSON
+  envelope had carried unnoticed on every large vocabulary. Two fixes:
+  every token's text is decoded once a run (`Tokenizer.Decoded_Texts`)
+  instead of twice a candidate a step, and the sampler is asked first,
+  unmasked, and its choice checked against the grammar, with the whole
+  vocabulary filtered and a second draw only when that choice is refused.
+  Greedy, that is the token the filter alone finds; sampled, a draw kept
+  where the grammar allows it plus a fresh draw from the filtered
+  distribution otherwise is a draw from the filtered distribution, so what
+  is produced is unchanged. agent-eval on Qwen3.5-0.8B: 4:04 constrained
+  the slow way, 0:37 now, the same as unconstrained; MiniCPM 5:28 to 0:55.
 - **Every Gemma answered in fluent nonsense, and now answers.** `gemma`,
   `gemma2` and `gemma3` all produced word salad -- "the name fortn Monsieur
   depic notor" for the capital of France -- since the day each was read, and

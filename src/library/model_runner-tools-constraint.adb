@@ -160,17 +160,94 @@ package body Model_Runner.Tools.Constraint is
       B.Used := B.Used + Text'Length;
    end Put;
 
+   --  The shape of a call in each syntax: what opens it, what follows the
+   --  name, what closes it, and the three spellings that make a parameter's
+   --  tag. The JSON envelope has no tag spellings; its arguments are JSON.
+   type Spelling is record
+      Opens   : access constant String;
+      Named   : access constant String;
+      Closes  : access constant String;
+      Before  : access constant String;
+      After   : access constant String;
+      Close   : access constant String;
+   end record;
+
+   Qwen_Opens  : aliased constant String := "<tool_call>"" ws ""<function=";
+   Qwen_Named  : aliased constant String := ">";
+   Qwen_Closes : aliased constant String :=
+     "</function>"" ws ""</tool_call>";
+   Qwen_Before : aliased constant String := "<parameter=";
+   Qwen_After  : aliased constant String := ">";
+   Qwen_Close  : aliased constant String := "</parameter>";
+
+   Func_Opens  : aliased constant String := "<function name=\x22";
+   Func_Named  : aliased constant String := "\x22>";
+   Func_Closes : aliased constant String := "</function>";
+   Func_Before : aliased constant String := "<param name=\x22";
+   Func_After  : aliased constant String := "\x22>";
+   Func_Close  : aliased constant String := "</param>";
+
+   Qwen_Spelling : constant Spelling :=
+     (Qwen_Opens'Access, Qwen_Named'Access, Qwen_Closes'Access,
+      Qwen_Before'Access, Qwen_After'Access, Qwen_Close'Access);
+   Func_Spelling : constant Spelling :=
+     (Func_Opens'Access, Func_Named'Access, Func_Closes'Access,
+      Func_Before'Access, Func_After'Access, Func_Close'Access);
+
+   function In_Tags (Syntax : Call_Syntax) return Boolean
+   is (Syntax in Qwen_XML | Function_XML);
+
+   function Spelled (Syntax : Call_Syntax) return Spelling
+   is (if Syntax = Qwen_XML then Qwen_Spelling else Func_Spelling);
+
+   --  What may stand ahead of a reply in a tag syntax: the families that
+   --  write one reason in a <think> block, and its '<' is one the prose
+   --  rule refuses. Admitted once, at the start, closed before anything
+   --  else; a reply with no reasoning writes none.
+   Think_Rule : constant String :=
+     "think ::= ""<think>"" [^<]* ""</think>"" ws" & ASCII.LF;
+
+   --  The loose grammar for a tag syntax: the envelope around parameters
+   --  named freely, each holding text. Names still constrained to the
+   --  tools offered. The spellings of the tags are filled in per syntax.
+   procedure Put_Loose_Tags (B : in out Builder; Sp : Spelling) is
+   begin
+      Put (B, "root ::= think? prose calls?" & ASCII.LF);
+      Put (B, Think_Rule);
+      Put (B, "prose ::= [^<]*" & ASCII.LF);
+      Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
+      Put (B, "call ::= """ & Sp.Opens.all & """ name """ & Sp.Named.all
+              & """ ws params """ & Sp.Closes.all & """" & ASCII.LF);
+      Put (B, "params ::= ( """ & Sp.Before.all & """ pname """
+              & Sp.After.all & """ text """ & Sp.Close.all & """ ws )*"
+              & ASCII.LF);
+      Put (B, "pname ::= [A-Za-z_] [A-Za-z0-9_.-]*" & ASCII.LF);
+      Put (B, "text ::= [^<]*" & ASCII.LF);
+      Put (B, "ws ::= [ \x09\x0A\x0D]*" & ASCII.LF);
+   end Put_Loose_Tags;
+
    --  The loose grammar (§a): envelope + general JSON arguments, names
    --  constrained to those offered.
-   procedure Build_Loose (Offered : Definitions; B : in out Builder) is
+   procedure Build_Loose
+     (Offered : Definitions; B : in out Builder; Syntax : Call_Syntax) is
    begin
-      Put (B, Loose_Fixed);
+      if In_Tags (Syntax) then
+         Put_Loose_Tags (B, Spelled (Syntax));
+      else
+         Put (B, Loose_Fixed);
+      end if;
+      --  The names, quoted as JSON has them in the envelope and bare in a
+      --  tag.
       Put (B, "name ::= ");
       for Index in 1 .. Count (Offered) loop
          if Index > 1 then
             Put (B, " | ");
          end if;
-         Put (B, """\x22" & Tool_Name (Offered, Index) & "\x22""");
+         if In_Tags (Syntax) then
+            Put (B, """" & Tool_Name (Offered, Index) & """");
+         else
+            Put (B, """\x22" & Tool_Name (Offered, Index) & "\x22""");
+         end if;
       end loop;
       Put (B, "" & ASCII.LF);
    end Build_Loose;
@@ -215,10 +292,13 @@ package body Model_Runner.Tools.Constraint is
       Answer_Schema : String;
       Scratch       : Text_Access;
       B             : in out Builder;
-      Ok            : out Boolean)
+      Ok            : out Boolean;
+      Syntax        : Call_Syntax)
    is
       Count_Of     : constant Natural := Count (Offered);
       Typed_Answer : constant Boolean := Answer_Schema /= "";
+      Tags         : constant Boolean := In_Tags (Syntax);
+      Sp           : constant Spelling := Spelled (Syntax);
    begin
       Ok := True;
 
@@ -230,10 +310,15 @@ package body Model_Runner.Tools.Constraint is
          --  A reply is a call or the answer, in the shape asked for -- no
          --  free prose. The answer rule is defined after the tools, from the
          --  same shared helpers.
-         Put (B, "root ::= calls | answer" & ASCII.LF);
+         Put (B, (if Tags then "root ::= think? (calls | answer)"
+                  else "root ::= calls | answer") & ASCII.LF);
       else
-         Put (B, "root ::= prose calls?" & ASCII.LF);
+         Put (B, (if Tags then "root ::= think? prose calls?"
+                  else "root ::= prose calls?") & ASCII.LF);
          Put (B, "prose ::= [^<]*" & ASCII.LF);
+      end if;
+      if Tags then
+         Put (B, Think_Rule);
       end if;
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
 
@@ -262,8 +347,15 @@ package body Model_Runner.Tools.Constraint is
                Grammar_Last : Natural;
                St           : E.Error_Info;
             begin
-               Model_Runner.Schema.To_Grammar
-                 (Def (First .. Last), Scratch.all, Grammar_Last, St);
+               if Tags then
+                  Model_Runner.Schema.To_Tag_Grammar
+                    (Def (First .. Last),
+                     Sp.Before.all, Sp.After.all, Sp.Close.all,
+                     Scratch.all, Grammar_Last, St);
+               else
+                  Model_Runner.Schema.To_Grammar
+                    (Def (First .. Last), Scratch.all, Grammar_Last, St);
+               end if;
                if E.Is_Error (St) or else Grammar_Last = 0 then
                   Ok := False;
                   return;
@@ -296,13 +388,21 @@ package body Model_Runner.Tools.Constraint is
                         return;
                      end if;
 
-                     Put (B, "call_" & Image (Index)
-                          & " ::= ""<tool_call>"" ws ""{"" ws "
-                          & """\x22name\x22"" ws "":"" ws ""\x22"
-                          & Tool_Name (Offered, Index)
-                          & "\x22"" ws "","" ws ""\x22arguments\x22"" ws "
-                          & """:"" ws args_" & Image (Index)
-                          & " ws ""}"" ws ""</tool_call>""" & ASCII.LF);
+                     if Tags then
+                        Put (B, "call_" & Image (Index)
+                             & " ::= """ & Sp.Opens.all
+                             & Tool_Name (Offered, Index) & Sp.Named.all
+                             & """ ws args_" & Image (Index)
+                             & " """ & Sp.Closes.all & """" & ASCII.LF);
+                     else
+                        Put (B, "call_" & Image (Index)
+                             & " ::= ""<tool_call>"" ws ""{"" ws "
+                             & """\x22name\x22"" ws "":"" ws ""\x22"
+                             & Tool_Name (Offered, Index)
+                             & "\x22"" ws "","" ws ""\x22arguments\x22"" ws "
+                             & """:"" ws args_" & Image (Index)
+                             & " ws ""}"" ws ""</tool_call>""" & ASCII.LF);
+                     end if;
                      Put (B, "args_" & Image (Index) & " ::= "
                           & Text (Body_First .. Break - 1) & ASCII.LF);
 
@@ -358,7 +458,9 @@ package body Model_Runner.Tools.Constraint is
      (Offered       : Model_Runner.Tools.Definitions;
       Into          : in out Model_Runner.Grammar.Compiled;
       Status        : out Model_Runner.Errors.Error_Info;
-      Answer_Schema : String := "")
+      Answer_Schema : String := "";
+      Syntax        : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON)
    is
       Tool_Count : constant Natural := Count (Offered);
    begin
@@ -407,7 +509,7 @@ package body Model_Runner.Tools.Constraint is
          --  tool's schema cannot be read or the result will not compile. The
          --  answer schema is honoured only on the tight path; the loose
          --  fallback leaves the answer as free text.
-         Build_Tight (Offered, Answer_Schema, Scratch, Tight, Ok);
+         Build_Tight (Offered, Answer_Schema, Scratch, Tight, Ok, Syntax);
          if Ok then
             Model_Runner.Grammar.Compile
               (Into, Tight.Room (1 .. Tight.Used), Status);
@@ -419,7 +521,7 @@ package body Model_Runner.Tools.Constraint is
             end if;
          end if;
 
-         Build_Loose (Offered, Loose);
+         Build_Loose (Offered, Loose, Syntax);
          if Loose.Full then
             Status := E.Make (E.Tools_Too_Large);
          else

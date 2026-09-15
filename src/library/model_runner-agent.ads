@@ -211,13 +211,13 @@ package Model_Runner.Agent is
    --    approval decision, stays on this task, and results are appended in
    --    call order whatever order they finished in.
    --  @param Tool_Syntax The shape the model writes its calls in, which the
-   --    loop reads them back by. The default, Tool_Call_JSON, is the
-   --    <tool_call> convention and is shaped by the call grammar; Function_XML
-   --    (MiniCPM's <function>/<param>) is read but not grammar-shaped, since
-   --    that family reasons in <think> blocks a call grammar could not admit,
-   --    so the loop leaves its output free and reads the calls out of it;
-   --    Open_JSON (Gemma's) reads the envelope and the bare or fenced object
-   --    a model writes instead, and is left free too where tools are offered.
+   --    loop reads them back by and the call grammar shapes. The default,
+   --    Tool_Call_JSON, is the <tool_call> convention; Function_XML
+   --    (MiniCPM's <function>/<param>) and Qwen_XML (Qwen3-Coder's
+   --    <function=..>/<parameter=..>) are shaped as tags, a <think> block
+   --    admitted ahead of the reply; Open_JSON (Gemma's) reads the envelope
+   --    and the bare or fenced object a model writes instead, and is left
+   --    free where tools are offered.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.

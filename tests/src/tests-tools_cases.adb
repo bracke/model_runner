@@ -198,6 +198,98 @@ package body Tests.Tools_Cases is
          & "(it fell back to the loose grammar)");
    end Full_Set_Is_Tight;
 
+   --  Whether the grammar compiled from the whole built-in set in a tag
+   --  syntax accepts a text whole.
+   function Full_Set_Takes_In
+     (Syntax : Tools.Call_Syntax; Text : String) return Boolean
+   is
+      Defs   : Tools.Definitions;
+      Rules  : G.Compiled;
+      State  : G.Matcher;
+      Status : E.Error_Info;
+      Held   : Boolean;
+   begin
+      Tools.Read (Defs, Builtin.All_Definitions_Text, Status);
+      Assert (E.Is_Ok (Status), "the full definitions would not read");
+      Constraint.Compile_Call_Grammar (Defs, Rules, Status, Syntax => Syntax);
+      Assert (E.Is_Ok (Status) and then G.Is_Ready (Rules),
+              "the full-set call grammar would not compile in the tag "
+              & "syntax: " & E.Error_Code'Image (Status.Code));
+      G.Start (Rules, State, Status);
+      G.Advance (Rules, State, Text, Status);
+      if E.Is_Error (Status) then
+         G.Close (Rules);
+         Tools.Close (Defs);
+         return False;
+      end if;
+      Held := G.Is_Complete (Rules, State);
+      G.Close (Rules);
+      Tools.Close (Defs);
+      return Held;
+   end Full_Set_Takes_In;
+
+   --  The two tag syntaxes are shaped by the grammar as the envelope is:
+   --  a call in the Qwen3-Coder form or the MiniCPM form names a tool on
+   --  offer and gives each parameter in its own tag, with the tool's
+   --  schema saying what goes in it. A reasoning block ahead of the reply
+   --  is admitted, since those families write one. What the grammar
+   --  refuses is what a 0.8B model wrote unconstrained -- <parameter/op>
+   --  -- and a call missing a required parameter; and the JSON envelope is
+   --  not a call in either tag syntax.
+   procedure Tag_Syntaxes_Are_Shaped
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := ASCII.LF;
+      Qwen_Call : constant String :=
+        "<think>" & LF & LF & "</think>" & LF & LF
+        & "<tool_call>" & LF & "<function=calculator>" & LF
+        & "<parameter=a>" & LF & "47" & LF & "</parameter>" & LF
+        & "<parameter=op>" & LF & "+" & LF & "</parameter>" & LF
+        & "<parameter=b>" & LF & "89" & LF & "</parameter>" & LF
+        & "</function>" & LF & "</tool_call>";
+      Qwen_Typo : constant String :=
+        "<tool_call>" & LF & "<function=calculator>" & LF
+        & "<parameter=a>" & LF & "47" & LF & "</parameter>" & LF
+        & "<parameter=b>" & LF & "89" & LF & "</parameter>" & LF
+        & "<parameter/op>" & LF & "+" & LF & "</parameter>" & LF
+        & "</function>" & LF & "</tool_call>";
+      Qwen_Short : constant String :=
+        "<tool_call>" & LF & "<function=calculator>" & LF
+        & "<parameter=a>" & LF & "47" & LF & "</parameter>" & LF
+        & "</function>" & LF & "</tool_call>";
+      Func_Call : constant String :=
+        "Let me add those." & LF
+        & "<function name=""calculator""><param name=""a"">47</param>"
+        & "<param name=""op"">+</param><param name=""b"">89</param>"
+        & "</function>";
+      Func_Bad_Op : constant String :=
+        "<function name=""calculator""><param name=""a"">47</param>"
+        & "<param name=""op"">plus</param><param name=""b"">89</param>"
+        & "</function>";
+      Envelope : constant String :=
+        "<tool_call>{""name"": ""calculator"", ""arguments"": "
+        & "{""a"":47,""op"":""+"",""b"":89}}</tool_call>";
+   begin
+      Assert (Full_Set_Takes_In (Tools.Qwen_XML, Qwen_Call),
+              "a well-formed Qwen call behind a think block was refused");
+      Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Qwen_Typo),
+              "<parameter/op> was taken as a parameter");
+      Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Qwen_Short),
+              "a Qwen call missing required parameters was taken");
+      Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Envelope),
+              "the JSON envelope was taken as a Qwen call");
+      Assert (Full_Set_Takes_In (Tools.Qwen_XML, "Just an answer."),
+              "prose was refused in the Qwen syntax");
+
+      Assert (Full_Set_Takes_In (Tools.Function_XML, Func_Call),
+              "a well-formed MiniCPM call after prose was refused");
+      Assert (not Full_Set_Takes_In (Tools.Function_XML, Func_Bad_Op),
+              "an op outside the calculator's enum was taken");
+      Assert (not Full_Set_Takes_In (Tools.Function_XML, Envelope),
+              "the JSON envelope was taken as a MiniCPM call");
+   end Tag_Syntaxes_Are_Shaped;
+
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1074,6 +1166,11 @@ package body Tests.Tools_Cases is
         (T, Answer_Schema_Shapes_The_Answer'Access,
          "an answer schema makes the reply a call or an answer in that "
          & "shape, not prose");
+      Register_Routine
+        (T, Tag_Syntaxes_Are_Shaped'Access,
+         "the Qwen3-Coder and MiniCPM tag syntaxes are shaped by the call "
+         & "grammar: a parameter per tag, the schema in it, a think block "
+         & "ahead, and a malformed tag refused");
       Register_Routine
         (T, Full_Set_Is_Tight'Access,
          "the whole built-in set builds the tight grammar, not the loose "

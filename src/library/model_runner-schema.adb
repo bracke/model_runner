@@ -237,11 +237,18 @@ package body Model_Runner.Schema is
    -- To_Grammar --
    ------------------
 
-   procedure To_Grammar
+   --  Both public procedures come here: the JSON shape when In_Tags is
+   --  false, and the parameters-in-tags shape when it is true, with the
+   --  three spellings that make a tag.
+   procedure Write
      (Text    : String;
       Grammar : out String;
       Last    : out Natural;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      In_Tags  : Boolean;
+      Before  : String;
+      After   : String;
+      Close   : String)
    is
       Used : Natural := 0;
 
@@ -279,6 +286,7 @@ package body Model_Runner.Schema is
 
       --  Write the grammar for the schema whose object begins at From.
       procedure Shape (From : Natural; Depth : Natural);
+      procedure Known_Keywords (From : Natural);
 
       --  The type keyword's value, as a bare word. Empty when absent.
       procedure Named_Type
@@ -606,6 +614,237 @@ package body Model_Runner.Schema is
          end if;
       end Choice;
 
+      --  A value standing in a tag rather than in JSON: text where JSON
+      --  would have a quoted string, and the same rule as JSON otherwise.
+      procedure Raw_Plain (Word : String) is
+      begin
+         if Word = "string" then
+            Put ("text");
+         else
+            Plain (Word);
+         end if;
+      end Raw_Plain;
+
+      --  An enum's choices as the words themselves: a string's quotes are
+      --  JSON's and a tag carries none, so a choice is written bare.
+      procedure Raw_Choice (At_Value : Natural) is
+         Item  : Reader := (At_Char => At_Value, others => <>);
+         Count : Natural := 0;
+      begin
+         Skip_Blanks (Text, Item);
+         if Item.At_Char > Text'Last or else Text (Item.At_Char) /= '[' then
+            Malformed := True;
+            return;
+         end if;
+         Item.At_Char := Item.At_Char + 1;
+
+         Put ("(");
+
+         loop
+            Skip_Blanks (Text, Item);
+            exit when Item.At_Char > Text'Last;
+            exit when Text (Item.At_Char) = ']';
+
+            declare
+               First, Last_At : Natural;
+            begin
+               Read_Value (Text, Item, First, Last_At);
+               if Item.Failed then
+                  Malformed := True;
+                  return;
+               end if;
+
+               if Count > 0 then
+                  Put (" | ");
+               end if;
+               Count := Count + 1;
+
+               Put ("""");
+               for Index in First .. Last_At loop
+                  if Text (Index) = '"' then
+                     --  A JSON string's own quotes, left out: the word
+                     --  stands bare in a tag. A quote inside one is kept,
+                     --  escaped for the grammar.
+                     if Index = First or else Index = Last_At then
+                        null;
+                     else
+                        Put ("\""");
+                     end if;
+                  elsif Text (Index) = '\' then
+                     Put ("\\");
+                  else
+                     Put (Text (Index .. Index));
+                  end if;
+               end loop;
+               Put ("""");
+
+               Skip_Blanks (Text, Item);
+               if Item.At_Char <= Text'Last
+                 and then Text (Item.At_Char) = ','
+               then
+                  Item.At_Char := Item.At_Char + 1;
+               end if;
+            end;
+         end loop;
+
+         Put (")");
+
+         if Count = 0 then
+            Malformed := True;
+         end if;
+      end Raw_Choice;
+
+      --  One property's value as it stands in a tag: a choice bare, a
+      --  string as text, a number or boolean as itself, and an object or
+      --  an array as the JSON those families write for one.
+      procedure Tag_Value (From : Natural) is
+         At_Enum, At_Const       : Natural;
+         Failed                  : Boolean;
+         Type_First, Type_Last   : Natural;
+      begin
+         Known_Keywords (From);
+         if Refused or else Malformed then
+            return;
+         end if;
+
+         Find_Member (Text, From, "const", At_Const, Failed);
+         if not Failed and then At_Const /= 0 then
+            Refuse ("a const in a tag");
+            return;
+         end if;
+
+         Find_Member (Text, From, "enum", At_Enum, Failed);
+         if not Failed and then At_Enum /= 0 then
+            Raw_Choice (At_Enum);
+            return;
+         end if;
+
+         Named_Type (From, Type_First, Type_Last);
+         if Type_Last < Type_First then
+            Refuse ("a schema with no type or enum");
+            return;
+         end if;
+
+         declare
+            Word : constant String := Text (Type_First .. Type_Last);
+         begin
+            if Word = "object" or else Word = "array" then
+               Shape (From, 1);
+            else
+               Raw_Plain (Word);
+            end if;
+         end;
+      end Tag_Value;
+
+      --  The properties of the top-level object, each in its tag, in the
+      --  order the schema names them. Unlike the JSON shape no comma
+      --  stands between them, so a property that may be absent may be
+      --  absent wherever it stands, the first included.
+      procedure Tag_Object_Shape (From : Natural) is
+         At_Props : Natural;
+         Failed   : Boolean;
+         Item     : Reader;
+         Count    : Natural := 0;
+         Type_First, Type_Last : Natural;
+      begin
+         Known_Keywords (From);
+         if Refused or else Malformed then
+            return;
+         end if;
+
+         Named_Type (From, Type_First, Type_Last);
+         if Type_Last < Type_First
+           or else Text (Type_First .. Type_Last) /= "object"
+         then
+            Refuse ("parameters that are not an object");
+            return;
+         end if;
+
+         Find_Member (Text, From, "properties", At_Props, Failed);
+         if Failed or else At_Props = 0 then
+            Refuse ("object without properties");
+            return;
+         end if;
+
+         Item := (At_Char => At_Props, others => <>);
+         Skip_Blanks (Text, Item);
+         if Item.At_Char > Text'Last or else Text (Item.At_Char) /= '{' then
+            Malformed := True;
+            return;
+         end if;
+         Item.At_Char := Item.At_Char + 1;
+
+         loop
+            Skip_Blanks (Text, Item);
+            exit when Item.At_Char > Text'Last;
+            exit when Text (Item.At_Char) = '}';
+
+            declare
+               Key_First, Key_Last     : Natural;
+               Value_First, Value_Last : Natural;
+            begin
+               Read_String (Text, Item, Key_First, Key_Last);
+               if Item.Failed then
+                  Malformed := True;
+                  return;
+               end if;
+
+               Skip_Blanks (Text, Item);
+               if Item.At_Char > Text'Last
+                 or else Text (Item.At_Char) /= ':'
+               then
+                  Malformed := True;
+                  return;
+               end if;
+               Item.At_Char := Item.At_Char + 1;
+
+               Skip_Blanks (Text, Item);
+               Value_First := Item.At_Char;
+               Read_Value (Text, Item, Value_First, Value_Last);
+               if Item.Failed then
+                  Malformed := True;
+                  return;
+               end if;
+
+               declare
+                  Wanted : constant Boolean :=
+                    Is_Required (From, Text (Key_First .. Key_Last));
+               begin
+                  if Count > 0 then
+                     Put (" ");
+                  end if;
+                  Count := Count + 1;
+
+                  Put ("(""");
+                  Put (Before);
+                  Put (Text (Key_First .. Key_Last));
+                  Put (After);
+                  Put (""" ws ");
+                  Tag_Value (Value_First);
+                  Put (" ws """);
+                  Put (Close);
+                  Put (""" ws)");
+                  if not Wanted then
+                     Put ("?");
+                  end if;
+               end;
+
+               Skip_Blanks (Text, Item);
+               if Item.At_Char <= Text'Last
+                 and then Text (Item.At_Char) = ','
+               then
+                  Item.At_Char := Item.At_Char + 1;
+               end if;
+            end;
+         end loop;
+
+         if Count = 0 then
+            --  A tool with no parameters calls with nothing between its
+            --  tags but the whitespace the envelope allows.
+            Put ("ws");
+         end if;
+      end Tag_Object_Shape;
+
       --  Every member of a schema object, checked against what this reads.
       --  A keyword it does not read is refused rather than ignored: ignoring
       --  one produces a grammar that allows more than the schema does, which
@@ -743,7 +982,11 @@ package body Model_Runner.Schema is
       end if;
 
       Put ("root ::= ");
-      Shape (Text'First, 0);
+      if In_Tags then
+         Tag_Object_Shape (Text'First);
+      else
+         Shape (Text'First, 0);
+      end if;
       Put (Character'Val (10) & "");
 
       --  The pieces every schema leans on, written once. A grammar that
@@ -768,6 +1011,9 @@ package body Model_Runner.Schema is
       --  to produce and is not forced into compact {"a":1,"b":2}. It is
       --  optional everywhere, so compact JSON is still accepted.
       Put ("ws ::= [ \x09\x0A\x0D]*" & Character'Val (10));
+      --  What a string is in a tag: anything up to the next tag. The
+      --  reader takes the whitespace off either end of it.
+      Put ("text ::= [^<]*" & Character'Val (10));
 
       if Malformed then
          Status := E.Make (E.Grammar_Syntax_Error);
@@ -789,6 +1035,37 @@ package body Model_Runner.Schema is
       end if;
 
       Last := Used;
+   end Write;
+
+   ----------------
+   -- To_Grammar --
+   ----------------
+
+   procedure To_Grammar
+     (Text    : String;
+      Grammar : out String;
+      Last    : out Natural;
+      Status  : out E.Error_Info) is
+   begin
+      Write (Text, Grammar, Last, Status, In_Tags => False,
+             Before => "", After => "", Close => "");
    end To_Grammar;
+
+   --------------------
+   -- To_Tag_Grammar --
+   --------------------
+
+   procedure To_Tag_Grammar
+     (Text    : String;
+      Before  : String;
+      After   : String;
+      Close   : String;
+      Grammar : out String;
+      Last    : out Natural;
+      Status  : out E.Error_Info) is
+   begin
+      Write (Text, Grammar, Last, Status, In_Tags => True,
+             Before => Before, After => After, Close => Close);
+   end To_Tag_Grammar;
 
 end Model_Runner.Schema;

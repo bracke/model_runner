@@ -69,4 +69,35 @@ package Model_Runner.Schema is
       Last    : out Natural;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  The same schema as the parameters of a call written in tags, the
+   --  way the Qwen3-Coder and MiniCPM families write one: each property
+   --  as Before, its name, After, its value, Close -- "<parameter=", ">"
+   --  and "</parameter>" for the one, "<param name=\"", "\">" and
+   --  "</param>" for the other -- in the order the schema names them,
+   --  a property the schema does not require allowed to be absent, and
+   --  nothing between them but whitespace.
+   --
+   --  A value in a tag is text, not JSON: a string is any run of
+   --  characters without a '<', an enum's choices are the words
+   --  themselves without quotes, a number or a boolean is written as it
+   --  would be anywhere, and an object or an array is JSON, since that is
+   --  what those families write for one. The schema must be an object
+   --  with properties; anything else is refused.
+   --
+   --  @param Text The schema, as JSON.
+   --  @param Before What opens a parameter's tag, before its name.
+   --  @param After What follows the name and closes the opening tag.
+   --  @param Close What closes the parameter.
+   --  @param Grammar Receives the grammar; empty on failure.
+   --  @param Last Length of the grammar written.
+   --  @param Status As To_Grammar.
+   procedure To_Tag_Grammar
+     (Text    : String;
+      Before  : String;
+      After   : String;
+      Close   : String;
+      Grammar : out String;
+      Last    : out Natural;
+      Status  : out Model_Runner.Errors.Error_Info);
+
 end Model_Runner.Schema;

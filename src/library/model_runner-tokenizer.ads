@@ -315,9 +315,49 @@ package Model_Runner.Tokenizer is
    --  @return Remaining buffered bytes.
    function Flush (Item : in out Decoder) return String;
 
+   --  Every token's decoded text, held once.
+   --
+   --  A grammar filters the whole vocabulary before each token is sampled,
+   --  and it asks what each token spells: decoded on the spot, that is a
+   --  hundred and fifty thousand decodings a token on a Qwen vocabulary,
+   --  each of them allocating -- four tenths of a second a token, against
+   --  the twenty milliseconds the filter itself takes. Decoded here once
+   --  for a run, a token's text is a slice of one pool. Release with Free.
+   type Decoded_Texts is limited private;
+
+   --  Decode every token of a vocabulary into the table.
+   --
+   --  @param Item Loaded vocabulary.
+   --  @param Into Table to fill; released first.
+   procedure Decode_All (Item : Vocabulary; Into : in out Decoded_Texts);
+
+   --  A token's decoded text, as Decode_Token gives it.
+   --
+   --  @param Table Filled table.
+   --  @param Token Token to look up; one outside the table is empty.
+   --  @return The text, possibly empty.
+   function Text_Of (Table : Decoded_Texts; Token : Token_Id) return String;
+
+   --  Release the table; idempotent.
+   --
+   --  @param Table Table to release.
+   procedure Free (Table : in out Decoded_Texts);
+
 private
 
    Max_Pending : constant := 8;
+
+   type Text_Pool_Access is access String;
+   type Starts_Array is array (Natural range <>) of Natural;
+   type Starts_Access is access Starts_Array;
+
+   --  The texts end to end in Pool; token T's runs from Starts (T) to
+   --  Starts (T + 1) - 1, so Starts has one entry more than there are
+   --  tokens. Both null until Decode_All fills them.
+   type Decoded_Texts is limited record
+      Pool   : Text_Pool_Access := null;
+      Starts : Starts_Access := null;
+   end record;
 
    type Decoder is record
       Started : Boolean := False;

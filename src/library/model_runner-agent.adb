@@ -73,20 +73,21 @@ package body Model_Runner.Agent is
       --  even with no tools.
       use type Model_Runner.Tools.Call_Syntax;
 
-      --  The call grammar shapes the <tool_call> convention. MiniCPM's
-      --  <function> form is read but not shaped: that family reasons in
-      --  <think> blocks, whose '<' a call grammar's prose could not carry, so
-      --  its output is left free and the calls are read out of it. Open_JSON
-      --  is left free too where tools are offered -- its point is to read
-      --  the object a model writes without the envelope, and the grammar's
-      --  prose would admit that object and shape nothing -- and shaped by
-      --  the answer schema where none are, since an answer is the same
-      --  JSON whichever syntax the calls take.
+      --  The call grammar shapes the <tool_call> envelope and both tag
+      --  forms -- Qwen3-Coder's <function=..> and MiniCPM's <function
+      --  name="..">, each with a <think> block admitted ahead of the
+      --  reply, since those families reason in one. Left free before,
+      --  because that block's '<' was one the grammar's prose refused, a
+      --  0.8B wrote <parameter/op> and lost the argument; shaped, it
+      --  cannot. Open_JSON alone is left free where tools are offered --
+      --  its point is to read the object a model writes without any
+      --  envelope, and the grammar's prose would admit that object and
+      --  shape nothing -- and shaped by the answer schema where none are,
+      --  since an answer is the same JSON whichever syntax the calls take.
       Constrain : constant Boolean :=
         (Have_Tools or else Answer_Schema /= "")
-        and then (Tool_Syntax = Model_Runner.Tools.Tool_Call_JSON
-                  or else (Tool_Syntax = Model_Runner.Tools.Open_JSON
-                           and then not Have_Tools));
+        and then (Tool_Syntax /= Model_Runner.Tools.Open_JSON
+                  or else not Have_Tools);
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
@@ -196,7 +197,8 @@ package body Model_Runner.Agent is
       if Constrain then
          Model_Runner.Tools.Constraint.Compile_Call_Grammar
            (Offered, Rules_Grammar, Result.Error,
-            Answer_Schema => Answer_Schema);
+            Answer_Schema => Answer_Schema,
+            Syntax        => Tool_Syntax);
          if E.Is_Error (Result.Error) then
             Result.Reason := Grammar_Failed;
             return;

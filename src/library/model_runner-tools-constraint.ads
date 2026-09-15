@@ -57,10 +57,20 @@ package Model_Runner.Tools.Constraint is
    --    (or when no tools are offered); when the tools force the looser
    --    fallback, or when the answer schema itself will not compile, the
    --    answer falls back to free text.
+   --  @param Syntax The shape a call takes. Tool_Call_JSON and Open_JSON
+   --    are the <tool_call> JSON envelope; Qwen_XML and Function_XML are
+   --    the two tag forms, a call as <function=name> or <function
+   --    name="name"> with a tag per parameter, the parameters shaped by
+   --    the tool's schema as Schema.To_Tag_Grammar shapes them. The tag
+   --    forms admit a <think> block ahead of the reply, since the families
+   --    that write them reason in one, and it is a '<' the prose rule could
+   --    not otherwise carry.
    procedure Compile_Call_Grammar
      (Offered       : Model_Runner.Tools.Definitions;
       Into          : in out Model_Runner.Grammar.Compiled;
       Status        : out Model_Runner.Errors.Error_Info;
-      Answer_Schema : String := "");
+      Answer_Schema : String := "";
+      Syntax        : Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Tools.Tool_Call_JSON);
 
 end Model_Runner.Tools.Constraint;

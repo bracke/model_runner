@@ -138,6 +138,26 @@ package body Model_Runner.Generation is
       --  constrains what the model produces, not what it was given.
       Shape   : Model_Runner.Grammar.Matcher;
       Decoder : Vocab.Decoder;
+
+      --  What every token spells, decoded once for the grammar's filter
+      --  rather than twice a candidate a step. Filled only when there is a
+      --  grammar to filter for.
+      Spelt   : Vocab.Decoded_Texts;
+
+      --  Whether the grammar's first, unmasked draw was taken as this
+      --  step's token, so that nothing draws again below.
+      Chosen  : Boolean := False;
+
+      --  Whether the grammar takes a token where it stands: the end token
+      --  only where the grammar may end, a token spelling nothing never --
+      --  it could not advance the grammar and would be produced forever --
+      --  and any other by what it spells.
+      function Grammar_Takes (Which : Token_Id) return Boolean
+      is (if Vocab.Ends_Generation (Words.all, Which)
+          then Model_Runner.Grammar.Is_Complete (Rules.all, Shape)
+          elsif Vocab.Text_Of (Spelt, Which) = "" then False
+          else Model_Runner.Grammar.Accepts
+                 (Rules.all, Shape, Vocab.Text_Of (Spelt, Which)));
       Logits  : T.Real_Array_Access := null;
       Tokens  : Token_Buffer := null;
 
@@ -256,6 +276,7 @@ package body Model_Runner.Generation is
          if Verified /= null then
             Free_Tokens (Verified);
          end if;
+         Vocab.Free (Spelt);
          S.Close (Sampler);
       end Cleanup;
 
@@ -413,6 +434,7 @@ package body Model_Runner.Generation is
       end if;
 
       if Rules /= null then
+         Vocab.Decode_All (Words.all, Spelt);
          Model_Runner.Grammar.Start (Rules.all, Shape, Status);
          if E.Is_Error (Status) then
             Conclude (Runtime_Error, Status);
@@ -1210,60 +1232,67 @@ package body Model_Runner.Generation is
                      exit Decode_Loop;
                   end if;
 
-                  --  What the grammar allows next, if there is one. Every token
-                  --  whose text cannot continue it leaves the distribution
-                  --  before anything is sampled, which is what makes this a
-                  --  constraint rather than a request: the tokens that would
-                  --  break the shape are not there to be chosen.
+                  --  What the grammar allows next, if there is one. A token
+                  --  whose text cannot continue it is not there to be
+                  --  chosen, which is what makes this a constraint rather
+                  --  than a request; and the end token is not there until
+                  --  the grammar may end, so a run cannot stop half way
+                  --  through what it was asked for.
                   --
-                  --  The end token goes with them until the grammar may end, so
-                  --  a run cannot stop half way through what it was asked for.
-                  if Rules /= null then
+                  --  Asked of one token before it is asked of all of them.
+                  --  The whole vocabulary filtered a step is a quarter of a
+                  --  million matches on a Qwen3.5 vocabulary, and where the
+                  --  grammar stands at a choice between prose and every call
+                  --  on offer each of those tries every branch: four seconds
+                  --  a token, a hundred times the model. So the sampler is
+                  --  asked first, unmasked, and its choice checked; a choice
+                  --  the grammar takes is the token, and only a refused one
+                  --  brings the whole filter and a second draw. Greedy, that
+                  --  is the same token the filter alone would have found.
+                  --  Sampled, a choice taken from the whole distribution and
+                  --  kept only where the grammar allows it, with a fresh
+                  --  draw from the filtered distribution otherwise, is a
+                  --  draw from the filtered distribution -- the two branches
+                  --  add up to exactly that -- so nothing about what is
+                  --  produced changes, only what it costs.
+                  if Rules /= null and then not Drafting then
                      S.Release_Step_Mask (Sampler);
+                     S.Sample (Sampler, Logits.all, Token, Status, Sharing);
+                     if E.Is_Error (Status) then
+                        Conclude (Runtime_Error, Status);
+                        exit Decode_Loop;
+                     end if;
 
-                     declare
-                        Allowed : Natural := 0;
-                     begin
-                        for Candidate in 0 .. Settings.Vocabulary - 1 loop
-                           declare
-                              Which : constant Token_Id := Token_Id (Candidate);
-                           begin
-                              if Vocab.Ends_Generation (Words.all, Which) then
-                                 if Model_Runner.Grammar.Is_Complete
-                                      (Rules.all, Shape)
-                                 then
+                     if Grammar_Takes (Token) then
+                        Chosen := True;
+                     else
+                        Chosen := False;
+                        declare
+                           Allowed : Natural := 0;
+                        begin
+                           for Candidate in 0 .. Settings.Vocabulary - 1 loop
+                              declare
+                                 Which : constant Token_Id :=
+                                   Token_Id (Candidate);
+                              begin
+                                 if Grammar_Takes (Which) then
                                     Allowed := Allowed + 1;
                                  else
                                     S.Forbid_For_Step (Sampler, Which);
                                  end if;
+                              end;
+                           end loop;
 
-                              elsif Vocab.Decode_Token (Words.all, Which) = ""
-                              then
-                                 --  A token that contributes no text cannot
-                                 --  advance a grammar, and allowing it would
-                                 --  let a run produce it forever while the
-                                 --  grammar stayed where it was. The end token
-                                 --  is the one exception and it is above.
-                                 S.Forbid_For_Step (Sampler, Which);
-
-                              elsif Model_Runner.Grammar.Accepts
-                                      (Rules.all, Shape,
-                                       Vocab.Decode_Token (Words.all, Which))
-                              then
-                                 Allowed := Allowed + 1;
-                              else
-                                 S.Forbid_For_Step (Sampler, Which);
-                              end if;
-                           end;
-                        end loop;
-
-                        if Allowed = 0 then
-                           Conclude
-                             (Runtime_Error,
-                              E.Make (E.Grammar_Rejected_Every_Token));
-                           exit Decode_Loop;
-                        end if;
-                     end;
+                           if Allowed = 0 then
+                              Conclude
+                                (Runtime_Error,
+                                 E.Make (E.Grammar_Rejected_Every_Token));
+                              exit Decode_Loop;
+                           end if;
+                        end;
+                     end if;
+                  else
+                     Chosen := False;
                   end if;
 
                   --  Where the next token comes from. Without a draft it is
@@ -1284,7 +1313,7 @@ package body Model_Runner.Generation is
 
                      Verified_At := Verified_At + 1;
                      Token := Verified.all (Verified_At);
-                  else
+                  elsif not Chosen then
                      S.Sample (Sampler, Logits.all, Token, Status, Sharing);
                      if E.Is_Error (Status) then
                         Conclude (Runtime_Error, Status);

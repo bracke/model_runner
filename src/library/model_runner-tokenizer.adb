@@ -3219,6 +3219,66 @@ package body Model_Runner.Tokenizer is
       return Combined (Combined'First .. Combined'First + Safe - 1);
    end Push;
 
+   ----------------
+   -- Decode_All --
+   ----------------
+
+   procedure Decode_All (Item : Vocabulary; Into : in out Decoded_Texts) is
+      Count : constant Natural := Size (Item);
+      Total : Natural := 0;
+   begin
+      Free (Into);
+      Into.Starts := new Starts_Array (0 .. Count);
+
+      --  Two passes: the lengths first, so the pool is allocated once at
+      --  its size, then the texts.
+      for Index in 0 .. Count - 1 loop
+         Into.Starts (Index) := Total;
+         Total := Total + Decode_Token (Item, Token_Id (Index))'Length;
+      end loop;
+      Into.Starts (Count) := Total;
+
+      Into.Pool := new String (1 .. Total);
+      for Index in 0 .. Count - 1 loop
+         declare
+            Text : constant String := Decode_Token (Item, Token_Id (Index));
+         begin
+            Into.Pool (Into.Starts (Index) + 1
+                       .. Into.Starts (Index) + Text'Length) := Text;
+         end;
+      end loop;
+   end Decode_All;
+
+   -------------
+   -- Text_Of --
+   -------------
+
+   function Text_Of (Table : Decoded_Texts; Token : Token_Id) return String is
+   begin
+      if Table.Pool = null
+        or else Token < 0
+        or else Natural (Token) >= Table.Starts'Last
+      then
+         return "";
+      end if;
+      return Table.Pool (Table.Starts (Natural (Token)) + 1
+                         .. Table.Starts (Natural (Token) + 1));
+   end Text_Of;
+
+   ----------
+   -- Free --
+   ----------
+
+   procedure Free (Table : in out Decoded_Texts) is
+      procedure Release is new Ada.Unchecked_Deallocation
+        (String, Text_Pool_Access);
+      procedure Release is new Ada.Unchecked_Deallocation
+        (Starts_Array, Starts_Access);
+   begin
+      Release (Table.Pool);
+      Release (Table.Starts);
+   end Free;
+
    -----------
    -- Flush --
    -----------
