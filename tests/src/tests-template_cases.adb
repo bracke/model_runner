@@ -628,6 +628,41 @@ package body Tests.Template_Cases is
                  "thinking off did not write the empty block: " & Off);
       end;
 
+      --  And the reasoning an earlier turn carried is not written back,
+      --  while the exchange in progress keeps its own -- as Qwen3.5's own
+      --  template keeps only what follows the last thing the user said.
+      --  Crossed against jinja2 on the same source, byte for byte.
+      declare
+         Nl     : constant String := "" & Character'Val (10);
+         Again  : Conv.History;
+         Room   : String (1 .. 4096);
+         Used   : Natural;
+         St     : E.Error_Info;
+      begin
+         Conv.Open (Again, Status => St);
+         Conv.Append (Again, Conv.User_Role, "q one", St);
+         Conv.Append (Again, Conv.Assistant_Role,
+                      "<think>" & Nl & "first thoughts" & Nl & "</think>"
+                      & Nl & Nl & "First answer.", St);
+         Conv.Append (Again, Conv.User_Role, "q two", St);
+         Conv.Append (Again, Conv.Assistant_Role,
+                      "<think>" & Nl & "second thoughts" & Nl & "</think>"
+                      & Nl & Nl & "Second answer.", St);
+         Tmpl.Render (Item, Again, "", "", True, Room, Used, St);
+         Assert (E.Is_Ok (St), "the two-exchange history did not render");
+         Assert (Has (Room (1 .. Used),
+                      "<|im_start|>assistant" & Nl & "First answer.<|im_end|>"),
+                 "an earlier turn kept its reasoning: " & Room (1 .. Used));
+         Assert (not Has (Room (1 .. Used), "first thoughts"),
+                 "an earlier turn's reasoning was written: " & Room (1 .. Used));
+         Assert (Has (Room (1 .. Used),
+                      "<|im_start|>assistant" & Nl & "<think>" & Nl
+                      & "second thoughts" & Nl & "</think>" & Nl & Nl
+                      & "Second answer.<|im_end|>"),
+                 "the current exchange lost its reasoning: " & Room (1 .. Used));
+         Conv.Close (Again);
+      end;
+
       Conv.Close (Messages);
       Tmpl.Close (Item);
       Model_Runner.Tools.Close (Defs);

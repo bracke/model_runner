@@ -87,6 +87,13 @@ Keep a Changelog and the project uses semantic versioning.
   logits against llama.cpp b10595. On agent-eval the 4B goes from 0 of 10
   -- every reply a word repeated -- to **10 of 10**, so the gemma format's
   tool calling is proven on a model that can follow it.
+- **The qwen3-coder format keeps reasoning only for the exchange in
+  progress, as Qwen3.5 does.** An assistant turn from an earlier exchange
+  is written without its `<think>` block and one after the last thing the
+  user said with it, which is what Qwen3.5's own template does with
+  `last_query_index`; the stand-in wrote every turn back whole. Crossed
+  against jinja2 on a two-exchange history, byte for byte; on the 0.8B
+  campaign the same nine of ten at 449 tokens where it was 501.
 - **The qwen3-coder format handles the reasoning block the way Qwen3.5
   does.** The Qwen3.5 family stands on this format -- its calls take the
   same `<function=..>` shape and its own template will not compile -- and

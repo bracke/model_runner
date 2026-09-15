@@ -321,6 +321,17 @@ package body Model_Runner.Templates is
            & "{% else %}"
            & "{% set turns = messages %}"
            & "{% endif %}"
+           --  Where the last thing the user said stands, so that the
+           --  reasoning an assistant turn carries is kept only after it,
+           --  as Qwen3.5's own template keeps it: a turn from an earlier
+           --  exchange is written without its <think> block, and one from
+           --  the exchange in progress with it.
+           & "{% set ns = namespace(last_query_index=-1) %}"
+           & "{% for message in turns %}"
+           & "{% if message.role == 'user' %}"
+           & "{% set ns.last_query_index = loop.index0 %}"
+           & "{% endif %}"
+           & "{% endfor %}"
            & "{% for message in turns %}"
            & "{% if message.role == 'tool' %}"
            & "{% if not loop.first"
@@ -335,8 +346,20 @@ package body Model_Runner.Templates is
            & "<|im_end|>" & LF
            & "{% endif %}"
            & "{% elif message.role == 'assistant' %}"
+           & "{% if '</think>' in message.content %}"
+           & "{% set reasoning = message.content.split('</think>')[0]"
+           & ".rstrip('\n').split('<think>')[-1].lstrip('\n') %}"
+           & "{% set content = message.content.split('</think>')[-1]"
+           & ".lstrip('\n') %}"
+           & "{% else %}"
+           & "{% set reasoning = '' %}"
+           & "{% set content = message.content %}"
+           & "{% endif %}"
            & "<|im_start|>assistant" & LF
-           & "{{ message.content }}"
+           & "{% if loop.index0 > ns.last_query_index and reasoning %}"
+           & "<think>" & LF & "{{ reasoning }}" & LF & "</think>" & LF & LF
+           & "{% endif %}"
+           & "{{ content }}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
            & LF & "<tool_call>" & LF & "<function=" & "{{ tool_call.name }}"
