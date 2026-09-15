@@ -431,12 +431,24 @@ package body Agent_Eval is
       Waiting     : Natural := 0;
       Trace       : Boolean := False;
       Report_Path : String := "";
+      Format      : String := "";
       Result      : out Report)
    is
       Source    : Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : L.Model;
       Status    : E.Error_Info;
+
+      --  The shape a task offering tools reads its calls in. The chat format
+      --  and the syntax are one choice: qwen3-coder renders and reads calls
+      --  as <function=..>, minicpm as <function name="..">, and every other
+      --  format uses the <tool_call> JSON envelope. A task with no tools --
+      --  the answer-schema one -- stays on the envelope regardless, because
+      --  that is the syntax its answer grammar constrains.
+      Tool_Syntax : constant Model_Runner.Tools.Call_Syntax :=
+        (if Format = "qwen3-coder" then Model_Runner.Tools.Qwen_XML
+         elsif Format = "minicpm" then Model_Runner.Tools.Function_XML
+         else Model_Runner.Tools.Tool_Call_JSON);
 
       --  The task objects of the JSON report, accumulated while each task's
       --  history is still open, and wrapped and written out at the end.
@@ -491,6 +503,30 @@ package body Agent_Eval is
          Say (Result, "the model would not prepare: "
               & E.Error_Code'Image (Status.Code));
          return;
+      end if;
+
+      --  A named format replaces the model's own template with one this
+      --  build carries -- for a model whose embedded template will not
+      --  compile, like Qwen3-Coder, whose template opens with a macro.
+      if Format /= "" then
+         if Model_Runner.Templates.Built_In (Format) = "" then
+            Say (Result, "no built-in chat format is named '" & Format & "'");
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Shards.Close (Source);
+            return;
+         end if;
+         L.Use_Template
+           (Engine, Model_Runner.Templates.Built_In (Format),
+            Model_Runner.Limits.Default_Model_Limits, Status);
+         if E.Is_Error (Status) then
+            Say (Result, "the '" & Format & "' format would not compile: "
+                 & E.Error_Code'Image (Status.Code));
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Shards.Close (Source);
+            return;
+         end if;
       end if;
 
       if not L.Template_Ready (Engine) then
@@ -562,6 +598,12 @@ package body Agent_Eval is
                   Sink       => null,
                   Time       => Clock'Unchecked_Access,
                   Seeds      => Seeds'Unchecked_Access,
+                  --  A task offering tools reads its calls in the format's
+                  --  shape; one with only an answer schema stays on the JSON
+                  --  envelope, which is what its answer grammar constrains.
+                  Tool_Syntax =>
+                    (if Wanted_Tool then Tool_Syntax
+                     else Model_Runner.Tools.Tool_Call_JSON),
                   --  Room for a chain: several tool calls and the answer.
                   Max_Steps  => 10,
                   --  A ceiling so one task cannot hang the run. Generous:

@@ -1323,6 +1323,7 @@ begin
             Waiting     => Number ("--wait", 0),
             Trace       => Given ("--trace"),
             Report_Path => Option ("--report", ""),
+            Format      => Option ("--chat-template", ""),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

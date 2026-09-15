@@ -51,6 +51,14 @@ package Agent_Eval is
    --  @param Path The model file. A missing one is reported, not measured.
    --  @param Threads Worker count for the run.
    --  @param Backend Which backend evaluates.
+   --  @param Format A built-in chat format to render with -- "qwen3-coder",
+   --    "minicpm", and the rest Templates carries -- for a model whose own
+   --    template this build will not compile, or one written in a tool shape
+   --    that is not the <tool_call> JSON envelope. Empty uses the model's
+   --    embedded template. When it is a format whose calls are an XML shape,
+   --    a task offering tools reads them in that shape; a task with only an
+   --    answer schema stays on the JSON envelope, since that is what its
+   --    answer grammar constrains.
    --  @param Anyway Run even when the machine is busy.
    --  @param Waiting Minutes to wait for the machine to quiet, at most.
    --  @param Result What was scored.
@@ -72,6 +80,7 @@ package Agent_Eval is
       Waiting     : Natural := 0;
       Trace       : Boolean := False;
       Report_Path : String := "";
+      Format      : String := "";
       Result      : out Report);
 
    --  A one-line summary of a report, in the style the other campaigns use.
