@@ -1,4 +1,8 @@
+with Ada.Calendar.Formatting;
+with Ada.Calendar.Time_Zones;
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
@@ -99,7 +103,7 @@ package body Model_Runner.Templates is
 
    --  What kind of block an open nesting level is, so that a closing tag can
    --  be checked against it.
-   type Block_Kind is (Block_For, Block_If);
+   type Block_Kind is (Block_For, Block_If, Block_Macro, Block_Set);
 
    type Frame is record
       Kind        : Block_Kind := Block_If;
@@ -435,6 +439,16 @@ package body Model_Runner.Templates is
            & "{% else %}"
            & "{% set turns = messages %}"
            & "{% endif %}"
+           --  As the model's own template does, and as qwen3-coder does
+           --  here: an assistant turn's reasoning is written only after the
+           --  last thing the user said, so an earlier exchange's <think>
+           --  block is dropped and the one in progress is kept.
+           & "{% set ns = namespace(last_query_index=-1) %}"
+           & "{% for message in turns %}"
+           & "{% if message.role == 'user' %}"
+           & "{% set ns.last_query_index = loop.index0 %}"
+           & "{% endif %}"
+           & "{% endfor %}"
            & "{% for message in turns %}"
            & "{% if message.role == 'tool' %}"
            & "{% if not loop.first"
@@ -449,10 +463,25 @@ package body Model_Runner.Templates is
            & "<|im_end|>" & LF
            & "{% endif %}"
            & "{% elif message.role == 'assistant' %}"
+           & "{% if '</think>' in message.content %}"
+           & "{% set reasoning = message.content.split('</think>')[0]"
+           & ".rstrip('\n').split('<think>')[-1].lstrip('\n') %}"
+           & "{% set content = message.content.split('</think>')[-1]"
+           & ".lstrip('\n') %}"
+           & "{% else %}"
+           & "{% set reasoning = '' %}"
+           & "{% set content = message.content %}"
+           & "{% endif %}"
            & "<|im_start|>assistant" & LF
-           & "{{ message.content }}"
+           & "{% if loop.index0 > ns.last_query_index and reasoning %}"
+           & "<think>" & LF & "{{ reasoning }}" & LF & "</think>" & LF & LF
+           & "{% endif %}"
+           & "{{ content }}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
+           & "{% if (loop.first and content) or not loop.first %}"
+           & LF
+           & "{% endif %}"
            & "<function name=""{{ tool_call.name }}"">"
            & "{{ tool_call.arguments | params }}</function>"
            & "{% endfor %}"
@@ -465,6 +494,11 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
            & "<|im_start|>assistant" & LF
+           & "{% if enable_thinking is defined and enable_thinking is true %}"
+           & "<think>" & LF
+           & "{% elif enable_thinking is defined %}"
+           & "<think>" & LF & LF & "</think>" & LF & LF
+           & "{% endif %}"
            & "{% endif %}";
       else
          return "";
@@ -796,6 +830,25 @@ package body Model_Runner.Templates is
          return Item.Name_Used;
       end Slot_Of;
 
+      --  Which macro a name is, or zero when the template defined none by
+      --  that name so far. Defined before it is called, as the language
+      --  reads a template top to bottom.
+      function Macro_Named (Name : String) return Natural is
+      begin
+         for Index in 1 .. Item.Macro_Used loop
+            declare
+               Held : Variable_Name renames Item.Macros (Index).Name;
+            begin
+               if Item.Source.all (Held.Offset + 1 .. Held.Offset + Held.Length)
+                 = Name
+               then
+                  return Index;
+               end if;
+            end;
+         end loop;
+         return 0;
+      end Macro_Named;
+
       --  A term the engine cannot evaluate, named so that the render which
       --  reaches it can say what it was.
       function Refused
@@ -989,6 +1042,28 @@ package body Model_Runner.Templates is
 
       --  Read one term without its filter. Terms are the only values the
       --  engine knows; anything else reads as unsupported.
+      --  Whether an operand is a number by construction: any join but plus
+      --  makes it one, and so does a plus between numbers. The same rule
+      --  Render's Is_Sum reads at render time, read here for a group.
+      function Sums (Value : Operand) return Boolean is
+      begin
+         if Value.Count <= 1 then
+            return Value.Count = 1 and then Value.Terms (1).Numeric;
+         end if;
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join = Join_Concat then
+               return False;
+            end if;
+         end loop;
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join /= Join_Plus then
+               return True;
+            end if;
+         end loop;
+         return (for all Index in 1 .. Value.Count =>
+                   Value.Terms (Index).Numeric);
+      end Sums;
+
       procedure Read_Bare_Term
         (Text   : String;
          From   : in out Natural;
@@ -1182,6 +1257,106 @@ package body Model_Runner.Templates is
                   end;
                end if;
 
+               --  A macro the template defined, called with its arguments.
+               --  The arguments are operands, kept one after another so
+               --  that the term can name them by the first and a count.
+               if Tail <= Text'Last and then Text (Tail) = '('
+                 and then Macro_Named (Word) /= 0
+               then
+                  declare
+                     Shut   : constant Natural := Closes_At (Text, Tail);
+                     Inside : constant String :=
+                       (if Shut = 0 then "" else Text (Tail + 1 .. Shut - 1));
+                     Cursor_At     : Natural := Inside'First;
+                     Given  : Natural := 0;
+                     Start  : Natural := 0;
+                  begin
+                     if Shut = 0 then
+                        return;
+                     end if;
+                     while Skip_Spaces (Inside, Cursor_At) <= Inside'Last loop
+                        declare
+                           Value : Operand;
+                           Read  : Boolean;
+                           Kept  : Natural;
+                           Next  : Natural;
+                        begin
+                           Read_Operand (Inside, Cursor_At, Value, Read);
+                           if not Read or else Given >= Max_Parameters then
+                              Result := Refused (Text (First .. Shut));
+                              From := Shut + 1;
+                              Ok := True;
+                              return;
+                           end if;
+                           Keep (Value, Kept);
+                           if Kept = 0 then
+                              return;
+                           end if;
+                           Given := Given + 1;
+                           if Start = 0 then
+                              Start := Kept;
+                           end if;
+                           Next := Skip_Spaces (Inside, Cursor_At);
+                           if Next <= Inside'Last then
+                              if Inside (Next) /= ',' then
+                                 Result := Refused (Text (First .. Shut));
+                                 From := Shut + 1;
+                                 Ok := True;
+                                 return;
+                              end if;
+                              Cursor_At := Next + 1;
+                           else
+                              Cursor_At := Next;
+                           end if;
+                        end;
+                     end loop;
+                     Result.Kind := Term_Macro;
+                     Result.Offset := Macro_Named (Word);
+                     Result.Index_At := Start;
+                     Result.Length := Given;
+                     From := Shut + 1;
+                     Ok := True;
+                     return;
+                  end;
+               end if;
+
+               --  The two functions a template calls: strftime_now for the
+               --  date and raise_exception to refuse. Each takes one quoted
+               --  argument, kept as a literal; anything else in the
+               --  brackets refuses the term where it is read.
+               if (Word = "strftime_now" or else Word = "raise_exception")
+                 and then Tail <= Text'Last and then Text (Tail) = '('
+               then
+                  declare
+                     Shut     : constant Natural := Closes_At (Text, Tail);
+                     Argument : Term;
+                     Scan     : Natural;
+                     Taken    : Boolean := False;
+                  begin
+                     if Shut = 0 then
+                        return;
+                     end if;
+                     Scan := Tail + 1;
+                     Read_Bare_Term (Text (Tail + 1 .. Shut - 1), Scan,
+                                     Argument, Taken);
+                     if Taken and then Argument.Kind = Term_Literal
+                       and then Skip_Spaces (Text (Tail + 1 .. Shut - 1),
+                                             Scan) > Shut - 1
+                     then
+                        Result.Kind :=
+                          (if Word = "strftime_now" then Term_Now
+                           else Term_Raise);
+                        Result.Offset := Argument.Offset;
+                        Result.Length := Argument.Length;
+                     else
+                        Result := Refused (Text (First .. Shut));
+                     end if;
+                     From := Shut + 1;
+                     Ok := True;
+                     return;
+                  end;
+               end if;
+
                --  message['role'] and message['content'] use bracket syntax;
                --  message.role and message.content use dotted syntax. Both are
                --  accepted because real templates use both.
@@ -1353,7 +1528,13 @@ package body Model_Runner.Templates is
 
                <<Not_A_Position>>
 
-               if Word = "message.role" then
+               if Word = "strftime_now" then
+                  --  The function named without being called, which is how
+                  --  a template asks whether it is there: "strftime_now is
+                  --  defined". It is, and answers the empty string if
+                  --  printed as it stands.
+                  Result.Kind := Term_Now;
+               elsif Word = "message.role" then
                   Result.Kind := Term_Message_Role;
                elsif Word = "message.content" then
                   Result.Kind := Term_Message_Content;
@@ -1571,7 +1752,7 @@ package body Model_Runner.Templates is
                Read_Word (Text, Scan, First, Last);
                From := Scan;
 
-               if Last < First or else Result.Filter /= Filter_None then
+               if Last < First or else Result.Filtered >= Max_Filters then
                   Result := Refused ("filter", E.Template_Unknown_Filter);
 
                --  Which piece of a cut text is wanted. A template writes
@@ -1596,20 +1777,124 @@ package body Model_Runner.Templates is
                         then Method_Split_First else Method_Split_Last);
                   end if;
 
-               elsif Text (First .. Last) = "trim" then
-                  Result.Filter := Filter_Trim;
-               elsif Text (First .. Last) = "length" then
-                  Result.Filter := Filter_Length;
-                  Result.Numeric := True;
-               elsif Text (First .. Last) = "tojson" then
-                  Result.Filter := Filter_JSON;
-               elsif Text (First .. Last) = "params" then
-                  Result.Filter := Filter_Params;
-               elsif Text (First .. Last) = "qwen_params" then
-                  Result.Filter := Filter_Qwen_Params;
                else
-                  Result :=
-                    Refused (Text (First .. Last), E.Template_Unknown_Filter);
+                  declare
+                     Word : constant String := Text (First .. Last);
+                     Step : Filter_Step;
+
+                     --  The arguments in brackets after a filter's name,
+                     --  each an operand, up to two: what default stands in
+                     --  and what replace takes out and puts in. tojson's
+                     --  ensure_ascii is taken and ignored, because every
+                     --  byte written here is UTF-8 already.
+                     procedure Read_Arguments (Wanted : Natural) is
+                        Opens : constant Natural := Skip_Spaces (Text, From);
+                        Shut  : Natural;
+                     begin
+                        if Opens > Text'Last or else Text (Opens) /= '(' then
+                           if Wanted > 0 then
+                              Result :=
+                                Refused (Word, E.Template_Unknown_Filter);
+                           end if;
+                           return;
+                        end if;
+
+                        Shut := Closes_At (Text, Opens);
+                        if Shut = 0 then
+                           Result := Refused (Word, E.Template_Unknown_Filter);
+                           return;
+                        end if;
+
+                        declare
+                           Inside : constant String :=
+                             Text (Opens + 1 .. Shut - 1);
+                           Scan   : Natural := Inside'First;
+                           Found  : Natural := 0;
+                        begin
+                           while Found < Wanted loop
+                              declare
+                                 Value : Operand;
+                                 Read  : Boolean;
+                                 Kept  : Natural;
+                              begin
+                                 Read_Operand (Inside, Scan, Value, Read);
+                                 if not Read then
+                                    Result :=
+                                      Refused (Word, E.Template_Unknown_Filter);
+                                    return;
+                                 end if;
+                                 Keep (Value, Kept);
+                                 if Kept = 0 then
+                                    Result :=
+                                      Refused (Word, E.Template_Unknown_Filter);
+                                    return;
+                                 end if;
+                                 Found := Found + 1;
+                                 if Found = 1 then
+                                    Step.Arg1 := Kept;
+                                 else
+                                    Step.Arg2 := Kept;
+                                 end if;
+                              end;
+                              Scan := Skip_Spaces (Inside, Scan);
+                              if Found < Wanted then
+                                 if Scan > Inside'Last
+                                   or else Inside (Scan) /= ','
+                                 then
+                                    Result :=
+                                      Refused (Word, E.Template_Unknown_Filter);
+                                    return;
+                                 end if;
+                                 Scan := Scan + 1;
+                              end if;
+                           end loop;
+                        end;
+                        From := Shut + 1;
+                     end Read_Arguments;
+                  begin
+                     if Word = "trim" then
+                        Step.Kind := Filter_Trim;
+                     elsif Word = "length" then
+                        Step.Kind := Filter_Length;
+                        Result.Numeric := True;
+                     elsif Word = "tojson" then
+                        Step.Kind := Filter_JSON;
+                        Read_Arguments (0);
+                     elsif Word = "params" then
+                        Step.Kind := Filter_Params;
+                     elsif Word = "qwen_params" then
+                        Step.Kind := Filter_Qwen_Params;
+                     elsif Word = "lower" then
+                        Step.Kind := Filter_Lower;
+                     elsif Word = "upper" then
+                        Step.Kind := Filter_Upper;
+                     elsif Word = "capitalize" then
+                        Step.Kind := Filter_Capitalize;
+                     elsif Word = "title" then
+                        Step.Kind := Filter_Title;
+                     elsif Word = "int" then
+                        Step.Kind := Filter_Int;
+                        Result.Numeric := True;
+                        Read_Arguments (0);
+                     elsif Word = "string" then
+                        Step.Kind := Filter_String;
+                     elsif Word = "safe" then
+                        Step.Kind := Filter_Safe;
+                     elsif Word = "default" or else Word = "d" then
+                        Step.Kind := Filter_Default;
+                        Read_Arguments (1);
+                     elsif Word = "replace" then
+                        Step.Kind := Filter_Replace;
+                        Read_Arguments (2);
+                     else
+                        Result := Refused (Word, E.Template_Unknown_Filter);
+                     end if;
+
+                     if Result.Kind /= Term_Unsupported then
+                        Result.Filtered := Result.Filtered + 1;
+                        Result.Filters (Result.Filtered) := Step;
+                     end if;
+                  end;
                end if;
             end;
          end loop;
@@ -1626,6 +1911,10 @@ package body Model_Runner.Templates is
          Taken  : Boolean;
          Joined : Join_Kind := Join_Plus;
 
+         --  Where the join's spelling was kept, for the joins that may
+         --  refuse.
+         Join_At, Join_Len : Natural := 0;
+
          --  Add one term to what has been read, under the join in force.
          --  Answers False where there is no room, which refuses the operand
          --  rather than dropping a term out of the middle of a sum.
@@ -1637,6 +1926,8 @@ package body Model_Runner.Templates is
             Result.Count := Result.Count + 1;
             Result.Terms (Result.Count) := Held;
             Result.Terms (Result.Count).Join := Under;
+            Result.Terms (Result.Count).Join_At := Join_At;
+            Result.Terms (Result.Count).Join_Len := Join_Len;
             return True;
          end Push;
       begin
@@ -1656,13 +1947,13 @@ package body Model_Runner.Templates is
                else
                   --  A bracketed group holding a sum. One holding a single
                   --  value is a term and was read as one above, methods and
-                  --  all; this is the other kind, and an operand is a flat
-                  --  run of terms evaluated left to right, so it is spliced
-                  --  in rather than held apart -- exactly what the brackets
-                  --  meant, because the only joins there are are plus and
-                  --  minus: a group joined by plus keeps its own joins, and
-                  --  one joined by minus has each of them turned round,
-                  --  which is what taking a sum away comes to.
+                  --  all; this is the other kind, kept as an operand of its
+                  --  own and read as one term, so that what is written
+                  --  outside the brackets binds to the whole of what is
+                  --  inside them. It used to be spliced into the sum around
+                  --  it, which is the same thing while the only joins are
+                  --  plus and minus and a wrong thing once a product is
+                  --  written outside.
                   From := Restart;
 
                   declare
@@ -1695,19 +1986,21 @@ package body Model_Runner.Templates is
                            return;
                         end if;
 
-                        for Index in 1 .. Inner.Count loop
-                           if not Push
-                             (Inner.Terms (Index),
-                              (if Index = 1 then Joined
-                               elsif Joined /= Join_Minus
-                               then Inner.Terms (Index).Join
-                               elsif Inner.Terms (Index).Join = Join_Minus
-                               then Join_Plus
-                               else Join_Minus))
-                           then
+                        declare
+                           Kept  : Natural;
+                           Group : Term;
+                        begin
+                           Keep (Inner, Kept);
+                           if Kept = 0 then
                               return;
                            end if;
-                        end loop;
+                           Group.Kind := Term_Group;
+                           Group.Offset := Kept;
+                           Group.Numeric := Sums (Inner);
+                           if not Push (Group, Joined) then
+                              return;
+                           end if;
+                        end;
 
                         From := Shut + 1;
                      end;
@@ -1719,13 +2012,38 @@ package body Model_Runner.Templates is
                Next : constant Natural := Skip_Spaces (Text, From);
             begin
                exit when Next > Text'Last
-                 or else (Text (Next) /= '+' and then Text (Next) /= '-');
+                 or else Text (Next) not in '+' | '-' | '*' | '/' | '%' | '~';
 
                --  Which way the next term joins this one, carried on that
                --  term rather than here: an operand is a list and the join
                --  belongs between two of its entries.
-               Joined := (if Text (Next) = '-' then Join_Minus else Join_Plus);
                From := Next + 1;
+               Join_At := 0;
+               Join_Len := 0;
+               case Text (Next) is
+                  when '-' => Joined := Join_Minus;
+                  when '*' => Joined := Join_Times;
+                  when '~' => Joined := Join_Concat;
+                  when '%' | '/' =>
+                     if Text (Next) = '%' then
+                        Joined := Join_Modulo;
+                     elsif Next < Text'Last and then Text (Next + 1) = '/' then
+                        Joined := Join_Floor;
+                        From := Next + 2;
+                     else
+                        Joined := Join_Divide;
+                     end if;
+                     declare
+                        Stored : Boolean;
+                     begin
+                        Store_Literal
+                          (Text (Next .. From - 1), Join_At, Join_Len, Stored);
+                        if not Stored then
+                           return;
+                        end if;
+                     end;
+                  when others => Joined := Join_Plus;
+               end case;
             end;
          end loop;
 
@@ -2167,6 +2485,23 @@ package body Model_Runner.Templates is
             Target := Slot_Of (Text (First .. Last));
          end if;
 
+         --  The block form, a name and nothing after it: what is written
+         --  up to the endset is the name's value rather than the prompt's.
+         if Target /= 0 and then Skip_Spaces (Text, Scan) > Text'Last then
+            if Depth >= Max_Depth then
+               Fail (E.Template_Nesting_Too_Deep, "set");
+               return;
+            end if;
+            Emit ((Op => Op_Capture_Begin, others => <>), Where);
+            if Where = 0 then
+               return;
+            end if;
+            Depth := Depth + 1;
+            Frames (Depth) := (Kind => Block_Set, Start => Target,
+                               others => <>);
+            return;
+         end if;
+
          declare
             Equals : constant Natural := Skip_Spaces (Text, Scan);
          begin
@@ -2471,6 +2806,124 @@ package body Model_Runner.Templates is
       end Compile_Set;
 
       --  Handle one {% ... %} tag.
+      --  {% macro name(p, q='x') %}: the jump over the body, the macro's
+      --  entry after it, and its parameters read into the table.
+      procedure Compile_Macro (Text : String) is
+         Scan        : Natural := Text'First;
+         First, Last : Natural;
+         Where       : Natural;
+         Added       : Macro;
+      begin
+         Read_Word (Text, Scan, First, Last);
+         if Last < First or else not Is_Plain_Name (Text (First .. Last))
+           or else Item.Macro_Used >= Max_Macros
+           or else Depth >= Max_Depth
+         then
+            Fail (E.Template_Unsupported_Construct, "macro");
+            return;
+         end if;
+
+         declare
+            Opens  : constant Natural := Skip_Spaces (Text, Scan);
+            Shut   : Natural;
+            Stored : Boolean;
+         begin
+            if Opens > Text'Last or else Text (Opens) /= '(' then
+               Fail (E.Template_Unsupported_Construct, "macro");
+               return;
+            end if;
+            Shut := Closes_At (Text, Opens);
+            if Shut = 0 or else Skip_Spaces (Text, Shut + 1) <= Text'Last then
+               Fail (E.Template_Unsupported_Construct, "macro");
+               return;
+            end if;
+
+            Store_Literal (Text (First .. Last), Added.Name.Offset,
+                           Added.Name.Length, Stored);
+            if not Stored then
+               Fail (E.Template_Too_Large, "source");
+               return;
+            end if;
+
+            --  The parameters, a name each, with a default after an
+            --  equals sign where one is written.
+            declare
+               Inside : constant String := Text (Opens + 1 .. Shut - 1);
+               Cursor_At     : Natural := Inside'First;
+            begin
+               while Skip_Spaces (Inside, Cursor_At) <= Inside'Last loop
+                  declare
+                     P_First, P_Last : Natural;
+                     Next : Natural;
+                  begin
+                     Cursor_At := Skip_Spaces (Inside, Cursor_At);
+                     Read_Word (Inside, Cursor_At, P_First, P_Last);
+                     if P_Last < P_First
+                       or else not Is_Plain_Name (Inside (P_First .. P_Last))
+                       or else Added.Count >= Max_Parameters
+                     then
+                        Fail (E.Template_Unsupported_Construct, "macro");
+                        return;
+                     end if;
+                     Added.Count := Added.Count + 1;
+                     Added.Slots (Added.Count) :=
+                       Slot_Of (Inside (P_First .. P_Last));
+                     if Added.Slots (Added.Count) = 0 then
+                        Fail (E.Template_Too_Large, "variables");
+                        return;
+                     end if;
+
+                     Next := Skip_Spaces (Inside, Cursor_At);
+                     if Next <= Inside'Last and then Inside (Next) = '=' then
+                        declare
+                           Value : Operand;
+                           Read  : Boolean;
+                           Kept  : Natural;
+                        begin
+                           Cursor_At := Next + 1;
+                           Read_Operand (Inside, Cursor_At, Value, Read);
+                           if not Read then
+                              Fail (E.Template_Unsupported_Construct,
+                                    "macro");
+                              return;
+                           end if;
+                           Keep (Value, Kept);
+                           if Kept = 0 then
+                              return;
+                           end if;
+                           Added.Defaults (Added.Count) := Kept;
+                        end;
+                        Next := Skip_Spaces (Inside, Cursor_At);
+                     end if;
+
+                     if Next <= Inside'Last then
+                        if Inside (Next) /= ',' then
+                           Fail (E.Template_Unsupported_Construct, "macro");
+                           return;
+                        end if;
+                        Cursor_At := Next + 1;
+                     else
+                        Cursor_At := Next;
+                     end if;
+                  end;
+               end loop;
+            end;
+         end;
+
+         Emit ((Op => Op_Jump, others => <>), Where);
+         if Where = 0 then
+            return;
+         end if;
+         Added.Entry_At := Item.Program_Used + 1;
+
+         Item.Macro_Used := Item.Macro_Used + 1;
+         Item.Macros (Item.Macro_Used) := Added;
+
+         Depth := Depth + 1;
+         Frames (Depth) := (Kind => Block_Macro, Pending => Where,
+                            others => <>);
+      end Compile_Macro;
+
       procedure Compile_Statement (Body_Text : String) is
          Trimmed : constant String := Model_Runner.Text.Trim (Body_Text);
          Where   : Natural;
@@ -2786,6 +3239,40 @@ package body Model_Runner.Templates is
                  Item.Program_Used + 1;
             end if;
             Resolve_Exits (Item.Program_Used + 1);
+            Depth := Depth - 1;
+
+         elsif Model_Runner.Text.Starts_With (Trimmed, "macro ") then
+            --  A macro is its body, jumped over where it is defined and
+            --  run from its entry where it is called. Its parameters are
+            --  names like any other, bound by the call and given back
+            --  afterwards, so a macro that calls itself finds its own.
+            Compile_Macro
+              (Model_Runner.Text.Trim
+                 (Trimmed (Trimmed'First + 6 .. Trimmed'Last)));
+
+         elsif Trimmed = "endmacro" then
+            if Depth = 0 or else Frames (Depth).Kind /= Block_Macro then
+               Fail (E.Template_Unbalanced_Block, "endmacro");
+               return;
+            end if;
+            Emit ((Op => Op_Return, others => <>), Where);
+            if Where = 0 then
+               return;
+            end if;
+            Item.Program.all (Frames (Depth).Pending).Target :=
+              Item.Program_Used + 1;
+            Depth := Depth - 1;
+
+         elsif Trimmed = "endset" then
+            if Depth = 0 or else Frames (Depth).Kind /= Block_Set then
+               Fail (E.Template_Unbalanced_Block, "endset");
+               return;
+            end if;
+            Emit ((Op => Op_Capture_End, Offset => Frames (Depth).Start,
+                   others => <>), Where);
+            if Where = 0 then
+               return;
+            end if;
             Depth := Depth - 1;
 
          else
@@ -3223,6 +3710,23 @@ package body Model_Runner.Templates is
          end if;
       end Refuse;
 
+      --  Where each open capture began in the output, so that endset can
+      --  take back what was written since.
+      Captures      : array (1 .. Max_Depth) of Natural := [others => 0];
+      Capture_Depth : Natural := 0;
+
+      --  How many macro calls are in progress, and whether the innermost
+      --  has reached its end.
+      Call_Depth : Natural := 0;
+      Returned   : Boolean := False;
+
+      --  Whether the step limit has been reached, which the loop reports.
+      Exhausted  : Boolean := False;
+
+      --  One instruction, at Position. Declared here because a macro call
+      --  runs the body from inside the value that asks for it.
+      procedure Execute;
+
       --  Give a name a text value, taking back the room the name last held
       --  where that room is the newest in the pool. Written once because
       --  three instructions do it and one of them does it every time round
@@ -3355,6 +3859,174 @@ package body Model_Runner.Templates is
       Testing : Boolean := False;
 
       --  Value of one term in the current context, before its filter.
+      --  The moment of rendering, written as a strftime format says. The
+      --  directives are the ones the templates use to write a date into a
+      --  system prompt -- day, month and year in numbers and in English
+      --  names, the time, the weekday -- and one this engine has no
+      --  answer for refuses where it is read rather than writing the
+      --  letter. Local time, which is what the language's strftime writes.
+      function Now_As (Format : String; Value : Term) return String is
+         package Fmt renames Ada.Calendar.Formatting;
+
+         Now    : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         Zone   : constant Ada.Calendar.Time_Zones.Time_Offset :=
+           Ada.Calendar.Time_Zones.UTC_Time_Offset (Now);
+         Year   : constant Ada.Calendar.Year_Number := Fmt.Year (Now, Zone);
+         Month  : constant Ada.Calendar.Month_Number := Fmt.Month (Now, Zone);
+         Day    : constant Ada.Calendar.Day_Number := Fmt.Day (Now, Zone);
+         Hour   : constant Fmt.Hour_Number := Fmt.Hour (Now, Zone);
+         Minute : constant Fmt.Minute_Number := Fmt.Minute (Now, Zone);
+         Second : constant Fmt.Second_Number := Fmt.Second (Now);
+         Week   : constant Fmt.Day_Name := Fmt.Day_Of_Week (Now);
+
+         Months : constant array (Ada.Calendar.Month_Number) of String (1 .. 9)
+           := ["January  ", "February ", "March    ", "April    ",
+               "May      ", "June     ", "July     ", "August   ",
+               "September", "October  ", "November ", "December "];
+         Days   : constant array (Fmt.Day_Name) of String (1 .. 9)
+           := ["Monday   ", "Tuesday  ", "Wednesday", "Thursday ",
+               "Friday   ", "Saturday ", "Sunday   "];
+
+         --  The day's number in the year, counted from one.
+         function Day_Of_Year return Natural is
+            Lengths : constant array (Ada.Calendar.Month_Number) of Natural :=
+              [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            Leap    : constant Boolean :=
+              (Year mod 4 = 0 and then Year mod 100 /= 0)
+              or else Year mod 400 = 0;
+            Total   : Natural := Day;
+         begin
+            for M in 1 .. Month - 1 loop
+               Total := Total + Lengths (M)
+                 + (if M = 2 and then Leap then 1 else 0);
+            end loop;
+            return Total;
+         end Day_Of_Year;
+
+         function Two (Number : Natural) return String
+         is ((if Number < 10 then "0" else "")
+             & Model_Runner.Text.Image (Long_Long_Integer (Number)));
+
+         function Plain (Number : Natural) return String
+         is (Model_Runner.Text.Image (Long_Long_Integer (Number)));
+
+         Result : Ada.Strings.Unbounded.Unbounded_String;
+         Index  : Natural := Format'First;
+      begin
+         while Index <= Format'Last loop
+            if Format (Index) /= '%' or else Index = Format'Last then
+               Ada.Strings.Unbounded.Append (Result, Format (Index));
+               Index := Index + 1;
+            else
+               declare
+                  --  A dash before the letter drops the leading zero, as
+                  --  the C library's strftime reads it.
+                  Bare   : constant Boolean := Format (Index + 1) = '-';
+                  Letter : constant Character :=
+                    (if Bare and then Index + 2 <= Format'Last
+                     then Format (Index + 2)
+                     else Format (Index + 1));
+
+                  function Number (Value : Natural) return String
+                  is (if Bare then Plain (Value) else Two (Value));
+
+                  Piece : constant String :=
+                    (case Letter is
+                        when 'Y' => Plain (Year),
+                        when 'y' => Two (Year mod 100),
+                        when 'm' => Number (Month),
+                        when 'd' => Number (Day),
+                        when 'e' => (if Day < 10 then " " else "")
+                                    & Plain (Day),
+                        when 'H' => Number (Hour),
+                        when 'I' => Number ((if Hour mod 12 = 0 then 12
+                                             else Hour mod 12)),
+                        when 'M' => Number (Minute),
+                        when 'S' => Number (Second),
+                        when 'p' => (if Hour < 12 then "AM" else "PM"),
+                        when 'b' => Months (Month) (1 .. 3),
+                        when 'B' => Model_Runner.Text.Trim (Months (Month)),
+                        when 'a' => Days (Week) (1 .. 3),
+                        when 'A' => Model_Runner.Text.Trim (Days (Week)),
+                        when 'j' => Plain (Day_Of_Year),
+                        when '%' => "%",
+                        when others => "");
+               begin
+                  if Piece'Length = 0 and then Letter /= '%' then
+                     Refuse (Value.Offset, Value.Length,
+                             E.Template_Unsupported_Construct);
+                     return "";
+                  end if;
+                  Ada.Strings.Unbounded.Append (Result, Piece);
+                  Index := Index + (if Bare then 3 else 2);
+               end;
+            end if;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (Result);
+      end Now_As;
+
+      --  A macro's body run from its entry to its return, and what it
+      --  wrote: the output past the mark where the call began, taken back
+      --  off the output and handed to the term. The arguments are read
+      --  before the parameters are bound, because a macro that calls
+      --  itself names its own parameters in the call; the parameters are
+      --  bound fresh and given back afterwards, which is what makes the
+      --  recursion a recursion rather than a loop over one set of names.
+      function Run_Macro (Value : Term) return String is
+         M      : Macro renames Item.Macros (Value.Offset);
+         Saved  : array (1 .. Max_Parameters) of Slot;
+         Mark   : constant Natural := Last;
+         Resume : constant Natural := Position;
+         Given  : array (1 .. Max_Parameters) of
+           Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         if Call_Depth >= Max_Depth then
+            Refuse (M.Name.Offset, M.Name.Length, E.Template_Nesting_Too_Deep);
+            return "";
+         end if;
+
+         for P in 1 .. M.Count loop
+            if P <= Value.Length then
+               Given (P) := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Value_Of (Item.Operands.all (Value.Index_At + P - 1)));
+            elsif M.Defaults (P) /= 0 then
+               Given (P) := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Value_Of (Item.Operands.all (M.Defaults (P))));
+            end if;
+         end loop;
+
+         for P in 1 .. M.Count loop
+            Saved (P) := Slots (M.Slots (P));
+            Slots (M.Slots (P)) := (Kind => Value_Undefined, others => <>);
+            Assign_Text
+              (M.Slots (P), Ada.Strings.Unbounded.To_String (Given (P)));
+         end loop;
+
+         Call_Depth := Call_Depth + 1;
+         Position := M.Entry_At;
+         Returned := False;
+         while not Returned and then Position <= Item.Program_Used
+           and then not Refused and then not Overflow and then not Exhausted
+         loop
+            Execute;
+         end loop;
+         Call_Depth := Call_Depth - 1;
+         Returned := False;
+
+         for P in 1 .. M.Count loop
+            Slots (M.Slots (P)) := Saved (P);
+         end loop;
+         Position := Resume;
+
+         declare
+            Written : constant String :=
+              Target (Target'First + Mark .. Target'First + Last - 1);
+         begin
+            Last := Mark;
+            return Written;
+         end;
+      end Run_Macro;
+
       function Raw_Of (Value : Term) return String is
       begin
          case Value.Kind is
@@ -3543,6 +4215,25 @@ package body Model_Runner.Templates is
                         return "";
                   end case;
                end;
+            when Term_Now =>
+               return Now_As
+                 (Item.Source.all
+                    (Value.Offset + 1 .. Value.Offset + Value.Length),
+                  Value);
+
+            when Term_Raise =>
+               --  The template's author refusing this conversation, in
+               --  their words. Not a construct this engine lacks: the
+               --  message is the diagnostic.
+               Refuse (Value.Offset, Value.Length, E.Template_Refused);
+               return "";
+
+            when Term_Group =>
+               return Value_Of (Item.Operands.all (Value.Offset));
+
+            when Term_Macro =>
+               return Run_Macro (Value);
+
             when Term_Unsupported =>
                --  A name this engine has never heard of is nothing when a
                --  condition asks about it -- a template writes "if
@@ -3924,48 +4615,158 @@ package body Model_Runner.Templates is
       end Params_Of;
 
       --  Value of one term with its filter applied.
-      function Value_Of (Value : Term) return String is
+      --  What one filter makes of the text before it. The three that read
+      --  the term rather than its text -- tojson and the two parameter
+      --  writers -- are answered in Value_Of, where the term is at hand.
+      function Filtered (Step : Filter_Step; Held : String) return String is
+         package Chars renames Ada.Characters.Handling;
       begin
-         if Value.Chained > 0 then
-            return Chain_Of (Value, Raw_Of (Value));
-         end if;
-
-         case Value.Filter is
-            when Filter_None =>
-               return Raw_Of (Value);
+         case Step.Kind is
+            when Filter_None | Filter_String | Filter_Safe | Filter_JSON
+               | Filter_Params | Filter_Qwen_Params =>
+               return Held;
 
             when Filter_Trim =>
-               return Model_Runner.Text.Trim (Raw_Of (Value));
-
-            when Filter_JSON =>
-               return JSON_Of (Value);
-
-            when Filter_Params =>
-               return Params_Of (Value);
-
-            when Filter_Qwen_Params =>
-               return Params_Of (Value, Qwen => True);
+               return Model_Runner.Text.Trim (Held);
 
             when Filter_Length =>
-               --  A list's length is the one thing about a list this engine
-               --  can answer, so it is answered before the value is asked
-               --  for as text.
-               if Value.Kind = Term_Variable
+               return Model_Runner.Text.Image (Long_Long_Integer (Held'Length));
+
+            when Filter_Lower =>
+               return Chars.To_Lower (Held);
+
+            when Filter_Upper =>
+               return Chars.To_Upper (Held);
+
+            when Filter_Capitalize =>
+               --  The first letter up and the rest down, as the language
+               --  does it.
+               if Held'Length = 0 then
+                  return Held;
+               end if;
+               return Chars.To_Upper (Held (Held'First))
+                 & Chars.To_Lower (Held (Held'First + 1 .. Held'Last));
+
+            when Filter_Title =>
+               --  Every word's first letter up and the rest down, a word
+               --  beginning after anything that is not a letter.
+               declare
+                  Result : String := Held;
+                  Fresh  : Boolean := True;
+               begin
+                  for Index in Result'Range loop
+                     if Chars.Is_Letter (Result (Index)) then
+                        Result (Index) :=
+                          (if Fresh then Chars.To_Upper (Result (Index))
+                           else Chars.To_Lower (Result (Index)));
+                        Fresh := False;
+                     else
+                        Fresh := True;
+                     end if;
+                  end loop;
+                  return Result;
+               end;
+
+            when Filter_Int =>
+               return Model_Runner.Text.Image (Number_Of (Held));
+
+            when Filter_Default =>
+               --  The stand-in where the value is empty, none or never set;
+               --  the value where it is anything else.
+               if Held'Length = 0 then
+                  return Value_Of (Item.Operands.all (Step.Arg1));
+               end if;
+               return Held;
+
+            when Filter_Replace =>
+               declare
+                  Old_Text : constant String :=
+                    Value_Of (Item.Operands.all (Step.Arg1));
+                  New_Text : constant String :=
+                    Value_Of (Item.Operands.all (Step.Arg2));
+                  Result   : Ada.Strings.Unbounded.Unbounded_String;
+                  Index    : Natural := Held'First;
+               begin
+                  if Old_Text'Length = 0 then
+                     return Held;
+                  end if;
+                  while Index <= Held'Last loop
+                     if Index + Old_Text'Length - 1 <= Held'Last
+                       and then Held (Index .. Index + Old_Text'Length - 1)
+                                = Old_Text
+                     then
+                        Ada.Strings.Unbounded.Append (Result, New_Text);
+                        Index := Index + Old_Text'Length;
+                     else
+                        Ada.Strings.Unbounded.Append (Result, Held (Index));
+                        Index := Index + 1;
+                     end if;
+                  end loop;
+                  return Ada.Strings.Unbounded.To_String (Result);
+               end;
+         end case;
+      end Filtered;
+
+      function Value_Of (Value : Term) return String is
+         --  The filters after the first, applied to what the first made.
+         function Rest_Of (Held : String; From : Positive) return String is
+         begin
+            if From > Value.Filtered then
+               return Held;
+            end if;
+            return Rest_Of (Filtered (Value.Filters (From), Held), From + 1);
+         end Rest_Of;
+
+         Base : constant String :=
+           (if Value.Chained > 0 then Chain_Of (Value, Raw_Of (Value))
+            elsif Value.Filtered = 0 then Raw_Of (Value)
+            else "");
+      begin
+         if Value.Filtered = 0 then
+            return Base;
+         end if;
+
+         --  The first filter reads the term itself where it must: a list's
+         --  length is the one thing about a list this engine can answer,
+         --  and a tool or a call's arguments have no text of their own.
+         case Value.Filters (1).Kind is
+            when Filter_JSON =>
+               return Rest_Of (JSON_Of (Value), 2);
+
+            when Filter_Params =>
+               return Rest_Of (Params_Of (Value), 2);
+
+            when Filter_Qwen_Params =>
+               return Rest_Of (Params_Of (Value, Qwen => True), 2);
+
+            when Filter_Length =>
+               if Value.Chained = 0 and then Value.Kind = Term_Variable
                  and then Slots (Value.Offset).Kind = Value_List
                then
-                  return Model_Runner.Text.Image
-                    (Long_Long_Integer
-                       (Integer'Max
-                          (Count - Slots (Value.Offset).Start + 1, 0)));
-               elsif Value.Kind = Term_Variable
+                  return Rest_Of
+                    (Model_Runner.Text.Image
+                       (Long_Long_Integer
+                          (Integer'Max
+                             (Count - Slots (Value.Offset).Start + 1, 0))),
+                     2);
+               elsif Value.Chained = 0 and then Value.Kind = Term_Variable
                  and then Slots (Value.Offset).Kind = Value_Tools
                then
-                  return Model_Runner.Text.Image
-                    (Long_Long_Integer (Tool_Count));
+                  return Rest_Of
+                    (Model_Runner.Text.Image
+                       (Long_Long_Integer (Tool_Count)), 2);
                end if;
-               return Model_Runner.Text.Image
-                 (Long_Long_Integer (Raw_Of (Value)'Length));
+
+            when others =>
+               null;
          end case;
+
+         declare
+            Held : constant String :=
+              (if Value.Chained > 0 then Base else Raw_Of (Value));
+         begin
+            return Rest_Of (Filtered (Value.Filters (1), Held), 2);
+         end;
       end Value_Of;
 
       --  Write an operand straight to the output. Emitting term by term
@@ -3992,8 +4793,16 @@ package body Model_Runner.Templates is
             return False;
          end if;
 
+         --  A '~' anywhere makes the whole of it text: the language turns
+         --  both sides of one into text, and a number beside text is text.
          for Index in 2 .. Value.Count loop
-            if Value.Terms (Index).Join = Join_Minus then
+            if Value.Terms (Index).Join = Join_Concat then
+               return False;
+            end if;
+         end loop;
+
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join /= Join_Plus then
                return True;
             end if;
          end loop;
@@ -4069,24 +4878,67 @@ package body Model_Runner.Templates is
          --  A sum is evaluated rather than run together, and its answer is
          --  the number's own text: everything downstream of an operand takes
          --  text, and a number written down is still a number.
+         --  Products before sums, as the language binds them: a run of
+         --  terms joined by the multiplicative joins is worked out as it is
+         --  read, and added to or taken from the total where a plus or a
+         --  minus ends it. Zero divides nothing, and a division that does
+         --  not come out whole is not a whole number, which is the only
+         --  kind this engine writes: both refuse where they are read.
          if Arithmetic then
             declare
-               Total : Long_Long_Integer :=
+               Total   : Long_Long_Integer := 0;
+               Current : Long_Long_Integer :=
                  (if Value.Count = 0 then 0
                   else Number_Of (Value_Of (Value.Terms (1))));
+               Sign    : Join_Kind := Join_Plus;
+
+               procedure Settle is
+               begin
+                  if Sign = Join_Minus then
+                     Total := Total - Current;
+                  else
+                     Total := Total + Current;
+                  end if;
+               end Settle;
             begin
                for Index in 2 .. Value.Count loop
                   declare
                      Next : constant Long_Long_Integer :=
                        Number_Of (Value_Of (Value.Terms (Index)));
+                     Join : constant Join_Kind := Value.Terms (Index).Join;
                   begin
-                     if Value.Terms (Index).Join = Join_Minus then
-                        Total := Total - Next;
-                     else
-                        Total := Total + Next;
-                     end if;
+                     case Join is
+                        when Join_Plus | Join_Minus | Join_Concat =>
+                           Settle;
+                           Sign := Join;
+                           Current := Next;
+                        when Join_Times =>
+                           Current := Current * Next;
+                        when Join_Divide | Join_Floor | Join_Modulo =>
+                           if Next = 0 then
+                              Refuse (Value.Terms (Index).Join_At,
+                                      Value.Terms (Index).Join_Len,
+                                      E.Template_Unsupported_Construct);
+                              return "0";
+                           end if;
+                           if Join = Join_Modulo then
+                              Current := Current mod Next;
+                           elsif Join = Join_Floor
+                             or else Current mod Next = 0
+                           then
+                              --  The language's // rounds towards minus
+                              --  infinity, which is what mod pairs with.
+                              Current := (Current - (Current mod Next)) / Next;
+                           else
+                              Refuse (Value.Terms (Index).Join_At,
+                                      Value.Terms (Index).Join_Len,
+                                      E.Template_Unsupported_Construct);
+                              return "0";
+                           end if;
+                     end case;
                   end;
                end loop;
+               Settle;
                return Model_Runner.Text.Image (Total);
             end;
          end if;
@@ -4303,49 +5155,12 @@ package body Model_Runner.Templates is
          return Answer;
       end Truth_Of;
 
-   begin
-      Target := [others => ' '];
-      Last := 0;
-      Status := E.Success;
-
-      if not Item.Ready then
-         Status := E.Make (E.Template_Missing);
-         return;
-      end if;
-
-      --  The name messages starts out meaning the whole conversation. A
-      --  template that never assigns anything sees exactly what it did
-      --  before this table existed.
-      Slots (1) := (Kind => Value_List, Start => 1, others => <>);
-
-      --  And the tools, where the template reads them and the caller
-      --  offered some. Left undefined otherwise, which is what makes
-      --  "if tools" false for a caller who offered none -- the same answer a
-      --  template gets from a build that had never heard of them.
-      if Item.Tools_Slot /= 0 and then Tool_Count > 0 then
-         Slots (Item.Tools_Slot) := (Kind => Value_Tools, others => <>);
-      end if;
-
-      --  And the name a reasoning model's template asks after, where it asks
-      --  and where the caller has an answer. Left undefined otherwise, which
-      --  is what the template's own "is defined" is there to find out: a
-      --  caller who says nothing leaves the model to do what it was trained
-      --  to do.
-      if Item.Thinking_Slot /= 0 and then Thinking /= Thinking_Unstated then
-         Assign_Text
-           (Item.Thinking_Slot,
-            (if Thinking = Thinking_On then "true" else "false"));
-      end if;
-
-      --  A flat instruction list with jumps: rendering never recurses, so the
-      --  only bound needed is on iterations.
-      while Position <= Item.Program_Used loop
+      procedure Execute is
+      begin
          Iterations := Iterations + 1;
          if Iterations > Item.Step_Limit then
-            Last := 0;
-            Status := E.Make (E.Template_Iteration_Limit);
-            E.Add_Integer
-              (Status, "limit", Long_Long_Integer (Item.Step_Limit));
+            Exhausted := True;
+            Position := Item.Program_Used + 1;
             return;
          end if;
 
@@ -4602,12 +5417,93 @@ package body Model_Runner.Templates is
                   end if;
                   Position := Position + 1;
 
+               when Op_Capture_Begin =>
+                  --  Nesting is bounded where the blocks are compiled, so
+                  --  the stack cannot fill.
+                  Capture_Depth := Capture_Depth + 1;
+                  Captures (Capture_Depth) := Last;
+                  Position := Position + 1;
+
+               when Op_Capture_End =>
+                  --  What was written since the block opened becomes the
+                  --  name's value and leaves the output.
+                  declare
+                     Mark : constant Natural := Captures (Capture_Depth);
+                  begin
+                     Capture_Depth := Capture_Depth - 1;
+                     Assign_Text
+                       (Step.Offset,
+                        Target (Target'First + Mark .. Target'First + Last - 1));
+                     Last := Mark;
+                  end;
+                  Position := Position + 1;
+
+               when Op_Return =>
+                  --  The end of a macro's body. Inside a call it hands
+                  --  back to Run_Macro; reached otherwise -- which the jump
+                  --  over the body prevents -- it ends the program.
+                  if Call_Depth > 0 then
+                     Returned := True;
+                  else
+                     Position := Item.Program_Used + 1;
+                  end if;
+
                when Op_Unsupported =>
                   Refuse (Step.Offset, Step.Length,
                           E.Template_Unsupported_Construct);
                   Position := Position + 1;
             end case;
          end;
+      end Execute;
+
+   begin
+      Target := [others => ' '];
+      Last := 0;
+      Status := E.Success;
+
+      if not Item.Ready then
+         Status := E.Make (E.Template_Missing);
+         return;
+      end if;
+
+      --  The name messages starts out meaning the whole conversation. A
+      --  template that never assigns anything sees exactly what it did
+      --  before this table existed.
+      Slots (1) := (Kind => Value_List, Start => 1, others => <>);
+
+      --  And the tools, where the template reads them and the caller
+      --  offered some. Left undefined otherwise, which is what makes
+      --  "if tools" false for a caller who offered none -- the same answer a
+      --  template gets from a build that had never heard of them.
+      if Item.Tools_Slot /= 0 and then Tool_Count > 0 then
+         Slots (Item.Tools_Slot) := (Kind => Value_Tools, others => <>);
+      end if;
+
+      --  And the name a reasoning model's template asks after, where it asks
+      --  and where the caller has an answer. Left undefined otherwise, which
+      --  is what the template's own "is defined" is there to find out: a
+      --  caller who says nothing leaves the model to do what it was trained
+      --  to do.
+      if Item.Thinking_Slot /= 0 and then Thinking /= Thinking_Unstated then
+         Assign_Text
+           (Item.Thinking_Slot,
+            (if Thinking = Thinking_On then "true" else "false"));
+      end if;
+
+      --  A flat instruction list with jumps. Rendering recurses in one
+      --  place only, a macro call, and that is bounded by the nesting
+      --  depth; the iteration bound holds across the whole render, calls
+      --  included.
+      while Position <= Item.Program_Used loop
+         Execute;
+
+         if Exhausted then
+            Last := 0;
+            Status := E.Make (E.Template_Iteration_Limit);
+            E.Add_Integer
+              (Status, "limit", Long_Long_Integer (Item.Step_Limit));
+            return;
+         end if;
 
          if Refused then
             Last := 0;

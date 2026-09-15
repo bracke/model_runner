@@ -225,6 +225,11 @@ package body Model_Runner.Errors is
             | Internal_Not_Implemented =>
             return Recovery_Unsupported;
 
+         when Template_Refused =>
+            --  The template's author said no to this conversation, and
+            --  the message says what to change about it.
+            return Recovery_User_Correctable;
+
          when Memory_Limit_Exceeded
             | Memory_Allocation_Failed
             | Memory_Plan_Overflow

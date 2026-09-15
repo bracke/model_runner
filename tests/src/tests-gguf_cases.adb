@@ -3444,20 +3444,24 @@ package body Tests.GGUF_Cases is
 
    end Structural_Refusals_Report_Themselves;
 
-   --  The byte-pair tokenizer, and the five rules that cut text for it.
+   --  The byte-pair tokenizer, and the rules that cut text for it.
    --
    --  The suite had no byte-pair vocabulary at all: every tokenizer test
    --  built a `llama` one, so the merge table, the byte-to-character mapping
-   --  and all five cutting rules ran nowhere, while the support matrix marked
-   --  those rows implemented under a definition that requires coverage.
+   --  and all five cutting rules of the time ran nowhere, while the support
+   --  matrix marked those rows implemented under a definition that requires
+   --  coverage.
    --
    --  The rules differ in what may lead a run of letters and in how digits
    --  are grouped, and the differences do not show in the decoded text -- the
    --  tokens read back as the same string either way and mean something else
    --  to the model. So the check is on the identifiers, and the vocabulary is
-   --  built so that the five rules give five different answers on two short
-   --  strings. Anything less would pass on a reader that carried one rule and
-   --  answered to five names.
+   --  built so that the first six rules give six different answers on two
+   --  short strings; the twenty that came after are checked on the pieces
+   --  themselves, each on the text that tells it from its neighbour, and
+   --  every one of them against the expressions it was written from over
+   --  generated text in the inference cases. Anything less would pass on a
+   --  reader that carried one rule and answered to every name.
    ---------------------------------------------
    -- Word_Piece_Folds_A_Text_Before_It_Spells --
    ---------------------------------------------
@@ -3853,6 +3857,69 @@ package body Tests.GGUF_Cases is
                  & ") where the rule says (" & Expected & ")");
       end Same;
 
+      --  The pieces one rule cuts a text into, joined by bars.
+      function Pieces_Of (Pre : String; Text : String) return String is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Ends   : Vocab.Piece_Ends (1 .. Text'Length);
+         Count  : Natural;
+         Result : String (1 .. Text'Length * 2 + 1);
+         Used   : Natural := 0;
+         From   : Natural := Text'First;
+      begin
+         BPE_Vocabulary.Build (Pre, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the byte-pair fixture did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the byte-pair vocabulary did not load under " & Pre & ": "
+                 & E.Error_Code'Image (Status.Code));
+
+         Vocab.Cut (Words, Text, Ends, Count, Status);
+         Assert (E.Is_Ok (Status),
+                 "cutting failed under " & Pre & ": "
+                 & E.Error_Code'Image (Status.Code));
+
+         for Piece in 1 .. Count loop
+            if Piece > 1 then
+               Used := Used + 1;
+               Result (Used) := '|';
+            end if;
+            Result (Used + 1 .. Used + Ends (Piece) - From + 1) :=
+              Text (From .. Ends (Piece));
+            Used := Used + Ends (Piece) - From + 1;
+            From := Ends (Piece) + 1;
+         end loop;
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Result (1 .. Used);
+      end Pieces_Of;
+
+      procedure Cuts (Pre, Text, Expected, What : String) is
+         Got : constant String := Pieces_Of (Pre, Text);
+      begin
+         Assert (Got = Expected,
+                 "under " & Pre & ", " & What & " cut as (" & Got
+                 & ") where the rule says (" & Expected & ")");
+      end Cuts;
+
+      LF     : constant String := [1 => Character'Val (10)];
+      --  U+0301, a combining acute accent.
+      Acute  : constant String :=
+        [Character'Val (16#CC#), Character'Val (16#81#)];
+      --  U+6F22 and U+5B57, two ideographs.
+      Han    : constant String :=
+        [Character'Val (16#E6#), Character'Val (16#BC#), Character'Val (16#A2#),
+         Character'Val (16#E5#), Character'Val (16#AD#), Character'Val (16#97#)];
+      --  U+AC00, a Hangul syllable.
+      Hangul : constant String :=
+        [Character'Val (16#EA#), Character'Val (16#B0#), Character'Val (16#80#)];
+
       --  "ab 1234": the space may lead digits under the original rule and
       --  under no other, and the digits run to the end, in threes, or one at
       --  a time. Three answers, and the rules that share one here are told
@@ -3931,6 +3998,59 @@ package body Tests.GGUF_Cases is
       --  "a b" last for exactly this.
       Same ("gpt-2", "x ab", "4 13", "a merge decided by rank");
       Same ("gpt-2", "abc", "1 23", "a merge decided by rank");
+
+      --  A vocabulary that takes a piece whole when it holds it takes "abc"
+      --  as the one token the fixture names for it; one that merges takes
+      --  what the table builds, which is "a" and "bc". llama3 and dbrx cut
+      --  by the same rule and differ in exactly this.
+      Same ("llama3", "abc", "34", "a piece the vocabulary holds whole");
+      Same ("dbrx", "abc", "1 23", "a piece the vocabulary holds whole");
+
+      --  The rules beyond the original six, each on the text that tells it
+      --  from its nearest neighbour. Compared as pieces rather than tokens,
+      --  because the cut is what a rule decides and the fixture's merges
+      --  would hide most of these boundaries.
+      Cuts ("tekken", "HelloWorld", "Hello|World", "a word cut at its case");
+      Cuts ("tekken", "ABCdef abcDEF", "ABCdef| abc|DEF",
+            "capitals before and after");
+      Cuts ("tekken", "x 1234", "x| |1|2|3|4", "digits one at a time");
+      Cuts ("gpt-4o", "It's x 1234567", "It's| x| |123|456|7",
+            "a contraction after the word, digits in threes");
+      Cuts ("tiny_aya", "x 1234567", "x| |1|234|567",
+            "digits in threes from the right");
+      Cuts ("superbpe", "ab cd 1234567 ef", "ab cd |1|234|567| ef",
+            "nothing cut but the digits");
+      Cuts ("bloom", "a b(c", "a| b|(|c", "the stops cut out");
+      Cuts ("viking", "a1 2", "a|1| |2", "digits after the stops");
+      Cuts ("deepseek-v3", "x 1234 ab", "x| |123|4| ab",
+            "digits first, then words");
+      Cuts ("deepseek-coder", "ab 12", "ab| |1|2", "letters, then digits");
+      Cuts ("deepseek-llm", "ab 12 cd", "ab| |12| cd",
+            "letters led by a space, then a run of digits");
+      Cuts ("afmoe", "x 1234ab", "x| |1|234|ab",
+            "digits from the right, then words");
+      Cuts ("chameleon", "ab  cd", "ab|  |cd", "two spaces cut as a run");
+      Cuts ("exaone-moe", "a b c1", "a b c|1",
+            "a space between letters inside a word");
+      Cuts ("seed-coder", "a+" & LF & "b", "a|+|" & LF & "|b",
+            "no line end trailing a symbol run");
+      Cuts ("qwen2", "a+" & LF & "b", "a|+" & LF & "|b",
+            "a line end trailing a symbol run");
+      Cuts ("laguna", "ab " & LF & "cd", "ab| |" & LF & "|cd",
+            "lines cut first");
+      Cuts ("qwen2", "ab " & LF & "cd", "ab| " & LF & "|cd",
+            "a space and a line end as one run");
+      Cuts ("jais-2", "          ab", "        | | ab",
+            "whitespace in widths of powers of two");
+      Cuts ("llama3", "          ab", "         | ab",
+            "whitespace up to the last space");
+      Cuts ("qwen35", "e" & Acute & "x", "e" & Acute & "x",
+            "a combining mark kept in its word");
+      Cuts ("qwen2", "e" & Acute & "x", "e|" & Acute & "x",
+            "a combining mark cut from its word and leading the next");
+      Cuts ("kimi-k2", Han & "ab", Han & "|ab", "ideographs cut out first");
+      Cuts ("gpt-4o", Han & "ab", Han & "ab", "ideographs in a word");
+      Cuts ("youtu", Hangul & "ab", Hangul & "|ab", "Hangul cut out first");
 
       --  A marker a chat template writes is one token and not the dozen its
       --  spelling would merge into. Nothing downstream would notice the
@@ -4167,7 +4287,9 @@ package body Tests.GGUF_Cases is
       end;
 
       --  A vocabulary naming a rule this does not implement is refused by
-      --  name rather than cut by the wrong one.
+      --  name rather than cut by the wrong one. gemma4 is not a cutting
+      --  rule but another road -- pieces looked up as raw bytes, spaces
+      --  written as the word marker -- and is refused for that.
       declare
          Image  : B.Byte_Array_Access;
          Item   : Containers.Container;
@@ -4175,7 +4297,7 @@ package body Tests.GGUF_Cases is
          Parse  : E.Error_Info;
          Status : E.Error_Info;
       begin
-         BPE_Vocabulary.Build ("deepseek-llm", Image);
+         BPE_Vocabulary.Build ("gemma4", Image);
          Parse_Image (Image.all, Item, Parse);
          Vocab.Load (Words, Item, Status => Status);
          Assert (Status.Code = E.Tokenizer_Unsupported_Model,

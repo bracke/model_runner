@@ -1052,7 +1052,7 @@ package body Tests.Sampling_Cases is
    begin
       --  A statement whose shape the engine cannot read stops compilation:
       --  everything after it is text of unknown meaning.
-      Reject ("{% macro m() %}{% endmacro %}", "macro");
+      Reject ("{% extends 'other' %}", "extends");
       Reject ("{% include 'other' %}", "include");
       Reject ("{% import 'other' as o %}", "import");
       Reject ("{% if true %}", "an unbalanced if");
@@ -1064,6 +1064,7 @@ package body Tests.Sampling_Cases is
       --  itself. Nothing here is approximated: each of these ends generation
       --  with an error, and none of them can reach a file or a process,
       --  because the engine has no operation that does.
+      --  raise_exception refuses too, as the template's own no.
       Refuse ("{{ raise_exception('no') }}", "raise_exception");
       Refuse ("{{ messages[i]['role'] }}", "indexing by a variable");
       Refuse ("{{ messages[0]['tool_calls'] }}", "an unknown message field");

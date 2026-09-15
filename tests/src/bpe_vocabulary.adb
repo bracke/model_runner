@@ -18,7 +18,7 @@ package body BPE_Vocabulary is
    type Text_Access is access constant String;
 
    --  The pieces, in identifier order.
-   Pieces : constant array (1 .. 34) of Text_Access :=
+   Pieces : constant array (1 .. 35) of Text_Access :=
      [new String'("<unk>"),
       new String'("a"),
       new String'("b"),
@@ -70,7 +70,14 @@ package body BPE_Vocabulary is
       new String'("."),
       new String'(Space_Mark & "."),
       new String'("`"),
-      new String'(Space_Mark & "`")];
+      new String'(Space_Mark & "`"),
+
+      --  A piece the merge table cannot build: no merge joins "a" to "bc"
+      --  or "ab" to "c". A vocabulary that takes a piece whole when it
+      --  holds it answers "abc" with this, and one that merges answers
+      --  with "a" and "bc"; nothing else in the fixture tells those two
+      --  ways of reading a vocabulary apart.
+      new String'("abc")];
 
    --  The merge table, in rank order, which is deliberately not the order the
    --  pieces are written above. "a b" is last and "b c" is next to last, so

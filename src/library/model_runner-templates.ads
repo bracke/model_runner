@@ -48,6 +48,12 @@ with Model_Runner.Tools;
 --                            read from one are a call's fields
 --    {%- ... -%} and {{- ... -}}   whitespace control on either side, and
 --                            {%+ ... %} to keep the line a tag stands on
+--    {% set name %} ... {% endset %}   what is written between goes to
+--                            the name and not to the prompt
+--    {% macro name(p, q='x') %} ... {% endmacro %}   and {{ name(a, b) }}
+--                            to call it: the body run where it is called,
+--                            its parameters bound by the call and given
+--                            back after, so a macro may call itself
 --
 --  Whitespace around a block. A tag is written on a line of its own to be
 --  read, and the line it stands on is the template's own shape rather than
@@ -82,6 +88,12 @@ with Model_Runner.Tools;
 --                            worked out rather than written
 --    | trim  and  | length, the second answering a list's length as well as
 --                            a text's
+--    | lower  | upper  | capitalize  | title  | int  | string  | safe
+--    | default(X)  | replace(A, B)   and up to four filters in a row
+--    strftime_now(FORMAT)      the moment of rendering, written as the
+--                            format says
+--    raise_exception(MESSAGE)  the template refusing the conversation,
+--                            which ends the render with Template_Refused
 --    | tojson, which writes a tool as JSON and any text as a JSON string
 --    .strip(S)  .lstrip(S)  .rstrip(S), the argument optional
 --    .split(S)[0]  and  .split(S)[-1], which is how a template takes a
@@ -123,16 +135,17 @@ with Model_Runner.Tools;
 --  meant text says nothing about the mistake.
 --
 --  Terms in an operand join with '+', which runs their text together, or
---  with '-', which reads both sides as whole numbers and subtracts. An
---  operand holding a subtraction is a number and answers as one, and so
---  does one whose every term is a number by construction -- a bare number,
---  a loop counter, a length. It answers the same whether it is assigned,
---  compared or printed: a template that works a position out in a set and
---  prints the same expression elsewhere means the same thing in both
---  places.
+--  with '-', '*', '//', '%' and '/', which read both sides as whole numbers
+--  and bind as the language binds them, products before sums; '~' runs
+--  both sides together as text whatever they are. An operand holding any
+--  join but '+' and '~' is a number and answers as one, and so does one
+--  whose every term is a number by construction -- a bare number, a loop
+--  counter, a length. It answers the same whether it is assigned, compared
+--  or printed: a template that works a position out in a set and prints
+--  the same expression elsewhere means the same thing in both places.
 --
---  Structural constructs outside the subset -- macro, include, import,
---  extends, filter blocks -- are rejected at compile time with
+--  Structural constructs outside the subset -- include, import, extends,
+--  filter blocks -- are rejected at compile time with
 --  Template_Unsupported_Construct, because a program whose shape cannot be
 --  read cannot be reasoned about at all.
 --
@@ -151,9 +164,9 @@ with Model_Runner.Tools;
 --  the same bytes. A template's own branch is the only thing that knows
 --  which they should be.
 --
---  Expressions outside the subset -- function calls, date formatting,
---  arithmetic, indexing into anything but messages -- compile to
---  an instruction that refuses when it is reached. Templates shipped with
+--  Expressions outside the subset -- functions this engine does not carry,
+--  list literals, mappings walked, indexing into anything but messages --
+--  compile to an instruction that refuses when it is reached. Templates shipped with
 --  current models describe tool calling in branches a conversation of plain
 --  messages never enters, and refusing the template for a branch nobody takes
 --  refuses the model. Refusing at the point of use refuses only what was
@@ -166,8 +179,9 @@ with Model_Runner.Tools;
 --  does any of those things.
 --
 --  Bounds. Template size, instruction count, nesting depth, loop iterations
---  and output size are all bounded. Rendering cannot recurse: the compiled
---  form is a flat instruction list with jumps.
+--  and output size are all bounded. Rendering recurses in one place, a
+--  macro call, and that is bounded by the nesting depth; everything else
+--  is a flat instruction list with jumps.
 --
 --  Task safety: a Compiled template is immutable after Compile and may be
 --  rendered concurrently.
@@ -386,6 +400,29 @@ private
       Term_False,
       Term_None,
 
+      --  strftime_now(FORMAT): the moment of rendering, written as the
+      --  format says. Offset and Length hold the format literal. The one
+      --  function the templates call for a value, because a model that
+      --  was trained with the date in its system prompt asks for today's.
+      Term_Now,
+
+      --  raise_exception(MESSAGE): the template refusing the conversation
+      --  in its author's words. Offset and Length hold the message, and
+      --  reaching it ends the render with Template_Refused naming it.
+      Term_Raise,
+
+      --  A macro called for its text: Offset names the macro, Index_At the
+      --  first of its arguments among the kept operands and Length how
+      --  many there are. The body runs where the call is read and what it
+      --  wrote is the value.
+      Term_Macro,
+
+      --  A bracketed sum, kept as an operand of its own and read as one
+      --  value: Offset names the kept operand. A group used to be spliced
+      --  into the sum around it, which is right while the only joins are
+      --  plus and minus and wrong once a product is written outside it.
+      Term_Group,
+
       --  Something this engine cannot evaluate, carried through compilation
       --  so that a template is refused for what it does rather than for what
       --  it contains. Offset and Length name the construct, for the error
@@ -421,7 +458,28 @@ private
       --  Write a call's arguments as Qwen3-Coder's parameter elements:
       --  <parameter=k> then the value on its own line then </parameter>, the
       --  value plain, as that family's template writes them.
-      Filter_Qwen_Params);
+      Filter_Qwen_Params,
+
+      --  The text filters the language has and templates reach for: the
+      --  case of a text changed, a value taken as a whole number, a value
+      --  left as it is under two names, a stand-in for an empty value, and
+      --  a text with one piece replaced by another.
+      Filter_Lower, Filter_Upper, Filter_Capitalize, Filter_Title,
+      Filter_Int, Filter_String, Filter_Safe, Filter_Default,
+      Filter_Replace);
+
+   --  One filter and where its arguments were kept, as operands: the
+   --  stand-in for default, the two texts for replace.
+   type Filter_Step is record
+      Kind : Filter_Kind := Filter_None;
+      Arg1 : Natural := 0;
+      Arg2 : Natural := 0;
+   end record;
+
+   --  How many filters may follow one another on a term.
+   Max_Filters : constant := 4;
+
+   type Filter_Chain is array (1 .. Max_Filters) of Filter_Step;
 
    --  What a template does to a piece of text after it has it: take
    --  whitespace off one end or both, or cut it at a marker and keep one
@@ -471,15 +529,32 @@ private
    --  How a term joins the one before it inside an operand. Plus is what
    --  Jinja's '+' does to two strings, which is to run them together;
    --  Minus reads both sides as whole numbers and subtracts, which is what
-   --  a template does to turn a length into a last index.
-   type Join_Kind is (Join_Plus, Join_Minus);
+   --  a template does to turn a length into a last index. The other four
+   --  are the products and remainders of whole numbers, and bind before
+   --  the two above as they do in the language: a division that does not
+   --  come out whole is refused where it is read rather than rounded.
+   --  Concat is the language's '~', which runs two values together as
+   --  text whatever they are: a sum with one in it is text, not a number.
+   type Join_Kind is
+     (Join_Plus, Join_Minus, Join_Times, Join_Divide, Join_Floor,
+      Join_Modulo, Join_Concat);
 
    type Term is record
       Kind   : Term_Kind := Term_Literal;
       Offset : Natural := 0;
       Length : Natural := 0;
-      Filter : Filter_Kind := Filter_None;
       Join   : Join_Kind := Join_Plus;
+
+      --  The filters written after the term, in their order, each taking
+      --  what the one before it answered.
+      Filters  : Filter_Chain := [others => <>];
+      Filtered : Natural := 0;
+
+      --  Where the join's own spelling was kept, for a division that is
+      --  refused where it is read: by zero, or one that does not come out
+      --  whole. Zero for the joins that cannot refuse.
+      Join_At  : Natural := 0;
+      Join_Len : Natural := 0;
 
       --  Whether this term is a number by construction rather than by what
       --  it happens to hold: a bare number, a loop counter, a length. What
@@ -628,6 +703,17 @@ private
       Op_Call_Begin,
       Op_Call_Next,
 
+      --  Gather what is written between two points into a name rather
+      --  than into the prompt: {% set name %} ... {% endset %}. The end
+      --  names the variable in Offset.
+      Op_Capture_Begin,
+      Op_Capture_End,
+
+      --  The end of a macro's body, which hands the text it wrote back to
+      --  the call that ran it. A macro is defined by a jump over its body
+      --  and called by running the body from its entry to this.
+      Op_Return,
+
       Op_Unsupported);  --  refuse, naming the construct, if ever reached
 
    --  An instruction names its operand and its condition rather than
@@ -680,6 +766,26 @@ private
 
    type Variable_Name_Array is array (1 .. Max_Variables) of Variable_Name;
 
+   --  Largest number of macros a template may define, and of parameters
+   --  one may take.
+   Max_Macros     : constant := 16;
+   Max_Parameters : constant := 8;
+
+   --  A macro: its name, where its body begins, and its parameters, each a
+   --  variable slot with the operand its default was kept as, or zero for
+   --  a parameter with none.
+   type Parameter_Slots is array (1 .. Max_Parameters) of Natural;
+
+   type Macro is record
+      Name     : Variable_Name;
+      Entry_At : Natural := 0;
+      Count    : Natural := 0;
+      Slots    : Parameter_Slots := [others => 0];
+      Defaults : Parameter_Slots := [others => 0];
+   end record;
+
+   type Macro_Array is array (1 .. Max_Macros) of Macro;
+
    type Compiled is limited new Ada.Finalization.Limited_Controlled with record
       Ready        : Boolean := False;
       Program      : Instruction_Access := null;
@@ -696,6 +802,9 @@ private
 
       Names     : Variable_Name_Array := [others => <>];
       Name_Used : Natural := 0;
+
+      Macros     : Macro_Array := [others => <>];
+      Macro_Used : Natural := 0;
 
       --  Where the name a reasoning model's template asks after lives, or
       --  zero when the template never mentions it. Made when the template

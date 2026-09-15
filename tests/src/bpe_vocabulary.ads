@@ -4,7 +4,7 @@ with Model_Runner.Bytes;
 --
 --  The suite had no such fixture. Every tokenizer test built a `llama`
 --  vocabulary, so the whole byte-pair half of Model_Runner.Tokenizer -- the
---  merge table, the byte-to-character mapping and all six cutting rules --
+--  merge table, the byte-to-character mapping and every cutting rule --
 --  ran nowhere in the suite, while the support matrix marked those rows
 --  implemented under a definition that requires coverage.
 --

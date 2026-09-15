@@ -25,7 +25,9 @@ with Model_Runner.GGUF.Containers;
 --  then merge within each pre-token, lowest rank in the merge table first,
 --  until no adjacent pair is in the table. The two differ in what decides a
 --  merge -- a score against a rank -- and in whether text is cut before
---  merging at all, so nothing is shared between them here either.
+--  merging at all, so nothing is shared between them here either. The
+--  cutting is done by Regex_Cutter interpreting the other runtime's
+--  expressions as text, where the engine has each rule written out by hand.
 --
 --  It shares no code with the engine: it looks pieces up by scanning the
 --  vocabulary it read, which is slow and obvious, where the engine keeps a
@@ -37,6 +39,8 @@ package Reference_Tokenizer is
 
    type Vocabulary is limited private;
 
+   type Ends_Array is array (Positive range <>) of Natural;
+
    Max_Tokens : constant := 4096;
 
    type Token_Vector is array (Positive range <>) of Integer;
@@ -47,7 +51,12 @@ package Reference_Tokenizer is
 
    --  Which rule cuts text before any merging happens. Default is what a
    --  vocabulary naming no rule is cut by, and is not the same rule as GPT2.
-   type Cut_Rule is (Default, GPT2, Falcon, SmolLM, Llama3, Qwen2);
+   --  Each is a list of expressions, in Expressions below.
+   type Cut_Rule is
+     (Default, GPT2, Falcon, SmolLM, Llama3, MiniCPM5, Jais2, Qwen2, Qwen35,
+      Bailing, Seed_Coder, Laguna, ExaOne_MoE, Tekken, GPT4o, Tiny_Aya,
+      Youtu, Kimi_K2, DeepSeek_LLM, DeepSeek_Coder, DeepSeek3, AFMoE, Bloom,
+      Viking, SuperBPE, Chameleon);
 
    --  Read the vocabulary from a parsed container.
    --
@@ -75,6 +84,20 @@ package Reference_Tokenizer is
    --  @param Item Vocabulary to inspect.
    --  @return The kind read from the container.
    function Kind (Item : Vocabulary) return Model_Kind;
+
+   --  Where the byte-pair road cuts a text before merging, as the last byte
+   --  of each piece; on any other road the text is one piece.
+   --
+   --  @param Item Loaded vocabulary.
+   --  @param Text Text to cut.
+   --  @param Ends Last byte of each piece, sized by the caller to at least
+   --    Text'Length.
+   --  @param Count Pieces made.
+   procedure Cut
+     (Item  : Vocabulary;
+      Text  : String;
+      Ends  : out Ends_Array;
+      Count : out Natural);
 
    --  Encode text.
    --
@@ -128,6 +151,9 @@ private
       Unknown   : Integer := -1;
       Model     : Model_Kind := Unreadable;
       Cutting   : Cut_Rule := GPT2;
+      --  Whether a piece the vocabulary holds whole is taken whole before
+      --  any merge, which some vocabularies ask for by name.
+      Whole     : Boolean := False;
       Merges    : Merge_Array_Access := null;
       Ranks     : Natural := 0;
    end record;

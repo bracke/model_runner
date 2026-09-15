@@ -37,7 +37,6 @@ package body Untested_Surface is
          | "Class_Of"
          | "Color_Names"
          | "Data_Offset"
-         | "Decode_First"
          | "Default_Severity"
          | "Divides_Into_Blocks"
          | "Enter"

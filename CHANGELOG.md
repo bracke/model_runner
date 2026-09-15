@@ -55,6 +55,86 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Arithmetic, the text filters, the date, the template's own refusal,
+  block sets and macros in the chat-template engine.** Each of these was a
+  construct the engine carried through compilation and refused where the
+  render reached it. Products and remainders of whole numbers bind before
+  sums now, as the language binds them, with brackets kept as an operand
+  of their own rather than spliced into the sum around them -- which was
+  the same thing while the only joins were plus and minus and not once a
+  product stood outside; `~` runs its sides together as text whatever they
+  are. `lower`, `upper`, `capitalize`, `title`, `int`, `string`, `safe`,
+  `default` and `replace` are filters, and up to four may follow one
+  another on a term. `strftime_now` writes the moment of rendering as its
+  format says, with the directives templates write a date into a system
+  prompt with, so Llama 3.2's template writes today's date rather than the
+  July 2024 its author typed as a fallback -- it was withheld to keep a
+  render reproducible, and a model trained to see the date was being shown
+  one day forever. `raise_exception` ends the render with `MR-TMPL-0014`,
+  the message as the construct: the template's no, in its author's words,
+  where it used to read as a construct this engine lacked. `{% set x %}`
+  ... `{% endset %}` gathers what is written between into the name, and a
+  macro is its body, jumped over where it is defined and run from its
+  entry where it is called, its parameters bound by the call -- arguments
+  read first, so a macro that calls itself finds its own -- and given back
+  afterwards; calls nest to the depth bound and the step bound holds
+  across them. `include`, `import` and `extends` stay refused, having
+  nothing to name inside a model file. What is still outside: list
+  literals, mappings walked with `items`, `is iterable`, and the string
+  methods beyond the ones carried -- which is what keeps Qwen3-Coder's and
+  MiniCPM's own templates on the carried formats.
+- **The carried `minicpm` format reasons as its model's own template
+  does.** MiniCPM5 was already driven through `run --agent` end to end by
+  the carried format and the `Function_XML` call syntax: the call written,
+  read back, run and answered. What the carried format lacked was the
+  reasoning block -- `--think` and `--no-think` reached the model as
+  nothing, so it thought at length whatever the caller said -- and the
+  rule the model's own template has for an earlier exchange's `<think>`
+  block, which is to drop it and keep the one in progress. Both are
+  carried now, as the `qwen3-coder` format carries them.
+- **Twenty more cutting rules for byte-pair vocabularies, and the machinery
+  rewritten under all of them.** `tokenizer.ggml.pre` named six rules this
+  build cut by and refused the rest by name; it cuts by twenty-six now,
+  under a hundred names: tekken, gpt-4o and llama4, deepseek-llm, -coder
+  and -v3, kimi-k2, bloom and viking, superbpe, chameleon, jais-2,
+  minicpm5, qwen35 as its own rule, bailingmoe, seed-coder, laguna,
+  exaone-moe, tiny_aya, youtu, afmoe and the names the other runtime maps
+  onto each. The other runtime writes every rule as a list of regular
+  expressions applied in turn, each over the pieces the ones before it
+  left, and the six rules here were one hand-written scanner with a case
+  per disagreement. `Tokenizer.Cutting` is the list machinery with each
+  expression written out as a scanner of its own -- the alternatives in
+  the expression's order, the first that matches taken, the backtracking
+  each needs worked out once -- so a rule is a list of passes and a name
+  picks one. What holds the transcription is a reader in the suite that
+  interprets the expressions themselves, by backtracking, from their text:
+  every name the engine accepts is driven over generated text made of the
+  things the rules disagree about, and the two cuts are held the same,
+  boundary for boundary, ten thousand texts a run and a hundred and sixty
+  thousand in the campaign that settled it. That campaign found three
+  transcriptions wrong before they shipped: minicpm5 is not llama3 with a
+  digit pass in front, because the pass cuts a run of spaces before a
+  digit into a piece of its own; Kimi K2's own expression cuts a word at
+  its case where the other runtime's hand-written cutter does not; and
+  SuperBPE's digit expression matches nothing and draws boundaries, which
+  leaves a piece's other numbers on its last group where a match would
+  cut them off. Three things changed for the rules that were already
+  here. A run of whitespace holding a line ending is cut at the last of
+  them under the later rules only, as their expressions say; the original
+  rule, falcon, smollm and the default have no such alternative and cut
+  the run as any run of spaces, which they did not before. A superscript
+  or a Roman numeral is a number, as every expression's `\p{N}` says and
+  the standard library's digit test did not. And the vocabularies the
+  other runtime reads with merges ignored -- llama3's group, tekken, youtu,
+  minicpm5, granite-embed-multi-97m -- take a piece whole when they hold
+  it, before any merge is tried, which nothing here did. The case-cutting
+  rules cut by the Unicode case categories, which is what the models' own
+  expressions say; the other runtime approximates them with ASCII, and the
+  two differ on a cased letter outside ASCII beside one inside. Four names
+  are refused on purpose and say so: gemma4, sarvam-moe, whitespace and
+  granite-embed-multi-311m are not cutting rules but another road.
+  `Tokenizer.Cut` is public, so a caller can ask where a text is cut
+  without asking for the tokens.
 - **MXFP4 reaches the device.** The format arrived with a processor
   decoder and no shader branch, and a model carrying it was refused on
   `--backend device` while it loaded, by name. Both shaders decode it now:
@@ -14623,7 +14703,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 180 diagnostic
+- Localization through `messages`, with a catalog entry for all 181 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

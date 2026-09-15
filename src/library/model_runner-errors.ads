@@ -169,6 +169,12 @@ package Model_Runner.Errors is
       Template_Variables_Too_Large,
       Template_Unknown_Format,
 
+      --  The template itself refused the conversation: it reached a
+      --  raise_exception call, whose message is the construct. What the
+      --  template's author wrote for a conversation it will not render --
+      --  a system message where none is allowed, roles out of turn.
+      Template_Refused,
+
       --  Output grammars.
       Grammar_Syntax_Error,
       Grammar_Unknown_Rule,

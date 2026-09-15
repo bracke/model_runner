@@ -34,13 +34,13 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 38) of Example :=
+   Held : constant array (1 .. 43) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
 
-      (new String'("`{{ terms }}` joined by `+`"),
-       new String'("{{ 'a' + 'b' }}"),
+      (new String'("`{{ terms }}` joined by `+` or `~`"),
+       new String'("{{ 'a' + 'b' }}{{ 'a' ~ 1 + 2 }}"),
        Works),
 
       (new String'("`{% for message in LIST %}`"),
@@ -103,9 +103,38 @@ package body Template_Registry is
                    & "{{ t.rstrip('c') }}"),
        Works),
 
-      (new String'("Date formatting"),
-       new String'("{{ strftime_now('%Y') }}"),
+      (new String'("`strftime_now(FORMAT)`"),
+       new String'("{{ strftime_now('%d %b %Y') }}"
+                   & "{% if strftime_now is defined %}y{% endif %}"),
+       Works),
+
+      (new String'("`raise_exception(MESSAGE)`"),
+       new String'("{{ raise_exception('no') }}"),
        Refused_At_Render),
+
+      (new String'("`*`, `//`, `%`, `/`"),
+       new String'("{{ 2 + 3 * 4 }}{{ (2 + 3) * 4 }}{{ -7 // 2 }}"
+                   & "{{ -7 % 2 }}{{ 8 / 2 }}"),
+       Works),
+
+      (new String'("`\| lower`, `\| upper`, `\| capitalize`, `\| title`, "
+                   & "`\| int`, `\| string`, `\| safe`, `\| default(X)`, "
+                   & "`\| replace(A, B)`"),
+       new String'("{{ 'Ab' | lower | upper }}{{ 'ab cd' | capitalize }}"
+                   & "{{ 'ab cd' | title }}{{ '12x' | int }}"
+                   & "{{ 'x' | string }}{{ 'x' | safe }}"
+                   & "{{ '' | default('d') }}{{ 'a-b' | replace('-', '+') }}"),
+       Works),
+
+      (new String'("`{% set name %} ... {% endset %}`"),
+       new String'("{% set x %}a{{ 1 + 1 }}{% endset %}{{ x | upper }}"),
+       Works),
+
+      (new String'("`{% macro name(p, q='x') %} ... {% endmacro %}` and "
+                   & "`{{ name(a, b) }}`"),
+       new String'("{% macro m(p, q='!') %}{{ p }}{{ q }}{% endmacro %}"
+                   & "{{ m('a') }}{{ m('b', '?') | upper }}"),
+       Works),
 
       (new String'("`{% for name in tools %}`"),
        new String'("{% for tool in tools %}{{ tool | tojson }}{% endfor %}"),
@@ -209,18 +238,19 @@ package body Template_Registry is
        new String'("  {%- if true -%}  a  {%- endif -%}  {{- 'b' -}}  "),
        Works),
 
-      (new String'("`macro`, `include`, `import`"),
-       new String'("{% macro m() %}{% endmacro %}"),
+      (new String'("`include`, `import`, `extends`"),
+       new String'("{% include 'other' %}"),
        Refused_At_Compile),
 
       (new String'("Other filters"),
-       new String'("{{ bos_token | upper }}"),
+       new String'("{{ bos_token | urlencode }}"),
        Refused_At_Render),
 
-      (new String'("Function calls, `strftime_now`, "
-                   & "`raise_exception`, arithmetic, indexing by anything "
-                   & "but a number"),
-       new String'("{{ raise_exception('no') }}"),
+      (new String'("`.strftime` on anything, other function calls, list "
+                   & "literals, `\| items`, `is iterable`, `is mapping`, a "
+                   & "loop over anything but the four things there are to "
+                   & "walk, indexing by anything but a number"),
+       new String'("{{ messages[i]['role'] }}"),
        Refused_At_Render),
 
       (new String'("Reading a name the template never assigned"),

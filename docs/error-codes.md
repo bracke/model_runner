@@ -129,6 +129,7 @@ ordinal is never reused, not because they might appear.
 | `MR-TMPL-0011` | `error.template.unsupported_role` | recovery_unsupported | 4 | reserved |
 | `MR-TMPL-0012` | `error.template.variables_too_large` | recovery_resource_limited | 3 | raised |
 | `MR-TMPL-0013` | `error.template.unknown_format` | recovery_none | 2 | raised |
+| `MR-TMPL-0014` | `error.template.refused` | recovery_user_correctable | 3 | raised |
 
 ## GRAM
 

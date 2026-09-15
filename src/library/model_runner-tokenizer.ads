@@ -232,6 +232,35 @@ package Model_Runner.Tokenizer is
    --  Encoding
    ---------------------------------------------------------------------------
 
+   --  The last byte of each piece a text is cut into.
+   type Piece_Ends is array (Positive range <>) of Natural;
+
+   --  Where the byte-pair road cuts a text before anything is merged: the
+   --  pieces the vocabulary's cutting rule makes, each named by its last
+   --  byte, the first beginning at Text'First. Chat-template markers are
+   --  not cut out here; this is the rule alone, asked of the text as given.
+   --  On any other road the text is one piece.
+   --
+   --  Exposed because the cut is what a vocabulary's rule decides and the
+   --  tokens are what the merge table then makes of it: a caller comparing
+   --  two implementations of the rule wants the cut, where a token stream
+   --  shows a difference only when a merge happens to straddle it.
+   --
+   --  @param Item Loaded vocabulary.
+   --  @param Text UTF-8 input.
+   --  @param Ends Buffer receiving the pieces' last bytes; a text of N bytes
+   --    makes at most N pieces.
+   --  @param Count Pieces made.
+   --  @param Status Success, Tokenizer_Invalid_Vocabulary,
+   --    Tokenizer_Invalid_UTF8, Tokenizer_Input_Too_Long or
+   --    Tokenizer_Buffer_Too_Small.
+   procedure Cut
+     (Item   : Vocabulary;
+      Text   : String;
+      Ends   : out Piece_Ends;
+      Count  : out Natural;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Encode text into tokens.
    --
    --  @param Item Loaded vocabulary.
@@ -388,11 +417,14 @@ private
    --  the vocabulary never merges.
    --  Which rule cuts text into pieces before any merging.
    --
-   --  They differ in what may lead a word, in how digits are grouped, and in
+   --  They differ in what may lead a word, in how digits are grouped, in
    --  whether a run of punctuation is cut out of the text before anything
-   --  else looks at it. The differences are not cosmetic: a model is trained
-   --  on one answer, and a wrong cut yields tokens that decode back to the
-   --  same text and mean something else to it.
+   --  else looks at it, in whether a word is cut where its case changes,
+   --  and in which scripts are cut as runs of their own. The differences
+   --  are not cosmetic: a model is trained on one answer, and a wrong cut
+   --  yields tokens that decode back to the same text and mean something
+   --  else to it. Each rule is a list of passes over the text, written out
+   --  in Tokenizer.Cutting from the expressions the other runtime applies.
    --
    --  Rule_Default is what a vocabulary that names no rule at all is cut by.
    --  It is a rule of its own and not the original one: the file that names
@@ -401,7 +433,11 @@ private
    --  space before a full stop each wrong.
    type Cut_Rule is
      (Rule_Default, Rule_GPT2, Rule_Falcon, Rule_SmolLM, Rule_Llama3,
-      Rule_Qwen2);
+      Rule_MiniCPM5, Rule_Jais2, Rule_Qwen2, Rule_Qwen35, Rule_Bailing, Rule_Seed_Coder,
+      Rule_Laguna, Rule_ExaOne_MoE, Rule_Tekken, Rule_GPT4o, Rule_Tiny_Aya,
+      Rule_Youtu, Rule_Kimi_K2, Rule_DeepSeek_LLM, Rule_DeepSeek_Coder,
+      Rule_DeepSeek3, Rule_AFMoE, Rule_Bloom, Rule_Viking, Rule_SuperBPE,
+      Rule_Chameleon);
 
    package Merge_Maps is
      new Ada.Containers.Indefinite_Hashed_Maps
@@ -454,6 +490,13 @@ private
       Byte_Fallback : Boolean := False;
       Merges        : Merge_Maps.Map;
       Cutting       : Cut_Rule := Rule_Default;
+
+      --  Whether a piece the vocabulary holds whole is taken whole, before
+      --  any merge is tried on it. Some vocabularies are written that way
+      --  -- the other runtime calls it ignoring merges -- and a piece the
+      --  merge table cannot build is then the token the file names for it
+      --  rather than the pieces the table can build.
+      Whole_First   : Boolean := False;
 
       --  What the unigram road needs beyond the pieces and their scores:
       --  the longest piece in bytes, which bounds how far ahead the best

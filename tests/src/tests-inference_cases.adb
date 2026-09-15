@@ -4,6 +4,7 @@ with AUnit.Assertions;
 
 with Model_Runner.Lookup;
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
 
@@ -4489,7 +4490,7 @@ package body Tests.Inference_Cases is
       --  the two: a name mapped one way here and another way there would
       --  otherwise be found by no test at all. Starcoder was such a name
       --  and was wrong.
-      Rules : constant array (1 .. 12) of Case_Text :=
+      Rules : constant array (1 .. 14) of Case_Text :=
         [new String'(""),
          new String'("default"),
          new String'("gpt-2"),
@@ -4501,7 +4502,9 @@ package body Tests.Inference_Cases is
          new String'("llama3"),
          new String'("dbrx"),
          new String'("qwen2"),
-         new String'("stablelm2")];
+         new String'("stablelm2"),
+         new String'("tekken"),
+         new String'("deepseek-v3")];
 
       --  Text that reaches every part of the rule: a bare word, the markers
       --  a chat template writes and two strings that open a bracket without
@@ -4604,6 +4607,221 @@ package body Tests.Inference_Cases is
          end;
       end loop;
    end Byte_Pair_Matches_An_Independent_One;
+
+   --  The cutting rules agree with the expressions they were written from.
+   --
+   --  Every rule in the engine is a scanner written out by hand from the
+   --  other runtime's regular expressions. The reader in the suite
+   --  interprets those expressions as text, by backtracking, one expression
+   --  after another over the pieces the ones before it left. Here every
+   --  name the engine accepts is driven over a few hundred texts made of
+   --  the things the rules disagree about -- letters of both cases and of
+   --  several scripts, marks, digits of two kinds, runs of spaces and line
+   --  ends, punctuation and symbols, contractions, ideographs, Hangul, the
+   --  literal tokens two rules look for -- and the two cuts are held to be
+   --  the same, boundary for boundary. A token stream would show a
+   --  difference only where a merge happened to straddle it; the cut shows
+   --  every one.
+   procedure Byte_Pair_Cutting_Matches_The_Expressions
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Reference_Tokenizer.Model_Kind;
+
+      type Case_Text is access constant String;
+
+      --  One name per rule the engine accepts, and one more for each name
+      --  that is mapped onto a rule another name is too.
+      Names : constant array (1 .. 41) of Case_Text :=
+        [new String'(""), new String'("default"), new String'("gpt-2"),
+         new String'("jina-v2-code"), new String'("falcon"),
+         new String'("smollm"), new String'("mellum2"),
+         new String'("llama3"), new String'("dbrx"),
+         new String'("minicpm5"), new String'("jais-2"),
+         new String'("qwen2"), new String'("solar-open"),
+         new String'("qwen35"), new String'("bailingmoe"),
+         new String'("llada-moe"), new String'("seed-coder"),
+         new String'("laguna"), new String'("exaone-moe"),
+         new String'("tekken"), new String'("gpt-4o"),
+         new String'("minimax-m2"), new String'("granite-embed-multi-97m"),
+         new String'("tiny_aya"), new String'("cohere2moe"),
+         new String'("youtu"), new String'("kimi-k2"),
+         new String'("deepseek-llm"), new String'("deepseek-coder"),
+         new String'("deepseek-v3"), new String'("joyai-llm"),
+         new String'("afmoe"), new String'("bloom"),
+         new String'("gpt3-finnish"), new String'("viking"),
+         new String'("superbpe"), new String'("chameleon"),
+         new String'("hunyuan-dense"), new String'("grok-2"),
+         new String'("chatglm-bpe"), new String'("kanana2")];
+
+      function U (Code : Natural) return String
+        renames Model_Runner.UTF8.Encode;
+
+      --  The pieces a text is built from, chosen so that each class every
+      --  expression names is present and each boundary the rules draw
+      --  differently can arise.
+      Atoms : constant array (1 .. 48) of Case_Text :=
+        [new String'("ab"), new String'("Hello"), new String'("WORLD"),
+         new String'("camelCase"), new String'("x"), new String'(" "),
+         new String'("  "), new String'("     "), new String'("         "),
+         new String'(U (9)), new String'(U (10)), new String'(U (13)),
+         new String'(U (10) & U (10)), new String'(" " & U (10) & " "),
+         new String'("1"), new String'("12"), new String'("1234"),
+         new String'("1234567"), new String'("'s"), new String'("'RE"),
+         new String'("'ll"), new String'("."), new String'(","),
+         new String'("!?"), new String'("+"), new String'("$"),
+         new String'("`"), new String'("<"), new String'("/"),
+         new String'("("), new String'("|"),
+         new String'(U (16#E9#)),           --  é, a lowercase letter
+         new String'(U (16#C9#)),           --  É, an uppercase letter
+         new String'(U (16#1C5#)),          --  ǅ, a titlecase letter
+         new String'(U (16#2B0#)),          --  ʰ, a modifier letter
+         new String'(U (16#301#)),          --  a combining acute accent
+         new String'(U (16#20AC#)),         --  €, a symbol
+         new String'(U (16#2014#)),         --  an em dash, punctuation
+         new String'(U (16#A0#)),           --  a no-break space
+         new String'(U (16#661#) & U (16#662#)),  --  Arabic-Indic digits
+         new String'(U (16#B2#)),           --  a superscript two
+         new String'(U (16#6F22#) & U (16#5B57#)),  --  two ideographs
+         new String'(U (16#3042#)),         --  hiragana a
+         new String'(U (16#AC00#)),         --  a Hangul syllable
+         new String'(U (16#43F#) & U (16#440#)),  --  Cyrillic lowercase
+         new String'(U (16#391#)),          --  Greek capital alpha
+         new String'("<sentinel:12>"), new String'("IMGIMGABZ")];
+
+      --  A small deterministic generator, so a failure names a text that
+      --  can be typed into a test.
+      Seed : Interfaces.Unsigned_32 := 2_463_534_242;
+
+      function Next (Bound : Positive) return Positive is
+         use type Interfaces.Unsigned_32;
+      begin
+         Seed := Seed xor Interfaces.Shift_Left (Seed, 13);
+         Seed := Seed xor Interfaces.Shift_Right (Seed, 17);
+         Seed := Seed xor Interfaces.Shift_Left (Seed, 5);
+         return Natural (Seed mod Interfaces.Unsigned_32 (Bound)) + 1;
+      end Next;
+
+      function Random_Text return String is
+         Result : String (1 .. 256);
+         Used   : Natural := 0;
+      begin
+         for Count in 1 .. Next (10) loop
+            declare
+               Atom : constant String := Atoms (Next (Atoms'Length)).all;
+            begin
+               exit when Used + Atom'Length > Result'Last;
+               Result (Used + 1 .. Used + Atom'Length) := Atom;
+               Used := Used + Atom'Length;
+            end;
+         end loop;
+         return Result (1 .. Used);
+      end Random_Text;
+
+      --  A text as something a failure message can show: every byte
+      --  outside printable ASCII as its number in brackets.
+      function Shown (Text : String) return String is
+         Result : String (1 .. Text'Length * 6);
+         Used   : Natural := 0;
+      begin
+         for Letter of Text loop
+            if Letter in ' ' .. '~' then
+               Used := Used + 1;
+               Result (Used) := Letter;
+            else
+               declare
+                  Image : constant String :=
+                    "[" & Model_Runner.Text.Trim
+                            (Natural'Image (Character'Pos (Letter))) & "]";
+               begin
+                  Result (Used + 1 .. Used + Image'Length) := Image;
+                  Used := Used + Image'Length;
+               end;
+            end if;
+         end loop;
+         return Result (1 .. Used);
+      end Shown;
+
+      Texts_Per_Rule : constant := 250;
+   begin
+      for Name of Names loop
+         declare
+            Image  : B.Byte_Array_Access;
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Loaded : Boolean;
+         begin
+            BPE_Vocabulary.Build (Name.all, Image);
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Words  : Vocab.Vocabulary;
+               Second : Reference_Tokenizer.Vocabulary;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the byte-pair fixture did not parse");
+
+               Vocab.Load (Words, Parsed, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the engine refused the rule " & Name.all & ": "
+                       & E.Error_Code'Image (Status.Code));
+
+               Reference_Tokenizer.Load (Second, Parsed, Loaded);
+               Assert (Loaded,
+                       "the reader refused the rule " & Name.all);
+               Assert (Reference_Tokenizer.Kind (Second)
+                       = Reference_Tokenizer.Byte_Pair,
+                       "the reader read " & Name.all & " as something else");
+
+               for Round in 1 .. Texts_Per_Rule loop
+                  declare
+                     Text     : constant String := Random_Text;
+                     Mine     : Vocab.Piece_Ends (1 .. Text'Length + 1);
+                     Mine_N   : Natural;
+                     Theirs   : Reference_Tokenizer.Ends_Array
+                       (1 .. Text'Length + 1);
+                     Theirs_N : Natural;
+                  begin
+                     Vocab.Cut (Words, Text, Mine, Mine_N, Status);
+                     Assert (E.Is_Ok (Status),
+                             "the engine would not cut """ & Shown (Text)
+                             & """ under " & Name.all & ": "
+                             & E.Error_Code'Image (Status.Code));
+
+                     Reference_Tokenizer.Cut (Second, Text, Theirs, Theirs_N);
+
+                     Assert (Mine_N = Theirs_N,
+                             "under " & Name.all & " the engine cuts """
+                             & Shown (Text) & """ into"
+                             & Natural'Image (Mine_N)
+                             & " pieces and the expressions into"
+                             & Natural'Image (Theirs_N));
+
+                     for Index in 1 .. Mine_N loop
+                        Assert (Mine (Index) = Theirs (Index),
+                                "under " & Name.all & " piece"
+                                & Natural'Image (Index) & " of """
+                                & Shown (Text) & """ ends at byte"
+                                & Natural'Image (Mine (Index))
+                                & " for the engine and at"
+                                & Natural'Image (Theirs (Index))
+                                & " for the expressions");
+                     end loop;
+                  end;
+               end loop;
+
+               Reference_Tokenizer.Close (Second);
+               Vocab.Close (Words);
+               Containers.Close (Parsed);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+   end Byte_Pair_Cutting_Matches_The_Expressions;
 
    procedure Unigram_Matches_An_Independent_One
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -9201,6 +9419,10 @@ package body Tests.Inference_Cases is
         (T, Byte_Pair_Matches_An_Independent_One'Access,
          "the byte-pair tokenizer agrees with one written from the "
          & "description");
+      Register_Routine
+        (T, Byte_Pair_Cutting_Matches_The_Expressions'Access,
+         "every cutting rule agrees with the expressions it was written "
+         & "from, over generated text");
       Register_Routine
         (T, Unigram_Matches_An_Independent_One'Access,
          "the unigram tokenizer agrees with one written from the "

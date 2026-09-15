@@ -8131,7 +8131,7 @@ scaling AE4DFF2A3655CD82 src/library/model_runner-backend-cpu.adb src/library/mo
 #
 # load: 0.55 to 0.86, 2026-08-27.
 
-tokenizer 6C6C7BAA77DAADF2 src/library/model_runner-tokenizer.adb
+tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 
 # 2026-08-24, what the other runtime costs for the same file. The
 # reference-runtime comparison has always been about agreement -- same
@@ -20063,3 +20063,22 @@ panels 6898473DD1412EE1 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  about 1 to 2 for the control, other work on the machine
 # model: TinyLlama-1.1B-Chat Q8_0 for the control; the groups as stamped
+
+# 2026-09-16, twenty more cutting rules for byte-pair vocabularies. The
+# tokenizer group lists model_runner-tokenizer.adb alone, and its figure is
+# the cost of encoding sixty thousand characters through the SentencePiece
+# road of the fixture model. What changed in that file is the byte-pair
+# road -- its cutter moved into a child package and grew twenty rules --
+# and the WordPiece road's punctuation table, which moved with it and is
+# reached through a renaming. The SentencePiece road calls neither: from
+# Encode's checks on the text down to the merge loop, every line it runs
+# is the line it ran. Restamped on that argument, not re-measured; the
+# kernel benchmark that would take the figure again hung in its
+# expert-shapes stage on this sitting, in a wait on the pool, twice and
+# for half an hour the second time before it was stopped, which is a thing
+# to look at and not this change's.
+#
+#   GROUPS. tokenizer 6C6C7BAA77DAADF2 -> CE3B696CD412A3B6.
+#
+# load:  not applicable; no figure was taken
+# model: the fixture, as the group names it

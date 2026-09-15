@@ -4,6 +4,8 @@ with Ada.Wide_Wide_Characters.Handling;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 
+with Regex_Cutter;
+
 package body Reference_Tokenizer is
 
    package Containers renames Model_Runner.GGUF.Containers;
@@ -152,18 +154,76 @@ package body Reference_Tokenizer is
               or else Cutting = "llama-bpe" or else Cutting = "falcon3"
               or else Cutting = "falcon-h1" or else Cutting = "pixtral"
               or else Cutting = "midm-2.0" or else Cutting = "lfm2"
-              or else Cutting = "jina-v5-nano" or else Cutting = "dbrx"
-              or else Cutting = "smaug-bpe" or else Cutting = "glm4"
-              or else Cutting = "chatglm-bpe"
+              or else Cutting = "jina-v5-nano"
             then
                Item.Cutting := Llama3;
+               Item.Whole := True;
+            elsif Cutting = "dbrx" or else Cutting = "smaug-bpe"
+              or else Cutting = "glm4" or else Cutting = "chatglm-bpe"
+            then
+               Item.Cutting := Llama3;
+            elsif Cutting = "minicpm5" then
+               Item.Cutting := MiniCPM5;
+               Item.Whole := True;
+            elsif Cutting = "jais-2" then
+               Item.Cutting := Jais2;
             elsif Cutting = "qwen2" or else Cutting = "stablelm2"
               or else Cutting = "deepseek-r1-qwen" or else Cutting = "kormo"
               or else Cutting = "f2llmv2" or else Cutting = "megrez"
               or else Cutting = "hunyuan" or else Cutting = "grok-2"
-              or else Cutting = "solar-open" or else Cutting = "qwen35"
+              or else Cutting = "solar-open"
             then
                Item.Cutting := Qwen2;
+            elsif Cutting = "qwen35" then
+               Item.Cutting := Qwen35;
+            elsif Cutting = "bailingmoe" or else Cutting = "bailingmoe2"
+              or else Cutting = "llada-moe"
+            then
+               Item.Cutting := Bailing;
+            elsif Cutting = "seed-coder" then
+               Item.Cutting := Seed_Coder;
+            elsif Cutting = "laguna" then
+               Item.Cutting := Laguna;
+            elsif Cutting = "exaone-moe" then
+               Item.Cutting := ExaOne_MoE;
+            elsif Cutting = "tekken" then
+               Item.Cutting := Tekken;
+               Item.Whole := True;
+            elsif Cutting = "gpt-4o" or else Cutting = "llama4"
+              or else Cutting = "kanana2" or else Cutting = "talkie"
+              or else Cutting = "minimax-m2"
+            then
+               Item.Cutting := GPT4o;
+            elsif Cutting = "granite-embed-multi-97m" then
+               Item.Cutting := GPT4o;
+               Item.Whole := True;
+            elsif Cutting = "tiny_aya" or else Cutting = "cohere2moe" then
+               Item.Cutting := Tiny_Aya;
+            elsif Cutting = "youtu" then
+               Item.Cutting := Youtu;
+               Item.Whole := True;
+            elsif Cutting = "kimi-k2" then
+               Item.Cutting := Kimi_K2;
+            elsif Cutting = "deepseek-llm" then
+               Item.Cutting := DeepSeek_LLM;
+            elsif Cutting = "deepseek-coder" then
+               Item.Cutting := DeepSeek_Coder;
+            elsif Cutting = "deepseek-v3" or else Cutting = "hunyuan-dense"
+              or else Cutting = "joyai-llm"
+            then
+               Item.Cutting := DeepSeek3;
+            elsif Cutting = "afmoe" then
+               Item.Cutting := AFMoE;
+            elsif Cutting = "bloom" or else Cutting = "poro-chat"
+              or else Cutting = "gpt3-finnish"
+            then
+               Item.Cutting := Bloom;
+            elsif Cutting = "viking" then
+               Item.Cutting := Viking;
+            elsif Cutting = "superbpe" then
+               Item.Cutting := SuperBPE;
+            elsif Cutting = "chameleon" then
+               Item.Cutting := Chameleon;
             else
                Item.Model := Unreadable;
                Close (Item);
@@ -697,12 +757,275 @@ package body Reference_Tokenizer is
 
    --  Byte-pair: cut, rewrite each byte, then merge by rank.
    --
-   --  The cutting is the ASCII part of the rule and no more: every byte above
-   --  127 counts as a letter here, where the engine asks the standard library
-   --  for the Unicode category. They agree on ASCII, which is what the
-   --  comparison uses; text outside it is the engine's own business and it
-   --  refuses what it cannot cut faithfully.
-   type Contraction is access constant String;
+   --  The cutting is the other runtime's expressions, held here as text and
+   --  interpreted by Regex_Cutter, where the engine carries each rule as a
+   --  scanner written out from the same expressions. Where an expression
+   --  the other runtime applies is an approximation of the model's own --
+   --  the case-cutting rules, written there with ASCII case classes -- the
+   --  model's own is what is held here, because the model's own is what
+   --  the engine transcribes; and where the other runtime cuts by hand
+   --  rather than by an expression, the expression that does the same is
+   --  held. Ideographs are written as \x{..} so that the source stays
+   --  ASCII.
+   package RC renames Regex_Cutter;
+
+   Contractions : constant String :=
+     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])";
+
+   Original_Rule : aliased constant String :=
+     "'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+"
+     & "|\s+(?!\S)";
+
+   Later_Spaces : constant String := "|\s*[\r\n]+|\s+(?!\S)|\s+";
+
+   Default_Punctuation : aliased constant String := "[\p{P}\$\+<=>\^~\|]+";
+   Falcon_Punctuation  : aliased constant String := "[\p{P}\$\+<=>\^~\|`]+";
+   Number_Runs         : aliased constant String := "\p{N}+";
+   Each_Number         : aliased constant String := "\p{N}";
+   ASCII_Threes        : aliased constant String := "[0-9][0-9][0-9]";
+   Threes              : aliased constant String := "\p{N}{1,3}";
+   Each_Line_End       : aliased constant String := "[\r\n]";
+   Lines               : aliased constant String := "[^\n]+|[\n]+";
+   Trailing_Spaces     : aliased constant String := "\s+$";
+
+   Llama3_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}"
+     & "| ?[^\s\p{L}\p{N}]+[\r\n]*" & Later_Spaces;
+
+   MiniCPM5_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}+"
+     & "| ?[^\s\p{L}\p{N}]+[\r\n]*" & Later_Spaces;
+
+   Jais2_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}"
+     & "| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s{512}(?!\S)"
+     & "|\s{256}(?!\S)|\s{128}(?!\S)|\s{64}(?!\S)|\s{32}(?!\S)"
+     & "|\s{16}(?!\S)|\s{8}(?!\S)|\s{4}(?!\S)|\s{1,2}(?!\S)|\s{1}";
+
+   Qwen2_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}"
+     & "| ?[^\s\p{L}\p{N}]+[\r\n]*" & Later_Spaces;
+
+   Qwen35_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}"
+     & "| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*" & Later_Spaces;
+
+   Bailing_Rule : aliased constant String :=
+     "'(?:[sSdDmMtT]|[lL][lL]|[vV][eE]|[rR][eE])|[^\r\n\p{L}\p{N}]?\p{L}+"
+     & "|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+";
+
+   Seed_Coder_Rule : aliased constant String :=
+     Contractions & "|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1}"
+     & "| ?[^\s\p{L}\p{N}\r\n]+|\s*[\r\n]+|\s+(?!\S)|\s+";
+
+   ExaOne_MoE_Rule : aliased constant String :=
+     Contractions
+     & "|[^\r\n\p{L}\p{N}]?(?:\p{L}\p{M}*(?: \p{L}\p{M}*)*)+|\p{N}"
+     & "| ?[^\s\p{L}\p{N}]+[\r\n/]?|\s*[\r\n]|\s+(?!\S)|\s+";
+
+   --  A word cut where its case changes, as the models' own tokenizers
+   --  write it, with and without a contraction allowed after it.
+   Cased_Word : constant String :=
+     "[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*"
+     & "[\p{Ll}\p{Lm}\p{Lo}\p{M}]+"
+     & "|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+"
+     & "[\p{Ll}\p{Lm}\p{Lo}\p{M}]*";
+
+   Cased_Word_Contracted : constant String :=
+     "[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*"
+     & "[\p{Ll}\p{Lm}\p{Lo}\p{M}]+" & Contractions & "?"
+     & "|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+"
+     & "[\p{Ll}\p{Lm}\p{Lo}\p{M}]*" & Contractions & "?";
+
+   Tekken_Rule : aliased constant String :=
+     Cased_Word & "|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n/]*" & Later_Spaces;
+
+   GPT4o_Rule : aliased constant String :=
+     Cased_Word_Contracted & "|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*"
+     & Later_Spaces;
+
+   Youtu_Rule : aliased constant String :=
+     Cased_Word_Contracted & "|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n/]*"
+     & Later_Spaces;
+
+   Kimi_K2_Rule : aliased constant String :=
+     Cased_Word_Contracted & "|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*"
+     & Later_Spaces;
+
+   --  Digits in threes from the right, which the other runtime does by
+   --  hand for two rules and an expression says this way.
+   ASCII_Threes_From_Right : aliased constant String :=
+     "\d{1,3}(?=(?:\d{3})*(?!\d))";
+   Threes_From_Right : aliased constant String :=
+     "\p{N}{1,3}(?=(?:\p{N}{3})*(?!\p{N}))";
+   SuperBPE_Threes : aliased constant String := "(?=(\d{3})+(?!\d))";
+
+   Youtu_Scripts : aliased constant String :=
+     "[\x{AC00}-\x{D7A3}\x{3131}-\x{318E}]+"
+     & "|[\x{FF01}\x{2026}\x{201C}\x{201D}\x{2018}\x{2019}\x{2014}"
+     & "\x{FF1A}\x{FF1B}\x{FF0C}\x{3001}-\x{303F}\x{FE30}-\x{FE4F}]+"
+     & "|[\x{3105}-\x{312F}]+"
+     & "|[\x{4E00}-\x{9FA5}\x{3040}-\x{309F}\x{30A0}-\x{30FF}]+";
+
+   Han_Runs : aliased constant String := "\p{Han}+";
+
+   DeepSeek_Letters : aliased constant String :=
+     "\s?[A-Za-z\x{B5}\x{C0}-\x{D6}\x{D8}-\x{F6}\x{F8}-\x{1BA}"
+     & "\x{1BC}-\x{1BF}\x{1C4}-\x{293}\x{295}-\x{2AF}\x{370}-\x{373}"
+     & "\x{376}\x{377}\x{37B}-\x{37D}\x{37F}\x{386}\x{388}-\x{38A}"
+     & "\x{38C}\x{38E}-\x{3A1}\x{3A3}-\x{3F5}\x{3F7}-\x{481}"
+     & "\x{48A}-\x{52F}\x{531}-\x{556}\x{10A0}-\x{10C5}"
+     & "\x{13A0}-\x{13F5}\x{13F8}-\x{13FD}\x{1C90}-\x{1CBA}"
+     & "\x{1CBD}-\x{1CBF}\x{1D00}-\x{1D2B}\x{1D6B}-\x{1D77}"
+     & "\x{1D79}-\x{1D9A}\x{1E00}-\x{1F15}\x{1F18}-\x{1F1D}"
+     & "\x{1F20}-\x{1F45}\x{1F48}-\x{1F4D}\x{1F50}-\x{1F57}\x{1F59}"
+     & "\x{1F5B}\x{1F5D}\x{1F5F}-\x{1F7D}\x{1F80}-\x{1FB4}"
+     & "\x{1FB6}-\x{1FBC}\x{1FBE}\x{1FC2}-\x{1FC4}\x{1FC6}-\x{1FCC}"
+     & "\x{1FD0}-\x{1FD3}\x{1FD6}-\x{1FDB}\x{1FE0}-\x{1FEC}"
+     & "\x{1FF2}-\x{1FF4}\x{1FF6}-\x{1FFC}\x{2102}\x{2107}"
+     & "\x{210A}-\x{2113}\x{2115}\x{2119}-\x{211D}\x{2124}\x{2126}"
+     & "\x{2128}\x{212A}-\x{212D}\x{212F}-\x{2134}\x{2139}"
+     & "\x{213C}-\x{213F}\x{2145}-\x{2149}\x{214E}\x{2183}\x{2184}"
+     & "\x{2C00}-\x{2C7B}\x{2C7E}-\x{2CE4}\x{2CEB}-\x{2CEE}\x{2CF2}"
+     & "\x{2CF3}\x{A640}-\x{A66D}\x{A680}-\x{A69B}\x{A722}-\x{A76F}"
+     & "\x{A771}-\x{A787}\x{A78B}-\x{A78E}\x{AB70}-\x{ABBF}"
+     & "\x{FB00}-\x{FB06}\x{FB13}-\x{FB17}\x{FF21}-\x{FF3A}"
+     & "\x{FF41}-\x{FF5A}\x{10400}-\x{1044F}\x{104B0}-\x{104D3}"
+     & "\x{104D8}-\x{104FB}\x{10C80}-\x{10CB2}\x{10CC0}-\x{10CF2}"
+     & "\x{118A0}-\x{118DF}\x{1E900}-\x{1E943}]+";
+
+   DeepSeek_Stops : aliased constant String :=
+     "\s?[!-/:-~\x{FF01}-\x{FF0F}\x{FF1A}-\x{FF5E}\x{2018}-\x{201F}"
+     & "\x{3000}-\x{3002}]+";
+
+   DeepSeek_Scripts : aliased constant String :=
+     "[\x{4E00}-\x{9FA5}\x{800}-\x{4E00}\x{AC00}-\x{D7FF}]+";
+
+   DeepSeek3_Scripts : aliased constant String :=
+     "[\x{4E00}-\x{9FA5}\x{3040}-\x{309F}\x{30A0}-\x{30FF}]+";
+
+   DeepSeek3_Rule : aliased constant String :=
+     "[!""#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+"
+     & "|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+[\r\n]*"
+     & Later_Spaces;
+
+   AFMoE_Scripts : aliased constant String :=
+     "[\x{4E00}-\x{9FFF}\x{3400}-\x{4DBF}\x{8C48}-\x{FAFF}"
+     & "\x{3040}-\x{309F}\x{30A0}-\x{30FF}\x{FF65}-\x{FF9F}"
+     & "\x{2F00}-\x{2FDF}\x{E40}-\x{E7F}\x{E80}-\x{EFF}"
+     & "\x{1780}-\x{17FF}\x{1000}-\x{109F}\x{AA60}-\x{AA7F}"
+     & "\x{A9E0}-\x{A9FF}\x{AC00}-\x{D7AF}\x{1100}-\x{11FF}]+";
+
+   Bloom_Rule : aliased constant String :=
+     " ?[^(\s|.,!?\x{2026}\x{3002}\x{FF0C}\x{3001}\x{964}\x{6D4}"
+     & "\x{60C})]+";
+
+   Space_Led_Letters     : aliased constant String := "\s?\p{L}+";
+   Space_Led_Punctuation : aliased constant String := "\s?\p{P}+";
+
+   Chameleon_Sentinels : aliased constant String := "<sentinel:[0-9]+>";
+   Chameleon_Images    : aliased constant String :=
+     "(IMGIMG)((A|B|C|D|E|F|G|H|I){1,4})Z";
+   Chameleon_Spaces    : aliased constant String := "([\t\n]|    |  )";
+   Chameleon_Stops     : aliased constant String := "[\p{P}!-/:-@\[-`{-~]";
+
+   --  The expressions each rule applies, in order.
+   function Expressions (Rule : Cut_Rule) return RC.Expression_List is
+   begin
+      case Rule is
+         when Default =>
+            return [Default_Punctuation'Access, Original_Rule'Access,
+                    Number_Runs'Access, ASCII_Threes'Access];
+         when GPT2 =>
+            return [1 => Original_Rule'Access];
+         when Falcon =>
+            return [Falcon_Punctuation'Access, Original_Rule'Access,
+                    ASCII_Threes'Access];
+         when SmolLM =>
+            return [Each_Number'Access, Original_Rule'Access];
+         when Llama3 =>
+            return [1 => Llama3_Rule'Access];
+         when MiniCPM5 =>
+            return [Threes'Access, MiniCPM5_Rule'Access];
+         when Jais2 =>
+            return [1 => Jais2_Rule'Access];
+         when Qwen2 =>
+            return [1 => Qwen2_Rule'Access];
+         when Qwen35 =>
+            return [1 => Qwen35_Rule'Access];
+         when Bailing =>
+            return [1 => Bailing_Rule'Access];
+         when Seed_Coder =>
+            return [1 => Seed_Coder_Rule'Access];
+         when Laguna =>
+            return [Lines'Access, Qwen2_Rule'Access];
+         when ExaOne_MoE =>
+            return [1 => ExaOne_MoE_Rule'Access];
+         when Tekken =>
+            return [1 => Tekken_Rule'Access];
+         when GPT4o =>
+            return [1 => GPT4o_Rule'Access];
+         when Tiny_Aya =>
+            return [ASCII_Threes_From_Right'Access, GPT4o_Rule'Access];
+         when Youtu =>
+            return [Youtu_Scripts'Access, Youtu_Rule'Access];
+         when Kimi_K2 =>
+            return [Han_Runs'Access, Kimi_K2_Rule'Access];
+         when DeepSeek_LLM =>
+            return [Each_Line_End'Access, DeepSeek_Letters'Access,
+                    DeepSeek_Stops'Access, Trailing_Spaces'Access,
+                    DeepSeek_Scripts'Access, Number_Runs'Access];
+         when DeepSeek_Coder =>
+            return [Each_Line_End'Access, Space_Led_Letters'Access,
+                    Space_Led_Punctuation'Access, DeepSeek_Scripts'Access,
+                    Each_Number'Access];
+         when DeepSeek3 =>
+            return [Threes'Access, DeepSeek3_Scripts'Access,
+                    DeepSeek3_Rule'Access];
+         when AFMoE =>
+            return [Threes_From_Right'Access, AFMoE_Scripts'Access,
+                    DeepSeek3_Rule'Access];
+         when Bloom =>
+            return [1 => Bloom_Rule'Access];
+         when Viking =>
+            return [Bloom_Rule'Access, Each_Number'Access];
+         when SuperBPE =>
+            return [Number_Runs'Access, SuperBPE_Threes'Access];
+         when Chameleon =>
+            return [Chameleon_Sentinels'Access, Chameleon_Images'Access,
+                    Chameleon_Spaces'Access, Each_Number'Access,
+                    Chameleon_Stops'Access, Original_Rule'Access];
+      end case;
+   end Expressions;
+
+   ---------
+   -- Cut --
+   ---------
+
+   procedure Cut
+     (Item  : Vocabulary;
+      Text  : String;
+      Ends  : out Ends_Array;
+      Count : out Natural)
+   is
+   begin
+      if Item.Model /= Byte_Pair then
+         Count := (if Text'Length = 0 then 0 else 1);
+         if Count = 1 then
+            Ends (Ends'First) := Text'Last;
+         end if;
+         return;
+      end if;
+
+      declare
+         Made : RC.Ends_Array (1 .. Text'Length);
+      begin
+         RC.Cut (Text, Expressions (Item.Cutting), Made, Count);
+         for Index in 1 .. Count loop
+            Ends (Ends'First + Index - 1) := Made (Index);
+         end loop;
+      end;
+   end Cut;
 
    procedure Encode_By_Rank
      (Item   : Vocabulary;
@@ -710,18 +1033,6 @@ package body Reference_Tokenizer is
       Tokens : out Token_Vector;
       Last   : out Natural)
    is
-      function Is_Letter (Value : Character) return Boolean
-      is (Value in 'a' .. 'z' | 'A' .. 'Z'
-          or else Character'Pos (Value) > 127);
-
-      function Is_Digit (Value : Character) return Boolean
-      is (Value in '0' .. '9');
-
-      function Is_Space (Value : Character) return Boolean
-      is (Value in ' ' | Character'Val (9) | Character'Val (10)
-                 | Character'Val (11) | Character'Val (12)
-                 | Character'Val (13));
-
       --  The character that stands for a byte. Bytes that print stand for
       --  themselves; the rest are moved above 255, in order, so that a merge
       --  table written as text can name every one of them.
@@ -750,154 +1061,6 @@ package body Reference_Tokenizer is
       is (if Value < 16#80# then [1 => Character'Val (Value)]
           else [Character'Val (16#C0# + Value / 16#40#),
                 Character'Val (16#80# + Value mod 16#40#)]);
-
-      --  Where the pre-token starting at From ends.
-      function Cut_Last (From : Positive) return Natural is
-         Ones : constant array (1 .. 7) of Contraction :=
-           [new String'("'s"), new String'("'t"), new String'("'re"),
-            new String'("'ve"), new String'("'m"), new String'("'ll"),
-            new String'("'d")];
-
-         At_Index : Natural := From;
-
-         function Follows return Character
-         is (if At_Index < Text'Last then Text (At_Index + 1)
-             else Character'Val (0));
-
-         function Has_More return Boolean is (At_Index < Text'Last);
-
-         --  Falcon and the default cut every run of punctuation out of the
-         --  text before the rest of the rule looks at it. This reader is
-         --  ASCII, and in ASCII that class is every printing character which
-         --  is neither letter nor digit nor space -- except the grave
-         --  accent, which falcon counts and the default does not, and which
-         --  is the whole difference between the two classes.
-         Splits : constant Boolean := Item.Cutting in Falcon | Default;
-
-         function Cut_Whole (Value : Character) return Boolean
-         is (Value in '!' .. '~'
-             and then not Is_Letter (Value) and then not Is_Digit (Value)
-             and then (Value /= '`' or else Item.Cutting = Falcon));
-
-         --  How many digits follow the character at At_Index, up to three.
-         function Digits_After return Natural is
-            Seen : Natural := 0;
-            Look : Natural := At_Index + 1;
-         begin
-            while Seen < 3 and then Look <= Text'Last
-              and then Is_Digit (Text (Look))
-            loop
-               Seen := Seen + 1;
-               Look := Look + 1;
-            end loop;
-            return Seen;
-         end Digits_After;
-      begin
-         --  A contraction is one piece only where nothing has cut its
-         --  apostrophe out from under it first.
-         if not Splits then
-            for One of Ones loop
-               if From + One'Length - 1 <= Text'Last
-                 and then Text (From .. From + One'Length - 1) = One.all
-               then
-                  return From + One'Length - 1;
-               end if;
-            end loop;
-         end if;
-
-         --  What may lead a run, which depends on the rule and on what the
-         --  run is made of.
-         if Has_More and then not Is_Space (Follows) then
-            if Is_Letter (Follows) then
-               if (case Item.Cutting is
-                      when Default | GPT2 | Falcon | SmolLM =>
-                        Text (At_Index) = ' ',
-                      when Llama3 | Qwen2 =>
-                        not Is_Letter (Text (At_Index))
-                        and then not Is_Digit (Text (At_Index))
-                        and then Text (At_Index) /= Character'Val (10)
-                        and then Text (At_Index) /= Character'Val (13))
-               then
-                  At_Index := At_Index + 1;
-               end if;
-
-            elsif Is_Digit (Follows) then
-               --  Falcon leaves a space on a run of one or two digits and
-               --  not on a longer one, because what cuts digits out of the
-               --  text there only reaches a run of three.
-               if Text (At_Index) = ' '
-                 and then (Item.Cutting = GPT2
-                           or else (Item.Cutting = Falcon
-                                    and then Digits_After < 3))
-               then
-                  At_Index := At_Index + 1;
-               end if;
-
-            elsif Text (At_Index) = ' '
-              and then not (Splits and then Cut_Whole (Follows))
-            then
-               At_Index := At_Index + 1;
-            end if;
-         end if;
-
-         if Is_Letter (Text (At_Index)) then
-            while Has_More and then Is_Letter (Follows) loop
-               At_Index := At_Index + 1;
-            end loop;
-
-         elsif Is_Digit (Text (At_Index)) then
-            declare
-               Room : Natural :=
-                 (case Item.Cutting is
-                     when GPT2 => Natural'Last,
-                     when Default | Falcon | Llama3 => 3,
-                     when SmolLM | Qwen2 => 1) - 1;
-            begin
-               while Room > 0 and then Has_More and then Is_Digit (Follows)
-               loop
-                  At_Index := At_Index + 1;
-                  Room := Room - 1;
-               end loop;
-            end;
-
-         elsif Is_Space (Text (At_Index)) then
-            declare
-               Began : constant Natural := At_Index;
-            begin
-               while Has_More and then Is_Space (Follows) loop
-                  At_Index := At_Index + 1;
-               end loop;
-
-               --  A run of spaces gives its last one back to the word after
-               --  it, unless the run is what the text ends with.
-               if At_Index < Text'Last and then At_Index > Began then
-                  At_Index := At_Index - 1;
-               end if;
-            end;
-
-         elsif Splits and then Cut_Whole (Text (At_Index)) then
-            while Has_More and then Cut_Whole (Follows) loop
-               At_Index := At_Index + 1;
-            end loop;
-
-         elsif Splits then
-            while Has_More and then not Is_Letter (Follows)
-              and then not Is_Digit (Follows) and then not Is_Space (Follows)
-              and then not Cut_Whole (Follows)
-            loop
-               At_Index := At_Index + 1;
-            end loop;
-
-         else
-            while Has_More and then not Is_Letter (Follows)
-              and then not Is_Digit (Follows) and then not Is_Space (Follows)
-            loop
-               At_Index := At_Index + 1;
-            end loop;
-         end if;
-
-         return At_Index;
-      end Cut_Last;
 
       --  The rank of a pair, or zero when the table does not hold it.
       function Rank_Of (Left, Right : String) return Natural is
@@ -940,6 +1103,16 @@ package body Reference_Tokenizer is
                Used := Used + One'Length;
             end;
          end loop;
+
+         --  A vocabulary that takes a piece whole does, when it holds it.
+         if Item.Whole and then Count > 1
+           and then Find (Item, Room (1 .. Used)) >= 0
+         then
+            Symbols (1).Length := Used;
+            for Index in 2 .. Count loop
+               Symbols (Index).Live := False;
+            end loop;
+         end if;
 
          --  Merge the lowest-ranked adjacent pair, over and over. Ties go to
          --  the leftmost, which is the only place two equal ranks can differ.
@@ -1000,18 +1173,16 @@ package body Reference_Tokenizer is
          end loop;
       end Emit;
 
-      At_Index : Natural;
+      Ends  : RC.Ends_Array (1 .. Text'Length);
+      Count : Natural;
+      From  : Natural := Text'First;
    begin
       Last := 0;
 
-      At_Index := Text'First;
-      while At_Index <= Text'Last loop
-         declare
-            Ends : constant Natural := Cut_Last (At_Index);
-         begin
-            Emit (At_Index, Ends);
-            At_Index := Ends + 1;
-         end;
+      RC.Cut (Text, Expressions (Item.Cutting), Ends, Count);
+      for Piece in 1 .. Count loop
+         Emit (From, Ends (Piece));
+         From := Ends (Piece) + 1;
       end loop;
    end Encode_By_Rank;
 

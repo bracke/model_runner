@@ -4,6 +4,7 @@ with Ada.Unchecked_Deallocation;
 with Ada.Wide_Wide_Characters.Handling;
 
 with Model_Runner.Numerics;
+with Model_Runner.Tokenizer.Cutting;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tokenizer is
@@ -345,11 +346,15 @@ package body Model_Runner.Tokenizer is
             --  under one and two under the other, and the models are
             --  trained on one answer each.
             --
-            --  Only the rule this implements is accepted. The others are
+            --  Only a rule this implements is accepted. The others are
             --  refused by name rather than cut by the wrong rule, because a
             --  wrong cut yields tokens that decode back to the same text
             --  and mean something else to the model -- there is nothing
-            --  downstream that would notice.
+            --  downstream that would notice. Three names the other runtime
+            --  knows are refused here on purpose: gemma4, sarvam-moe and
+            --  whitespace are not cutting rules but another road, pieces
+            --  looked up as the bytes they are rather than through the
+            --  stand-in alphabet, and this road does not take it.
             declare
                Cutting : constant String :=
                  Containers.String_Value (Source, "tokenizer.ggml.pre");
@@ -386,25 +391,88 @@ package body Model_Runner.Tokenizer is
                  or else Cutting = "llama-bpe" or else Cutting = "falcon3"
                  or else Cutting = "falcon-h1" or else Cutting = "pixtral"
                  or else Cutting = "midm-2.0" or else Cutting = "lfm2"
-                 or else Cutting = "jina-v5-nano" or else Cutting = "dbrx"
-                 or else Cutting = "smaug-bpe" or else Cutting = "glm4"
-                 or else Cutting = "chatglm-bpe"
+                 or else Cutting = "jina-v5-nano"
+               then
+                  --  These vocabularies take a piece whole when they hold
+                  --  it; the four below cut the same way and do not.
+                  Item.Cutting := Rule_Llama3;
+                  Item.Whole_First := True;
+               elsif Cutting = "dbrx" or else Cutting = "smaug-bpe"
+                 or else Cutting = "glm4" or else Cutting = "chatglm-bpe"
                then
                   Item.Cutting := Rule_Llama3;
+               elsif Cutting = "minicpm5" then
+                  --  Digits in threes first and then Llama 3's expression
+                  --  with a whole run of digits. Not Llama 3's rule, though
+                  --  it reads as one: a run of spaces before a digit is cut
+                  --  by the first pass into a piece of its own, and Llama 3
+                  --  leaves that run's last space to stand alone.
+                  Item.Cutting := Rule_MiniCPM5;
+                  Item.Whole_First := True;
+               elsif Cutting = "jais-2" then
+                  Item.Cutting := Rule_Jais2;
                elsif Cutting = "qwen2" or else Cutting = "stablelm2"
                  or else Cutting = "deepseek-r1-qwen"
-                 --  Qwen3.5's rule differs from qwen2's in one place: a
-                 --  run of letters may carry combining marks. Over text
-                 --  without them the two cut alike, and a mark inside a
-                 --  word is cut apart from it here where the other runtime
-                 --  keeps it, which a comparison over such text would show
-                 --  as a different piece and the same words.
-                 or else Cutting = "qwen35"
                  or else Cutting = "kormo" or else Cutting = "f2llmv2"
                  or else Cutting = "megrez" or else Cutting = "hunyuan"
                  or else Cutting = "grok-2" or else Cutting = "solar-open"
                then
                   Item.Cutting := Rule_Qwen2;
+               elsif Cutting = "qwen35" then
+                  --  Qwen 2's rule with combining marks kept in the word
+                  --  they follow rather than cut out as symbols.
+                  Item.Cutting := Rule_Qwen35;
+               elsif Cutting = "bailingmoe" or else Cutting = "bailingmoe2"
+                 or else Cutting = "llada-moe"
+               then
+                  Item.Cutting := Rule_Bailing;
+               elsif Cutting = "seed-coder" then
+                  Item.Cutting := Rule_Seed_Coder;
+               elsif Cutting = "laguna" then
+                  Item.Cutting := Rule_Laguna;
+               elsif Cutting = "exaone-moe" then
+                  Item.Cutting := Rule_ExaOne_MoE;
+               elsif Cutting = "tekken" then
+                  Item.Cutting := Rule_Tekken;
+                  Item.Whole_First := True;
+               elsif Cutting = "gpt-4o" or else Cutting = "llama4"
+                 or else Cutting = "kanana2" or else Cutting = "talkie"
+                 or else Cutting = "minimax-m2"
+               then
+                  Item.Cutting := Rule_GPT4o;
+               elsif Cutting = "granite-embed-multi-97m" then
+                  --  GPT-4o's expression with the marks named beside the
+                  --  letters, which the category-based reading of that
+                  --  expression already has; and pieces taken whole.
+                  Item.Cutting := Rule_GPT4o;
+                  Item.Whole_First := True;
+               elsif Cutting = "tiny_aya" or else Cutting = "cohere2moe" then
+                  Item.Cutting := Rule_Tiny_Aya;
+               elsif Cutting = "youtu" then
+                  Item.Cutting := Rule_Youtu;
+                  Item.Whole_First := True;
+               elsif Cutting = "kimi-k2" then
+                  Item.Cutting := Rule_Kimi_K2;
+               elsif Cutting = "deepseek-llm" then
+                  Item.Cutting := Rule_DeepSeek_LLM;
+               elsif Cutting = "deepseek-coder" then
+                  Item.Cutting := Rule_DeepSeek_Coder;
+               elsif Cutting = "deepseek-v3" or else Cutting = "hunyuan-dense"
+                 or else Cutting = "joyai-llm"
+               then
+                  Item.Cutting := Rule_DeepSeek3;
+               elsif Cutting = "afmoe" then
+                  Item.Cutting := Rule_AFMoE;
+               elsif Cutting = "bloom" or else Cutting = "poro-chat"
+                 or else Cutting = "gpt3-finnish"
+               then
+                  Item.Cutting := Rule_Bloom;
+               elsif Cutting = "viking" then
+                  Item.Cutting := Rule_Viking;
+               elsif Cutting = "superbpe" then
+                  Item.Cutting := Rule_SuperBPE;
+               elsif Cutting = "chameleon" then
+                  Item.Cutting := Rule_Chameleon;
                elsif Cutting = "smollm" or else Cutting = "starcoder"
                  or else Cutting = "refact" or else Cutting = "command-r"
                  or else Cutting = "codeshell" or else Cutting = "exaone"
@@ -1042,128 +1110,37 @@ package body Model_Runner.Tokenizer is
    --  Byte-pair encoding.
    --
    --  Three steps, in this order, and the order is the whole of it. The text
-   --  is cut into pieces at boundaries the vocabulary's own rules define --
-   --  a run of letters, a run of digits, a run of neither, each allowed one
-   --  leading space -- so that no merge can ever join a word to the one after
-   --  it. Each piece is rewritten so that every byte becomes a printable
-   --  character, which is what lets a merge table written as text describe
-   --  arbitrary bytes. Then the pieces are merged, lowest rank first, until
-   --  no adjacent pair appears in the table.
+   --  is cut into pieces at boundaries the vocabulary's own rule defines, so
+   --  that no merge can ever join a word to the one after it. Each piece is
+   --  rewritten so that every byte becomes a printable character, which is
+   --  what lets a merge table written as text describe arbitrary bytes. Then
+   --  the pieces are merged, lowest rank first, until no adjacent pair
+   --  appears in the table -- unless the vocabulary is one that takes a
+   --  piece whole when it holds it, in which case that comes first.
    --
    --  The first step is the one the vocabularies disagree about. They name a
-   --  pre-tokenizer -- gpt-2, llama3, qwen2 and others -- and Cut_At carries
-   --  the five this build accepts, refusing any other by name at load. What
-   --  a letter is, and what a digit, is asked of Ada.Wide_Wide_Characters,
-   --  which knows the Unicode categories, so a CJK ideograph is a letter and
-   --  a CJK comma is not, in any script and not only in ASCII.
+   --  pre-tokenizer -- gpt-2, llama3, qwen2, tekken and the rest -- and
+   --  Tokenizer.Cutting carries the twenty-six rules this build accepts,
+   --  each as the passes the other runtime's expressions make over the
+   --  text, refusing any other name at load. What a letter is, and what a
+   --  digit, is asked of Ada.Wide_Wide_Characters, which knows the Unicode
+   --  categories, so a CJK ideograph is a letter and a CJK comma is not, in
+   --  any script and not only in ASCII.
    --
-   --  What Cut_At carries is a rule per vocabulary and not a general engine
-   --  for the expressions those pre-tokenizers are written as. Two things
-   --  follow, and both are in Cut_At below rather than hidden:
-   --
-   --  The contractions are the seven the original names, matched exactly as
-   --  written and so in lower case only.
-   --
-   --  A run of line endings is a run of whitespace and not a run of its own,
-   --  so it gives its last character to the word that follows as any run of
-   --  spaces does.
-   --
-   --  Whether either is the boundary a given model was trained on is a
+   --  Whether a rule is the boundary a given model was trained on is a
    --  question about that model. The tests here settle that the engine cuts
-   --  as this says and that an independent reader written from this
-   --  description agrees; what they cannot settle is the description itself,
-   --  which needs a second runtime and a real vocabulary -- see
-   --  docs/reference-runtime.md.
+   --  as the expressions say -- an independent reader in the suite
+   --  interprets the expressions themselves and is held to agree -- and
+   --  what they cannot settle is the transcription of a model's tokenizer
+   --  into those expressions, which needs a second runtime and a real
+   --  vocabulary; see docs/reference-runtime.md.
 
-   --  Unicode's punctuation categories -- Pc, Pd, Pe, Pf, Pi, Po and Ps --
-   --  as ranges. Both roads need them, and both need punctuation and not
-   --  "everything that is neither letter nor digit": a currency sign, a
-   --  degree sign and a multiplication sign are symbols, and the difference
-   --  shows in the answer twice. Two of the byte-pair rules cut every run of
-   --  punctuation out of the text before anything else looks at it, so
-   --  " €5" keeps the space with the sign there and " —b" does not; and
-   --  WordPiece cuts a word at punctuation, so "±5" is one word and "a€b"
-   --  is two.
-   --
-   --  Ada.Wide_Wide_Characters.Handling answers for letters, digits and
-   --  spaces and has no general-category test, so the set is written out.
-   --  It is 191 ranges over 842 code points, and it was taken from a
-   --  Unicode database rather than from the other runtime: the two agree on
-   --  every one of those code points and on no code point outside them,
-   --  which is what makes the table evidence rather than a copy.
-   type Span is record
-      First : Natural;
-      Last  : Natural;
-   end record;
-
-   Punctuation : constant array (1 .. 191) of Span :=
-     [(33, 35), (37, 42), (44, 47), (58, 59), (63, 64), (91, 93),
-      (95, 95), (123, 123), (125, 125), (161, 161), (167, 167),
-      (171, 171), (182, 183), (187, 187), (191, 191), (894, 894),
-      (903, 903), (1370, 1375), (1417, 1418), (1470, 1470),
-      (1472, 1472), (1475, 1475), (1478, 1478), (1523, 1524),
-      (1545, 1546), (1548, 1549), (1563, 1563), (1565, 1567),
-      (1642, 1645), (1748, 1748), (1792, 1805), (2039, 2041),
-      (2096, 2110), (2142, 2142), (2404, 2405), (2416, 2416),
-      (2557, 2557), (2678, 2678), (2800, 2800), (3191, 3191),
-      (3204, 3204), (3572, 3572), (3663, 3663), (3674, 3675),
-      (3844, 3858), (3860, 3860), (3898, 3901), (3973, 3973),
-      (4048, 4052), (4057, 4058), (4170, 4175), (4347, 4347),
-      (4960, 4968), (5120, 5120), (5742, 5742), (5787, 5788),
-      (5867, 5869), (5941, 5942), (6100, 6102), (6104, 6106),
-      (6144, 6154), (6468, 6469), (6686, 6687), (6816, 6822),
-      (6824, 6829), (7002, 7008), (7037, 7038), (7164, 7167),
-      (7227, 7231), (7294, 7295), (7360, 7367), (7379, 7379),
-      (8208, 8231), (8240, 8259), (8261, 8273), (8275, 8286),
-      (8317, 8318), (8333, 8334), (8968, 8971), (9001, 9002),
-      (10088, 10101), (10181, 10182), (10214, 10223), (10627, 10648),
-      (10712, 10715), (10748, 10749), (11513, 11516), (11518, 11519),
-      (11632, 11632), (11776, 11822), (11824, 11855), (11858, 11869),
-      (12289, 12291), (12296, 12305), (12308, 12319), (12336, 12336),
-      (12349, 12349), (12448, 12448), (12539, 12539), (42238, 42239),
-      (42509, 42511), (42611, 42611), (42622, 42622), (42738, 42743),
-      (43124, 43127), (43214, 43215), (43256, 43258), (43260, 43260),
-      (43310, 43311), (43359, 43359), (43457, 43469), (43486, 43487),
-      (43612, 43615), (43742, 43743), (43760, 43761), (44011, 44011),
-      (64830, 64831), (65040, 65049), (65072, 65106), (65108, 65121),
-      (65123, 65123), (65128, 65128), (65130, 65131), (65281, 65283),
-      (65285, 65290), (65292, 65295), (65306, 65307), (65311, 65312),
-      (65339, 65341), (65343, 65343), (65371, 65371), (65373, 65373),
-      (65375, 65381), (65792, 65794), (66463, 66463), (66512, 66512),
-      (66927, 66927), (67671, 67671), (67871, 67871), (67903, 67903),
-      (68176, 68184), (68223, 68223), (68336, 68342), (68409, 68415),
-      (68505, 68508), (69293, 69293), (69461, 69465), (69510, 69513),
-      (69703, 69709), (69819, 69820), (69822, 69825), (69952, 69955),
-      (70004, 70005), (70085, 70088), (70093, 70093), (70107, 70107),
-      (70109, 70111), (70200, 70205), (70313, 70313), (70731, 70735),
-      (70746, 70747), (70749, 70749), (70854, 70854), (71105, 71127),
-      (71233, 71235), (71264, 71276), (71353, 71353), (71484, 71486),
-      (71739, 71739), (72004, 72006), (72162, 72162), (72255, 72262),
-      (72346, 72348), (72350, 72354), (72448, 72457), (72769, 72773),
-      (72816, 72817), (73463, 73464), (73539, 73551), (73727, 73727),
-      (74864, 74868), (77809, 77810), (92782, 92783), (92917, 92917),
-      (92983, 92987), (92996, 92996), (93847, 93850), (94178, 94178),
-      (113823, 113823), (121479, 121483), (125278, 125279)];
-
-   function Is_Punctuation (Code_Point : Natural) return Boolean is
-      Low  : Natural := Punctuation'First;
-      High : Natural := Punctuation'Last;
-   begin
-      while Low <= High loop
-         declare
-            Middle : constant Natural := Low + (High - Low) / 2;
-         begin
-            if Code_Point < Punctuation (Middle).First then
-               High := Middle - 1;
-            elsif Code_Point > Punctuation (Middle).Last then
-               Low := Middle + 1;
-            else
-               return True;
-            end if;
-         end;
-      end loop;
-      return False;
-   end Is_Punctuation;
+   --  Unicode punctuation, category P, which the standard library does not
+   --  answer for and Tokenizer.Cutting carries the table of. Both roads
+   --  need it, and both need punctuation and not "everything that is
+   --  neither letter nor digit".
+   function Is_Punctuation (Code_Point : Natural) return Boolean
+     renames Cutting.Is_Punctuation;
 
    package BPE is
 
@@ -1207,310 +1184,9 @@ package body Model_Runner.Tokenizer is
          240, 241, 242, 243, 244, 245, 246, 247,
          248, 249, 250, 251, 252, 253, 254, 255];
 
-      --  Where one pre-token ends, starting at From.
-      --
-      --  A run of letters, a run of digits, or a run of neither, each
-      --  allowed one leading character; a run of whitespace on its own; and
-      --  the handful of English contractions the original tokenizer named.
-      --  Which character may lead a run, and how far a run of digits
-      --  reaches, is what the five rules disagree about, and every one of
-      --  those disagreements is a case in the body below.
-      function Cut_At
-        (Text : String; From : Positive; Rule : Cut_Rule) return Natural;
-
    end BPE;
 
    package body BPE is
-
-      --  Classified by the standard library, which knows the Unicode
-      --  categories: a letter is anything in L, a digit anything in Nd. That
-      --  is what tells a CJK ideograph, which is a letter, from a CJK comma,
-      --  which is not, and neither can be told apart by looking at bytes.
-      package Handling renames Ada.Wide_Wide_Characters.Handling;
-
-      function Wide (Code_Point : Natural) return Wide_Wide_Character
-      is (Wide_Wide_Character'Val (Code_Point));
-
-      function Is_Letter (Code_Point : Natural) return Boolean
-      is (Handling.Is_Letter (Wide (Code_Point)));
-
-      function Is_Digit (Code_Point : Natural) return Boolean
-      is (Handling.Is_Digit (Wide (Code_Point)));
-
-      function Is_Space (Code_Point : Natural) return Boolean
-      is (Code_Point in 32 | 9 | 10 | 11 | 12 | 13
-          or else Handling.Is_Space (Wide (Code_Point))
-          or else Handling.Is_Line_Terminator (Wide (Code_Point)));
-
-      --  What the two rules that pre-split cut whole: Unicode punctuation,
-      --  the eight symbols they name outright -- $ + < = > ^ ~ | -- and the
-      --  grave accent, which falcon names and the default does not. That one
-      --  character is the whole difference between their classes, and it
-      --  shows on " `b": the default leaves the space on the accent and
-      --  falcon does not.
-      function Cuts_Whole
-        (Code_Point : Natural; Rule : Cut_Rule) return Boolean
-      is (Code_Point in 36 | 43 | 60 | 61 | 62 | 94 | 124 | 126
-          or else (Rule = Rule_Falcon and then Code_Point = 96)
-          or else Is_Punctuation (Code_Point));
-
-      function Cut_At
-        (Text : String; From : Positive; Rule : Cut_Rule) return Natural
-      is
-         --  The code point at a byte position, and how many bytes it took.
-         procedure Look
-           (At_Byte : Positive; Value : out Natural; Width : out Natural) is
-         begin
-            if At_Byte > Text'Last then
-               Value := 0;
-               Width := 0;
-            else
-               Model_Runner.UTF8.Decode_First
-                 (Text (At_Byte .. Text'Last), Value, Width);
-               if Width = 0 then
-                  Width := 1;
-               end if;
-            end if;
-         end Look;
-
-         Index : Natural := From;
-         Here, Wide_Here : Natural;
-         Next, Wide_Next : Natural;
-
-         --  Two rules cut every run of punctuation out of the text before
-         --  the rest of the rule looks at it. That one step decides three
-         --  things at once, and each of them is a different answer: a
-         --  contraction is cut at its apostrophe rather than kept whole, a
-         --  space before punctuation is left standing alone rather than
-         --  leading it, and a run of punctuation is told apart from the
-         --  symbols beside it.
-         Splits : constant Boolean := Rule in Rule_Falcon | Rule_Default;
-
-         --  The contractions, cut off whole and before anything else looks.
-         type Contraction is access constant String;
-         Ones : constant array (1 .. 7) of Contraction :=
-           [new String'("'s"), new String'("'t"), new String'("'re"),
-            new String'("'ve"), new String'("'m"), new String'("'ll"),
-            new String'("'d")];
-
-         --  True while the code point after Index is of the kind wanted:
-         --  1 a letter, 2 a digit, 3 a space, 5 a character the rule cuts
-         --  whole, 6 one it does not and which is none of the first three,
-         --  and anything else none of the first three.
-         function Runs_On (Kind : Natural) return Boolean is
-            Value, Width : Natural;
-         begin
-            if Index >= Text'Last then
-               return False;
-            end if;
-            Look (Index + Wide_Here, Value, Width);
-            if Width = 0 then
-               return False;
-            end if;
-            case Kind is
-               when 1 => return Is_Letter (Value);
-               when 2 => return Is_Digit (Value);
-               when 3 => return Is_Space (Value);
-               when 5 => return Cuts_Whole (Value, Rule);
-               when 6 =>
-                  return not Is_Letter (Value) and then not Is_Digit (Value)
-                    and then not Is_Space (Value)
-                    and then not Cuts_Whole (Value, Rule);
-               when others =>
-                  return not Is_Letter (Value) and then not Is_Digit (Value)
-                    and then not Is_Space (Value);
-            end case;
-         end Runs_On;
-
-         --  How many digits run on from the code point after Index, up to
-         --  three, which is as far as any rule asks.
-         function Digits_Ahead return Natural is
-            At_Byte : Natural := Index + Wide_Here;
-            Value, Width : Natural;
-            Seen : Natural := 0;
-         begin
-            while Seen < 3 and then At_Byte <= Text'Last loop
-               Look (At_Byte, Value, Width);
-               exit when Width = 0 or else not Is_Digit (Value);
-               Seen := Seen + 1;
-               At_Byte := At_Byte + Width;
-            end loop;
-            return Seen;
-         end Digits_Ahead;
-
-         --  Step over the code point at Index.
-         procedure Step is
-            Value, Width : Natural;
-         begin
-            Look (Index + Wide_Here, Value, Width);
-            Index := Index + Wide_Here;
-            Here := Value;
-            Wide_Here := Width;
-         end Step;
-      begin
-         if Index > Text'Last then
-            return Text'Last;
-         end if;
-
-         --  The contractions, but only where nothing has cut the apostrophe
-         --  out from under them first. An apostrophe is punctuation, so a
-         --  rule that pre-splits punctuation never sees "'s" as a piece at
-         --  all: it sees "'" and then "s". The seven names are still in the
-         --  expression the rule is written as, and they never match.
-         if not Splits then
-            for One of Ones loop
-               if Index + One'Length - 1 <= Text'Last
-                 and then Text (Index .. Index + One'Length - 1) = One.all
-               then
-                  return Index + One'Length - 1;
-               end if;
-            end loop;
-         end if;
-
-         Look (Index, Here, Wide_Here);
-         Look (Index + Wide_Here, Next, Wide_Next);
-
-         --  What may lead a run depends on the rule and on what follows.
-         --
-         --  Under the original rule a space may lead anything: letters,
-         --  digits, or symbols. Under llama3 and qwen2 any single character
-         --  that is neither letter, digit nor line ending may lead letters --
-         --  which is why a tab joins the word after it there -- a space may
-         --  still lead symbols, and nothing at all may lead digits, which is
-         --  what keeps their groups of three from starting with one.
-         --
-         --  The two that pre-split are the ones that need what follows.
-         --  Falcon lets a space lead a short run of digits and not a long
-         --  one, because the step that cuts digits into threes cuts them out
-         --  of the text and leaves the space behind, and it only reaches a
-         --  run of three or more: " 12" is one piece and " 123" is two. The
-         --  default cuts every run of digits out however short, so a space
-         --  never leads digits there at all. Both leave a space standing
-         --  when what follows is punctuation, and neither does when it is a
-         --  symbol they do not cut, which is why " €5" and " —b" answer
-         --  differently under the same rule.
-         if Wide_Next > 0 and then not Is_Space (Next) then
-            if Is_Letter (Next) then
-               if (if Rule in Rule_Default | Rule_GPT2 | Rule_Falcon
-                            | Rule_SmolLM
-                   then Here = 32
-                   else not Is_Letter (Here) and then not Is_Digit (Here)
-                        and then Here /= 13 and then Here /= 10)
-               then
-                  Step;
-               end if;
-
-            elsif Is_Digit (Next) then
-               if Here = 32
-                 and then (Rule = Rule_GPT2
-                           or else (Rule = Rule_Falcon
-                                    and then Digits_Ahead < 3))
-               then
-                  Step;
-               end if;
-
-            elsif Here = 32
-              and then not (Splits and then Cuts_Whole (Next, Rule))
-            then
-               Step;
-            end if;
-         end if;
-
-         if Is_Letter (Here) then
-            while Runs_On (1) loop
-               Step;
-            end loop;
-
-         elsif Is_Digit (Here) then
-            --  Digits run to the end under the original rule, in threes
-            --  under falcon, llama3 and the default, and one at a time under
-            --  smollm and qwen2.
-            declare
-               Room : Natural :=
-                 (case Rule is
-                     when Rule_GPT2 => Natural'Last,
-                     when Rule_Default => 3,
-                     when Rule_Falcon => 3,
-                     when Rule_Llama3 => 3,
-                     when Rule_SmolLM | Rule_Qwen2 => 1);
-            begin
-               Room := Room - 1;
-               while Room > 0 and then Runs_On (2) loop
-                  Step;
-                  Room := Room - 1;
-               end loop;
-            end;
-
-         elsif Is_Space (Here) then
-            --  A run of white space that has a line end in it is cut at
-            --  the last line end, as one piece: that alternative of every
-            --  rule here comes before the one that keeps a run's last
-            --  space for the word that follows, so two line ends are one
-            --  piece and not two, and a template's blank line is the
-            --  token the model was trained on. Found by comparing this
-            --  cutter with the other runtime's over a corpus: a hundred
-            --  and nine pieces in fourteen thousand, every one a run of
-            --  line ends.
-            declare
-               Last_End : Natural := 0;
-               At_Byte  : Natural := Index;
-               Wide_At  : Natural := Wide_Here;
-               Value, Width : Natural;
-            begin
-               if Here in 10 | 13 then
-                  Last_End := Index;
-               end if;
-
-               loop
-                  exit when At_Byte + Wide_At > Text'Last;
-                  Look (At_Byte + Wide_At, Value, Width);
-                  exit when Width = 0 or else not Is_Space (Value);
-                  At_Byte := At_Byte + Wide_At;
-                  Wide_At := Width;
-                  if Value in 10 | 13 then
-                     Last_End := At_Byte;
-                  end if;
-               end loop;
-
-               if Last_End > 0 then
-                  while Index < Last_End loop
-                     Step;
-                  end loop;
-                  return Index + Wide_Here - 1;
-               end if;
-            end;
-
-            --  A run of spaces keeps its last one for the word that follows.
-            while Runs_On (3) loop
-               Step;
-            end loop;
-            if Index < Text'Last and then Index > From then
-               Index := Index - 1;
-               return Index + Wide_Here - 1 - (Wide_Here - 1);
-            end if;
-
-         elsif Splits and then Cuts_Whole (Here, Rule) then
-            --  A run of what the rule cuts whole, and nothing else: the
-            --  symbols it leaves alone end the run rather than joining it,
-            --  which is what tells "`+" under falcon from "`" and "+" under
-            --  the default.
-            while Runs_On (5) loop
-               Step;
-            end loop;
-
-         elsif Splits then
-            while Runs_On (6) loop
-               Step;
-            end loop;
-
-         else
-            while Runs_On (4) loop
-               Step;
-            end loop;
-         end if;
-
-         return Index + Wide_Here - 1;
-      end Cut_At;
 
    end BPE;
 
@@ -2359,6 +2035,18 @@ package body Model_Runner.Tokenizer is
                   end;
                end loop;
 
+               --  A vocabulary that takes a piece whole does so here, before
+               --  any merge: the piece as one symbol, if the file names a
+               --  token for exactly that. A piece the merge table cannot
+               --  build is then the token the file holds for it rather than
+               --  what the table can build out of it.
+               if Item.Whole_First and then Count > 1
+                 and then Find (Item, Mapped (1 .. Filled)) /= No_Token
+               then
+                  Ends (1) := Filled;
+                  Count := 1;
+               end if;
+
                --  Merge the lowest-ranked adjacent pair until none is in the
                --  table. Written plainly, a pass per merge: a vocabulary's
                --  pieces are short, and the alternative is a heap for what is
@@ -2427,19 +2115,16 @@ package body Model_Runner.Tokenizer is
                   exit when Refused;
                end loop;
             end Emit;
+            Ends  : Cutting.Piece_Ends_Access;
+            Count : Natural;
          begin
-            while From <= Text'Last loop
-               declare
-                  Stop : constant Natural :=
-                    BPE.Cut_At (Text, From, Item.Cutting);
-               begin
-                  exit when Stop < From;
-                  Emit (Text (From .. Stop));
-                  From := Stop + 1;
-               end;
-
+            Cutting.Cut (Text, Item.Cutting, Ends, Count);
+            for Piece in 1 .. Count loop
+               Emit (Text (From .. Ends (Piece)));
+               From := Ends (Piece) + 1;
                exit when Refused;
             end loop;
+            Cutting.Free (Ends);
 
             Last := (if Refused then 0 else Produced);
             return;
@@ -2849,6 +2534,65 @@ package body Model_Runner.Tokenizer is
    ------------
    -- Encode --
    ------------
+
+   ---------
+   -- Cut --
+   ---------
+
+   procedure Cut
+     (Item   : Vocabulary;
+      Text   : String;
+      Ends   : out Piece_Ends;
+      Count  : out Natural;
+      Status : out E.Error_Info)
+   is
+      Made  : Cutting.Piece_Ends_Access;
+      Total : Natural;
+   begin
+      Status := E.Success;
+      Count := 0;
+
+      if not Item.Loaded then
+         Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
+         return;
+      end if;
+
+      if not Model_Runner.UTF8.Is_Valid (Text) then
+         Status := E.Make (E.Tokenizer_Invalid_UTF8);
+         return;
+      end if;
+
+      if Model_Runner.UTF8.Code_Point_Count (Text) > Max_Symbols then
+         Status := E.Make (E.Tokenizer_Input_Too_Long);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
+         return;
+      end if;
+
+      if Item.Model /= Kind_BPE then
+         if Text'Length > 0 then
+            if Ends'Length < 1 then
+               Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+               E.Add_Integer (Status, "size", 0);
+               return;
+            end if;
+            Count := 1;
+            Ends (Ends'First) := Text'Last;
+         end if;
+         return;
+      end if;
+
+      Cutting.Cut (Text, Item.Cutting, Made, Total);
+      if Total > Ends'Length then
+         Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+         E.Add_Integer (Status, "size", Long_Long_Integer (Ends'Length));
+      else
+         Count := Total;
+         for Piece in 1 .. Total loop
+            Ends (Ends'First + Piece - 1) := Made (Piece);
+         end loop;
+      end if;
+      Cutting.Free (Made);
+   end Cut;
 
    procedure Encode
      (Item          : Vocabulary;

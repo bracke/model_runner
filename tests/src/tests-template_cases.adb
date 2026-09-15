@@ -1,4 +1,6 @@
 with AUnit.Assertions;
+with Ada.Calendar.Formatting;
+with Ada.Calendar.Time_Zones;
 
 with Interfaces;
 
@@ -72,6 +74,31 @@ package body Tests.Template_Cases is
       Tmpl.Close (Item);
       return Result;
    end Render_Status;
+
+   --  Today's date as "%d %b %Y" or "%Y-%m-%d" would write it, worked out
+   --  here from the calendar rather than asked of the engine, so that the
+   --  engine's answer is checked against something it did not compute.
+   function Today (Format : String) return String is
+      package Fmt renames Ada.Calendar.Formatting;
+      Now   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      Zone  : constant Ada.Calendar.Time_Zones.Time_Offset :=
+        Ada.Calendar.Time_Zones.UTC_Time_Offset (Now);
+      Month : constant Ada.Calendar.Month_Number := Fmt.Month (Now, Zone);
+      Day   : constant Ada.Calendar.Day_Number := Fmt.Day (Now, Zone);
+      Year  : constant Ada.Calendar.Year_Number := Fmt.Year (Now, Zone);
+      Names : constant String := "JanFebMarAprMayJunJulAugSepOctNovDec";
+      function Two (N : Natural) return String
+      is ((if N < 10 then "0" else "")
+          & Model_Runner.Text.Trim (Natural'Image (N)));
+   begin
+      if Format = "%d %b %Y" then
+         return Two (Day) & " " & Names (Month * 3 - 2 .. Month * 3) & " "
+           & Model_Runner.Text.Trim (Natural'Image (Year));
+      else
+         return Model_Runner.Text.Trim (Natural'Image (Year)) & "-"
+           & Two (Month) & "-" & Two (Day);
+      end if;
+   end Today;
 
    --  Nested "for message in messages" blocks, Levels deep.
    function Nested (Levels : Positive) return String is
@@ -507,6 +534,74 @@ package body Tests.Template_Cases is
                  "the op param was not written: " & R);
       end;
 
+      --  The generation prompt's reasoning block, as MiniCPM's own template
+      --  writes it and as the carried qwen3-coder does: opened for a caller
+      --  who asked, closed and empty for one who asked it off, absent for
+      --  one who said nothing. The carried format wrote none of these, so
+      --  --no-think reached a MiniCPM as nothing at all.
+      declare
+         Nl : constant String := "" & Character'Val (10);
+         function Ends (Whole, Tail : String) return Boolean
+         is (Whole'Length >= Tail'Length
+             and then Whole (Whole'Last - Tail'Length + 1 .. Whole'Last)
+                      = Tail);
+         function Rendered (Choice : Tmpl.Thinking_Choice) return String is
+            Room : String (1 .. 4096);
+            Used : Natural;
+            St   : E.Error_Info;
+         begin
+            Tmpl.Render (Item, Messages, "<s>", "</s>", True, Room, Used, St,
+                         Thinking => Choice);
+            Assert (E.Is_Ok (St), "the format did not render");
+            return Room (1 .. Used);
+         end Rendered;
+         Silent : constant String := Rendered (Tmpl.Thinking_Unstated);
+         Asked  : constant String := Rendered (Tmpl.Thinking_On);
+         Off    : constant String := Rendered (Tmpl.Thinking_Off);
+      begin
+         Assert (Ends (Silent, "<|im_start|>assistant" & Nl),
+                 "a caller who said nothing got a reasoning block: " & Silent);
+         Assert (Ends (Asked, "<|im_start|>assistant" & Nl & "<think>" & Nl),
+                 "thinking on did not open the block: " & Asked);
+         Assert (Ends (Off, "<|im_start|>assistant" & Nl & "<think>" & Nl & Nl
+                            & "</think>" & Nl & Nl),
+                 "thinking off did not write the empty block: " & Off);
+      end;
+
+      --  And an earlier exchange's reasoning is dropped while the one in
+      --  progress keeps its own, which is what the model's own template
+      --  does with its last_query_index.
+      declare
+         Nl     : constant String := "" & Character'Val (10);
+         Again  : Conv.History;
+         Room   : String (1 .. 4096);
+         Used   : Natural;
+         St     : E.Error_Info;
+      begin
+         Conv.Open (Again, Status => St);
+         Conv.Append (Again, Conv.User_Role, "q one", St);
+         Conv.Append (Again, Conv.Assistant_Role,
+                      "<think>" & Nl & "first thoughts" & Nl & "</think>"
+                      & Nl & Nl & "First answer.", St);
+         Conv.Append (Again, Conv.User_Role, "q two", St);
+         Conv.Append (Again, Conv.Assistant_Role,
+                      "<think>" & Nl & "second thoughts" & Nl & "</think>"
+                      & Nl & Nl & "Second answer.", St);
+         Tmpl.Render (Item, Again, "", "", True, Room, Used, St);
+         Assert (E.Is_Ok (St), "the two-exchange history did not render");
+         Assert (Has (Room (1 .. Used),
+                      "<|im_start|>assistant" & Nl & "First answer.<|im_end|>"),
+                 "an earlier turn kept its reasoning: " & Room (1 .. Used));
+         Assert (not Has (Room (1 .. Used), "first thoughts"),
+                 "an earlier turn's reasoning was written: " & Room (1 .. Used));
+         Assert (Has (Room (1 .. Used),
+                      "<|im_start|>assistant" & Nl & "<think>" & Nl
+                      & "second thoughts" & Nl & "</think>" & Nl & Nl
+                      & "Second answer.<|im_end|>"),
+                 "the current exchange lost its reasoning: " & Room (1 .. Used));
+         Conv.Close (Again);
+      end;
+
       Conv.Close (Messages);
       Tmpl.Close (Item);
       Model_Runner.Tools.Close (Defs);
@@ -668,6 +763,128 @@ package body Tests.Template_Cases is
       Model_Runner.Tools.Close (Defs);
    end Qwen3_Coder_Renders_Tool_Calls;
 
+   --  Arithmetic, the text filters, the date and the template's own
+   --  refusal: the constructs that used to be refused where they were
+   --  read, each rendered against what the language would write.
+   procedure Expressions_Render_As_The_Language_Would
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      --  What a template renders with two messages, or the code it
+      --  refused with, as text.
+      function Rendered (Source : String) return String is
+         Item   : Tmpl.Compiled;
+         Status : E.Error_Info;
+         Talk   : Conv.History;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+      begin
+         Tmpl.Compile (Item, Source, Status => Status);
+         if E.Is_Error (Status) then
+            Tmpl.Close (Item);
+            return "compile: " & E.Error_Code'Image (Status.Code);
+         end if;
+         Fill (Talk, 2);
+         Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status);
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+         if E.Is_Error (Status) then
+            return "render: " & E.Error_Code'Image (Status.Code)
+              & (if Status.Parameter_Total > 0
+                 then " " & Model_Runner.Text.To_String
+                              (Status.Parameters (1).Text_Value)
+                 else "");
+         end if;
+         return Room (1 .. Last);
+      end Rendered;
+
+      procedure Same (Source, Expected, What : String) is
+         Got : constant String := Rendered (Source);
+      begin
+         Assert (Got = Expected,
+                 What & ": " & Source & " rendered (" & Got
+                 & ") where the language writes (" & Expected & ")");
+      end Same;
+   begin
+      --  Products bind before sums, brackets bind tightest, and the
+      --  language's floor division and remainder round towards minus
+      --  infinity together.
+      Same ("{{ 2 + 3 * 4 }}", "14", "a product inside a sum");
+      Same ("{{ (2 + 3) * 4 }}", "20", "a bracketed sum in a product");
+      Same ("{{ 20 - 2 * 3 - 4 }}", "10", "products and minuses mixed");
+      Same ("{{ 7 // 2 }}", "3", "floor division");
+      Same ("{{ -7 // 2 }}", "-4", "floor division rounds down");
+      Same ("{{ -7 % 2 }}", "1", "a remainder pairs with the floor");
+      Same ("{{ 8 / 2 }}", "4", "a division that comes out whole");
+      Same ("{{ 2 * (3 + 4) * 2 }}", "28", "a group in the middle");
+      Same ("{{ (messages | length) * 10 + 1 }}", "21",
+            "a length in a product");
+      Same ("{{ 'a' ~ 1 + 2 ~ 'b' }}", "a12b", "a tilde makes text of it all");
+      Same ("{{ (1 + 2) ~ 'b' }}", "3b", "a bracketed sum beside a tilde");
+      Same ("{{ 7 / 2 }}", "render: TEMPLATE_UNSUPPORTED_CONSTRUCT /",
+            "a division that does not come out whole");
+      Same ("{{ 7 // (2 - 2) }}",
+            "render: TEMPLATE_UNSUPPORTED_CONSTRUCT //",
+            "a division by zero");
+
+      --  The text filters, alone and in a chain.
+      Same ("{{ 'Hello World' | lower }}", "hello world", "lower");
+      Same ("{{ 'Hello World' | upper }}", "HELLO WORLD", "upper");
+      Same ("{{ 'hello WORLD' | capitalize }}", "Hello world", "capitalize");
+      Same ("{{ 'hello big WORLD' | title }}", "Hello Big World", "title");
+      Same ("{{ ' 42x' | int }}", "42", "int reads the leading number");
+      Same ("{{ 'x' | string }}", "x", "string is the text as it is");
+      Same ("{{ 'x' | safe }}", "x", "safe is the text as it is");
+      Same ("{{ '' | default('d') }}", "d", "default stands in for nothing");
+      Same ("{{ 'v' | default('d') }}", "v", "default keeps a value");
+      Same ("{{ 'a-b-c' | replace('-', '+') }}", "a+b+c", "replace");
+      Same ("{{ ' Ab ' | trim | lower | replace('a', 'x') }}", "xb",
+            "filters in a chain");
+      Same ("{% set n = 5 %}{{ n | int + 1 }}", "6",
+            "int makes a number of a name");
+
+      --  The date, checked against a calendar the engine did not read.
+      Same ("{{ strftime_now('%d %b %Y') }}", Today ("%d %b %Y"),
+            "strftime_now with the directives Llama 3 uses");
+      Same ("{{ strftime_now('%Y-%m-%d') }}", Today ("%Y-%m-%d"),
+            "strftime_now with numeric directives");
+      Same ("{% if strftime_now is defined %}yes{% endif %}", "yes",
+            "strftime_now is defined");
+
+      --  The template refusing, in its author's words.
+      Same ("{{ raise_exception('System role not supported') }}",
+            "render: TEMPLATE_REFUSED System role not supported",
+            "raise_exception");
+
+      --  A block set gathers what is written into the name and not the
+      --  prompt; a macro is a body run where it is called, its parameters
+      --  bound by the call and given back after, defaults and all, and a
+      --  macro may call itself.
+      Same ("{% set x %}a{{ 1 + 1 }}b{% endset %}[{{ x }}]", "[a2b]",
+            "a block set");
+      Same ("{% set x %}{% for message in messages %}{{ message.role }}"
+            & "{% endfor %}{% endset %}<{{ x | upper }}>",
+            "<USERASSISTANT>", "a block set holding a loop, then filtered");
+      Same ("{% macro hi(name, mark='!') %}hi {{ name }}{{ mark }}"
+            & "{% endmacro %}{{ hi('a') }} {{ hi('b', '?') }}",
+            "hi a! hi b?", "a macro with a default parameter");
+      Same ("{% macro twice(t) %}{{ t }}{{ t }}{% endmacro %}"
+            & "{{ twice('ab') | upper }}", "ABAB", "a macro's text filtered");
+      Same ("{% set p = 'outer' %}{% macro m(p) %}{{ p }}{% endmacro %}"
+            & "{{ m('inner') }}{{ p }}", "innerouter",
+            "a parameter given back after the call");
+      Same ("{% macro count(n) %}{{ n }}{% if n > 1 %},"
+            & "{{ count(n - 1) }}{% endif %}{% endmacro %}{{ count(4) }}",
+            "4,3,2,1", "a macro calling itself");
+      Same ("{% macro m() %}x{% endmacro %}{% for message in messages %}"
+            & "{{ m() }}{% endfor %}", "xx", "a macro called in a loop");
+      Same ("{% macro loop_forever(n) %}{{ loop_forever(n) }}{% endmacro %}"
+            & "{{ loop_forever(1) }}",
+            "render: TEMPLATE_NESTING_TOO_DEEP loop_forever",
+            "a macro that never returns");
+   end Expressions_Render_As_The_Language_Would;
+
    procedure Ordinary_Template_Renders
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -797,15 +1014,16 @@ package body Tests.Template_Cases is
               & E.Error_Code'Image (Status.Code));
 
       --  Without a system message. The name messages still means the whole
-      --  conversation, date_string falls to the value the template itself
-      --  supplies, and the tool branches are never entered.
+      --  conversation, date_string is today's date -- strftime_now is
+      --  defined, so the template's own fallback is not taken -- and the
+      --  tool branches are never entered.
       Conv.Open (Messages, Status => Status);
       Conv.Append (Messages, Conv.User_Role, " Hi ", Status);
       Tmpl.Render (Item, Messages, "<s>", "</s>", True, Target, Last, Status);
       Assert (E.Is_Ok (Status),
               "rendering failed: " & E.Error_Code'Image (Status.Code));
       Assert (Target (1 .. Last)
-              = "<s><|system|>Today: 26 Jul 2024 <|end|>"
+              = "<s><|system|>Today: " & Today ("%d %b %Y") & " <|end|>"
                 & "<|user|>Hi<|end|><|assistant|>",
               "rendered the wrong text: " & Target (1 .. Last));
       Conv.Close (Messages);
@@ -823,7 +1041,7 @@ package body Tests.Template_Cases is
               "rendering with a system message failed: "
               & E.Error_Code'Image (Status.Code));
       Assert (Target (1 .. Last)
-              = "<s><|system|>Today: 26 Jul 2024 Be brief.<|end|>"
+              = "<s><|system|>Today: " & Today ("%d %b %Y") & " Be brief.<|end|>"
                 & "<|user|>Hi<|end|><|assistant|>Yo<|end|><|assistant|>",
               "rendered the wrong text: " & Target (1 .. Last));
       Conv.Close (Messages);
@@ -1002,13 +1220,18 @@ package body Tests.Template_Cases is
               = E.Template_Unsupported_Construct,
               "a call loop binding a name that is not tool_call was "
               & "accepted");
+      --  raise_exception is the template refusing in its author's words,
+      --  and the words are the diagnostic.
       Assert (Render_Status ("{{ raise_exception('no') }}")
-              = E.Template_Unsupported_Construct,
-              "raise_exception rendered");
-      Assert (Render_Status ("{{ message.content | upper }}")
+              = E.Template_Refused,
+              "raise_exception did not refuse");
+      Assert (Render_Status ("{{ message.content | urlencode }}")
               = E.Template_Unknown_Filter,
               "an unknown filter rendered");
       Assert (Render_Status ("{% set d = strftime_now('%d') %}{{ d }}")
+              = E.No_Error,
+              "strftime_now with a directive this engine has was refused");
+      Assert (Render_Status ("{% set d = strftime_now('%Q') %}{{ d }}")
               = E.Template_Unsupported_Construct,
               "a function call rendered");
       Assert (Render_Status ("{{ never_assigned }}")
@@ -1035,7 +1258,7 @@ package body Tests.Template_Cases is
       --  A filter keeps a diagnostic of its own: a reader can act on "this
       --  template uses a filter I do not have" where "unsupported
       --  expression" leaves them looking for the expression.
-      Assert (Render_Status ("{{ bos_token | upper }}")
+      Assert (Render_Status ("{{ bos_token | urlencode }}")
               = E.Template_Unknown_Filter,
               "a filter was not reported as one");
       Assert (Render_Status ("{{ message.content | trim }}") = E.No_Error,
@@ -2125,6 +2348,10 @@ package body Tests.Template_Cases is
       Register_Routine
         (T, Ordinary_Template_Renders'Access,
          "a template the program would meet compiles and renders");
+      Register_Routine
+        (T, Expressions_Render_As_The_Language_Would'Access,
+         "arithmetic, the text filters, the date and raise_exception "
+         & "render as the language writes them");
       Register_Routine
         (T, Model_Shaped_Template_Renders'Access,
          "a template shaped like the one a current model ships renders");
