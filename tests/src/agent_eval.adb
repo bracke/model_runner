@@ -1,3 +1,4 @@
+with Ada.Calendar; use type Ada.Calendar.Time;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Text_IO;
@@ -259,7 +260,8 @@ package body Agent_Eval is
       Spec     : Task_Spec;
       Messages : Conv.History;
       Outcome  : Model_Runner.Agent.Outcome;
-      Passed   : Boolean)
+      Passed   : Boolean;
+      Seconds  : Duration)
    is
       procedure Line (Text : String) is
       begin
@@ -272,6 +274,8 @@ package body Agent_Eval is
                               (Outcome.Reason)
             & "  calls=" & Natural'Image (Outcome.Calls)
             & "  tokens=" & Natural'Image (Outcome.Generated_Tokens)
+            & "  prompt=" & Natural'Image (Outcome.Prompt_Tokens)
+            & "  seconds=" & Natural'Image (Natural (Seconds))
             & "  wants=""" & Spec.Wants.all & """"
             & (if Spec.Also.all /= "" then " +""" & Spec.Also.all & """"
                else "")
@@ -432,6 +436,7 @@ package body Agent_Eval is
       Trace       : Boolean := False;
       Report_Path : String := "";
       Format      : String := "";
+      Context     : Natural := 8_192;
       Result      : out Report)
    is
       Source    : Shards.Shard_Set;
@@ -563,10 +568,12 @@ package body Agent_Eval is
 
                Wanted_Tool : constant Boolean := Spec.Tool.all /= "";
                Passed      : Boolean;
+               Began       : constant Ada.Calendar.Time := Ada.Calendar.Clock;
             begin
                Result.Tasks := Result.Tasks + 1;
 
-               L.Open (Session, Engine, Workers => Where, Status => Local);
+               L.Open (Session, Engine, Context => Context,
+                       Workers => Where, Status => Local);
                exit when E.Is_Error (Local);
 
                Conv.Open (Messages, Bounds, Local);
@@ -651,7 +658,8 @@ package body Agent_Eval is
                end if;
 
                if Trace then
-                  Dump (Index, Spec, Messages, Loop_Out, Passed);
+                  Dump (Index, Spec, Messages, Loop_Out, Passed,
+                        Ada.Calendar.Clock - Began);
                end if;
 
                if Report_Path /= "" then

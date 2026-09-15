@@ -60,6 +60,10 @@ package Agent_Eval is
    --    shape the format in use writes them; a task with only an answer
    --    schema stays on the JSON envelope, since that is what its answer
    --    grammar constrains.
+   --  @param Context Context capacity the session is opened at. Bounded
+   --    rather than the model's own, because the tasks are a few hundred
+   --    tokens each and a model's own can be a cache of twenty gigabytes
+   --    -- which is not what a campaign should cost the machine it runs on.
    --  @param Anyway Run even when the machine is busy.
    --  @param Waiting Minutes to wait for the machine to quiet, at most.
    --  @param Result What was scored.
@@ -82,6 +86,7 @@ package Agent_Eval is
       Trace       : Boolean := False;
       Report_Path : String := "";
       Format      : String := "";
+      Context     : Natural := 8_192;
       Result      : out Report);
 
    --  A one-line summary of a report, in the style the other campaigns use.

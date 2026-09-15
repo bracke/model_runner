@@ -148,6 +148,16 @@ Keep a Changelog and the project uses semantic versioning.
   still overrides. Verified: `run --agent` against MiniCPM5-1B with no
   `--chat-template` reports the stand-in, reads the model's `<function>` call
   and answers 136.
+- **`agent-eval` scores on the arithmetic `run` uses, at a bounded context,
+  and says what each task cost.** The campaign never told the CPU backend
+  which activations to use, so it scored on the f32 path nobody runs: on
+  Qwen3.5-4B a two-step task took 213 s where `run --agent` took 23. It
+  tells the backend as `speed` does now, `--arith int8` unless said
+  otherwise. It opens each session at 8,192 tokens rather than the model's
+  own -- the tasks are a few hundred tokens and the 4B's own context is a
+  twenty-gigabyte cache -- with `--context-size N` to say otherwise. And
+  `--trace` prints each task's prompt tokens and seconds, which is what
+  found the first of these. Qwen3.5-4B: 10 of 10 tasks, 12 calls, 3:48.
 - **`agent-eval --chat-template NAME`.** The campaign scores with a carried
   format the way `run` does, reads calls in that format's shape, notes a
   format that stood in, and writes `"format"` into the JSON report.

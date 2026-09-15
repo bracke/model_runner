@@ -1307,6 +1307,13 @@ begin
 
          Result : Agent_Eval.Report;
       begin
+         --  The arithmetic `run` uses unless told otherwise, told here the
+         --  same way and for the same reason `speed` tells it: a campaign
+         --  that scored on the f32 path measured a path nobody runs, and
+         --  on a four-billion-parameter hybrid took ten times as long.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (Option ("--arith", "int8") = "int8");
+
          if Option ("--model", "") = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "agent-eval: --model is required");
@@ -1324,6 +1331,7 @@ begin
             Trace       => Given ("--trace"),
             Report_Path => Option ("--report", ""),
             Format      => Option ("--chat-template", ""),
+            Context     => Number ("--context-size", 8_192),
             Result      => Result);
 
          Ada.Text_IO.Put_Line
