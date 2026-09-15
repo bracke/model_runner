@@ -2889,6 +2889,125 @@ package body Tests.GGUF_Cases is
    --  identifiers are the dangerous ones because they are used as indices into
    --  the vocabulary, and a file naming token 999999 in a vocabulary of five
    --  must not be believed.
+   --  The tokens that end a turn end generation, beside the end of sequence.
+   --
+   --  A model whose chat format closes a turn with a token other than its
+   --  end-of-sequence one -- MiniCPM5 ends a sequence with </s> and a turn
+   --  with <|im_end|> -- is done at either. The turn-enders are the ids the
+   --  file declares as eot and eom, and the vocabulary's own special tokens
+   --  whose text is a marker the chat formats write. A normal token that
+   --  happens to spell such a marker is text, and an ordinary token is not
+   --  an end.
+   procedure Turn_End_Tokens_End_Generation
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+
+      Builder : Fixtures.Builder;
+      Words   : Vocab.Vocabulary;
+      Status  : E.Error_Info;
+
+      --  0 <unk>, 1 </s>, 2 <|im_end|> user-defined, 3 hello, 4 <|end|>
+      --  as a normal token, 5 <|eot_id|> control, 6 <EOT> control.
+      procedure Write_Tokens is
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, 7);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "</s>");
+         Fixtures.String_Element (Builder, "<|im_end|>");
+         Fixtures.String_Element (Builder, "hello");
+         Fixtures.String_Element (Builder, "<|end|>");
+         Fixtures.String_Element (Builder, "<|eot_id|>");
+         Fixtures.String_Element (Builder, "<EOT>");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 7);
+         Fixtures.Int32_Element (Builder, 2);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.Int32_Element (Builder, 4);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 0);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 1);
+      end Write_Tokens;
+
+      procedure Load is
+         Image : B.Byte_Array_Access;
+         Item  : Containers.Container;
+         Parse : E.Error_Info;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse),
+                 "the fixture container did not parse: "
+                 & E.Error_Code'Image (Parse.Code));
+         Vocab.Load (Words, Item, Status => Status);
+         Containers.Close (Item);
+         B.Free (Image);
+         Assert (E.Is_Ok (Status),
+                 "the vocabulary was refused: "
+                 & E.Error_Code'Image (Status.Code));
+      end Load;
+   begin
+      Write_Tokens;
+      Load;
+
+      Assert (Vocab.Ends_Generation (Words, 1),
+              "the end-of-sequence token ends generation");
+      Assert (Vocab.Ends_Generation (Words, 2),
+              "a user-defined <|im_end|> ends generation without being "
+              & "the end-of-sequence token");
+      Assert (Vocab.Ends_Generation (Words, 5),
+              "a control <|eot_id|> ends generation");
+      Assert (Vocab.Ends_Generation (Words, 6),
+              "a control <EOT> ends generation");
+      Assert (not Vocab.Ends_Generation (Words, 4),
+              "a normal token spelling <|end|> is text, not an end");
+      Assert (not Vocab.Ends_Generation (Words, 3),
+              "an ordinary token does not end generation");
+      Assert (not Vocab.Ends_Generation (Words, 0),
+              "the unknown token does not end generation");
+      Assert (not Vocab.Ends_Generation (Words, Vocab.No_Token),
+              "no token is not an end");
+      Vocab.Close (Words);
+
+      --  A declared eot ends generation whatever its text.
+      Write_Tokens;
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.eot_token_id", 3);
+      Load;
+      Assert (Vocab.Ends_Generation (Words, 3),
+              "the declared eot token ends generation");
+      Vocab.Close (Words);
+
+      --  And one declared outside the vocabulary is refused, as the other
+      --  special identifiers are.
+      Write_Tokens;
+      Fixtures.Add_U32 (Builder, "tokenizer.ggml.eot_token_id", 999_999);
+      declare
+         Image : B.Byte_Array_Access;
+         Item  : Containers.Container;
+         Parse : E.Error_Info;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the fixture container did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Containers.Close (Item);
+         B.Free (Image);
+         Assert (E.Is_Error (Status),
+                 "an eot identifier outside the vocabulary was accepted");
+      end;
+      Vocab.Close (Words);
+   end Turn_End_Tokens_End_Generation;
+
    procedure Hostile_Vocabulary_Stays_Inside_Itself
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7017,6 +7136,10 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Hostile_Vocabulary_Stays_Inside_Itself'Access,
          "a hostile vocabulary cannot make the tokenizer reach outside itself");
+      Register_Routine
+        (T, Turn_End_Tokens_End_Generation'Access,
+         "the tokens that end a turn end generation beside the end of "
+         & "sequence, by declared id or by marked text");
       Register_Routine
         (T, Hostile_Text_Cannot_Reach_The_Terminal'Access,
          "nothing a model file says can steer the terminal");

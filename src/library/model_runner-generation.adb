@@ -1228,7 +1228,7 @@ package body Model_Runner.Generation is
                            declare
                               Which : constant Token_Id := Token_Id (Candidate);
                            begin
-                              if Which = Vocab.End_Token (Words.all) then
+                              if Vocab.Ends_Generation (Words.all, Which) then
                                  if Model_Runner.Grammar.Is_Complete
                                       (Rules.all, Shape)
                                  then
@@ -1337,8 +1337,11 @@ package body Model_Runner.Generation is
                   end if;
 
                   --  Token-level stop conditions, before any text is produced, so
-                  --  that no byte of a stop token reaches the output.
-                  if Token = Vocab.End_Token (Words.all) then
+                  --  that no byte of a stop token reaches the output. The end
+                  --  of the sequence, or of the turn: a model whose chat format
+                  --  closes a turn with a token other than its end-of-sequence
+                  --  one is done at either.
+                  if Vocab.Ends_Generation (Words.all, Token) then
                      Conclude (End_Of_Sequence);
                      exit Decode_Loop;
                   end if;

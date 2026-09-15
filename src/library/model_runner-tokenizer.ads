@@ -154,6 +154,26 @@ package Model_Runner.Tokenizer is
    --  @return Token identifier.
    function End_Token (Item : Vocabulary) return Token_Id;
 
+   --  Whether a token ends what the model is generating.
+   --
+   --  The end-of-sequence token, and the tokens that end a turn without
+   --  ending the sequence. A model whose chat format closes a turn with a
+   --  token other than its end-of-sequence one -- MiniCPM5 ends a sequence
+   --  with </s> and a turn with <|im_end|> -- would otherwise be read past
+   --  the end of its answer into whatever it says next. Read from the
+   --  file's tokenizer.ggml.eot_token_id and eom_token_id when they are
+   --  there, and otherwise from the vocabulary itself: a control or
+   --  user-defined token whose text is one of the turn-end markers the
+   --  chat formats write -- <|im_end|>, <|eot_id|>, <|end|>, <end_of_turn>,
+   --  <|endoftext|>, <|eom_id|>, <|end_of_text|>, <EOT> -- which is how the
+   --  reference runtime answers the same question. Decided once at load.
+   --
+   --  @param Item Vocabulary to inspect.
+   --  @param Token Token identifier.
+   --  @return True when generation should stop at this token.
+   function Ends_Generation
+     (Item : Vocabulary; Token : Token_Id) return Boolean;
+
    --  Unknown token, or No_Token.
    --
    --  @param Item Vocabulary to inspect.
@@ -382,6 +402,12 @@ private
       Beginning     : Token_Id := No_Token;
       Ending        : Token_Id := No_Token;
       Unknown       : Token_Id := No_Token;
+
+      --  The tokens that end a turn without being Ending; see
+      --  Ends_Generation. A few at most: the declared eot and eom, and the
+      --  markers found by text.
+      Turn_Ends     : Token_Array (1 .. 10) := [others => No_Token];
+      Turn_End_Count : Natural := 0;
       Add_Beginning : Boolean := True;
       Add_End       : Boolean := False;
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];

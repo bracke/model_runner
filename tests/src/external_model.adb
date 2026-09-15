@@ -303,7 +303,7 @@ package body External_Model is
                Produced_Used := Produced_Used + 1;
                Produced (Produced_Used) := Token;
 
-               exit when Token = Vocab.End_Token (Words.all);
+               exit when Vocab.Ends_Generation (Words.all, Token);
 
                L.Evaluate (Session, Engine, Token, Logits, Status => Local);
                exit when E.Is_Error (Local);

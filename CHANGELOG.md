@@ -42,6 +42,26 @@ Keep a Changelog and the project uses semantic versioning.
   and never saw it) and an enormous file costs no more memory than a fitting
   one.
 
+### Fixed
+
+- **Generation ends at the end of a turn, not only at the end of the
+  sequence.** MiniCPM5 ends a sequence with `</s>` (its `eos_token_id`) and a
+  turn with `<|im_end|>`, a different, user-defined token -- so a run read
+  past the model's answer and printed `<|im_end|>` and whatever the model
+  said next, and the agent loop saw several turns' worth of text as one
+  reply. The vocabulary now keeps the turn-ending tokens beside the
+  end-of-sequence one -- `tokenizer.ggml.eot_token_id` and `eom_token_id`
+  when the file declares them, and otherwise its own control or
+  user-defined tokens whose text is one of the markers the chat formats
+  write (`<|im_end|>`, `<|eot_id|>`, `<|end|>`, `<end_of_turn>`,
+  `<|endoftext|>`, `<|eom_id|>`, `<|end_of_text|>`, `<EOT>`), as the
+  reference runtime does; a normal token that happens to spell one is text
+  -- and `Tokenizer.Ends_Generation` answers for all of them, decided once at
+  load. Generation stops at any, and a grammar-constrained run allows any
+  only once the grammar is complete. Verified: `run --agent` against
+  MiniCPM5-1B now stops at `<|im_end|>` -- one call, one answer, nothing
+  leaking. A unit test loads a vocabulary carrying the shapes.
+
 ### Added
 
 - **A carried chat format stands in for a model template that will not

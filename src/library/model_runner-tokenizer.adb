@@ -82,6 +82,8 @@ package body Model_Runner.Tokenizer is
       Item.Beginning := No_Token;
       Item.Ending := No_Token;
       Item.Unknown := No_Token;
+      Item.Turn_Ends := [others => No_Token];
+      Item.Turn_End_Count := 0;
       Item.Byte_Tokens := [others => No_Token];
       Item.Byte_Fallback := False;
       Item.Longest_Marker := 0;
@@ -159,6 +161,24 @@ package body Model_Runner.Tokenizer is
    ----------------
 
    function End_Token (Item : Vocabulary) return Token_Id is (Item.Ending);
+
+   ---------------------
+   -- Ends_Generation --
+   ---------------------
+
+   function Ends_Generation
+     (Item : Vocabulary; Token : Token_Id) return Boolean is
+   begin
+      if Token = Item.Ending and then Token /= No_Token then
+         return True;
+      end if;
+      for Index in 1 .. Item.Turn_End_Count loop
+         if Item.Turn_Ends (Index) = Token then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Ends_Generation;
 
    --------------------
    -- Unknown_Token --
@@ -683,6 +703,66 @@ package body Model_Runner.Tokenizer is
          if Refused then
             return;
          end if;
+
+         --  The tokens that end a turn without ending the sequence: the two
+         --  the file may declare, then the markers the chat formats write,
+         --  looked up by text and taken only when the vocabulary marks them
+         --  special -- a normal token that happens to spell <|end|> is text.
+         --  Each is kept once, and Ending is not kept here at all, since
+         --  Ends_Generation asks it first.
+         declare
+            procedure Keep (Token : Token_Id) is
+            begin
+               if Token = No_Token or else Token = Item.Ending then
+                  return;
+               end if;
+               for Index in 1 .. Item.Turn_End_Count loop
+                  if Item.Turn_Ends (Index) = Token then
+                     return;
+                  end if;
+               end loop;
+               if Item.Turn_End_Count < Item.Turn_Ends'Last then
+                  Item.Turn_End_Count := Item.Turn_End_Count + 1;
+                  Item.Turn_Ends (Item.Turn_End_Count) := Token;
+               end if;
+            end Keep;
+
+            procedure Keep_Marked (Text : String) is
+               Token : constant Token_Id := Find (Item, Text);
+            begin
+               if Token /= No_Token
+                 and then Class_Of (Item, Token)
+                            in Class_Control | Class_User_Defined
+               then
+                  Keep (Token);
+               end if;
+            end Keep_Marked;
+
+            Declared : Token_Id;
+         begin
+            Declared := No_Token;
+            Special ("tokenizer.ggml.eot_token_id", Declared, Refused);
+            if Refused then
+               return;
+            end if;
+            Keep (Declared);
+
+            Declared := No_Token;
+            Special ("tokenizer.ggml.eom_token_id", Declared, Refused);
+            if Refused then
+               return;
+            end if;
+            Keep (Declared);
+
+            Keep_Marked ("<|im_end|>");
+            Keep_Marked ("<|eot_id|>");
+            Keep_Marked ("<|end|>");
+            Keep_Marked ("<end_of_turn>");
+            Keep_Marked ("<|endoftext|>");
+            Keep_Marked ("<|eom_id|>");
+            Keep_Marked ("<|end_of_text|>");
+            Keep_Marked ("<EOT>");
+         end;
 
          --  The best-path road needs a piece to stand for what it cannot
          --  spell: the edge across an unseen character is the only thing
