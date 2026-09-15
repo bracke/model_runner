@@ -1,6 +1,6 @@
 package body Untested_Surface is
 
-   --  Grouped by why, because sixty-three separate sentences would be read
+   --  Grouped by why, because sixty-one separate sentences would be read
    --  by nobody and the groups are the reasons that matter.
    --
    --  Reached through a caller. Every one of these runs on an ordinary
@@ -80,7 +80,6 @@ package body Untested_Surface is
          | "Tensor_Is_Supported"
          | "To_Tensor_Type"
          | "To_Value_Type"
-         | "Use_Template"
          | "Wide_From_Bits";
    end Is_Untested;
 
@@ -88,6 +87,6 @@ package body Untested_Surface is
    -- Count --
    -----------
 
-   function Count return Natural is (62);
+   function Count return Natural is (61);
 
 end Untested_Surface;
