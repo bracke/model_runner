@@ -1205,12 +1205,13 @@ package body Model_Runner.CLI.Execute is
             Stretch      => Asked_Rotation (Item));
 
          --  A chat format named on the command line replaces the model's
-         --  own. Models whose template this build will not compile are
-         --  otherwise usable only in raw mode, and naming the format is a
-         --  decision a reader can check -- nothing here guesses one from the
-         --  model, because a chat format applied to the wrong model produces
-         --  output that looks entirely reasonable and is not what the model
-         --  was trained on.
+         --  own, and whatever Prepare chose. Nothing here guesses a format
+         --  from the model's name, because a chat format applied to the
+         --  wrong model produces output that looks entirely reasonable and
+         --  is not what the model was trained on. What Prepare may do is
+         --  narrower: when the model's own template will not compile but
+         --  its text is written in a carried format, that format stands
+         --  in -- and a caller who asked to be told things is told.
          if E.Is_Ok (Status)
            and then not Model_Runner.Text.Is_Empty (Item.Chat_Template)
          then
@@ -1218,7 +1219,15 @@ package body Model_Runner.CLI.Execute is
               (Prepared,
                Model_Runner.Templates.Built_In
                  (Model_Runner.Text.To_String (Item.Chat_Template)),
-               Bounds, Status);
+               Bounds, Status,
+               Name => Model_Runner.Text.To_String (Item.Chat_Template));
+         elsif E.Is_Ok (Status)
+           and then L.Template_Stood_In (Prepared)
+           and then Item.Level = Opt.Verbose
+         then
+            Pres.Put_Note
+              (Screen, "cli.note.template_stood_in",
+               [Loc.Named ("name", L.Template_Format (Prepared))]);
          end if;
       end if;
    end Load;
@@ -2627,17 +2636,13 @@ package body Model_Runner.CLI.Execute is
                      Max_Retries => Item.Max_Retries,
                      Max_Total_Tokens => Item.Max_Total_Tokens,
                      Max_Parallel => Positive'Max (1, Item.Max_Parallel),
-                     --  A model rendered with the minicpm format writes its
-                     --  calls in the <function name="..">  form and one
-                     --  rendered qwen3-coder in the <function=..> form, so the
-                     --  loop reads each that way; every other format uses the
-                     --  <tool_call> JSON envelope.
+                     --  The loop reads calls in the shape the format the
+                     --  model renders with writes them -- the one named on
+                     --  the command line, or the one that stood in for a
+                     --  template that would not compile.
                      Tool_Syntax =>
-                       (if T.To_String (Item.Chat_Template) = "minicpm"
-                        then Model_Runner.Tools.Function_XML
-                        elsif T.To_String (Item.Chat_Template) = "qwen3-coder"
-                        then Model_Runner.Tools.Qwen_XML
-                        else Model_Runner.Tools.Tool_Call_JSON),
+                       Model_Runner.Templates.Syntax_Of
+                         (L.Template_Format (Prepared)),
                      Compact     => Item.Compact,
                      Answer_Schema =>
                        (if Answer /= null then Answer.all else ""),

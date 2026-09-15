@@ -72,6 +72,11 @@ package body Model_Runner.Llama is
 
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Arithmetic.Checked;
+
+   --  Record which carried chat format Chat holds; the empty string for the
+   --  model's own template. Truncated to the room the record keeps, which
+   --  every format name fits.
+   procedure Set_Template_Format (Item : in out Model; Name : String);
    use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Numerics.Real;
@@ -2080,13 +2085,29 @@ package body Model_Runner.Llama is
      (Item   : in out Model;
       Source : String;
       Bounds : Model_Runner.Limits.Model_Limits;
-      Status : out Model_Runner.Errors.Error_Info) is
+      Status : out Model_Runner.Errors.Error_Info;
+      Name   : String := "") is
    begin
       Model_Runner.Templates.Close (Item.Chat);
       Model_Runner.Templates.Compile (Item.Chat, Source, Bounds, Status);
       Item.Chat_Present := E.Is_Ok (Status);
       Item.Chat_Status := Status;
+      Set_Template_Format (Item, (if E.Is_Ok (Status) then Name else ""));
+      Item.Chat_Stood_In := False;
    end Use_Template;
+
+   -------------------------
+   -- Set_Template_Format --
+   -------------------------
+
+   procedure Set_Template_Format (Item : in out Model; Name : String) is
+      Used : constant Natural :=
+        Natural'Min (Name'Length, Item.Chat_Format_Name'Length);
+   begin
+      Item.Chat_Format_Name (1 .. Used) :=
+        Name (Name'First .. Name'First + Used - 1);
+      Item.Chat_Format_Used := Used;
+   end Set_Template_Format;
 
    procedure Prepare
      (Item     : in out Model;
@@ -2229,6 +2250,35 @@ package body Model_Runner.Llama is
          if Item.Chat_Present then
             Model_Runner.Templates.Compile
               (Item.Chat, Source_Text, Bounds, Item.Chat_Status);
+
+            --  A template outside the subset that is nonetheless written in
+            --  a format this build carries -- its own text says which, by
+            --  the turn markers and the call shape in it -- is rendered with
+            --  that format instead. Only then: a template that compiles is
+            --  what the model was trained on and nothing replaces it, and a
+            --  template no carried format is recognised in leaves the model
+            --  in raw mode as before. The stand-in is compiled the same way
+            --  and refused the same way, so a carried format that will not
+            --  compile against these bounds changes nothing.
+            if E.Is_Error (Item.Chat_Status) then
+               declare
+                  Name  : constant String :=
+                    Model_Runner.Templates.Recognise (Source_Text);
+                  Again : E.Error_Info;
+               begin
+                  if Name /= "" then
+                     Model_Runner.Templates.Close (Item.Chat);
+                     Model_Runner.Templates.Compile
+                       (Item.Chat, Model_Runner.Templates.Built_In (Name),
+                        Bounds, Again);
+                     if E.Is_Ok (Again) then
+                        Item.Chat_Status := Again;
+                        Set_Template_Format (Item, Name);
+                        Item.Chat_Stood_In := True;
+                     end if;
+                  end if;
+               end;
+            end if;
          else
             Item.Chat_Status := E.Make (E.Template_Missing);
          end if;
@@ -7167,6 +7217,20 @@ package body Model_Runner.Llama is
 
    function Template_Condition (Item : Model) return E.Error_Info
    is (Item.Chat_Status);
+
+   ---------------------
+   -- Template_Format --
+   ---------------------
+
+   function Template_Format (Item : Model) return String
+   is (Item.Chat_Format_Name (1 .. Item.Chat_Format_Used));
+
+   -----------------------
+   -- Template_Stood_In --
+   -----------------------
+
+   function Template_Stood_In (Item : Model) return Boolean
+   is (Item.Chat_Stood_In);
 
    --------------
    -- Template --

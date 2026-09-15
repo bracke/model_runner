@@ -481,19 +481,23 @@ package Model_Runner.Llama is
    type Model is tagged limited private;
    --  Replace the model's chat template with one the caller supplies.
    --
-   --  For models whose own template this build will not compile. The source
-   --  is compiled and validated exactly as an embedded one is, so an
-   --  unusable replacement is refused rather than stored.
+   --  For models whose own template this build will not compile, or whose
+   --  caller wants another. The source is compiled and validated exactly as
+   --  an embedded one is, so an unusable replacement is refused rather than
+   --  stored.
    --
    --  @param Item Prepared model.
    --  @param Source Template source.
    --  @param Bounds Limits applied while compiling.
    --  @param Status Success, or why the source was refused.
+   --  @param Name The carried format the source is, when it is one, so that
+   --    Template_Format answers it. Empty for a source that is not.
    procedure Use_Template
      (Item   : in out Model;
       Source : String;
       Bounds : Model_Runner.Limits.Model_Limits;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Name   : String := "");
 
    --  What to decode the weight matrices into before evaluating them.
    --
@@ -813,6 +817,30 @@ package Model_Runner.Llama is
    --  @return Success when the template compiled or is absent.
    function Template_Condition
      (Item : Model) return Model_Runner.Errors.Error_Info;
+
+   --  The carried chat format the model renders with, when it is one.
+   --
+   --  Set by Use_Template when the caller named one, and by Prepare when
+   --  the model's own template would not compile but its text is written
+   --  in a format this build carries -- that format then stands in, and
+   --  Template_Stood_In says so. A caller reads tool calls in the shape
+   --  this format writes them: Templates.Syntax_Of.
+   --
+   --  @param Item Prepared model.
+   --  @return Format name as Templates.Format_Name gives it, or the empty
+   --    string when the model renders with its own template.
+   function Template_Format (Item : Model) return String;
+
+   --  Whether a carried format was chosen for the model rather than named.
+   --
+   --  True when Prepare recognised the model's own template, which would
+   --  not compile, as a carried format and compiled that instead. A caller
+   --  who wants to say so to a reader asks here; one who names a format
+   --  through Use_Template afterwards resets it.
+   --
+   --  @param Item Prepared model.
+   --  @return True when Template_Format was recognised, not named.
+   function Template_Stood_In (Item : Model) return Boolean;
 
    --  The compiled chat template.
    --
@@ -1793,6 +1821,15 @@ private
       Chat        : aliased Model_Runner.Templates.Compiled;
       Chat_Present : Boolean := False;
       Chat_Status : Model_Runner.Errors.Error_Info;
+
+      --  The carried format Chat holds, when it holds one rather than the
+      --  model's own template; and whether Prepare chose it because the
+      --  model's own would not compile. A bounded name rather than a
+      --  Chat_Format, so that "none" is the empty string and not a value
+      --  the enumeration would have to carry for this one record.
+      Chat_Format_Name : String (1 .. 16) := [others => ' '];
+      Chat_Format_Used : Natural := 0;
+      Chat_Stood_In    : Boolean := False;
       Accounting  : Model_Runner.Memory.Account;
 
       --  What the backend this model was prepared for can read. Every tensor

@@ -55,10 +55,11 @@ package Agent_Eval is
    --    "minicpm", and the rest Templates carries -- for a model whose own
    --    template this build will not compile, or one written in a tool shape
    --    that is not the <tool_call> JSON envelope. Empty uses the model's
-   --    embedded template. When it is a format whose calls are an XML shape,
-   --    a task offering tools reads them in that shape; a task with only an
-   --    answer schema stays on the JSON envelope, since that is what its
-   --    answer grammar constrains.
+   --    embedded template, or the carried format Prepare recognised it as
+   --    when it would not compile. A task offering tools reads calls in the
+   --    shape the format in use writes them; a task with only an answer
+   --    schema stays on the JSON envelope, since that is what its answer
+   --    grammar constrains.
    --  @param Anyway Run even when the machine is busy.
    --  @param Waiting Minutes to wait for the machine to quiet, at most.
    --  @param Result What was scored.

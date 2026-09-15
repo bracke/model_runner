@@ -213,13 +213,42 @@ package Model_Runner.Templates is
    --
    --  These are written in the subset this engine already compiles, so they
    --  are ordinary templates and not a second mechanism. A caller asks for
-   --  one by name; nothing chooses one on a model's behalf, because a chat
-   --  format applied to the wrong model is wrong in a way the output does
-   --  not show.
+   --  one by name; nothing chooses one from the model's name or file,
+   --  because a chat format applied to the wrong model is wrong in a way
+   --  the output does not show. What may stand in for a template that will
+   --  not compile is the format that template's own text names -- see
+   --  Recognise.
    --
    --  @param Name Format name, such as "llama3" or "chatml".
    --  @return Template source, or the empty string when the name is unknown.
    function Built_In (Name : String) return String;
+
+   --  The carried format a template's own text is written in, when it is.
+   --
+   --  A template that this engine will not compile still says what it
+   --  renders: the turn markers and the tool-call shape are literal text in
+   --  it, and each carried format has markers no other has. Read from the
+   --  template rather than from the model's name because the template is
+   --  what the model was trained on and the name is whatever the converter
+   --  typed. The most specific shape is asked for first -- a Qwen3-Coder
+   --  template carries the ChatML turn markers too, and it is the
+   --  <function=..> call form that tells the formats apart.
+   --
+   --  @param Source Template text, compiled or not.
+   --  @return The format's name, or the empty string when no carried format
+   --    is recognised.
+   function Recognise (Source : String) return String;
+
+   --  The shape a model rendered with a carried format writes tool calls in.
+   --
+   --  The chat format and the call syntax are one choice: the format tells
+   --  the model how to write a call, so a reader must read that shape back.
+   --
+   --  @param Name Format name, as Format_Name gives it; the empty string
+   --    means the model's own template.
+   --  @return The syntax that format's calls are read in; the <tool_call>
+   --    JSON envelope for every format that does not say otherwise.
+   function Syntax_Of (Name : String) return Model_Runner.Tools.Call_Syntax;
 
    --  The chat formats this build carries, in the order they are offered.
    --

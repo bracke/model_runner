@@ -268,6 +268,70 @@ package body Tests.Template_Cases is
    --  tools offered as a <tools> block, and a call as a <function> element
    --  whose arguments the params filter turns into <param> children -- the
    --  shape MiniCPM emits and Tools.Read_Calls reads back in Function_XML.
+   --  A template's own text names the carried format it is written in.
+   --
+   --  Each carried format is recognised in its own source -- what Recognise
+   --  reads are the markers Built_In writes -- and in the shape a model's
+   --  real template takes: Qwen3-Coder's opens its turns the ChatML way and
+   --  is told apart by its call form, and a Zephyr-style template shares
+   --  Phi3's turn markers without being Phi3. What no carried format is
+   --  written in is not recognised as one. And the syntax a format's calls
+   --  are read in follows from the name, for every name the build carries.
+   procedure Templates_Are_Recognised_By_Their_Markers
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Model_Runner.Tools.Call_Syntax;
+   begin
+      for Which in Tmpl.Chat_Format loop
+         Assert
+           (Tmpl.Recognise (Tmpl.Built_In (Tmpl.Format_Name (Which)))
+              = Tmpl.Format_Name (Which),
+            "the " & Tmpl.Format_Name (Which)
+            & " format is recognised in its own source");
+      end loop;
+
+      --  The shapes real templates take, reduced to their markers: a
+      --  Qwen3-Coder template is ChatML turns plus its call form, a
+      --  MiniCPM one ChatML turns plus its own, and a Qwen3 one that
+      --  calls in the JSON envelope is ChatML.
+      Assert
+        (Tmpl.Recognise
+           ("<|im_start|>{{ m.role }} {% if tools %}<tool_call>"
+            & "<function={{ c.name }}><parameter={{ k }}>{{ v }}"
+            & "</parameter></function></tool_call>{% endif %}")
+           = "qwen3-coder",
+         "ChatML turns with the <function=..> call form are qwen3-coder");
+      Assert
+        (Tmpl.Recognise
+           ("<|im_start|>{{ m.role }} <function name=""{{ c.name }}"">"
+            & "<param name=""{{ k }}"">{{ v }}</param></function>")
+           = "minicpm",
+         "ChatML turns with the <function name=..> call form are minicpm");
+      Assert
+        (Tmpl.Recognise
+           ("<|im_start|>{{ m.role }} <tool_call>{{ c | tojson }}</tool_call>")
+           = "chatml",
+         "ChatML turns calling in the JSON envelope are chatml");
+      Assert
+        (Tmpl.Recognise ("<|user|>{{ m.content }}</s><|assistant|>") = "",
+         "a Zephyr-style template shares phi3's turn markers and is not "
+         & "recognised as phi3");
+      Assert
+        (Tmpl.Recognise ("[INST] {{ m.content }} [/INST]") = "",
+         "a template in no carried format is not recognised as one");
+      Assert (Tmpl.Recognise ("") = "", "an empty template is not recognised");
+
+      Assert (Tmpl.Syntax_Of ("qwen3-coder") = Model_Runner.Tools.Qwen_XML,
+              "qwen3-coder calls are read as <function=..>");
+      Assert (Tmpl.Syntax_Of ("minicpm") = Model_Runner.Tools.Function_XML,
+              "minicpm calls are read as <function name=..>");
+      Assert (Tmpl.Syntax_Of ("chatml") = Model_Runner.Tools.Tool_Call_JSON,
+              "chatml calls are read from the JSON envelope");
+      Assert (Tmpl.Syntax_Of ("") = Model_Runner.Tools.Tool_Call_JSON,
+              "a model's own template is read from the JSON envelope");
+   end Templates_Are_Recognised_By_Their_Markers;
+
    procedure MiniCPM_Renders_Tool_Calls
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1869,6 +1933,10 @@ package body Tests.Template_Cases is
         (T, Qwen3_Coder_Renders_Tool_Calls'Access,
          "the qwen3-coder format offers tools and writes a call in the "
          & "<function=..><parameter=..> form");
+      Register_Routine
+        (T, Templates_Are_Recognised_By_Their_Markers'Access,
+         "a template's own text names the carried format it is written in, "
+         & "and the call syntax follows from the name");
       Register_Routine
         (T, Built_In_Formats_Render_Their_Turns'Access,
          "each built-in chat format renders the turns its architecture reads");

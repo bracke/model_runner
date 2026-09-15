@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
 
@@ -371,6 +372,48 @@ package body Model_Runner.Templates is
          return "";
       end if;
    end Built_In;
+
+   ---------------
+   -- Recognise --
+   ---------------
+
+   function Recognise (Source : String) return String is
+      function Has (Marker : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Source, Marker) > 0);
+   begin
+      --  The two tool-call shapes before the turn markers, because both of
+      --  those templates open their turns the ChatML way. Phi3 is asked for
+      --  by its end-of-turn token beside the assistant marker: the
+      --  Zephyr-style templates share its <|user|> and <|assistant|> markers
+      --  and close a turn with </s>, and the carried phi3 writes the role by
+      --  interpolation, so <|user|> is not literal in it.
+      if Has ("<function=") and then Has ("<parameter=") then
+         return Format_Name (Format_Qwen3_Coder);
+      elsif Has ("<function name=") and then Has ("<param name=") then
+         return Format_Name (Format_MiniCPM);
+      elsif Has ("<|start_header_id|>") then
+         return Format_Name (Format_Llama3);
+      elsif Has ("<start_of_turn>") then
+         return Format_Name (Format_Gemma);
+      elsif Has ("<|im_start|>") then
+         return Format_Name (Format_ChatML);
+      elsif Has ("<|assistant|>") and then Has ("<|end|>") then
+         return Format_Name (Format_Phi3);
+      else
+         return "";
+      end if;
+   end Recognise;
+
+   ---------------
+   -- Syntax_Of --
+   ---------------
+
+   function Syntax_Of (Name : String) return Model_Runner.Tools.Call_Syntax
+   is (if Name = Format_Name (Format_Qwen3_Coder)
+       then Model_Runner.Tools.Qwen_XML
+       elsif Name = Format_Name (Format_MiniCPM)
+       then Model_Runner.Tools.Function_XML
+       else Model_Runner.Tools.Tool_Call_JSON);
 
    procedure Compile
      (Item   : in out Compiled;

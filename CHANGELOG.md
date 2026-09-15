@@ -44,6 +44,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A carried chat format stands in for a model template that will not
+  compile, when the template's own text names it.** A model whose embedded
+  template is outside the engine's subset -- Qwen3-Coder, MiniCPM -- no longer
+  needs `--chat-template` to run in conversation mode: `Llama.Prepare` asks
+  `Templates.Recognise` which carried format the template is written in, by
+  the literal markers in it (`<function=`/`<parameter=` is qwen3-coder,
+  `<function name=`/`<param name=` is minicpm, then the llama3, gemma, chatml
+  and phi3 turn markers, most specific first), and compiles that format
+  instead. Only then: a template that compiles is what the model was trained
+  on and nothing replaces it, and one no carried format is recognised in
+  leaves the model in raw mode as before. Nothing reads the model's name.
+  `run --verbose` says when a format stood in, `Llama.Template_Format` and
+  `Template_Stood_In` answer which and whether, `Templates.Syntax_Of` gives
+  the tool-call syntax that format writes -- so the agent loop reads calls
+  in the right shape whether the format was named or recognised, and the
+  mapping that lived in the CLI and in agent-eval lives once. `--chat-template`
+  still overrides. Verified: `run --agent` against MiniCPM5-1B with no
+  `--chat-template` reports the stand-in, reads the model's `<function>` call
+  and answers 136.
+- **`agent-eval --chat-template NAME`.** The campaign scores with a carried
+  format the way `run` does, reads calls in that format's shape, notes a
+  format that stood in, and writes `"format"` into the JSON report.
 - **MiniCPM tool calls work end to end in the agent loop.** With
   `--chat-template minicpm --agent`, the loop offers tools through the minicpm
   format's `<tools>` block, reads the model's `<function>/<param>` calls

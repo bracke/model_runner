@@ -439,17 +439,6 @@ package body Agent_Eval is
       Engine    : L.Model;
       Status    : E.Error_Info;
 
-      --  The shape a task offering tools reads its calls in. The chat format
-      --  and the syntax are one choice: qwen3-coder renders and reads calls
-      --  as <function=..>, minicpm as <function name="..">, and every other
-      --  format uses the <tool_call> JSON envelope. A task with no tools --
-      --  the answer-schema one -- stays on the envelope regardless, because
-      --  that is the syntax its answer grammar constrains.
-      Tool_Syntax : constant Model_Runner.Tools.Call_Syntax :=
-        (if Format = "qwen3-coder" then Model_Runner.Tools.Qwen_XML
-         elsif Format = "minicpm" then Model_Runner.Tools.Function_XML
-         else Model_Runner.Tools.Tool_Call_JSON);
-
       --  The task objects of the JSON report, accumulated while each task's
       --  history is still open, and wrapped and written out at the end.
       Report_Buf : Ada.Strings.Unbounded.Unbounded_String;
@@ -506,8 +495,10 @@ package body Agent_Eval is
       end if;
 
       --  A named format replaces the model's own template with one this
-      --  build carries -- for a model whose embedded template will not
-      --  compile, like Qwen3-Coder, whose template opens with a macro.
+      --  build carries, and whatever Prepare chose: for a model whose
+      --  embedded template will not compile, Prepare has already put the
+      --  carried format that template is written in, when there is one,
+      --  and the summary says so.
       if Format /= "" then
          if Model_Runner.Templates.Built_In (Format) = "" then
             Say (Result, "no built-in chat format is named '" & Format & "'");
@@ -518,7 +509,7 @@ package body Agent_Eval is
          end if;
          L.Use_Template
            (Engine, Model_Runner.Templates.Built_In (Format),
-            Model_Runner.Limits.Default_Model_Limits, Status);
+            Model_Runner.Limits.Default_Model_Limits, Status, Name => Format);
          if E.Is_Error (Status) then
             Say (Result, "the '" & Format & "' format would not compile: "
                  & E.Error_Code'Image (Status.Code));
@@ -537,7 +528,21 @@ package body Agent_Eval is
          return;
       end if;
 
+      if L.Template_Stood_In (Engine) then
+         Say (Result, "the model's own template would not compile; "
+              & "rendering with the built-in " & L.Template_Format (Engine)
+              & " format");
+      end if;
+
       declare
+         --  The shape a task offering tools reads its calls in: the one the
+         --  format the model renders with writes them. A task with no tools
+         --  -- the answer-schema one -- stays on the JSON envelope
+         --  regardless, because that is the syntax its answer grammar
+         --  constrains.
+         Tool_Syntax : constant Model_Runner.Tools.Call_Syntax :=
+           Model_Runner.Templates.Syntax_Of (L.Template_Format (Engine));
+
          Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
          Where : constant CPU.Pool_Reference :=
            (if Threads = 1 then null else Team'Unchecked_Access);
@@ -672,9 +677,10 @@ package body Agent_Eval is
          CPU.Close (Team);
       end;
 
+      --  Detail is left as it stands: empty for a plain run, or the note
+      --  that a carried format stood in, which the summary carries along.
       Result.Ran := Result.Tasks > 0;
       Result.Load_After := Host_Load.Now;
-      Say (Result, "scored");
 
       if Report_Path /= "" then
          declare
@@ -688,6 +694,13 @@ package body Agent_Eval is
               (File, ",""backend"":"""
                & Model_Runner.Backend.Backend_Name (Backend) & """");
             Ada.Text_IO.Put (File, ",""threads"":" & Num (Threads));
+            --  The carried format rendered with, when one was; a reader
+            --  comparing runs wants to know the model was not rendered
+            --  with its own template.
+            if L.Template_Format (Engine) /= "" then
+               Ada.Text_IO.Put
+                 (File, ",""format"":""" & L.Template_Format (Engine) & """");
+            end if;
             Ada.Text_IO.Put (File, ",""tasks"":" & Num (Result.Tasks));
             Ada.Text_IO.Put (File, ",""passed"":" & Num (Result.Passed));
             Ada.Text_IO.Put (File, ",""steps"":" & Num (Result.Steps));
@@ -729,7 +742,11 @@ package body Agent_Eval is
         & ", passed " & Count (Item.Passed)
         & ", steps " & Count (Item.Steps)
         & ", calls " & Count (Item.Calls)
-        & ", tokens " & Count (Item.Tokens);
+        & ", tokens " & Count (Item.Tokens)
+        --  What a run that scored still had to say: a format standing in.
+        & (if Item.Detail_Up > 0
+           then "; " & Item.Detail (1 .. Item.Detail_Up)
+           else "");
    end Summary;
 
 end Agent_Eval;
