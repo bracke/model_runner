@@ -3205,10 +3205,15 @@ package body Model_Runner.CLI.Execute is
                   Request.Context_Shift := Item.Context_Shift;
                   Request.Context_Keep := Item.Context_Keep;
                   --  Without a draft model or a lookup, a model that carries
-                  --  a next-token block drafts from that: the block exists
-                  --  for nothing else.
+                  --  a next-token block drafts from that, asked or not: the
+                  --  block exists for nothing else, the text is the same
+                  --  with it as without, and the round is a gain on every
+                  --  file it has been measured on. --draft-tokens 0 is how
+                  --  a caller turns it off; generation itself leaves it
+                  --  unused where it cannot apply, which is any sampling
+                  --  but greedy and any run under a grammar.
                   Request.Draft_From_Next :=
-                    Item.Draft_Tokens_Set
+                    Item.Draft_Tokens > 0
                     and then not Draft_Ready
                     and then not Item.Draft_Lookup
                     and then L.Drafts_Next (Session);

@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A model with a next-token block drafts from it unasked.** `run` on a
+  qwen35 or qwen35moe file used to draft from the block past the stack only
+  when `--draft-tokens` was given; it drafts by default now, four at a time,
+  and `--draft-tokens 0` turns that off. The block exists for nothing else,
+  the text is the same with it as without -- the round only runs greedily
+  and under no grammar, and generation leaves it unused where either fails
+  -- and the round is a gain where the block is worth its weight: Qwen3.5-4B
+  generates sixty tokens in 5.22 s against 6.51 without, forty-five of sixty
+  proposals accepted, and on the 0.8B it costs a twentieth, the head being a
+  third of that file. The statistics still say how many were proposed and
+  accepted, so a run tells whether the round paid.
 - **The agent trace reads as a flow now, not a column of identical diagnostic
   lines.** `run --agent` printed each call, result and outcome as a flat
   `model_runner: ...` line. Each is now led by a glyph -- an arrow in for a

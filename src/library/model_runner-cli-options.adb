@@ -2040,7 +2040,7 @@ package body Model_Runner.CLI.Options is
                      Result.Draft_Lookup := True;
 
                   elsif Name = "--draft-tokens" then
-                     Natural_Value (Flag_Draft_Tokens, 1, 32,
+                     Natural_Value (Flag_Draft_Tokens, 0, 32,
                                     Result.Draft_Tokens, Good);
                      if not Good then
                         return;
