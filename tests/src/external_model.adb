@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 --  This tool publishes counts and answers rather than timings, which is
 --  why it reports no load where `tests speed` and `tests benchmark` both
 --  do. A line carrying a load is a line that differs between two runs of
@@ -236,8 +237,15 @@ package body External_Model is
          Words   : constant access constant Vocab.Vocabulary :=
            L.Vocabulary (Engine);
          Settings : constant L.Configuration := L.Config (Engine);
-         Logits  : N.Real_Array (0 .. N.Element_Count (Settings.Vocabulary) - 1)
-           := [others => 0.0];
+
+         --  On the heap, as the caller's copy is: a Gemma vocabulary is
+         --  262,144 entries, a megabyte of logits, and two of those on the
+         --  stack beside a session put the harness over its eight and out
+         --  through a storage error that named nothing.
+         Held    : Model_Runner.Tensors.Real_Array_Access :=
+           new N.Real_Array'
+             (0 .. N.Element_Count (Settings.Vocabulary) - 1 => 0.0);
+         Logits  : N.Real_Array renames Held.all;
          Local   : E.Error_Info;
       begin
          Refusal := E.Success;
@@ -258,12 +266,14 @@ package body External_Model is
             False, Prompt_Tokens, Prompt_Used, Local);
          if E.Is_Error (Local) or else Prompt_Used = 0 then
             Refusal := Local;
+            Model_Runner.Tensors.Free (Held);
             return;
          end if;
 
          L.Open (Session, Engine, Status => Local);
          if E.Is_Error (Local) then
             Refusal := Local;
+            Model_Runner.Tensors.Free (Held);
             return;
          end if;
 
@@ -273,6 +283,7 @@ package body External_Model is
          if E.Is_Error (Local) then
             Refusal := Local;
             L.Close (Session);
+            Model_Runner.Tensors.Free (Held);
             return;
          end if;
 
@@ -284,6 +295,7 @@ package body External_Model is
                Refusal := Local;
                Model_Runner.Sampling.Close (Sampler);
                L.Close (Session);
+               Model_Runner.Tensors.Free (Held);
                return;
             end if;
          end loop;
@@ -311,6 +323,7 @@ package body External_Model is
 
          Model_Runner.Sampling.Close (Sampler);
          L.Close (Session);
+         Model_Runner.Tensors.Free (Held);
          Ok := True;
       end Greedy_Trace;
 
@@ -853,8 +866,14 @@ package body External_Model is
             Prompt_Used   : Natural;
             Produced      : Vocab.Token_Array (1 .. 4096);
             Produced_Used : Natural;
-            Logits : N.Real_Array
-              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+
+            --  Heap-held for the same reason Greedy_Trace's copy is. Freed
+            --  on the way out that reaches the summary; the early returns
+            --  above and below leave the model open too, and the process
+            --  ends with the report.
+            Held   : Model_Runner.Tensors.Real_Array_Access :=
+              new N.Real_Array (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+            Logits : N.Real_Array renames Held.all;
             Traced : Boolean;
          begin
             Greedy_Trace
@@ -966,6 +985,7 @@ package body External_Model is
                   end;
                end;
             end loop;
+            Model_Runner.Tensors.Free (Held);
          end;
       end if;
 
@@ -988,9 +1008,11 @@ package body External_Model is
       Containers.Close (Container);
       Files.Close (Source);
    exception
-      when others =>
+      when Escaped : others =>
          Result.Result := Failed;
-         Say ("an exception escaped while validating the model");
+         Say ("an exception escaped while validating the model: "
+              & Ada.Exceptions.Exception_Name (Escaped) & " "
+              & Ada.Exceptions.Exception_Message (Escaped));
    end Run;
 
    -------------

@@ -1888,14 +1888,15 @@ package body Model_Runner.Llama is
       Cap_Logits (Source.Settings, Values);
    end Finish_Logits;
 
-   --  Whether this model's normalization weights are trained around zero.
-   --
-   --  Gemma's are, so its gain is one plus the stored weight; every other
-   --  architecture here trains them around one and uses the weight as it
-   --  stands. Asked of the model rather than carried in the plan, so that
-   --  the nine places a normalization happens cannot disagree.
-   function Lifted_Norms (Item : Model'Class) return Boolean
-   is (Item.Settings.Kind in Gemma | Gemma2 | Gemma3);
+   --  Every normalization here multiplies by the gain as the file stores
+   --  it. Gemma trains its gains around zero and adds one at the point of
+   --  use -- but the converter that writes a Gemma file adds that one to
+   --  every norm weight as it writes, so a GGUF gain is already one plus
+   --  the trained weight, and a runtime that lifts it again normalizes to
+   --  two plus the weight. This engine did, for the whole family: every
+   --  Gemma answered in fluent nonsense, and the fixtures and the reference
+   --  agreed with it because they shared the belief. The kernels keep their
+   --  Lifted option; nothing in a GGUF asks for it.
 
    -------------
    -- Account --
@@ -1969,8 +1970,7 @@ package body Model_Runner.Llama is
       then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
       else
-         K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target,
-                     Lifted => Lifted_Norms (Item));
+         K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target);
       end if;
    end Normalize;
 
@@ -2021,8 +2021,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      K.RMS_Norm (Target, Gain.all, Item.Settings.Epsilon, Room.all,
-                  Lifted => Lifted_Norms (Item));
+      K.RMS_Norm (Target, Gain.all, Item.Settings.Epsilon, Room.all);
       Target := Room.all;
    end Post_Norm;
 
@@ -11052,7 +11051,6 @@ package body Model_Runner.Llama is
                                                 Natural (Index)) > 0
                            then Settings.Window
                            else 0),
-                        Lifted   => Lifted_Norms (Source),
                         Max_Bias => Settings.Max_Bias,
                         Cancel   => Item.Stopping,
 
@@ -11290,7 +11288,6 @@ package body Model_Runner.Llama is
                         Current.Feed_Norm.all, Settings.Epsilon,
                         Current.Gate, Current.Up, Current.Down,
                         Gate_Unit (Source), Item.Activation, Fused,
-                        Lifted   => Lifted_Norms (Source),
                         Max_Bias => Settings.Max_Bias);
 
                      if Fused then
@@ -12658,7 +12655,6 @@ package body Model_Runner.Llama is
                            then Settings.Window
                            else 0),
                         Causal    => Settings.Causal,
-                        Lifted    => Lifted_Norms (Source),
                         Max_Bias  => Settings.Max_Bias,
                         Table_At  =>
                           (if Rounding
@@ -12717,7 +12713,6 @@ package body Model_Runner.Llama is
                         Acts, Current.Attention_Norm.all, Settings.Epsilon,
                         [Query, Keys, Values], Projected,
                         Spread => Count,
-                        Lifted => Lifted_Norms (Source),
                         Turns  =>
                           (if Turnable
                            then Angles.all (0 .. Count * Pairs * 2 - 1)
@@ -13091,7 +13086,6 @@ package body Model_Runner.Llama is
                            Positions => Natural (Count),
                            Window    => Window_Here,
                            Causal    => Settings.Causal,
-                           Lifted    => Lifted_Norms (Source),
                            Max_Bias  => Settings.Max_Bias,
                            Table_At  => Table);
                      end if;

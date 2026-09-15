@@ -167,6 +167,26 @@ which no vocabulary-only fixture can. It is not committed and its licence is
 not one that would allow it to be. Its recording is
 `tests/fixtures/llama32-1b.expect`.
 
+### Gemma-3-1B-It, Q4_K_M
+
+| | |
+|---|---|
+| File | `gemma-3-1b-it-Q4_K_M.gguf` |
+| Size | 806 058 272 bytes |
+| Source | `unsloth/gemma-3-1b-it-GGUF` on Hugging Face |
+| Upstream model | `google/gemma-3-1b-it` |
+| Licence | Gemma Terms of Use |
+
+Obtained because the whole Gemma family had answered in fluent nonsense
+since it was read, and nothing in this repository could tell: the engine,
+the fixtures and the independent implementation all held that a Gemma
+normalization gain is one plus the stored weight, as the architecture
+states it, and the converter that writes a Gemma GGUF has already added
+that one. Three implementations of the same belief agree with each other.
+Its recording is `tests/fixtures/gemma3-1b.expect`, and it is the first
+recording of a model with a 262,144-row output, which is what put the
+harness's stack-held logits on the heap.
+
 ### jina-embeddings-v2-base-en, F16 and Q8_0
 
 | | |

@@ -44,6 +44,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Every Gemma answered in fluent nonsense, and now answers.** `gemma`,
+  `gemma2` and `gemma3` all produced word salad -- "the name fortn Monsieur
+  depic notor" for the capital of France -- since the day each was read, and
+  nothing here could tell: `tests external-model` checks determinism and
+  thread-stability, not sense, and the fixtures and `Reference_Transformer`
+  agreed with the engine because all three held the same belief. The belief:
+  a Gemma normalization gain is one plus the stored weight, as the
+  architecture states it. The fact: the converter that writes a Gemma GGUF
+  adds that one to every `norm.weight` as it writes, so the stored gain is
+  already lifted and the engine normalized to two plus the weight, twenty-six
+  times a token. Found by writing the model out a second time in numpy from
+  the dequantized file and toggling one thing at a time until the top logit
+  was `Paris`. `Llama.Lifted_Norms` is gone and the reference's lift with it;
+  the kernels keep their `Lifted` option, which nothing in a GGUF asks for.
+  All three now answer "Paris." greedily, gemma2 token for token with the
+  reference runtime. Recorded: `tests/fixtures/gemma3-1b.expect`, against
+  llama.cpp b10595 on a published Gemma-3-1B-It Q4_K_M -- tokens, greedy text
+  and three logits, at a tolerance of 0.3 because the third logit is where
+  the reference's eight-bit activations drift and this engine's float32 does
+  not (a numpy pass on the exact weights agrees with this engine to four
+  digits). Its 262,144-row output is what put `external-model`'s stack-held
+  logits on the heap, where two of them beside a session overflowed the
+  stack as a storage error that named nothing; the harness now names the
+  exception it catches.
 - **Generation ends at the end of a turn, not only at the end of the
   sequence.** MiniCPM5 ends a sequence with `</s>` (its `eos_token_id`) and a
   turn with `<|im_end|>`, a different, user-defined token -- so a run read

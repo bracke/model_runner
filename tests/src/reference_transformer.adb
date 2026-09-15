@@ -2421,17 +2421,18 @@ package body Reference_Transformer is
               1.0 / Functions.Sqrt
                       (Total / Long_Float (Source'Length) + Item.Epsilon);
 
-            --  Gemma stores its normalization weights around zero and uses
-            --  one plus them as the gain. Written as the architecture states
-            --  it rather than as the engine implements it: the engine has a
-            --  flag on its kernel, and this has the addition where the
-            --  formula puts it.
-            Lift : constant Long_Float :=
-              (if Item.Kind in Gemma | Gemma2 | Gemma3 then 1.0 else 0.0);
          begin
+            --  The gain as the file stores it, for every architecture.
+            --  Gemma trains its gains around zero and adds one at the
+            --  point of use, and this used to add that one here as the
+            --  architecture states it -- but the converter that writes a
+            --  Gemma file has already added it to every norm weight, so
+            --  the addition here made the gain two plus the weight. The
+            --  engine had the same belief, which is why crossing the two
+            --  found nothing: what tells them apart from the published
+            --  runtime is the file, which neither of them was asked about.
             for Index in Source'Range loop
-               Target (Index) :=
-                 Source (Index) * Scale * (Lift + Gain (Index));
+               Target (Index) := Source (Index) * Scale * Gain (Index);
             end loop;
          end;
       end Normalize;
