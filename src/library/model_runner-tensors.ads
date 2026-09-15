@@ -43,10 +43,20 @@ package Model_Runner.Tensors is
    --  Data is the buffer the elements live in; Offset is the byte position of
    --  the first element within it. A default view is empty and every operation
    --  on it reports a shape mismatch.
+   --  What a weight matrix is to the model that reads it, by the name the
+   --  file gives it: an attention projection, a feed-forward projection,
+   --  the output head, or something else. A backend that chooses how to
+   --  multiply by the role -- quantizing the activations of one class and
+   --  not another -- reads it here, so the choice is a property of the
+   --  matrix and not of the shape that happens to be its.
+   type Weight_Role is
+     (Role_Other, Role_Attention, Role_Feed_Forward, Role_Output);
+
    type View is record
       Format  : Model_Runner.GGUF.Tensor_Type := Model_Runner.GGUF.Type_F32;
       Rows    : Element_Count := 0;
       Columns : Element_Count := 0;
+      Role    : Weight_Role := Role_Other;
 
       --  Where the buffer begins and how much of it there is, rather than an
       --  access to it. An access to an unconstrained array carries its

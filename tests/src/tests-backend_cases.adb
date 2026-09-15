@@ -2570,6 +2570,100 @@ package body Tests.Backend_Cases is
    --  What the joining is for is a submission and a round trip, not a
    --  different answer, so the answer has to be the same one. The saving is
    --  measured by `tests device-bench` and is not what this asserts.
+   --  A weight's role decides whether its product rounds the activations.
+   --
+   --  The same bytes, viewed once as an attention projection and once as a
+   --  feed-forward one, dispatched under the mixed role set: the attention
+   --  view answers what the unrounded product answers, to the bit, and the
+   --  feed-forward view answers what the rounded product answers. Told
+   --  every role or none, the two views agree with each other -- so the
+   --  role is read exactly where the mixed mode says, and nowhere else.
+   procedure Role_Decides_Which_Products_Round
+     (Unused : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (Unused);
+      use type N.Real_Array;
+      package Tens renames Model_Runner.Tensors;
+
+      Tall  : constant N.Element_Count := 64;
+      Wide  : constant N.Element_Count := 256;
+      Held  : constant CPU.Role_Set := CPU.Integer_Activation_Roles;
+      Plain : B.Byte_Array_Access;
+      As_Attention, As_Feed : Tens.View;
+      Status : E.Error_Info;
+
+      function Product
+        (Weight : Tens.View; Roles : CPU.Role_Set) return N.Real_Array
+      is
+         Inputs : T.Real_Array_Access;
+         Answer : T.Real_Array_Access;
+      begin
+         T.Allocate (Wide, Inputs);
+         T.Allocate (Tall, Answer);
+         Inputs.all := Fixtures.Sequence (Wide, 991, 1.0);
+         CPU.Use_Integer_Activations (Roles);
+         CPU.Dispatch_Batch (null, Weight, Inputs, 1, Answer, Status);
+         Assert (E.Is_Ok (Status), "the product failed");
+         return Result : constant N.Real_Array := Answer.all do
+            T.Free (Inputs);
+            T.Free (Answer);
+         end return;
+      end Product;
+
+      Mixed : constant CPU.Role_Set :=
+        [Tens.Role_Attention => False, others => True];
+   begin
+      declare
+         Values : N.Real_Array (0 .. Tall * Wide - 1);
+      begin
+         for Index in Values'Range loop
+            Values (Index) :=
+              N.Real ((Index * 7) mod 23) / 23.0 - 0.5;
+         end loop;
+         declare
+            Bytes : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Values);
+         begin
+            B.Allocate (Bytes'Length, Plain);
+            Plain.all := Bytes;
+         end;
+      end;
+
+      T.Make (G.Type_Q8_0, Tall, Wide, Plain, 0, As_Attention, Status);
+      Assert (E.Is_Ok (Status), "the weight view was refused");
+      As_Feed := As_Attention;
+      As_Attention.Role := Tens.Role_Attention;
+      As_Feed.Role := Tens.Role_Feed_Forward;
+
+      declare
+         Exact   : constant N.Real_Array := Product (As_Feed, CPU.No_Role);
+         Rounded : constant N.Real_Array :=
+           Product (As_Feed, CPU.Every_Role);
+         Attn    : constant N.Real_Array := Product (As_Attention, Mixed);
+         Feed    : constant N.Real_Array := Product (As_Feed, Mixed);
+         Differ  : Boolean := False;
+      begin
+         for Index in Exact'Range loop
+            if Exact (Index) /= Rounded (Index) then
+               Differ := True;
+            end if;
+         end loop;
+         Assert (Differ,
+                 "the rounded product agrees with the exact one, so the "
+                 & "test cannot tell which path a view took");
+         Assert (Attn = Exact,
+                 "an attention view rounded under the mixed roles");
+         Assert (Feed = Rounded,
+                 "a feed-forward view did not round under the mixed roles");
+         Assert (Product (As_Attention, CPU.Every_Role) = Rounded,
+                 "an attention view did not round when every role does");
+         Assert (Product (As_Attention, CPU.No_Role) = Exact,
+                 "an attention view rounded when no role does");
+      end;
+
+      CPU.Use_Integer_Activations (Held);
+      B.Free (Plain);
+   end Role_Decides_Which_Products_Round;
+
    procedure Joined_Pair_Says_What_Two_Steps_Say
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2647,6 +2741,7 @@ package body Tests.Backend_Cases is
                  Span => Model_Runner.Bytes.Byte_Count (Weights.all'Length),
                  Offset => 0,
                  Interleaved => False,
+                 Role => Model_Runner.Tensors.Role_Other,
                  Length => Model_Runner.Bytes.Byte_Count
                              (Weights.all'Length));
 
@@ -2804,6 +2899,7 @@ package body Tests.Backend_Cases is
          Span => Model_Runner.Bytes.Byte_Count (Held.all'Length),
          Offset => 0,
          Interleaved => False,
+                 Role => Model_Runner.Tensors.Role_Other,
          Length => Model_Runner.Bytes.Byte_Count (Held.all'Length));
    begin
       Model_Runner.Backend.Device.Close;
@@ -3152,6 +3248,7 @@ package body Tests.Backend_Cases is
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
             Offset => 0,
             Interleaved => False,
+                 Role => Model_Runner.Tensors.Role_Other,
             Length =>
               Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
       end loop;
@@ -3341,6 +3438,7 @@ package body Tests.Backend_Cases is
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
             Offset => 0,
             Interleaved => False,
+                 Role => Model_Runner.Tensors.Role_Other,
             Length =>
               Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
       end loop;
@@ -5633,6 +5731,11 @@ package body Tests.Backend_Cases is
         (T, Joined_Pair_Says_What_Two_Steps_Say'Access,
          "attention and its projection named together say what the two "
          & "done apart say");
+      Register_Routine
+        (T, Role_Decides_Which_Products_Round'Access,
+         "a weight's role decides whether its product rounds the "
+         & "activations: attention stays exact under the mixed roles, "
+         & "feed-forward rounds");
       Register_Routine
         (T, Fused_Layer_Says_What_The_Parts_Say'Access,
          "a layer's second half named as one sequence says what its nine "

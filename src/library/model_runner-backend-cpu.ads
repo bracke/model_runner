@@ -383,10 +383,33 @@ package Model_Runner.Backend.CPU is
    --  @param Allowed True to quantize activations before a matrix product.
    procedure Use_Integer_Activations (Allowed : Boolean);
 
+   --  Which roles of weight may quantize their activations.
+   type Role_Set is array (Model_Runner.Tensors.Weight_Role) of Boolean;
+
+   Every_Role : constant Role_Set := [others => True];
+   No_Role    : constant Role_Set := [others => False];
+
+   --  The same telling, by the role a weight plays.
+   --
+   --  A product quantizes its activations when the weight's role is
+   --  allowed. What the choice is for: the error the rounding leaves is
+   --  tolerable in one class of product and not, compounded with another,
+   --  in the next -- Gemma 2 answers its tool tasks with either its
+   --  attention or its feed-forward quantized and not with both -- and the
+   --  role is the model's own division, not a shape that happens to match.
+   --
+   --  @param Roles True for each role whose products quantize.
+   procedure Use_Integer_Activations (Roles : Role_Set);
+
    --  Report what the last such telling said.
    --
-   --  @return True when products quantize their activations.
+   --  @return True when any product quantizes its activations.
    function Integer_Activations return Boolean;
+
+   --  Report it by role.
+   --
+   --  @return The roles whose products quantize.
+   function Integer_Activation_Roles return Role_Set;
 
 private
 

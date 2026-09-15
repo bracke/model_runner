@@ -64,6 +64,10 @@ package Agent_Eval is
    --    rather than the model's own, because the tasks are a few hundred
    --    tokens each and a model's own can be a cache of twenty gigabytes
    --    -- which is not what a campaign should cost the machine it runs on.
+   --  @param Arithmetic How a matrix product multiplies, as `run` names
+   --    it: "f32", "int8" or "mixed". Empty chooses as `run` does unasked
+   --    -- int8, and mixed for a Gemma 2 -- so that a campaign scores the
+   --    arithmetic a user of that model gets.
    --  @param Anyway Run even when the machine is busy.
    --  @param Waiting Minutes to wait for the machine to quiet, at most.
    --  @param Result What was scored.
@@ -87,6 +91,7 @@ package Agent_Eval is
       Report_Path : String := "";
       Format      : String := "";
       Context     : Natural := 8_192;
+      Arithmetic  : String := "";
       Result      : out Report);
 
    --  A one-line summary of a report, in the style the other campaigns use.

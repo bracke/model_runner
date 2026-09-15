@@ -447,6 +447,11 @@ package Model_Runner.CLI.Options is
       --  it to be discovered.
       Draft_Tokens_Set : Boolean := False;
 
+      --  Whether --arith was named, so that a model whose family is known
+      --  to want another arithmetic than the default gets it only when the
+      --  caller said nothing.
+      Arithmetic_Set : Boolean := False;
+
       Memory_Limit : Interfaces.Unsigned_64 := 0;
 
       --  Bytes of device memory the model's matrices may take, and whether

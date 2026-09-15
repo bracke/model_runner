@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Real_Time;
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
@@ -1264,6 +1265,26 @@ package body Model_Runner.Llama is
    --  Resolve one tensor by name and check its shape against the role it
    --  plays. Every required tensor is resolved during preparation; no name
    --  lookup happens during evaluation.
+   --  The role a weight plays, read from its name: what a file calls
+   --  "attn_" is an attention projection, "ffn_" a feed-forward one, and
+   --  the output head is the output weight or, tied, the token table.
+   --  Everything else -- a hybrid's linear layers, the block past the
+   --  stack -- is other.
+   function Role_Of (Name : String) return T.Weight_Role is
+      function Has (Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Name, Part) > 0);
+   begin
+      if Name = "output.weight" or else Name = "token_embd.weight" then
+         return T.Role_Output;
+      elsif Has (".attn_") then
+         return T.Role_Attention;
+      elsif Has (".ffn_") then
+         return T.Role_Feed_Forward;
+      else
+         return T.Role_Other;
+      end if;
+   end Role_Of;
+
    procedure Resolve
      (Item     : in out Model;
       Source   : Containers.Container;
@@ -1391,6 +1412,7 @@ package body Model_Runner.Llama is
          if E.Is_Error (Status) then
             E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
          end if;
+         Result.Role := Role_Of (Name);
 
          --  Where this matrix is, against what it is called. This is the
          --  one moment the two are in the same place: a view has an address
@@ -1472,6 +1494,7 @@ package body Model_Runner.Llama is
             Offset  => Whole.Offset + B.Byte_Count (First_Row) * Row_Bytes,
             Result  => Result,
             Status  => Status);
+         Result.Role := Whole.Role;
       end;
 
       --  Nothing repacks here. The pass that rewrites weights runs later,
@@ -3662,6 +3685,7 @@ package body Model_Runner.Llama is
                         Fail (Status);
                         return;
                      end if;
+                     Fresh.Role := Held (Index).all.Role;
                      Held (Index).all := Fresh;
                   end;
                end loop;

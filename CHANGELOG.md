@@ -99,6 +99,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--arith mixed`: int8 everywhere but the attention projections, chosen
+  by the role a weight plays -- and Gemma 2's default.** Gemma 2 answers
+  three tool tasks of ten with every product's activations rounded, seven
+  with none, and the fault is not in any one class of product: rounded on
+  its own, the head, the feed-forward or the attention each leaves the
+  score at seven, and only the feed-forward and the attention rounded
+  together take it to four -- the residual stream, post-normalized after
+  each sublayer, carries one class's error into the other's, twenty-six
+  layers deep. Leaving the attention whole and rounding the rest scores
+  eight. So every weight view now carries a `Role` -- attention,
+  feed-forward, output, other -- read in `Llama.Resolve` from the name the
+  file gives the tensor (`attn_`, `ffn_`, `output.weight` and the tied
+  token table) and carried through a repack, and `Backend.CPU` is told a
+  `Role_Set` rather than a yes or no; `Llama.Quantized_Roles` maps a mode
+  to its set. `run` picks `mixed` for a Gemma 2 when `--arith` names
+  nothing, and `agent-eval` chooses the same way, with `--arith` to say
+  otherwise on both. What it costs on Gemma2-2B: generation 2.8 s for sixty
+  tokens against int8's 2.1 and f32's 8.8; prefill 10.4 s for 485 tokens
+  against 3.5 and 44.1 -- the attention's tenth of the weight costs more
+  than a tenth on the batched path, which has no panel kernel in f32. A unit
+  test views the same bytes as attention and as feed-forward and shows the
+  first computing exactly and the second rounding under the mixed set.
 - **The `gemma` chat format carries tools.** Gemma has no system turn and
   no tool turn, and was trained on no tool format of its own, so the format
   does what the model's own template does with a system message -- folds it

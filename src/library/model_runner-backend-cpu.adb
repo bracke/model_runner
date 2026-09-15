@@ -207,10 +207,10 @@ package body Model_Runner.Backend.CPU is
    -- Partition --
    ---------------
 
-   --  Whether products quantize their activations. Written by one task
-   --  before the workers exist and read by them after, which is the same
-   --  protocol Model_Runner.Quantization states for its own such flag.
-   Quantizing : Boolean := False;
+   --  Which roles of weight quantize their activations. Written by one
+   --  task before the workers exist and read by them after, which is the
+   --  same protocol Model_Runner.Quantization states for its own such flag.
+   Quantized : Role_Set := No_Role;
 
    -------------------------------
    -- Use_Integer_Activations --
@@ -218,14 +218,22 @@ package body Model_Runner.Backend.CPU is
 
    procedure Use_Integer_Activations (Allowed : Boolean) is
    begin
-      Quantizing := Allowed;
+      Quantized := (if Allowed then Every_Role else No_Role);
+   end Use_Integer_Activations;
+
+   procedure Use_Integer_Activations (Roles : Role_Set) is
+   begin
+      Quantized := Roles;
    end Use_Integer_Activations;
 
    ---------------------------
    -- Integer_Activations --
    ---------------------------
 
-   function Integer_Activations return Boolean is (Quantizing);
+   function Integer_Activations return Boolean
+   is (for some Role in Quantized'Range => Quantized (Role));
+
+   function Integer_Activation_Roles return Role_Set is (Quantized);
 
    --  Shares for a product of one vector, which is what a generated token
    --  is. Fewer than the machine has, on purpose.
@@ -544,7 +552,7 @@ package body Model_Runner.Backend.CPU is
         (if Columns = 0 then 0 else Elements / QI.Activation_Block);
       Ok       : Boolean;
    begin
-      if not Quantizing
+      if not Quantized (Weight.Role)
         or else Vector = null
         or else Count = 0
         or else not QI.Packs_Vectors
@@ -684,7 +692,7 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
-      if Quantizing
+      if Quantized (Weight.Role)
         and then QI.Packs_Vectors
                    (Weight.Format, Count, Weight.Interleaved)
         and then QI.Is_Packable (Columns)
@@ -1659,7 +1667,9 @@ package body Model_Runner.Backend.CPU is
       Unpack (Item);
       Ok := False;
 
-      if not Quantizing
+      --  The rows packed here are read against experts, which are the
+      --  feed-forward of a mixture, so that is the role asked.
+      if not Quantized (T.Role_Feed_Forward)
         or else Vectors = null
         or else Count = 0
         or else not QI.Is_Packable (Columns)

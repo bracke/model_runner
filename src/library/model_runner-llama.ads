@@ -572,16 +572,39 @@ package Model_Runner.Llama is
    --  Only the formats and widths that line up take the second: a weight
    --  format without an integer kernel, or a width that is not a whole
    --  number of blocks, is computed the first way whatever is asked for.
-   type Arithmetic_Mode is (Float_Activations, Integer_Activations);
+   --
+   --  Mixed_Activations is the second everywhere but the attention
+   --  projections, which take the first. What that is for: the rounding's
+   --  error is tolerable in either the attention or the feed-forward of a
+   --  block and not, compounded, in both -- Gemma 2 answers three tool
+   --  tasks of ten with everything rounded, seven with nothing, and eight
+   --  with its attention left whole -- and the attention projections are
+   --  a tenth of the weight, so nearly all of the speed stays. Chosen by
+   --  the role a weight plays, which the model reads from its name.
+   type Arithmetic_Mode is
+     (Float_Activations, Integer_Activations, Mixed_Activations);
 
    --  The identifier a caller names an arithmetic by.
    --
    --  @param Item Arithmetic to name.
-   --  @return Lower-case identifier, "f32" or "int8".
+   --  @return Lower-case identifier: "f32", "int8" or "mixed".
    function Arithmetic_Name (Item : Arithmetic_Mode) return String
    is (case Item is
          when Float_Activations   => "f32",
-         when Integer_Activations => "int8");
+         when Integer_Activations => "int8",
+         when Mixed_Activations   => "mixed");
+
+   --  Which roles of weight an arithmetic quantizes the activations of.
+   --
+   --  @param Item Arithmetic to ask about.
+   --  @return The roles that round, for Backend.CPU to be told.
+   function Quantized_Roles
+     (Item : Arithmetic_Mode) return Model_Runner.Backend.CPU.Role_Set
+   is (case Item is
+         when Float_Activations   => Model_Runner.Backend.CPU.No_Role,
+         when Integer_Activations => Model_Runner.Backend.CPU.Every_Role,
+         when Mixed_Activations   =>
+           [Model_Runner.Tensors.Role_Attention => False, others => True]);
 
    --  The word a caller types for a repacking mode.
    --

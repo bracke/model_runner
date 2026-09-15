@@ -1073,6 +1073,20 @@ package body Model_Runner.CLI.Execute is
    --
    --  @param Item Parsed command.
    --  @return Worker tasks the run would use.
+   --  The arithmetic a run computes with: what --arith named, or, where
+   --  nothing was named, the default -- int8 -- for every family but the
+   --  one measured to want another. Gemma 2 with every product rounded
+   --  answers three tool tasks of ten where it answers seven unrounded and
+   --  eight with its attention left whole, so it takes the mixed mode
+   --  unasked; a caller who names an arithmetic gets the one named.
+   function Chosen_Arithmetic
+     (Item : Opt.Command; Prepared : L.Model) return L.Arithmetic_Mode
+   is (if not Item.Arithmetic_Set
+         and then L."=" (Item.Arithmetic, L.Integer_Activations)
+         and then L."=" (L.Config (Prepared).Kind, L.Gemma2)
+       then L.Mixed_Activations
+       else Item.Arithmetic);
+
    function Selected_Workers (Item : Opt.Command) return Positive is
       use type Model_Runner.Backend.Backend_Kind;
 
@@ -2242,7 +2256,7 @@ package body Model_Runner.CLI.Execute is
          --  that it must be told once and not part way through a run, which
          --  is why this is here and not a parameter of every product.
          Model_Runner.Backend.CPU.Use_Integer_Activations
-           (L."=" (Item.Arithmetic, L.Integer_Activations));
+           (L.Quantized_Roles (Chosen_Arithmetic (Item, Prepared)));
 
          L.Open
            (Session, Prepared, Item.Context_Size,
@@ -3626,7 +3640,7 @@ package body Model_Runner.CLI.Execute is
          --  that it must be told once and not part way through a run, which
          --  is why this is here and not a parameter of every product.
          Model_Runner.Backend.CPU.Use_Integer_Activations
-           (L."=" (Item.Arithmetic, L.Integer_Activations));
+           (L.Quantized_Roles (Chosen_Arithmetic (Item, Prepared)));
 
          L.Open
            (Session, Prepared, Item.Context_Size,

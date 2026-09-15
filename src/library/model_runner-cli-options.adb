@@ -1478,6 +1478,7 @@ package body Model_Runner.CLI.Options is
                              = T.To_String (Asked)
                            then
                               Result.Arithmetic := Mode;
+                              Result.Arithmetic_Set := True;
                               Found := True;
                            end if;
                         end loop;

@@ -437,6 +437,7 @@ package body Agent_Eval is
       Report_Path : String := "";
       Format      : String := "";
       Context     : Natural := 8_192;
+      Arithmetic  : String := "";
       Result      : out Report)
    is
       Source    : Shards.Shard_Set;
@@ -498,6 +499,37 @@ package body Agent_Eval is
               & E.Error_Code'Image (Status.Code));
          return;
       end if;
+
+      --  The arithmetic, told to the backend once the model is known and
+      --  before anything is dispatched: the one named, or the one run
+      --  would choose for this model unasked. A campaign that scored on
+      --  the f32 path measured a path nobody runs, and on a four-billion
+      --  parameter hybrid took ten times as long.
+      declare
+         use type L.Arithmetic_Mode;
+         use type L.Architecture;
+         Mode  : L.Arithmetic_Mode := L.Integer_Activations;
+         Found : Boolean := Arithmetic = "";
+      begin
+         for Each in L.Arithmetic_Mode loop
+            if L.Arithmetic_Name (Each) = Arithmetic then
+               Mode := Each;
+               Found := True;
+            end if;
+         end loop;
+         if not Found then
+            Say (Result, "no arithmetic is named '" & Arithmetic & "'");
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Shards.Close (Source);
+            return;
+         end if;
+         if Arithmetic = "" and then L.Config (Engine).Kind = L.Gemma2 then
+            Mode := L.Mixed_Activations;
+         end if;
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (L.Quantized_Roles (Mode));
+      end;
 
       --  A named format replaces the model's own template with one this
       --  build carries, and whatever Prepare chose: for a model whose

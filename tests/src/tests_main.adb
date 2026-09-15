@@ -100,6 +100,19 @@ procedure Tests_Main is
       return Model_Runner.Backend.Backend_CPU;
    end Backend_Of;
 
+   --  The roles --arith names, as run names them: f32, int8 or mixed. A
+   --  word that names none is int8, which is what run does unasked.
+   function Roles_Named (Word : String)
+     return Model_Runner.Backend.CPU.Role_Set is
+   begin
+      for Mode in Model_Runner.Llama.Arithmetic_Mode loop
+         if Model_Runner.Llama.Arithmetic_Name (Mode) = Word then
+            return Model_Runner.Llama.Quantized_Roles (Mode);
+         end if;
+      end loop;
+      return Model_Runner.Backend.CPU.Every_Role;
+   end Roles_Named;
+
    --  Selected command, defaulting to the mandatory suite.
    function Command return String is
    begin
@@ -1307,13 +1320,6 @@ begin
 
          Result : Agent_Eval.Report;
       begin
-         --  The arithmetic `run` uses unless told otherwise, told here the
-         --  same way and for the same reason `speed` tells it: a campaign
-         --  that scored on the f32 path measured a path nobody runs, and
-         --  on a four-billion-parameter hybrid took ten times as long.
-         Model_Runner.Backend.CPU.Use_Integer_Activations
-           (Option ("--arith", "int8") = "int8");
-
          if Option ("--model", "") = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "agent-eval: --model is required");
@@ -1332,6 +1338,7 @@ begin
             Report_Path => Option ("--report", ""),
             Format      => Option ("--chat-template", ""),
             Context     => Number ("--context-size", 8_192),
+            Arithmetic  => Option ("--arith", ""),
             Result      => Result);
 
          Ada.Text_IO.Put_Line
@@ -1943,7 +1950,7 @@ begin
          --  the backend states that it must be told once and not part way
          --  through.
          Model_Runner.Backend.CPU.Use_Integer_Activations
-           (Option ("--arith", "int8") = "int8");
+           (Roles_Named (Option ("--arith", "int8")));
 
          --  Several sequences in one pass rather than one, which is a
          --  different measurement and takes a different loop: a round has
