@@ -187,6 +187,25 @@ Its recording is `tests/fixtures/gemma3-1b.expect`, and it is the first
 recording of a model with a 262,144-row output, which is what put the
 harness's stack-held logits on the heap.
 
+### Gemma-3-4B-It, Q4_K_M
+
+| | |
+|---|---|
+| File | `gemma-3-4b-it-Q4_K_M.gguf` |
+| Size | 2 489 894 016 bytes |
+| Source | `unsloth/gemma-3-4b-it-GGUF` on Hugging Face |
+| Upstream model | `google/gemma-3-4b-it` |
+| Licence | Gemma Terms of Use |
+
+Obtained to try the gemma chat format's tool calling on a Gemma 3 large
+enough to follow it, and what it found first was the engine: the 4B and
+up state a linear rotary stretch of eight, which is for the layers that see
+the whole context alone, and the engine stretched the windowed layers too --
+a six-token prompt answered and a four-hundred-token one came apart into a
+word repeated. Its recording is `tests/fixtures/gemma3-4b.expect`; on the
+campaign's first task it now writes the reference runtime's `<tool_call>`
+byte for byte, and scores ten of ten.
+
 ### jina-embeddings-v2-base-en, F16 and Q8_0
 
 | | |

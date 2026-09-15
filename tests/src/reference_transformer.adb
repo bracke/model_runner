@@ -2584,12 +2584,25 @@ package body Reference_Transformer is
                              / Long_Float (Item.Rotary))
                     / Divisor;
 
+                  --  Whether this layer is a windowed one of Gemma3's,
+                  --  which the file's stretch does not reach: the factor a
+                  --  Gemma 3 states is for the layers that see the whole
+                  --  context, and a windowed layer turns as it was trained.
+                  --  The other family that windows on a base of its own,
+                  --  GPT-OSS, stretches every layer.
+                  Unstretched : constant Boolean :=
+                    Item.Kind = Gemma3
+                    and then Item.Window_Every > 0
+                    and then Layer mod Item.Window_Every
+                             /= Item.Window_Every - 1;
+
                   --  The angle as trained, and the angle the model's factor
                   --  stretches it to.
                   Trained_Angle : constant Long_Float :=
                     Long_Float (Position) * Frequency;
                   Stretched : constant Long_Float :=
-                    Item.Frequency * Trained_Angle;
+                    (if Unstretched then Trained_Angle
+                     else Item.Frequency * Trained_Angle);
 
                   --  Yarn keeps the fast dimensions as trained and stretches
                   --  the slow ones, mixing across the band between them. The
@@ -2598,18 +2611,18 @@ package body Reference_Transformer is
                   --  on, which is what solving the frequency for the
                   --  dimension gives.
                   Mixed : constant Long_Float :=
-                    (if Item.Stretch /= Yarn then 0.0
+                    (if Item.Stretch /= Yarn or else Unstretched then 0.0
                      else Ramp (Long_Float (Pair), Base));
 
                   Angle : constant Long_Float :=
-                    (if Item.Stretch = Yarn
+                    (if Item.Stretch = Yarn and then not Unstretched
                      then Stretched * (1.0 - Mixed) + Trained_Angle * Mixed
                      else Stretched);
 
                   --  And it scales what comes out, because interpolating
                   --  angles brings the scores they produce together.
                   Size : constant Long_Float :=
-                    (if Item.Stretch = Yarn
+                    (if Item.Stretch = Yarn and then not Unstretched
                      then Item.Attenuation
                           * (1.0 + 0.1 * Functions.Log (1.0 / Item.Frequency))
                      else 1.0);

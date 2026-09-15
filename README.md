@@ -402,13 +402,15 @@ an 8,192-token context, 2026-09-15.
 | Qwen3.5-0.8B Q8_0 | **9** / 10 | 19 | 10 | 501 | 0:38 | 1.3 GB |
 | MiniCPM5-1B Q4_K_M | **9** / 10 | 19 | 10 | 1238 | 0:51 | 1.1 GB |
 | Gemma2-2B | **8** / 10 | 19 | 12 | 612 | 2:28 | 3.2 GB |
+| Gemma3-4B Q4_K_M | **10** / 10 | 21 | 12 | 689 | 2:18 | 3.3 GB |
 | Gemma3-1B Q4_K_M | **3** / 10 | 17 | 11 | 947 | 3:12 | 1.1 GB |
 
 Gemma 2 is the one whose score the arithmetic decides: 7 at f32, 3 at int8,
 8 with its attention projections left in f32 and the rest rounded, which is
-what `--arith mixed` is and why it is that family's default. Gemma 3 scores
+what `--arith mixed` is and why it is that family's default. Gemma3-1B scores
 3 at every arithmetic; a one-billion-parameter model pastes a parameter
-schema where the arguments go, and no format fixes that. The table is
+schema where the arguments go, and no format fixes that -- the 4B, on the
+same format, scores ten. The table is
 what `tests agent-eval` printed, not a claim about the models beyond these
 ten tasks.
 

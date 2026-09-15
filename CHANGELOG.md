@@ -55,6 +55,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Gemma 3's rotary stretch reaches the global layers alone.** The 4B and
+  up state `rope.scaling linear 8`, and the engine applied it to every
+  layer; the reference runtime keeps a separate scale for the windowed
+  layers and holds it at one for this family. A six-token prompt answered
+  and a four-hundred-token one came apart into a word repeated -- the
+  windowed five layers in six were reading positions at an eighth. The
+  fixtures and the independent implementation agreed with the engine
+  because no fixture windows and stretches at once. `Llama.Turn_Scaling`
+  now answers the unstretched rotation for a Gemma 3 windowed layer beside
+  `Turn_Base`, and the reference implementation says the same. Verified on
+  a published Gemma-3-4B-It Q4_K_M: the campaign's first prompt now yields
+  the reference runtime's `<tool_call>` byte for byte, and
+  `tests/fixtures/gemma3-4b.expect` records tokens, greedy text and three
+  logits against llama.cpp b10595. On agent-eval the 4B goes from 0 of 10
+  -- every reply a word repeated -- to **10 of 10**, so the gemma format's
+  tool calling is proven on a model that can follow it.
 - **The qwen3-coder format handles the reasoning block the way Qwen3.5
   does.** The Qwen3.5 family stands on this format -- its calls take the
   same `<function=..>` shape and its own template will not compile -- and

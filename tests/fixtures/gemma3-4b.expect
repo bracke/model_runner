@@ -1,0 +1,40 @@
+# Recorded by hand from a reference runtime; see docs/reference-runtime.md.
+# The model this refers to is NOT committed -- see docs/fixture-provenance.md
+# for where to obtain it. No mandatory test reads this file.
+#
+# This one is here for the rule the 1B cannot exercise: a Gemma 3 of the
+# 4B and up states a linear rotary stretch of eight, and that stretch is
+# for the layers that see the whole context alone -- the windowed five in
+# six turn as they were trained. Applied to every layer, the 4B answered
+# a six-token prompt and came apart on a four-hundred-token one, a word
+# repeated; the fixtures and the reference agreed with the engine because
+# neither windowed and stretched at once. On the rendered prompt of the
+# campaign's first task this engine now writes the same <tool_call>
+# the reference runtime writes, byte for byte.
+#
+# Tokenization came from:
+#   llama-tokenize -m gemma-3-4b-it-Q4_K_M.gguf
+#     -p "The capital of France is"
+#     -> [2, 818, 5279, 529, 7001, 563]
+#   where 2 is the beginning marker this vocabulary asks for.
+#
+# Greedy continuation came from llama-completion with --temp 0
+# --no-conversation, which printed " Paris." for the same prompt.
+#
+# The logits are the first three values of result_output from
+# llama-eval-callback at the position after the prompt. The tolerance is
+# 0.6, for the 1B's reason at thirty-four layers: this engine puts the
+# second at -6.167 and a float32 pass over the exactly dequantized weights
+# puts it at -6.167 too, the stretch on the global layers alone; the
+# reference runtime sits 0.56 away, its activations rounded to eight bits
+# before each product. The first agrees to 0.12, the third to 0.24.
+
+runtime llama.cpp b10595-95b8e33e1
+model gemma-3-4b-it-Q4_K_M.gguf
+prompt The capital of France is
+tokens 2 818 5279 529 7001 563
+greedy_text \sParis.
+logit 0 -10.5075
+logit 1 -6.7284
+logit 2 -0.0455
+tolerance 0.6

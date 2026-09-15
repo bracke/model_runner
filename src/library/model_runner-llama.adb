@@ -1861,6 +1861,27 @@ package body Model_Runner.Llama is
        then Settings.Local_Base
        else Settings.Rope_Base);
 
+   --  The stretch a layer turns its rotation with.
+   --
+   --  The model's own everywhere but on Gemma3's windowed layers, which
+   --  turn unstretched: the factor a Gemma 3 file states -- eight, on the
+   --  4B and up -- is for the layers that see the whole context, and a
+   --  layer that looks a thousand positions back was trained on positions
+   --  as they are. The reference runtime keeps a separate scale for the
+   --  windowed layers and sets it to one for this family. Applied to every
+   --  layer, the factor put the 4B's windowed layers at an eighth of their
+   --  positions: a six-token prompt answered, a four-hundred-token one
+   --  came apart into a word repeated. GPT-OSS, the other family here that
+   --  windows on a base of its own, stretches its windowed layers as the
+   --  rest, which the reference does too.
+   function Turn_Scaling
+     (Settings : Configuration; Layer : Natural) return K.Rotary_Scaling
+   is (if Settings.Kind = Gemma3
+         and then Settings.Window_Every > 0
+         and then Layer mod Settings.Window_Every /= Settings.Window_Every - 1
+       then K.Rotary_Scaling'(others => <>)
+       else Settings.Scaling);
+
    --  A score held under a bound, as the architecture that states one puts
    --  it: cap times the hyperbolic tangent of the score over the cap. Small
    --  scores come back nearly unchanged and large ones stop just under the
@@ -9439,7 +9460,7 @@ package body Model_Runner.Llama is
                        (Item.Key_Row.all, KV_Heads, Head_Size,
                         Element_Count (Settings.Rotary), Drop,
                         Turn_Base (Settings, Natural (Index)),
-                        Settings.Scaling, Turns (Source),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                         Settings.Pairing, Backwards => True);
 
                      if Item.Held = Eighth then
@@ -10428,7 +10449,7 @@ package body Model_Runner.Llama is
          K.Apply_Rotary_Pair
            (Item.Query.all, Heads, Item.Key_Row.all, KV_Heads, Head_Size,
             Element_Count (Settings.Rotary), Position,
-            Turn_Base (Settings, Layer_Index), Settings.Scaling,
+            Turn_Base (Settings, Layer_Index), Turn_Scaling (Settings, Layer_Index),
             Turns (Source), Settings.Pairing);
 
          for Offset in 0 .. KV_Width - 1 loop
@@ -11021,7 +11042,7 @@ package body Model_Runner.Llama is
                      K.Rotary_Table
                        (Element_Count (Settings.Rotary), Item.Committed,
                         Turn_Base (Settings, Natural (Index)),
-                        Settings.Scaling, Turns (Source),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                         Cosines => Cosines, Sines => Sines);
 
                      for Pair in 0 .. Pairs - 1 loop
@@ -11187,13 +11208,13 @@ package body Model_Runner.Llama is
                  (Item.Query.all, Heads, Head_Size,
                   Element_Count (Settings.Rotary), Item.Committed,
                   Turn_Base (Settings, Natural (Index)),
-                  Settings.Scaling, Turns (Source),
+                  Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                   Settings.Pairing);
                K.Apply_Rotary
                  (Item.Key_Row.all, KV_Heads, Head_Size,
                   Element_Count (Settings.Rotary), Item.Committed,
                   Turn_Base (Settings, Natural (Index)),
-                  Settings.Scaling, Turns (Source),
+                  Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                   Settings.Pairing);
 
                --  Write into the reserved slot. The slot is only readable as
@@ -12578,7 +12599,7 @@ package body Model_Runner.Llama is
                                 (Element_Count (Settings.Rotary),
                                  Natural (Sits_At (Which)),
                                  Turn_Base (Settings, Natural (Index)),
-                                 Settings.Scaling, Turns (Source),
+                                 Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                                  Cosines => Cosines, Sines => Sines);
 
                               for Pair in 0 .. Pairs - 1 loop
@@ -12933,7 +12954,7 @@ package body Model_Runner.Llama is
                            Head_Size, Element_Count (Settings.Rotary),
                            Natural (Sits_At (Which)),
                            Turn_Base (Settings, Natural (Index)),
-                           Settings.Scaling, Turns (Source),
+                           Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                            Settings.Pairing);
                      end if;
 
