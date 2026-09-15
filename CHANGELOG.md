@@ -55,6 +55,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The qwen3-coder format handles the reasoning block the way Qwen3.5
+  does.** The Qwen3.5 family stands on this format -- its calls take the
+  same `<function=..>` shape and its own template will not compile -- and
+  reasons where Qwen3-Coder does not. The generation prompt now opens
+  `<think>` for `--think` and writes the empty block for `--no-think`, as
+  Qwen3.5's own template does, and writes nothing for a caller who said
+  neither, which is the prompt Qwen3-Coder was trained on and leaves a
+  Qwen3.5 to decide for itself, as before. On the 0.8B, `--no-think` now
+  answers without the four tokens of empty block it used to spend.
+- **`run --raw --verbose` no longer says a chat format stood in** for a
+  template it is not going to render with.
 - **The gate is green.** Twenty-eight repository checks had been failing,
   some for weeks and some from this fortnight's work. Put right: the
   `write_file` tool writes bytes through `Stream_IO` rather than a text

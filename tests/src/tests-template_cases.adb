@@ -595,6 +595,39 @@ package body Tests.Template_Cases is
                  "the call envelope was not closed: " & R);
       end;
 
+      --  The generation prompt's reasoning block, as Qwen3.5's own
+      --  template writes it: opened for a caller who asked, closed and
+      --  empty for one who asked it off, and absent -- the prompt
+      --  Qwen3-Coder was trained on -- for a caller who said nothing.
+      declare
+         Nl : constant String := "" & Character'Val (10);
+         function Ends (Whole, Tail : String) return Boolean
+         is (Whole'Length >= Tail'Length
+             and then Whole (Whole'Last - Tail'Length + 1 .. Whole'Last)
+                      = Tail);
+         function Rendered (Choice : Tmpl.Thinking_Choice) return String is
+            Room : String (1 .. 4096);
+            Used : Natural;
+            St   : E.Error_Info;
+         begin
+            Tmpl.Render (Item, Messages, "<s>", "</s>", True, Room, Used, St,
+                         Thinking => Choice);
+            Assert (E.Is_Ok (St), "the format did not render");
+            return Room (1 .. Used);
+         end Rendered;
+         Silent : constant String := Rendered (Tmpl.Thinking_Unstated);
+         Asked  : constant String := Rendered (Tmpl.Thinking_On);
+         Off    : constant String := Rendered (Tmpl.Thinking_Off);
+      begin
+         Assert (Ends (Silent, "<|im_start|>assistant" & Nl),
+                 "a caller who said nothing got a reasoning block: " & Silent);
+         Assert (Ends (Asked, "<|im_start|>assistant" & Nl & "<think>" & Nl),
+                 "thinking on did not open the block: " & Asked);
+         Assert (Ends (Off, "<|im_start|>assistant" & Nl & "<think>" & Nl & Nl
+                            & "</think>" & Nl & Nl),
+                 "thinking off did not write the empty block: " & Off);
+      end;
+
       Conv.Close (Messages);
       Tmpl.Close (Item);
       Model_Runner.Tools.Close (Defs);

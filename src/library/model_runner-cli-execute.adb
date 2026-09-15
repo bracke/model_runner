@@ -1238,6 +1238,7 @@ package body Model_Runner.CLI.Execute is
          elsif E.Is_Ok (Status)
            and then L.Template_Stood_In (Prepared)
            and then Item.Level = Opt.Verbose
+           and then not Item.Raw
          then
             Pres.Put_Note
               (Screen, "cli.note.template_stood_in",

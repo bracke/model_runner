@@ -275,6 +275,14 @@ package body Model_Runner.Templates is
          --  parameter XML: the JSON carries the same names, types and
          --  descriptions, and the call-format instructions carry the shape a
          --  call must take, which is what the model acts on.
+         --
+         --  The Qwen3.5 family, whose calls take the same shape, stands on
+         --  this format too, and reasons where Qwen3-Coder does not. Its
+         --  own template opens the reasoning block for a caller who asked
+         --  for it and writes the empty one for a caller who asked it off;
+         --  so does this, and only when asked -- a caller who says nothing
+         --  gets the generation prompt Qwen3-Coder was trained on, and a
+         --  Qwen3.5 then decides for itself, as it does unasked.
          return
            "{% if messages[0]['role'] == 'system' %}"
            & "<|im_start|>system" & LF & "{{ messages[0]['content'] }}"
@@ -344,6 +352,11 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
            & "<|im_start|>assistant" & LF
+           & "{% if enable_thinking is defined and enable_thinking is true %}"
+           & "<think>" & LF
+           & "{% elif enable_thinking is defined %}"
+           & "<think>" & LF & LF & "</think>" & LF & LF
+           & "{% endif %}"
            & "{% endif %}";
 
       elsif Name = Format_Name (Format_MiniCPM) then
