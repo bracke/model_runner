@@ -192,12 +192,12 @@ package body Conformance is
       --  format runs a whole model on the device against the independent
       --  reference transformer, so a branch that decodes almost correctly
       --  fails.
-      Device_Formats : constant array (1 .. 15) of Tiny_Model.Weight_Format :=
+      Device_Formats : constant array (1 .. 16) of Tiny_Model.Weight_Format :=
         [Tiny_Model.F32, Tiny_Model.F16, Tiny_Model.BF16,
          Tiny_Model.Q4_0, Tiny_Model.Q4_1, Tiny_Model.Q5_0, Tiny_Model.Q5_1,
          Tiny_Model.Q8_0, Tiny_Model.IQ4_NL,
          Tiny_Model.Q2_K, Tiny_Model.Q3_K, Tiny_Model.Q4_K, Tiny_Model.Q5_K,
-         Tiny_Model.Q6_K, Tiny_Model.IQ4_XS];
+         Tiny_Model.Q6_K, Tiny_Model.IQ4_XS, Tiny_Model.MXFP4];
 
       Swept : constant array (1 .. 2) of Model_Runner.Backend.Backend_Kind :=
         [Model_Runner.Backend.Backend_CPU,

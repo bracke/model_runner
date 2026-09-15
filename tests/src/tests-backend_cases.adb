@@ -1055,10 +1055,13 @@ package body Tests.Backend_Cases is
       --  What this may not be asked against is Is_Supported, which says what
       --  the *program* reads. The two were the same set for as long as the
       --  Ada decoder and the shader were written together; MXFP4 is where
-      --  they parted, and asking the wrong one of them made this test pass
-      --  while the backend claimed a format its shader has no branch for.
-      --  Q8_1 and Q8_K are recognized by the parser and decoded by nothing
-      --  here; they are refused before any backend is asked.
+      --  they parted for a while, and asking the wrong one of them made this
+      --  test pass while the backend claimed a format its shader had no
+      --  branch for. The shader has one now, and the sets are the same
+      --  again; the check stays one-directional so the next format to arrive
+      --  one-sided is caught. Q8_1 and Q8_K are recognized by the parser and
+      --  decoded by nothing here; they are refused before any backend is
+      --  asked.
       for Format in G.Tensor_Type loop
          Assert (not Model_Runner.Backend.Supports (Said, Format)
                  or else G.Is_Supported (Format),
@@ -1075,6 +1078,7 @@ package body Tests.Backend_Cases is
                     | G.Type_Q8_0 | G.Type_IQ4_NL
                     | G.Type_Q2_K | G.Type_Q3_K | G.Type_Q4_K
                     | G.Type_Q5_K | G.Type_Q6_K | G.Type_IQ4_XS
+                    | G.Type_MXFP4
          then
             Assert (Model_Runner.Backend.Supports (Said, Format),
                     "the device backend disclaims " & G.Type_Name (Format)

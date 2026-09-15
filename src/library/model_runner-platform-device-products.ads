@@ -152,12 +152,18 @@ package Model_Runner.Platform.Device.Products is
    --  reordering here silently changes what every branch there decodes. The
    --  conformance sweep multiplies a matrix in each of these on the device
    --  and against the reference transformer, which is what would catch it.
+   --
+   --  MXFP4 is last rather than beside the other thirty-two-element
+   --  formats because it arrived last: the shader's constants are the
+   --  positions, and a format slotted into the middle would renumber every
+   --  branch after it.
    type Weight_Packing is
      (Values_F32, Values_F16, Values_BF16,
       Packed_Q4_0, Packed_Q4_1, Packed_Q5_0, Packed_Q5_1, Packed_Q8_0,
       Packed_IQ4_NL,
       Packed_Q2_K, Packed_Q3_K, Packed_Q4_K, Packed_Q5_K, Packed_Q6_K,
-      Packed_IQ4_XS);
+      Packed_IQ4_XS,
+      Packed_MXFP4);
 
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
@@ -1678,7 +1684,7 @@ private
       --  and the eight-wide one.
 
       --  And the sixth: the same tile, compiled from the same source with
-      --  MORE_FORMATS, decoding the eight formats the fourth leaves out.
+      --  MORE_FORMATS, decoding the nine formats the fourth leaves out.
       --  Two pipelines rather than one that decodes them all, because a
       --  pipeline's registers are allocated for every branch in it and the
       --  fourteen-branch shader cost the six formats a fifth of their speed

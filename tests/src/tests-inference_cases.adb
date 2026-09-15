@@ -2152,10 +2152,10 @@ package body Tests.Inference_Cases is
          --  branch for is a model that runs and answers wrongly.
          --
          --  One direction, not both. The program may read a format the
-         --  shader does not -- MXFP4 is one, and arrived that way -- and
-         --  such a model is refused on the device while it loads, by name.
-         --  What may not happen is the other direction, and that is what
-         --  this asks.
+         --  shader does not -- MXFP4 arrived that way, and was refused on
+         --  the device while it loaded, by name, until the shader grew its
+         --  branch. What may not happen is the other direction, and that
+         --  is what this asks.
          declare
             Said : constant Model_Runner.Backend.Capabilities :=
               Model_Runner.Backend.Device.Describe;

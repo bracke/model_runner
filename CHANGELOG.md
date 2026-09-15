@@ -55,6 +55,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MXFP4 reaches the device.** The format arrived with a processor
+  decoder and no shader branch, and a model carrying it was refused on
+  `--backend device` while it loaded, by name. Both shaders decode it now:
+  the row product after IQ4_NL, whose nibble layout it shares, with the
+  one-byte E8M0 scale read as the power of two it names by the shift the
+  processor's decoder uses, and the tile in its MORE_FORMATS compilation,
+  where the seventeen-byte block -- the one odd length among the formats
+  -- gave its word reads a third alignment arm, compiled into that
+  pipeline alone so the six-format tile keeps the words it had, byte for
+  byte. The packing enumeration grows by one at its end, so no branch is
+  renumbered. The device sweep crosses it with the reference transformer
+  as it crosses the other fifteen, 1428 sequences on a device now against
+  1344, none outside tolerance; and a published TinyLlama in MXFP4
+  generates the same text on the device as on the processor, through
+  both the row kernel and the tile, at 1035 prompt tokens a second
+  against the processor's 28. The release checklist's recipe for the
+  sixth attention compilation now names `-DFOURS`, which the committed
+  words were compiled with and the message did not say.
 - **A model file edited in place is refused as a replaced one is.** The
   check before the tensors are read compared the size on disk with the
   size at open, which sees a file replaced by a longer or shorter one and

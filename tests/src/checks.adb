@@ -5847,7 +5847,7 @@ package body Checks is
          then
             Fail ("the sixth compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it with --target-env "
-                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DGROUPED to "
+                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DGROUPED -DFOURS to "
                   & "attention_bundle_exact.spv, and run 'tests shader' "
                   & "again with every shader named");
          end if;
@@ -5949,7 +5949,7 @@ package body Checks is
            and then Digest /= Model_Runner.Shaders.Matrix_Narrow_Extra_Digest
          then
             Fail ("the narrow compilation of src/shaders/matrix_product.comp"
-                  & " for the other eight formats is older than the source; "
+                  & " for the other nine formats is older than the source; "
                   & "compile it with -DNARROW -DMORE_FORMATS to "
                   & "matrix_narrow_extra.spv, and run 'tests shader' again "
                   & "with every shader named");
@@ -5974,7 +5974,7 @@ package body Checks is
            and then Digest /= Model_Runner.Shaders.Matrix_Listed_Extra_Digest
          then
             Fail ("the listed compilation of src/shaders/matrix_product.comp"
-                  & " for the other eight formats is older than the source; "
+                  & " for the other nine formats is older than the source; "
                   & "compile it with -DLISTED -DMORE_FORMATS to "
                   & "matrix_listed_extra.spv, and run 'tests shader' again "
                   & "with every shader named");

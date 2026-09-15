@@ -37,9 +37,9 @@
 //
 //  This source is compiled twice. As it stands it decodes the six formats
 //  a published model is usually made of; with MORE_FORMATS defined it
-//  decodes eight others instead, and the engine picks the pipeline by the
+//  decodes nine others instead, and the engine picks the pipeline by the
 //  weights it is given. Two compilations rather than one shader of
-//  fourteen branches, because a pipeline pays for every branch compiled
+//  fifteen branches, because a pipeline pays for every branch compiled
 //  into it whether or not the branch is ever taken -- adding the eight to
 //  this one cost the six twenty-one per cent with the host refusing to
 //  send them, so with not a line of the new code reachable. Registers are
@@ -258,19 +258,41 @@ int signed_at(uint at) {
 //  rest -- thirty-four and two hundred and ten are both two more than a
 //  multiple of four -- so the odd case is shifted into place. Four loads
 //  where a byte at a time is sixteen loads and sixteen shifts.
+//
+//  MXFP4 is the one format whose block is an odd length, seventeen, so
+//  its runs begin one and three bytes into a word as well. Those take a
+//  third arm with the shift they need, and only the compilation that
+//  decodes MXFP4 has the arm: the six formats of the first compilation
+//  never reach it, and a pipeline pays for a branch compiled into it
+//  whether or not the branch is taken, so they keep the words they had.
 void four_words (uint at, out uint p0, out uint p1, out uint p2, out uint p3)
 {
     uint i = at >> 2u;
 
     if ((at & 3u) == 0u) {
         p0 = w[i]; p1 = w[i + 1u]; p2 = w[i + 2u]; p3 = w[i + 3u];
+#ifdef MORE_FORMATS
+    } else if ((at & 3u) == 2u) {
+#else
     } else {
+#endif
         uint a0 = w[i], a1 = w[i + 1u], a2 = w[i + 2u];
         uint a3 = w[i + 3u], a4 = w[i + 4u];
         p0 = (a0 >> 16u) | (a1 << 16u);
         p1 = (a1 >> 16u) | (a2 << 16u);
         p2 = (a2 >> 16u) | (a3 << 16u);
         p3 = (a3 >> 16u) | (a4 << 16u);
+#ifdef MORE_FORMATS
+    } else {
+        uint s = (at & 3u) * 8u;
+        uint t = 32u - s;
+        uint a0 = w[i], a1 = w[i + 1u], a2 = w[i + 2u];
+        uint a3 = w[i + 3u], a4 = w[i + 4u];
+        p0 = (a0 >> s) | (a1 << t);
+        p1 = (a1 >> s) | (a2 << t);
+        p2 = (a2 >> s) | (a3 << t);
+        p3 = (a3 >> s) | (a4 << t);
+#endif
     }
 }
 
@@ -301,6 +323,7 @@ const uint FMT_IQ4_NL =  8u;
 const uint FMT_Q2_K   =  9u;
 const uint FMT_Q3_K   = 10u;
 const uint FMT_IQ4_XS = 14u;
+const uint FMT_MXFP4  = 15u;
 
 //  The sixteen levels a non-linear four-bit quant may take. A nibble in
 //  IQ4_NL and IQ4_XS is not a number but an index into this, and the table
@@ -308,10 +331,30 @@ const uint FMT_IQ4_XS = 14u;
 const int LEVELS[16] = int[16](-127, -104, -83, -65, -49, -35, -22, -10,
                                   1,   13,  25,  38,  53,  69,  89, 113);
 
+//  MXFP4's own sixteen: the E2M1 floating-point values at twice their
+//  size, 0, 0.5, 1, 1.5, 2, 3, 4, 6 and the same again negated, as
+//  row_product.comp and the processor's decoder hold them. The scale
+//  carries the halving.
+const int FOURS[16] = int[16](0, 1, 2, 3, 4, 6, 8, 12,
+                              0, -1, -2, -3, -4, -6, -8, -12);
+
+//  An E8M0 exponent byte as two to the byte less a hundred and
+//  twenty-eight -- less a hundred and twenty-seven for the exponent's own
+//  bias, and one more for the doubled table. The bit pattern has a biased
+//  exponent of the byte less one and no mantissa, so it is a shift; the
+//  two bytes below that are subnormal, where the shift is of the leading
+//  bit instead.
+float e8m0_at (uint at) {
+    uint e = byte_at (at);
+    return uintBitsToFloat (e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
+}
+
 //  Whether a format keeps thirty-two elements to a block rather than two
 //  hundred and fifty-six, which decides how a row's length is counted.
+//  MXFP4 is numbered past the super-blocks, so it is named apart.
 bool is_short (uint format) {
-    return format >= FMT_Q4_0 && format <= FMT_IQ4_NL;
+    return (format >= FMT_Q4_0 && format <= FMT_IQ4_NL)
+           || format == FMT_MXFP4;
 }
 
 //  And which of those keep them as nibbles. The eight-bit format sits in
@@ -336,6 +379,7 @@ uint block_bytes (uint format) {
         case FMT_Q4_K:   return 144u;
         case FMT_Q5_K:   return 176u;
         case FMT_Q6_K:   return 210u;
+        case FMT_MXFP4:  return  17u;
         default:         return 136u;
     }
 }
@@ -346,12 +390,21 @@ uint block_bytes (uint format) {
 //  cannot fold is an indexed read of four live values, and it cost the
 //  formats that were already here twenty-two per cent before this was
 //  written out.
+//
+//  Table names which table, if any, the nibble indexes: none, the levels
+//  of IQ4_NL, or the fours of MXFP4.
+const uint NO_TABLE = 0u;
+const uint LEVELS_TABLE = 1u;
+const uint FOURS_TABLE = 2u;
+
 float nibble_value (uint word, uint shift, uint k, uint fifths,
-                    bool levelled, float bias) {
+                    uint table, float bias) {
     uint nib = (word >> shift) & 15u;
-    return levelled
+    return table == LEVELS_TABLE
            ? float (LEVELS[nib])
-           : float (nib + ((fifths >> k) & 1u) * 16u) - bias;
+           : (table == FOURS_TABLE
+              ? float (FOURS[nib])
+              : float (nib + ((fifths >> k) & 1u) * 16u) - bias);
 }
 
 //  One of the sixteen six-bit scales a Q3_K super-block carries, which are
@@ -448,12 +501,13 @@ void main() {
 
 #ifdef MORE_FORMATS
             if (is_nibble (shape.format)) {
-                //  The five formats that keep thirty-two elements in a
+                //  The six formats that keep thirty-two elements in a
                 //  block behind one scale, as nibbles. They share a shape
                 //  and differ only in what is done to a nibble once it is
                 //  out: centred on eight or sixteen, lifted by a minimum of
                 //  its own, given a fifth bit from four bytes held apart,
-                //  or read as an index into the table of levels.
+                //  or read as an index into a table -- the levels, or the
+                //  fours behind MXFP4's one-byte power-of-two scale.
                 //
                 //  The low half of byte j is element j and the high half is
                 //  element j + 16, so both halves of a step read the same
@@ -462,11 +516,12 @@ void main() {
 
                 uint quants_at = fmt == FMT_Q4_1 ? 4u
                                  : (fmt == FMT_Q5_0 ? 6u
-                                    : (fmt == FMT_Q5_1 ? 8u : 2u));
+                                    : (fmt == FMT_Q5_1 ? 8u
+                                       : (fmt == FMT_MXFP4 ? 1u : 2u)));
 
                 uint at = row + (k0 / 32u) * block_bytes (fmt);
 
-                float scale = half_at (at);
+                float scale = fmt == FMT_MXFP4 ? e8m0_at (at) : half_at (at);
                 float lowest = (fmt == FMT_Q4_1 || fmt == FMT_Q5_1)
                                ? half_at (at + 2u) : 0.0;
                 float bias = fmt == FMT_Q4_0 ? 8.0
@@ -487,7 +542,8 @@ void main() {
                 uint p0, p1, p2, p3;
                 four_words (at + quants_at, p0, p1, p2, p3);
                 uint turn = half_of * 4u;
-                bool levelled = fmt == FMT_IQ4_NL;
+                uint levelled = fmt == FMT_IQ4_NL ? LEVELS_TABLE
+                                : (fmt == FMT_MXFP4 ? FOURS_TABLE : NO_TABLE);
 
                 wt[into +  0u] = float16_t (scale * nibble_value
                     (p0, turn +  0u,  0u, fifths, levelled, bias)

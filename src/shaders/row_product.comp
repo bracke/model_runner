@@ -28,7 +28,7 @@
 //  as plain words and decoded here, which is what lets a quantized model
 //  reach a device without four bytes a weight being made for it first.
 //
-//  Every format this program reads is decoded here -- all fifteen, the same
+//  Every format this program reads is decoded here -- all sixteen, the same
 //  set Model_Runner.GGUF.Is_Supported names. It used to be three, and the
 //  other twelve reached a device only by being repacked into one of them
 //  first: a pass over the whole model at load, and four bytes a weight
@@ -182,6 +182,7 @@ const uint FMT_Q4_K   = 11u;
 const uint FMT_Q5_K   = 12u;
 const uint FMT_Q6_K   = 13u;
 const uint FMT_IQ4_XS = 14u;
+const uint FMT_MXFP4  = 15u;
 
 //  Vectors carried at once by one invocation. A constant, so that the loops
 //  over it unroll and the accumulators stay in registers; making it the
@@ -267,6 +268,15 @@ shared float shares[256u * GROUP];
 const int LEVELS[16] = int[16](-127, -104, -83, -65, -49, -35, -22, -10,
                                   1,   13,  25,  38,  53,  69,  89, 113);
 
+//  MXFP4's own sixteen, which are the E2M1 floating-point values at twice
+//  their size: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and the same again negated.
+//  Doubling them keeps the table whole, and the scale carries the halving
+//  -- which is why an exponent byte is read as two to the byte less a
+//  hundred and twenty-eight rather than a hundred and twenty-seven. The
+//  same table and the same reading as the processor's decoder.
+const int FOURS[16] = int[16](0, 1, 2, 3, 4, 6, 8, 12,
+                              0, -1, -2, -3, -4, -6, -8, -12);
+
 //  Where each of this invocation's vectors begins, and what it has
 //  accumulated. Both are at file scope so that the accumulation below can be
 //  a function rather than fifteen copies of the same three lines: a GLSL
@@ -343,6 +353,17 @@ float half_at(uint at) {
     return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
 }
 
+//  An E8M0 exponent byte as the power of two it names, less one. The bit
+//  pattern of two to the byte less a hundred and twenty-eight has a biased
+//  exponent of the byte less one and no mantissa, so the whole of it is a
+//  shift; the two bytes below that are subnormal, where the shift is of
+//  the leading bit instead. Exact, where a power taken at run time need
+//  not be.
+float e8m0_at(uint at) {
+    uint e = byte_at(at);
+    return uintBitsToFloat(e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
+}
+
 //  Bytes one row takes, which is what says where the next row starts.
 uint row_bytes() {
     switch (shape.format) {
@@ -362,6 +383,7 @@ uint row_bytes() {
         case FMT_Q4_K:   return (shape.columns / 256u) * 144u;
         case FMT_Q5_K:   return (shape.columns / 256u) * 176u;
         case FMT_Q6_K:   return (shape.columns / 256u) * 210u;
+        case FMT_MXFP4:  return (shape.columns / 32u) * 17u;
         default:         return (shape.columns / 256u) * 136u;
     }
 }
@@ -584,6 +606,24 @@ void main() {
                 uint packed = byte_at(at + 2u + j);
                 accumulate(col + j, scale * float(LEVELS[packed & 15u]));
                 accumulate(col + j + 16u, scale * float(LEVELS[packed >> 4u]));
+            }
+        }
+    } else if (shape.format == FMT_MXFP4) {
+        //  Thirty-two elements in seventeen bytes: one exponent byte, then
+        //  sixteen of nibbles laid out as Q4_0 lays them. A nibble is an
+        //  index into the table of fours, as IQ4_NL's is into its levels,
+        //  and the scale is a power of two rather than a half.
+        uint blocks = shape.columns / 32u;
+
+        for (uint b = part; b < blocks; b += LANES) {
+            uint at = base + b * 17u;
+            float scale = e8m0_at(at);
+            uint col = b * 32u;
+
+            for (uint j = 0u; j < 16u; ++j) {
+                uint packed = byte_at(at + 1u + j);
+                accumulate(col + j, scale * float(FOURS[packed & 15u]));
+                accumulate(col + j + 16u, scale * float(FOURS[packed >> 4u]));
             }
         }
     } else if (shape.format == FMT_Q2_K) {

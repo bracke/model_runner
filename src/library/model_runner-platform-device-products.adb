@@ -347,13 +347,13 @@ package body Model_Runner.Platform.Device.Products is
    --  goes where it always went.
 
    --  Which of the two pipelines a format belongs to. The six the first
-   --  decodes are the ones a published model is usually made of; the eight
+   --  decodes are the ones a published model is usually made of; the nine
    --  the second decodes are the rest. The split is the shader's, not a
    --  judgement about the formats: see the note on Extra.
    function On_Extra (Packing : Weight_Packing) return Boolean
    is (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0 | Packed_Q5_1
                   | Packed_IQ4_NL | Packed_Q2_K | Packed_Q3_K
-                  | Packed_IQ4_XS);
+                  | Packed_IQ4_XS | Packed_MXFP4);
 
    --  Which of the two row kernels a batch of this length wants. The narrow
    --  one exists only for a batch of one -- a generated token -- and is null
@@ -755,7 +755,7 @@ package body Model_Runner.Platform.Device.Products is
                   and then Columns mod Tile_Step (Count) = 0)
                  or else (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0
                                      | Packed_Q5_1 | Packed_Q8_0
-                                     | Packed_IQ4_NL
+                                     | Packed_IQ4_NL | Packed_MXFP4
                           and then Columns mod Tile_Step (Count) = 0)
                  or else (Packing in Super_Packing
                           and then Columns mod 256 = 0)));
@@ -3836,7 +3836,8 @@ package body Model_Runner.Platform.Device.Products is
          Packed_Q4_K   => 144,
          Packed_Q5_K   => 176,
          Packed_Q6_K   => 210,
-         Packed_IQ4_XS => 136];
+         Packed_IQ4_XS => 136,
+         Packed_MXFP4  => 17];
 
       Per : constant Natural :=
         (case Packing is

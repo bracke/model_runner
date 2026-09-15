@@ -342,13 +342,16 @@ package body Model_Runner.Backend.Device is
       --  It used to be read from Is_Supported, which says what the program
       --  reads rather than what the shader does. Those were the same set for
       --  as long as the two decoders were written together, and MXFP4 is
-      --  where they parted: it arrived with an Ada decoder and no shader
-      --  branch, and this claimed it. A model carrying one then passed the
-      --  loader's check and was refused inside the first product instead --
-      --  as a missing capability, with no tensor named, because a view
-      --  arriving there carries none. Asked of Packing_Of it is refused
-      --  where every other format a backend cannot take is refused: while
-      --  the model loads, by name, with the backend named.
+      --  where they parted for a while: it arrived with an Ada decoder and
+      --  no shader branch, and this claimed it. A model carrying one then
+      --  passed the loader's check and was refused inside the first product
+      --  instead -- as a missing capability, with no tensor named, because
+      --  a view arriving there carries none. Asked of Packing_Of, a format
+      --  the shader lacks is refused where every other format a backend
+      --  cannot take is refused: while the model loads, by name, with the
+      --  backend named. The shader decodes MXFP4 now and the two sets are
+      --  the same again; the mapping stays the source, so the next format
+      --  to arrive one-sided is refused rather than claimed.
       Result.Formats := [others => False];
       for Format in Model_Runner.GGUF.Tensor_Type loop
          declare
@@ -604,6 +607,9 @@ package body Model_Runner.Backend.Device is
             Packing := Products.Packed_Q6_K;
          when Model_Runner.GGUF.Type_IQ4_XS  =>
             Packing := Products.Packed_IQ4_XS;
+
+         when Model_Runner.GGUF.Type_MXFP4   =>
+            Packing := Products.Packed_MXFP4;
 
          when others =>
             Known := False;
