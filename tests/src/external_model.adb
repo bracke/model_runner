@@ -33,7 +33,6 @@ package body External_Model is
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.Numerics.Element_Count;
-   use type Model_Runner.Tokenizer.Token_Id;
 
    package CPU renames Model_Runner.Backend.CPU;
    package Containers renames Model_Runner.GGUF.Containers;
