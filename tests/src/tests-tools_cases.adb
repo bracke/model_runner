@@ -7,6 +7,7 @@ with Ada.Text_IO;
 with Zlib;
 
 with Model_Runner.Errors;
+with Model_Runner.Numerics;
 with Model_Runner.Grammar;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
@@ -15,6 +16,7 @@ with Model_Runner.Tools.Constraint;
 
 package body Tests.Tools_Cases is
 
+   use type Model_Runner.Numerics.Element_Count;
    package E renames Model_Runner.Errors;
    package G renames Model_Runner.Grammar;
    package Tools renames Model_Runner.Tools;
@@ -289,6 +291,194 @@ package body Tests.Tools_Cases is
       Assert (not Full_Set_Takes_In (Tools.Function_XML, Envelope),
               "the JSON envelope was taken as a MiniCPM call");
    end Tag_Syntaxes_Are_Shaped;
+
+   --  A delegator wired in runs the delegate tool's subtask; an inquirer
+   --  wired in answers ask_user; an embedder wired in is what retrieve
+   --  ranks with. Each is given as a stub that records what it was handed
+   --  and answers something the tool's reply must carry, so the test sees
+   --  the wiring reach the tool and the tool reach back through it -- and
+   --  each unwired again declines as it did before, so a runner handed a
+   --  null is the runner it started as.
+   type Counting_Delegator is limited new Builtin.Delegator with record
+      Calls : Natural := 0;
+   end record;
+
+   overriding procedure Run_Sub
+     (Self        : in out Counting_Delegator;
+      Instruction : String;
+      Result      : out String;
+      Last        : out Natural;
+      Status      : out E.Error_Info);
+
+   overriding function Parallel_Delegates
+     (Self : Counting_Delegator) return Boolean is (False);
+
+   overriding procedure Run_Sub
+     (Self        : in out Counting_Delegator;
+      Instruction : String;
+      Result      : out String;
+      Last        : out Natural;
+      Status      : out E.Error_Info)
+   is
+      Reply : constant String := "sub-agent did: " & Instruction;
+   begin
+      Self.Calls := Self.Calls + 1;
+      Last := Natural'Min (Reply'Length, Result'Length);
+      Result (Result'First .. Result'First + Last - 1) :=
+        Reply (Reply'First .. Reply'First + Last - 1);
+      Status := E.Success;
+   end Run_Sub;
+
+   type Fixed_Inquirer is limited new Builtin.Inquirer with record
+      Asked : Natural := 0;
+   end record;
+
+   overriding procedure Ask
+     (Self     : in out Fixed_Inquirer;
+      Question : String;
+      Answer   : out String;
+      Last     : out Natural;
+      Status   : out E.Error_Info);
+
+   overriding procedure Ask
+     (Self     : in out Fixed_Inquirer;
+      Question : String;
+      Answer   : out String;
+      Last     : out Natural;
+      Status   : out E.Error_Info)
+   is
+      Reply : constant String := "the second one, to " & Question;
+   begin
+      Self.Asked := Self.Asked + 1;
+      Last := Natural'Min (Reply'Length, Answer'Length);
+      Answer (Answer'First .. Answer'First + Last - 1) :=
+        Reply (Reply'First .. Reply'First + Last - 1);
+      Status := E.Success;
+   end Ask;
+
+   --  An embedder that puts a text on one of two axes by a word in it, so
+   --  that a passage about the moon and a query about the moon lie
+   --  together and everything else lies apart.
+   type Axis_Embedder is limited new Builtin.Embedder with record
+      Embedded : Natural := 0;
+   end record;
+
+   overriding procedure Embed
+     (Self   : in out Axis_Embedder;
+      Text   : String;
+      Vector : out Model_Runner.Numerics.Real_Array;
+      Last   : out Natural;
+      Status : out E.Error_Info);
+
+   overriding procedure Embed
+     (Self   : in out Axis_Embedder;
+      Text   : String;
+      Vector : out Model_Runner.Numerics.Real_Array;
+      Last   : out Natural;
+      Status : out E.Error_Info)
+   is
+      Lunar : Boolean := False;
+   begin
+      Self.Embedded := Self.Embedded + 1;
+      for I in Text'First .. Text'Last - 3 loop
+         if Text (I .. I + 3) = "moon" then
+            Lunar := True;
+         end if;
+      end loop;
+      Vector := [others => 0.0];
+      if Lunar then
+         Vector (Vector'First) := 1.0;
+      else
+         Vector (Vector'First + 1) := 1.0;
+      end if;
+      Last := 1;
+      Status := E.Success;
+   end Embed;
+
+   procedure Wired_Helpers_Reach_Their_Tools
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Runner    : Builtin.Instance;
+      Delegator : aliased Counting_Delegator;
+      Inquirer  : aliased Fixed_Inquirer;
+      Embedder  : aliased Axis_Embedder;
+      Room      : String (1 .. Tools.Max_Call_Bytes);
+      Last      : Natural;
+      Status    : E.Error_Info;
+      Dir       : constant String := "obj/wired_case";
+
+      function Has (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Whole'Length < Part'Length then
+            return False;
+         end if;
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+
+      procedure Write_File (Name, Text : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Dir & "/" & Name);
+         Ada.Text_IO.Put_Line (F, Text);
+         Ada.Text_IO.Close (F);
+      end Write_File;
+   begin
+      Runner.Use_Delegator (Delegator'Unchecked_Access);
+      Runner.Run ("delegate", "{""task"":""count the stars""}", Room, Last,
+                  Status);
+      Assert (E.Is_Ok (Status), "delegate through a delegator failed");
+      Assert (Has (Room (1 .. Last), "sub-agent did: count the stars"),
+              "the delegator's answer did not come back: " & Room (1 .. Last));
+      Assert (Delegator.Calls = 1, "the delegator was not run once");
+
+      Runner.Use_Inquirer (Inquirer'Unchecked_Access);
+      Runner.Run ("ask_user", "{""question"":""which one?""}", Room, Last,
+                  Status);
+      Assert (E.Is_Ok (Status), "ask_user through an inquirer failed");
+      Assert (Has (Room (1 .. Last), "the second one, to which one?"),
+              "the inquirer's answer did not come back: " & Room (1 .. Last));
+      Assert (Inquirer.Asked = 1, "the inquirer was not asked once");
+
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Write_File ("a.txt", "the tides follow the moon across the bay");
+      Write_File ("b.txt", "a ledger of grain sold at the autumn market");
+
+      Runner.Use_Embedder (Embedder'Unchecked_Access);
+      Runner.Run
+        ("retrieve",
+         "{""folder"":""" & Dir & """,""query"":""where is the moon""}",
+         Room, Last, Status);
+      Assert (E.Is_Ok (Status), "retrieve through an embedder failed");
+      Assert (Embedder.Embedded >= 3,
+              "the embedder was not asked for the query and each passage:"
+              & Natural'Image (Embedder.Embedded));
+      Assert (Has (Room (1 .. Last), "tides follow the moon"),
+              "retrieve did not rank the passage the embedder put beside "
+              & "the query first: " & Room (1 .. Last));
+
+      --  Unwired again, each declines as a runner given nothing does.
+      Runner.Use_Delegator (null);
+      Runner.Use_Inquirer (null);
+      Runner.Use_Embedder (null);
+      Runner.Run ("delegate", "{""task"":""again""}", Room, Last, Status);
+      Assert (Room (1 .. 5) = "error", "delegate did not decline unwired");
+      Runner.Run ("ask_user", "{""question"":""again?""}", Room, Last,
+                  Status);
+      Assert (Room (1 .. 5) = "error", "ask_user did not decline unwired");
+      Assert (Delegator.Calls = 1 and then Inquirer.Asked = 1,
+              "an unwired helper was still reached");
+
+      Ada.Directories.Delete_Tree (Dir);
+   end Wired_Helpers_Reach_Their_Tools;
 
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
@@ -1140,6 +1330,11 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Function_XML_Calls_Parse'Access,
          "a MiniCPM function/param reply reads as calls with JSON arguments");
+      Register_Routine
+        (T, Wired_Helpers_Reach_Their_Tools'Access,
+         "a delegator, an inquirer and an embedder wired into the runner "
+         & "are what delegate, ask_user and retrieve reach, and unwired "
+         & "each declines again");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

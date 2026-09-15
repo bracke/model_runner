@@ -2979,6 +2979,32 @@ package body Tests.GGUF_Cases is
               "no token is not an end");
       Vocab.Close (Words);
 
+      --  And every token's text, decoded once into a table, is what
+      --  Decode_Token gives for it -- the table is what a grammar's filter
+      --  reads instead of decoding a quarter of a million times a step --
+      --  with a token outside the vocabulary, and no token, empty.
+      Write_Tokens;
+      Load;
+      declare
+         Table : Vocab.Decoded_Texts;
+      begin
+         Vocab.Decode_All (Words, Table);
+         for Index in 0 .. Vocab.Size (Words) - 1 loop
+            Assert (Vocab.Text_Of (Table, Vocab.Token_Id (Index))
+                      = Vocab.Decode_Token (Words, Vocab.Token_Id (Index)),
+                    "token" & Natural'Image (Index)
+                    & " reads differently out of the table");
+         end loop;
+         Assert (Vocab.Text_Of (Table, Vocab.Token_Id (Vocab.Size (Words)))
+                   = "",
+                 "a token past the vocabulary read as text");
+         Assert (Vocab.Text_Of (Table, Vocab.No_Token) = "",
+                 "no token read as text");
+         Vocab.Free (Table);
+         Vocab.Free (Table);
+      end;
+      Vocab.Close (Words);
+
       --  A declared eot ends generation whatever its text.
       Write_Tokens;
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.eot_token_id", 3);
@@ -7139,7 +7165,8 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Turn_End_Tokens_End_Generation'Access,
          "the tokens that end a turn end generation beside the end of "
-         & "sequence, by declared id or by marked text");
+         & "sequence, by declared id or by marked text; and every token's "
+         & "text decoded once reads as Decode_Token gives it");
       Register_Routine
         (T, Hostile_Text_Cannot_Reach_The_Terminal'Access,
          "nothing a model file says can steer the terminal");

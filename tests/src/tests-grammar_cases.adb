@@ -333,6 +333,96 @@ package body Tests.Grammar_Cases is
    --  converter that writes plausible text is exactly what a test comparing
    --  strings would pass. Each schema below is compiled and then fed the
    --  answers it should take and the answers it should not.
+   --  The same schema as the parameters of a call written in tags, the
+   --  way a Qwen3-Coder or MiniCPM call is: a tag per property in schema
+   --  order, a required one mandatory and an optional one not, a string as
+   --  text up to the next tag, an enum's words bare, an integer as digits,
+   --  an object as JSON. What a tag holds is what the schema says and no
+   --  more, and a schema that is not an object with properties is refused.
+   procedure Schemas_Become_Tag_Grammars
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Sch renames Model_Runner.Schema;
+      LF : constant Character := ASCII.LF;
+
+      Calc : constant String :=
+        "{""type"": ""object"", ""properties"": {"
+        & """a"": {""type"": ""integer""}, "
+        & """op"": {""type"": ""string"", ""enum"": [""+"", ""-""]}, "
+        & """note"": {""type"": ""string""}, "
+        & """extra"": {""type"": ""object"", ""properties"": "
+        & "{""k"": {""type"": ""boolean""}}}}, "
+        & """required"": [""a"", ""op""]}";
+
+      procedure Check (Text : String; Wanted : Boolean; Why : String) is
+         Room   : String (1 .. Sch.Max_Grammar_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+         Item   : G.Compiled;
+         State  : G.Matcher;
+         Taken  : Boolean := True;
+      begin
+         Sch.To_Tag_Grammar
+           (Calc, "<parameter=", ">", "</parameter>", Room, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "the schema was refused as tags: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+         G.Compile (Item, Room (1 .. Last), Status);
+         Assert (E.Is_Ok (Status),
+                 "the tag grammar would not compile: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+         G.Start (Item, State, Status);
+         for Index in Text'Range loop
+            if not G.Accepts (Item, State, Text (Index .. Index)) then
+               Taken := False;
+               exit;
+            end if;
+            G.Advance (Item, State, Text (Index .. Index), Status);
+            exit when E.Is_Error (Status);
+         end loop;
+         if Taken then
+            Taken := G.Is_Complete (Item, State);
+         end if;
+         Assert (Taken = Wanted,
+                 (if Wanted then "the tag grammar refused "
+                  else "the tag grammar took ")
+                 & """" & Text & """: " & Why);
+         G.Close (Item);
+      end Check;
+
+      Room   : String (1 .. Sch.Max_Grammar_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+   begin
+      Check ("<parameter=a>" & LF & "47" & LF & "</parameter>" & LF
+             & "<parameter=op>" & LF & "+" & LF & "</parameter>" & LF,
+             True, "the two required parameters, values on their own lines");
+      Check ("<parameter=a>47</parameter><parameter=op>-</parameter>"
+             & "<parameter=note>a line, with a comma</parameter>"
+             & "<parameter=extra>{""k"": true}</parameter>",
+             True, "every parameter, the object as JSON");
+      Check ("<parameter=a>47</parameter>",
+             False, "a required parameter missing");
+      Check ("<parameter=op>+</parameter><parameter=a>47</parameter>",
+             False, "the parameters out of the schema's order");
+      Check ("<parameter=a>x</parameter><parameter=op>+</parameter>",
+             False, "an integer that is not digits");
+      Check ("<parameter=a>1</parameter><parameter=op>*</parameter>",
+             False, "an op outside the enum");
+      Check ("<parameter=a>1</parameter><parameter=op>""+""</parameter>",
+             False, "an enum word quoted as JSON would have it");
+      Check ("<parameter/a>1</parameter><parameter=op>+</parameter>",
+             False, "a malformed tag");
+
+      Sch.To_Tag_Grammar
+        ("{""type"": ""array"", ""items"": {""type"": ""string""}}",
+         "<parameter=", ">", "</parameter>", Room, Last, Status);
+      Assert (Status.Code = E.Grammar_Schema_Unsupported,
+              "parameters that are not an object were accepted as tags");
+   end Schemas_Become_Tag_Grammars;
+
    procedure Schemas_Become_Grammars_That_Hold
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -477,6 +567,10 @@ package body Tests.Grammar_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Schemas_Become_Tag_Grammars'Access,
+         "a JSON schema becomes the tag shape of a call's parameters, each "
+         & "in its tag in order, holding what the schema says and no more");
       Register_Routine
         (T, Schemas_Become_Grammars_That_Hold'Access,
          "a JSON schema becomes a grammar that takes what the schema "

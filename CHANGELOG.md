@@ -55,6 +55,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The gate is green.** Twenty-eight repository checks had been failing,
+  some for weeks and some from this fortnight's work. Put right: the
+  `write_file` tool writes bytes through `Stream_IO` rather than a text
+  stream, as the library rule says; six specs carry the GNATdoc tags their
+  public declarations lacked; a catalog key nothing read is gone;
+  `Library_Surface` no longer lists `Ends_With` and `Timed`, which the
+  program calls, and lists `Integer_Activation_Roles`, which it does not;
+  the reader's `case` is laid out as the style rule wants; and the
+  operations on no test are on one now -- a delegator, an inquirer and an
+  embedder wired into the built-in runner and reached through their tools,
+  the agent trace's three console lines read back as bytes, the tag
+  grammar from a schema, the decoded-text table -- or, for the agent
+  loop's observer, on the untested list with the reason. The ten
+  measured-figure groups whose sources moved are restamped, with the
+  argument for each change written in `docs/measured-figures.txt` and the
+  twelve-token figure taken again as the control: 0.352 s against the
+  published 0.339 at a load of 2.9, the same generated bits.
 - **The Qwen3-Coder and MiniCPM call syntaxes are shaped by the grammar,
   and a grammar no longer costs seconds a token.** Both tag forms were left
   unconstrained because the `<think>` block those families open a reply

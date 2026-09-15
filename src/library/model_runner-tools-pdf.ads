@@ -18,6 +18,9 @@ package Model_Runner.Tools.PDF is
    --  The text of a PDF, as far as its content streams give it up. Raw is the
    --  file's bytes. The result is bounded; an unreadable or textless PDF
    --  yields the empty string.
+   --
+   --  @param Raw The file's bytes.
+   --  @return The text its content streams give up, or the empty string.
    function Extract_Text (Raw : String) return String;
 
 end Model_Runner.Tools.PDF;

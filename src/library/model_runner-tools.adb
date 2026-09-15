@@ -1341,72 +1341,72 @@ package body Model_Runner.Tools is
 
       case Syntax is
       when Tool_Call_JSON | Open_JSON =>
-      Index := Reply'First;
-      while Index <= Reply'Last loop
-         if Marks (Index, Call_Opens) then
-            declare
-               First : constant Natural := Index + Call_Opens'Length;
-               Shut  : Natural := First;
-            begin
-               while Shut <= Reply'Last and then not Marks (Shut, Call_Closes)
-               loop
-                  Shut := Shut + 1;
-               end loop;
-
-               if Shut > Reply'Last then
-                  --  A block that never closes is a reply that stopped in
-                  --  the middle of a call, which is worth saying rather
-                  --  than reading as no call at all.
-                  Status := E.Make (E.Tools_Call_Malformed);
-                  E.Add_Integer
-                    (Status, "index", Long_Long_Integer (Item.Used + 1));
-                  return;
-               end if;
-
-               declare
-                  Taken : Boolean;
-               begin
-                  Take_One (Reply (First .. Shut - 1), Taken => Taken);
-               end;
-               if E.Is_Error (Status) then
-                  return;
-               end if;
-
-               Index := Shut + Call_Closes'Length;
-            end;
-         else
-            Index := Index + 1;
-         end if;
-      end loop;
-
-      --  The shapes a model trained on no envelope writes: an object
-      --  standing open in the text, bare or fenced. Looked for only when
-      --  no envelope was found, so that a reply which did write the
-      --  envelope is not read twice, and taken only when the object reads
-      --  as JSON and names a function with arguments; anything else at a
-      --  brace is text, and the search moves on one character.
-      if Syntax = Open_JSON and then Item.Used = 0 then
          Index := Reply'First;
          while Index <= Reply'Last loop
-            if Reply (Index) = '{' then
+            if Marks (Index, Call_Opens) then
                declare
-                  Shut  : constant Natural := Object_End (Index);
-                  Taken : Boolean := False;
+                  First : constant Natural := Index + Call_Opens'Length;
+                  Shut  : Natural := First;
                begin
-                  if Shut > 0 then
-                     Take_One (Reply (Index .. Shut), Announced => False,
-                               Taken => Taken);
-                     if E.Is_Error (Status) then
-                        return;
-                     end if;
+                  while Shut <= Reply'Last and then not Marks (Shut, Call_Closes)
+                  loop
+                     Shut := Shut + 1;
+                  end loop;
+
+                  if Shut > Reply'Last then
+                     --  A block that never closes is a reply that stopped in
+                     --  the middle of a call, which is worth saying rather
+                     --  than reading as no call at all.
+                     Status := E.Make (E.Tools_Call_Malformed);
+                     E.Add_Integer
+                       (Status, "index", Long_Long_Integer (Item.Used + 1));
+                     return;
                   end if;
-                  Index := (if Taken then Shut + 1 else Index + 1);
+
+                  declare
+                     Taken : Boolean;
+                  begin
+                     Take_One (Reply (First .. Shut - 1), Taken => Taken);
+                  end;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Index := Shut + Call_Closes'Length;
                end;
             else
                Index := Index + 1;
             end if;
          end loop;
-      end if;
+
+         --  The shapes a model trained on no envelope writes: an object
+         --  standing open in the text, bare or fenced. Looked for only when
+         --  no envelope was found, so that a reply which did write the
+         --  envelope is not read twice, and taken only when the object reads
+         --  as JSON and names a function with arguments; anything else at a
+         --  brace is text, and the search moves on one character.
+         if Syntax = Open_JSON and then Item.Used = 0 then
+            Index := Reply'First;
+            while Index <= Reply'Last loop
+               if Reply (Index) = '{' then
+                  declare
+                     Shut  : constant Natural := Object_End (Index);
+                     Taken : Boolean := False;
+                  begin
+                     if Shut > 0 then
+                        Take_One (Reply (Index .. Shut), Announced => False,
+                                  Taken => Taken);
+                        if E.Is_Error (Status) then
+                           return;
+                        end if;
+                     end if;
+                     Index := (if Taken then Shut + 1 else Index + 1);
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
+            end loop;
+         end if;
 
       when Function_XML =>
          declare

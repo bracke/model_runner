@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 34) of Text_Access :=
+   Held : constant array (1 .. 33) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -38,7 +38,6 @@ package body Library_Surface is
       new String'("Finalize_Plan"),
 
       --  Helpers.
-      new String'("Ends_With"),
       new String'("Equal_Ignore_Case"),
       new String'("Failure_Name"),
       new String'("Has_Controls"),
@@ -78,7 +77,11 @@ package body Library_Surface is
       --  engine asks.
       new String'("Keep_Timeline"),
       new String'("Timeline_Report"),
-      new String'("Timed"),
+
+      --  Which roles of weight round their activations, as the backend was
+      --  last told. The command tells and never asks back; a caller with
+      --  its own engine, or a test restoring what it found, asks.
+      new String'("Integer_Activation_Roles"),
 
       --  How far back a hybrid session may be rewound. The round that
       --  needs the answer asks for the count itself and knows it; a

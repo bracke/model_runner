@@ -2,7 +2,6 @@ with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
-with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
@@ -1023,22 +1022,34 @@ package body Model_Runner.Tools.Builtin is
    end Read_File;
 
    function Write_File (Args : String) return String is
+      use Ada.Streams;
       Have_P, Have_C : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Content : constant String := Text_Argument (Args, "content", Have_C);
-      File    : Ada.Text_IO.File_Type;
+      File    : Stream_IO.File_Type;
    begin
       if not (Have_P and then Have_C) then
          return "error: write_file needs a path and content";
       end if;
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
-      Ada.Text_IO.Put (File, Content);
-      Ada.Text_IO.Close (File);
+      --  Written as bytes, the way the file is read back: a text file
+      --  would end the content with a line break the model never wrote.
+      Stream_IO.Create (File, Stream_IO.Out_File, Path);
+      declare
+         Block : Stream_Element_Array
+           (1 .. Stream_Element_Offset (Content'Length));
+      begin
+         for Index in Block'Range loop
+            Block (Index) := Stream_Element
+              (Character'Pos (Content (Content'First + Natural (Index) - 1)));
+         end loop;
+         Stream_IO.Write (File, Block);
+      end;
+      Stream_IO.Close (File);
       return "wrote" & Natural'Image (Content'Length) & " bytes to " & Path;
    exception
       when others =>
-         if Ada.Text_IO.Is_Open (File) then
-            Ada.Text_IO.Close (File);
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
          end if;
          return "error: could not write the file";
    end Write_File;

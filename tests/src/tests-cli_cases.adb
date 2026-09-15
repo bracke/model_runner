@@ -9376,6 +9376,112 @@ package body Tests.CLI_Cases is
    --  exercised only in the arrangement where nothing is styled. This one
    --  states the two arrangements that matter and reads the bytes.
 
+   --  The agent trace: a call, its result and the outcome each go to
+   --  standard error on a line of their own, led by a plain glyph when the
+   --  stream is not styled -- an arrow in, an arrow out, a word for the
+   --  ending -- and by an escape-coloured one when it is; and quiet
+   --  writes none of them. Read as bytes, both ways, so a redirected
+   --  trace is known to stay readable and a terminal one to carry colour.
+   procedure Agent_Trace_Reads_As_A_Flow
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Err_Path : constant String := "obj/agent-trace-err.txt";
+
+      procedure Traced
+        (On_Terminal : Boolean; Level : Opt.Verbosity := Opt.Normal)
+      is
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Errors  : File_Type;
+      begin
+         Model_Runner.Localization.Open
+           (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access,
+            (if On_Terminal then Opt.Color_Always else Opt.Color_Never),
+            (Output_Is_Terminal => False,
+             Error_Is_Terminal  => On_Terminal,
+             Input_Is_Terminal  => False,
+             Colour_Suppressed  => not On_Terminal),
+            Level);
+
+         Create (Errors, Out_File, Err_Path);
+         Set_Error (Errors);
+         begin
+            Model_Runner.Presentation.Put_Tool_Call
+              (Screen, "calculator", "{""a"": 47, ""op"": ""*"", ""b"": 89}");
+            Model_Runner.Presentation.Put_Tool_Result (Screen, "4183");
+            Model_Runner.Presentation.Put_Agent_Outcome
+              (Screen, "ANSWERED", 2, 1,
+               Model_Runner.Presentation.Answered_Well);
+            Model_Runner.Presentation.Put_Agent_Outcome
+              (Screen, "REPEATING", 3, 2,
+               Model_Runner.Presentation.Stopped_Short);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               Model_Runner.Localization.Close (Catalog);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
+         Model_Runner.Localization.Close (Catalog);
+      end Traced;
+
+      function Has (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Whole'Length < Part'Length then
+            return False;
+         end if;
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+
+      function Coloured (Text : String) return Boolean is
+      begin
+         for Index in Text'Range loop
+            if Text (Index) = ASCII.ESC then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Coloured;
+   begin
+      Traced (On_Terminal => False);
+      declare
+         Plain : constant String := Text_Of (Err_Path);
+      begin
+         Assert (Has (Plain, "-> calculator {""a"": 47, ""op"": ""*"", "
+                               & """b"": 89}" & ASCII.LF),
+                 "the call did not read as an arrow in: " & Plain);
+         Assert (Has (Plain, "<- 4183" & ASCII.LF),
+                 "the result did not read as an arrow out: " & Plain);
+         Assert (Has (Plain, "ok ") and then Has (Plain, "ANSWERED"),
+                 "the answered outcome did not read as ok: " & Plain);
+         Assert (Has (Plain, "! ") and then Has (Plain, "REPEATING"),
+                 "the stop short did not read as a mark: " & Plain);
+         Assert (not Coloured (Plain),
+                 "a redirected trace carried escape sequences");
+      end;
+
+      Traced (On_Terminal => True);
+      Assert (Coloured (Text_Of (Err_Path)),
+              "a trace on a terminal was not coloured");
+
+      --  Nothing but the line break Text_IO closes an empty file with.
+      Traced (On_Terminal => False, Level => Opt.Quiet);
+      Assert (Text_Of (Err_Path) in "" | "" & ASCII.LF,
+              "quiet still wrote the trace: " & Text_Of (Err_Path));
+   end Agent_Trace_Reads_As_A_Flow;
+
    procedure Styling_Follows_Its_Stream
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11287,6 +11393,11 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Published_Transcripts_Are_Real'Access,
          "the transcripts the README publishes are what the program prints");
+      Register_Routine
+        (T, Agent_Trace_Reads_As_A_Flow'Access,
+         "the agent trace's call, result and outcome lines lead with a "
+         & "glyph, plain when redirected and coloured on a terminal, and "
+         & "quiet writes none");
       Register_Routine
         (T, Styling_Follows_Its_Stream'Access,
          "a line is coloured according to the stream it is going to");

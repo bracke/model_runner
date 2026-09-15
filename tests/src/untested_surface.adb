@@ -1,6 +1,6 @@
 package body Untested_Surface is
 
-   --  Grouped by why, because sixty-one separate sentences would be read
+   --  Grouped by why, because sixty-four separate sentences would be read
    --  by nobody and the groups are the reasons that matter.
    --
    --  Reached through a caller. Every one of these runs on an ordinary
@@ -17,6 +17,13 @@ package body Untested_Surface is
    --  Interfaces for a caller this repository does not have. A library is
    --  wider than its command, which Library_Surface already records; these
    --  are the part of that width nothing exercises either.
+   --
+   --  The agent loop's observer. On_Call, On_Result and On_Step are what
+   --  a watcher overrides to be told of each call, each result and each
+   --  step, and every `run --agent` drives them through the console's
+   --  watcher; a test that names them would need a model that calls a
+   --  tool, and no fixture here does -- the campaign that exercises them
+   --  runs against published models, behind the gate rather than in it.
    function Is_Untested (Name : String) return Boolean is
    begin
       return Name in
@@ -80,13 +87,16 @@ package body Untested_Surface is
          | "Tensor_Is_Supported"
          | "To_Tensor_Type"
          | "To_Value_Type"
-         | "Wide_From_Bits";
+         | "Wide_From_Bits"
+         | "On_Call"
+         | "On_Result"
+         | "On_Step";
    end Is_Untested;
 
    -----------
    -- Count --
    -----------
 
-   function Count return Natural is (61);
+   function Count return Natural is (64);
 
 end Untested_Surface;

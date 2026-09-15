@@ -15,6 +15,9 @@ package Model_Runner.Tools.RTF is
 
    --  The text of an RTF document, from its bytes. Bounded; an input that is
    --  not RTF yields the empty string.
+   --
+   --  @param Raw The file's bytes.
+   --  @return The document's text, or the empty string.
    function Extract_Text (Raw : String) return String;
 
 end Model_Runner.Tools.RTF;

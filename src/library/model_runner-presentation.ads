@@ -234,10 +234,17 @@ package Model_Runner.Presentation is
    --  localized but the leading glyph and the words are the same everywhere.
 
    --  A call the model made, about to run.
+   --
+   --  @param Item Console to write through.
+   --  @param Named The tool called.
+   --  @param Arguments Its arguments, as one line of JSON.
    procedure Put_Tool_Call
      (Item : in out Console; Named : String; Arguments : String);
 
    --  What running a call returned.
+   --
+   --  @param Item Console to write through.
+   --  @param Result The tool's answer, as text.
    procedure Put_Tool_Result (Item : in out Console; Result : String);
 
    --  How the agent loop ended, for the outcome line's glyph and colour: a

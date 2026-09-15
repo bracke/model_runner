@@ -24,11 +24,19 @@ package Model_Runner.Tools.OOXML is
 
    --  The kind a file name names by its extension. Found is false for a name
    --  that is none of these, and Kind is then meaningless.
+   --
+   --  @param Name A file name, with its extension.
+   --  @param Found True when the extension names a kind read here.
+   --  @return The kind; meaningless unless Found.
    function Kind_Of
      (Name : String; Found : out Boolean) return Document_Kind;
 
    --  The text of such a document, from its bytes. Bounded; an archive that
    --  cannot be read yields the empty string.
+   --
+   --  @param Raw The file's bytes.
+   --  @param Kind Which kind of document they are.
+   --  @return The document's text, or the empty string.
    function Extract_Text (Raw : String; Kind : Document_Kind) return String;
 
 end Model_Runner.Tools.OOXML;

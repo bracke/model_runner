@@ -18,6 +18,9 @@ package Model_Runner.Tools.DOC is
 
    --  The printable text of a legacy Word file, from its bytes. Bounded; a
    --  file that is not an OLE2 container yields the empty string.
+   --
+   --  @param Raw The file's bytes.
+   --  @return Its printable text, or the empty string.
    function Extract_Text (Raw : String) return String;
 
 end Model_Runner.Tools.DOC;
