@@ -123,6 +123,7 @@ package Model_Runner.Tools is
    --  it.
    type Call_Syntax is
      (Tool_Call_JSON,   --  <tool_call>{"name": .., "arguments": {..}}</tool_call>
+      Open_JSON,        --  that, or the object standing open in the text
       Function_XML,     --  <function name=".."><param name="p">v</param></function>
       Qwen_XML);        --  <function=..><parameter=p>\nv\n</parameter></function>
 
@@ -136,6 +137,14 @@ package Model_Runner.Tools is
    --  <![CDATA[..]]> block unwrapped -- becomes a JSON string, so the call's
    --  arguments read as one JSON object either way. What a caller reads here
    --  is a call and not a transcription.
+   --
+   --  In Open_JSON the envelope is read as in Tool_Call_JSON, and so is a
+   --  JSON object standing anywhere in the reply -- bare, or in a ```json
+   --  fence -- that names a function and carries arguments: the shapes a
+   --  model trained on no envelope at all writes when asked for one, Gemma
+   --  among them. An object without both members is text, and so is one
+   --  that does not read as JSON; nothing that was not announced as a call
+   --  is an error for not being one.
    --
    --  A reply with no such block carries no calls and is not an error: a
    --  model asked a question it can answer itself answers it.

@@ -171,6 +171,19 @@ package body Model_Runner.Templates is
          --  Gemma's turns are "user" and "model", so the role a caller gives
          --  is mapped rather than written through -- which is why this needs
          --  a comparison where the other three need none.
+         --
+         --  Gemma has no system turn: its own template folds a system
+         --  message into the first user turn, ahead of what the user said
+         --  and a blank line apart, and this does the same. Tools go the
+         --  same way, since there is nowhere else for them: the model was
+         --  trained on no tool format of its own, so the first user turn
+         --  says what functions there are, as JSON one a line, and asks for
+         --  a call as a JSON object in <tool_call> tags -- the envelope
+         --  Tools.Read_Calls reads and the call grammar constrains. An
+         --  assistant turn that asked for tools writes each call that way;
+         --  a run of tool answers is folded into one user turn between
+         --  <tool_response> tags, Gemma having no tool role either.
+         --
          --  The line break that ends the role is written inside each branch
          --  rather than after the endif, because a line break standing
          --  straight after a block tag belongs to the template's own shape
@@ -178,11 +191,60 @@ package body Model_Runner.Templates is
          --  the break between a turn's role and its content.
          return
            "{{ bos_token }}"
-           & "{% for message in messages %}"
-           & "<start_of_turn>"
-           & "{% if message['role'] == 'assistant' %}model" & LF
-           & "{% else %}{{ message['role'] }}" & LF & "{% endif %}"
-           & "{{ message['content'] }}<end_of_turn>" & LF
+           & "{% if messages[0]['role'] == 'system' %}"
+           & "{% set turns = messages[1:] %}"
+           & "{% else %}"
+           & "{% set turns = messages %}"
+           & "{% endif %}"
+           & "{% for message in turns %}"
+           & "{% if message.role == 'tool' %}"
+           & "{% if not loop.first"
+           & " and turns[loop.index0 - 1].role != 'tool' %}"
+           & "<start_of_turn>user" & LF
+           & "{% endif %}"
+           & "<tool_response>" & LF
+           & "{{ message.content }}" & LF
+           & "</tool_response>" & LF
+           & "{% if loop.last"
+           & " or turns[loop.index0 + 1].role != 'tool' %}"
+           & "<end_of_turn>" & LF
+           & "{% endif %}"
+           & "{% elif message.role == 'assistant' %}"
+           & "<start_of_turn>model" & LF
+           & "{{ message.content }}"
+           & "{% if message.tool_calls %}"
+           & "{% for tool_call in message.tool_calls %}"
+           & "<tool_call>" & LF
+           & "{""name"": ""{{ tool_call.name }}"", ""arguments"": "
+           & "{{ tool_call.arguments | tojson }}}" & LF
+           & "</tool_call>"
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "<end_of_turn>" & LF
+           & "{% else %}"
+           & "<start_of_turn>{{ message.role }}" & LF
+           & "{% if loop.first %}"
+           & "{% if messages[0]['role'] == 'system' %}"
+           & "{{ messages[0]['content'] }}" & LF & LF
+           & "{% endif %}"
+           & "{% if tools %}"
+           & "You have access to the following functions. To call one, "
+           & "reply with a JSON object inside <tool_call> tags and nothing "
+           & "else:" & LF
+           & "<tool_call>" & LF
+           & "{""name"": ""function-name"", ""arguments"": "
+           & "{""parameter-name"": ""value""}}" & LF
+           & "</tool_call>" & LF
+           & "The function's result comes back inside <tool_response> tags; "
+           & "wait for it, then answer from it. If no function is needed, "
+           & "answer directly." & LF
+           & "Functions:" & LF
+           & "{% for tool in tools %}{{ tool | tojson }}" & LF
+           & "{% endfor %}" & LF & LF
+           & "{% endif %}"
+           & "{% endif %}"
+           & "{{ message.content }}<end_of_turn>" & LF
+           & "{% endif %}"
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
            & "<start_of_turn>model" & LF
@@ -413,6 +475,8 @@ package body Model_Runner.Templates is
        then Model_Runner.Tools.Qwen_XML
        elsif Name = Format_Name (Format_MiniCPM)
        then Model_Runner.Tools.Function_XML
+       elsif Name = Format_Name (Format_Gemma)
+       then Model_Runner.Tools.Open_JSON
        else Model_Runner.Tools.Tool_Call_JSON);
 
    procedure Compile
@@ -3678,6 +3742,13 @@ package body Model_Runner.Templates is
             end;
          elsif Value.Kind = Term_Literal then
             return Quoted (Raw_Of (Value));
+
+         elsif Value.Kind = Term_Call_Arguments then
+            --  A call's arguments are held as the JSON text they were read
+            --  from, so their JSON is themselves. Templates in the wild
+            --  write `tool_call.arguments | tojson` as often as they test
+            --  `is string` first, and both mean this.
+            return Raw_Of (Value);
          end if;
 
          Refuse (Value.Offset, Value.Length,

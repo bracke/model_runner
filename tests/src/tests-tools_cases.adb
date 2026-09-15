@@ -955,6 +955,73 @@ package body Tests.Tools_Cases is
       Tools.Close (Asked);
    end Function_XML_Calls_Parse;
 
+   --  Open_JSON reads the envelope, and the object a model trained on no
+   --  envelope writes instead: bare on a line, or in a ```json fence, with
+   --  prose around it. It is read only where it names a function and
+   --  carries arguments; an object with a name and nothing else is text,
+   --  as is a brace in prose, and neither is an error. A reply that wrote
+   --  the envelope is read once, not once as an envelope and again as an
+   --  open object. And read as Tool_Call_JSON, the open shapes are text,
+   --  so no other format's reading changes.
+   procedure Open_JSON_Calls_Parse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF     : constant Character := ASCII.LF;
+      Asked  : Tools.Calls;
+      Status : E.Error_Info;
+
+      Bare : constant String :=
+        "{""name"": ""lookup"", ""arguments"": {""key"": ""capital_of_france""}}"
+        & LF & "The capital of France is Paris.";
+      Fenced : constant String :=
+        "```json" & LF
+        & "{""name"": ""reverse_text"", ""arguments"": {""text"": ""stressed""}}"
+        & LF & "```" & LF & "stressedstressed";
+      Wrapped : constant String :=
+        "Sure." & LF & "<tool_call>{""name"": ""calc"", ""arguments"": "
+        & "{""a"": 1}}</tool_call>";
+      Text_Only : constant String :=
+        "The set {1, 2} and {""name"": ""Paris""} and {""arguments"": {}} "
+        & "and {not json} are all text.";
+   begin
+      Tools.Read_Calls (Asked, Bare, Status, Syntax => Tools.Open_JSON);
+      Assert (E.Is_Ok (Status), "the bare object would not read");
+      Assert (Tools.Count (Asked) = 1, "the bare object was not one call");
+      Assert (Tools.Called (Asked, 1) = "lookup",
+              "wrong name: " & Tools.Called (Asked, 1));
+      Assert (Tools.Arguments (Asked, 1) = "{""key"": ""capital_of_france""}",
+              "wrong arguments: " & Tools.Arguments (Asked, 1));
+      Tools.Close (Asked);
+
+      Tools.Read_Calls (Asked, Fenced, Status, Syntax => Tools.Open_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1,
+              "the fenced object was not read as one call");
+      Assert (Tools.Called (Asked, 1) = "reverse_text",
+              "wrong fenced name: " & Tools.Called (Asked, 1));
+      Tools.Close (Asked);
+
+      Tools.Read_Calls (Asked, Wrapped, Status, Syntax => Tools.Open_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1,
+              "the envelope was not read exactly once:"
+              & Natural'Image (Tools.Count (Asked)));
+      Tools.Close (Asked);
+
+      Tools.Read_Calls (Asked, Text_Only, Status, Syntax => Tools.Open_JSON);
+      Assert (E.Is_Ok (Status),
+              "a brace in prose was an error: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Tools.Count (Asked) = 0,
+              "prose with braces was read as calls:"
+              & Natural'Image (Tools.Count (Asked)));
+      Tools.Close (Asked);
+
+      Tools.Read_Calls (Asked, Bare, Status, Syntax => Tools.Tool_Call_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 0,
+              "the bare object was read in the envelope syntax");
+      Tools.Close (Asked);
+   end Open_JSON_Calls_Parse;
+
    -------------------
    -- Register_Tests --
    -------------------
@@ -962,6 +1029,10 @@ package body Tests.Tools_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Open_JSON_Calls_Parse'Access,
+         "an Open_JSON reply reads a bare or fenced object naming a function "
+         & "with arguments as a call, the envelope once, and prose as prose");
       Register_Routine
         (T, Answers_Are_Fixed'Access,
          "every built-in tool answers the same way every time");

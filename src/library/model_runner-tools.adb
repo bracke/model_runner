@@ -874,11 +874,20 @@ package body Model_Runner.Tools is
       end Keep;
 
       --  Read what one block holds.
-      procedure Take_One (Inner : String) is
+      --  Announced is whether the text stood in an envelope: an announced
+      --  call that does not read is malformed, while an object found
+      --  standing open must carry both members to be a call at all, and
+      --  is text otherwise -- Taken says which.
+      procedure Take_One
+        (Inner     : String;
+         Announced : Boolean := True;
+         Taken     : out Boolean)
+      is
          Room    : String (1 .. Max_Call_Bytes);
          Written : Natural;
          Reading : E.Error_Info;
       begin
+         Taken := False;
          if Item.Used = Max_Calls then
             Status := E.Make (E.Tools_Too_Many);
             E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Calls));
@@ -887,9 +896,11 @@ package body Model_Runner.Tools is
 
          Rewrite (Inner, Room, Written, Reading);
          if E.Is_Error (Reading) then
-            Status := E.Make (E.Tools_Call_Malformed);
-            E.Add_Integer
-              (Status, "index", Long_Long_Integer (Item.Used + 1));
+            if Announced then
+               Status := E.Make (E.Tools_Call_Malformed);
+               E.Add_Integer
+                 (Status, "index", Long_Long_Integer (Item.Used + 1));
+            end if;
             return;
          end if;
 
@@ -900,10 +911,12 @@ package body Model_Runner.Tools is
             Name_At   : Span;
             Where     : Span;
          begin
-            if Called = "" then
-               Status := E.Make (E.Tools_Call_Malformed);
-               E.Add_Integer
-                 (Status, "index", Long_Long_Integer (Item.Used + 1));
+            if Called = "" or else (not Announced and then Given = "") then
+               if Announced then
+                  Status := E.Make (E.Tools_Call_Malformed);
+                  E.Add_Integer
+                    (Status, "index", Long_Long_Integer (Item.Used + 1));
+               end if;
                return;
             end if;
 
@@ -951,8 +964,39 @@ package body Model_Runner.Tools is
 
             Item.Used := Item.Used + 1;
             Item.Rows (Item.Used) := (Name => Name_At, Arguments => Where);
+            Taken := True;
          end;
       end Take_One;
+
+      --  The index of the brace that closes the object opened at Index,
+      --  or zero when none does before the reply ends. Strings are
+      --  stepped over, escapes and all, so a brace inside one is text.
+      function Object_End (Index : Positive) return Natural is
+         Depth     : Natural := 0;
+         In_String : Boolean := False;
+         P         : Positive := Index;
+      begin
+         while P <= Reply'Last loop
+            if In_String then
+               if Reply (P) = '\' then
+                  P := P + 1;
+               elsif Reply (P) = '"' then
+                  In_String := False;
+               end if;
+            elsif Reply (P) = '"' then
+               In_String := True;
+            elsif Reply (P) = '{' then
+               Depth := Depth + 1;
+            elsif Reply (P) = '}' then
+               Depth := Depth - 1;
+               if Depth = 0 then
+                  return P;
+               end if;
+            end if;
+            P := P + 1;
+         end loop;
+         return 0;
+      end Object_End;
 
       --  Store one call the arguments of which are already built as JSON,
       --  which is how the <function> form arrives.
@@ -1296,7 +1340,7 @@ package body Model_Runner.Tools is
       Item.Pool.all := [others => ' '];
 
       case Syntax is
-      when Tool_Call_JSON =>
+      when Tool_Call_JSON | Open_JSON =>
       Index := Reply'First;
       while Index <= Reply'Last loop
          if Marks (Index, Call_Opens) then
@@ -1319,7 +1363,11 @@ package body Model_Runner.Tools is
                   return;
                end if;
 
-               Take_One (Reply (First .. Shut - 1));
+               declare
+                  Taken : Boolean;
+               begin
+                  Take_One (Reply (First .. Shut - 1), Taken => Taken);
+               end;
                if E.Is_Error (Status) then
                   return;
                end if;
@@ -1330,6 +1378,35 @@ package body Model_Runner.Tools is
             Index := Index + 1;
          end if;
       end loop;
+
+      --  The shapes a model trained on no envelope writes: an object
+      --  standing open in the text, bare or fenced. Looked for only when
+      --  no envelope was found, so that a reply which did write the
+      --  envelope is not read twice, and taken only when the object reads
+      --  as JSON and names a function with arguments; anything else at a
+      --  brace is text, and the search moves on one character.
+      if Syntax = Open_JSON and then Item.Used = 0 then
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Reply (Index) = '{' then
+               declare
+                  Shut  : constant Natural := Object_End (Index);
+                  Taken : Boolean := False;
+               begin
+                  if Shut > 0 then
+                     Take_One (Reply (Index .. Shut), Announced => False,
+                               Taken => Taken);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  end if;
+                  Index := (if Taken then Shut + 1 else Index + 1);
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
+      end if;
 
       when Function_XML =>
          declare

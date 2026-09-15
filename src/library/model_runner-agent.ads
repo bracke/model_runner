@@ -215,7 +215,9 @@ package Model_Runner.Agent is
    --    <tool_call> convention and is shaped by the call grammar; Function_XML
    --    (MiniCPM's <function>/<param>) is read but not grammar-shaped, since
    --    that family reasons in <think> blocks a call grammar could not admit,
-   --    so the loop leaves its output free and reads the calls out of it.
+   --    so the loop leaves its output free and reads the calls out of it;
+   --    Open_JSON (Gemma's) reads the envelope and the bare or fenced object
+   --    a model writes instead, and is left free too where tools are offered.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.

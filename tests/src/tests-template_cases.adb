@@ -332,6 +332,108 @@ package body Tests.Template_Cases is
               "a model's own template is read from the JSON envelope");
    end Templates_Are_Recognised_By_Their_Markers;
 
+   --  The gemma format offers tools in the first user turn, writes a call
+   --  in the <tool_call> JSON envelope, and folds a tool's answer into a
+   --  user turn -- Gemma having no system turn and no tool turn of its own.
+   --
+   --  The system message goes ahead of the tools and both ahead of what the
+   --  user said, in the one turn, as the model's own template folds a
+   --  system message. Crossed against jinja2 reading the same source on
+   --  five conversation shapes, every byte agreeing; what is checked here
+   --  is that each part is where the model will look for it.
+   procedure Gemma_Renders_Tool_Calls
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF       : constant Character := Character'Val (10);
+      Item     : Tmpl.Compiled;
+      Messages : Conv.History;
+      Defs     : aliased Model_Runner.Tools.Definitions;
+      Asked    : Model_Runner.Tools.Calls;
+      Status   : E.Error_Info;
+      Target   : String (1 .. 4096);
+      Last     : Natural;
+
+      function Has (Whole, Part : String) return Boolean is
+      begin
+         if Part'Length = 0 or else Whole'Length < Part'Length then
+            return False;
+         end if;
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+   begin
+      Model_Runner.Tools.Read
+        (Defs,
+         "[{""type"": ""function"", ""function"": {""name"": ""calc"", "
+         & """description"": ""d"", ""parameters"": {""type"": ""object"", "
+         & """properties"": {""a"": {""type"": ""number""}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      Tmpl.Compile
+        (Item, Tmpl.Built_In (Tmpl.Format_Name (Tmpl.Format_Gemma)),
+         Status => Status);
+      Assert (E.Is_Ok (Status), "the gemma format did not compile");
+      Assert (Tmpl.Reads_Tools (Item), "the gemma format does not read tools");
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Set_System (Messages, "Be brief.", Status);
+      Conv.Append (Messages, Conv.User_Role, "hi", Status);
+      Conv.Append_Asking (Messages, "", Status);
+      Model_Runner.Tools.Read_Calls
+        (Asked,
+         "<tool_call>{""name"": ""calc"", ""arguments"": "
+         & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>",
+         Status);
+      Conv.Append_Call
+        (Messages, Model_Runner.Tools.Called (Asked, 1),
+         Model_Runner.Tools.Arguments (Asked, 1), Status);
+      Model_Runner.Tools.Close (Asked);
+      Conv.Append (Messages, Conv.Tool_Role, "4183", Status);
+
+      Tmpl.Render
+        (Item, Messages, "<bos>", "<eos>", True, Target, Last, Status,
+         Tools => Defs'Access);
+      Assert (E.Is_Ok (Status),
+              "the gemma format did not render with tools: "
+              & E.Error_Code'Image (Status.Code));
+
+      declare
+         R : constant String := Target (1 .. Last);
+      begin
+         Assert (Has (R, "<bos><start_of_turn>user" & LF & "Be brief." & LF & LF
+                          & "You have access to the following functions."),
+                 "the system message does not open the first user turn "
+                 & "ahead of the tools: " & R);
+         Assert (Has (R, "Functions:" & LF & "{""type"": ""function"""),
+                 "the tools were not offered as JSON: " & R);
+         Assert (Has (R, "}" & LF & LF & "hi<end_of_turn>"),
+                 "the user's words do not close the first turn: " & R);
+         Assert (not Has (R, "<start_of_turn>system"),
+                 "a system turn was written, which Gemma has none of: " & R);
+         Assert (Has (R, "<start_of_turn>model" & LF & "<tool_call>" & LF
+                          & "{""name"": ""calc"", ""arguments"": "
+                          & "{""a"": 47, ""op"": ""*"", ""b"": 89}}" & LF
+                          & "</tool_call><end_of_turn>"),
+                 "the call was not written in the JSON envelope: " & R);
+         Assert (Has (R, "<start_of_turn>user" & LF & "<tool_response>" & LF
+                          & "4183" & LF & "</tool_response>" & LF
+                          & "<end_of_turn>"),
+                 "the tool's answer was not folded into a user turn: " & R);
+         Assert (R (R'Last - 20 .. R'Last) = "<start_of_turn>model" & LF,
+                 "the generation prompt does not end the rendering: " & R);
+      end;
+
+      Conv.Close (Messages);
+      Tmpl.Close (Item);
+      Model_Runner.Tools.Close (Defs);
+   end Gemma_Renders_Tool_Calls;
+
    procedure MiniCPM_Renders_Tool_Calls
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1925,6 +2027,11 @@ package body Tests.Template_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Gemma_Renders_Tool_Calls'Access,
+         "the gemma format offers tools in the first user turn, writes a "
+         & "call in the <tool_call> JSON envelope, and folds a tool's "
+         & "answer into a user turn");
       Register_Routine
         (T, MiniCPM_Renders_Tool_Calls'Access,
          "the minicpm format offers tools and writes a call as a function "

@@ -88,6 +88,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The `gemma` chat format carries tools.** Gemma has no system turn and
+  no tool turn, and was trained on no tool format of its own, so the format
+  does what the model's own template does with a system message -- folds it
+  into the first user turn -- and does the same with the tools: the
+  functions as JSON one a line, with a request for a call as a JSON object
+  in `<tool_call>` tags; an assistant turn that asked for tools writes each
+  call that way, and a run of tool answers is folded into one user turn
+  between `<tool_response>` tags. Crossed against `jinja2` reading the same
+  source on five conversation shapes, every byte agreeing; a unit test
+  checks each part is where the model will look for it. A system message
+  no longer renders as a `<start_of_turn>system` turn, which Gemma never
+  had. And `tojson` on `tool_call.arguments` passes the arguments through,
+  since they are held as the JSON they were read from -- it refused before,
+  and templates in the wild write it as often as they test `is string`.
+- **`Tools.Open_JSON`, the call syntax Gemma's format reads by.** A model
+  trained on no envelope writes the object and not the tags: Gemma-3-1B,
+  asked for `<tool_call>`, answers with the JSON bare on a line or in a
+  ```` ```json ```` fence, and its calls were right in three tasks of four
+  while the reader saw none of them. Open_JSON reads the envelope as
+  Tool_Call_JSON does, and, when no envelope was written, any object
+  standing in the reply that reads as JSON and names a function with
+  arguments; a brace in prose, an object with a name and nothing else, or
+  one that does not parse is text, not an error, since nothing announced
+  it as a call. `Templates.Syntax_Of ("gemma")` answers it, and the agent
+  loop leaves an Open_JSON reply free where tools are offered -- the
+  grammar's prose would admit the bare object and shape nothing -- and
+  shapes it by the answer schema where none are. On agent-eval, Gemma-3-1B
+  goes from 0 calls read to 18, and from 2 tasks to 3; what it still fails
+  it fails as a one-billion-parameter model does, pasting a parameter
+  schema where the arguments go.
 - **A carried chat format stands in for a model template that will not
   compile, when the template's own text names it.** A model whose embedded
   template is outside the engine's subset -- Qwen3-Coder, MiniCPM -- no longer

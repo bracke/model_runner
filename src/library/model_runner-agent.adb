@@ -76,10 +76,17 @@ package body Model_Runner.Agent is
       --  The call grammar shapes the <tool_call> convention. MiniCPM's
       --  <function> form is read but not shaped: that family reasons in
       --  <think> blocks, whose '<' a call grammar's prose could not carry, so
-      --  its output is left free and the calls are read out of it.
+      --  its output is left free and the calls are read out of it. Open_JSON
+      --  is left free too where tools are offered -- its point is to read
+      --  the object a model writes without the envelope, and the grammar's
+      --  prose would admit that object and shape nothing -- and shaped by
+      --  the answer schema where none are, since an answer is the same
+      --  JSON whichever syntax the calls take.
       Constrain : constant Boolean :=
         (Have_Tools or else Answer_Schema /= "")
-        and then Tool_Syntax = Model_Runner.Tools.Tool_Call_JSON;
+        and then (Tool_Syntax = Model_Runner.Tools.Tool_Call_JSON
+                  or else (Tool_Syntax = Model_Runner.Tools.Open_JSON
+                           and then not Have_Tools));
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
