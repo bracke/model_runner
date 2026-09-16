@@ -422,24 +422,35 @@ And the two carried formats that were written to stand in for a model's own
 template, `qwen3-coder` and `minicpm`, each against `jinja2` reading *the
 model's own template* rather than its own source -- which is the check that
 matters for a stand-in, since the point of one is to be the bytes the model
-was trained on. `tests render --model PATH --format NAME` renders the
-carried format with the model's own tokens, and a script hands the same
-conversation to `jinja2` with the model's template, `trim_blocks` and
-`lstrip_blocks` on and `tojson` as `transformers` defines it. Eight
-conversations for Qwen3-Coder and nine for MiniCPM, byte for byte: with and
-without a system turn, tools offered -- with enums, defaults, nested items,
-required lists and a return -- a call turn with text and one without, two
-calls answered by two tool turns, reasoning kept in the exchange in progress
-and dropped from an earlier one, and for MiniCPM the caller's `--think` and
-`--no-think` each. The models' own templates render in this engine now, and
-the same script with `--template FILE` in place of `--format NAME` runs
-them against `jinja2` on the same conversations, every byte agreeing; the
-two files are fixtures, and the suite renders each beside its carried
-format on those conversations, so the crossing the script made once is
-made on every run. Gemma 3's own template renders too, and is crossed
-and kept the same way on the conversations without tools, which its
-template has no half for; it found the carried `gemma` format writing a
-turn's content untrimmed where the model's template trims it. Five faults came out of it: the line break after a block
+was trained on. `tests cross --model PATH --format NAME` renders the
+carried format with the model's own tokens and hands the same conversation
+to `jinja2` with the model's template, `trim_blocks` and `lstrip_blocks`
+on and `tojson` as `transformers` defines it. The Python that asks jinja2
+is carried inside the command, as text, so a checkout runs the crossing
+rather than a script somebody once had; a machine without python3 or
+jinja2 skips it. Nine conversations, byte for byte: with and without a
+system turn, tools offered -- with enums, defaults, nested items, required
+lists and a return -- a call turn with text and one without, two calls
+answered by two tool turns, a reply with no generation prompt, and
+reasoning kept in the exchange in progress and dropped from an earlier
+one, with the caller's `--think` and `--no-think` each where the template
+reads them; `--without-tools` and `--without-reasoning` leave out the
+shapes a carried format was never meant to match, which is how the
+`gemma` format -- whose model has no tool half -- and the `qwen3-coder`
+format -- which writes reasoning as Qwen3.5's template does -- are
+crossed. `tests cross --model PATH` alone sets the model's own template
+beside jinja2 reading the same text, which every model file on this
+machine passes: TinyLlama, Qwen2, Qwen3 in three sizes, Qwen3-MoE,
+Qwen3.5 in two sizes, Qwen3.6, Qwen3-Coder, MiniCPM, Phi-3 and Gemma 3 --
+whose template refuses a tool turn, on both sides -- and, from a file,
+gpt-oss's harmony template, which walks every tool's schema through a
+recursive macro into TypeScript. `--expressions` runs twelve one-line
+suites, one construct of the support matrix after another, the same way.
+The own templates of Qwen3-Coder, MiniCPM, Gemma 3, Qwen3.6 and gpt-oss
+are fixtures, and the suite renders the first three beside their carried
+formats on those conversations and the last two on every shape, so the
+crossing is made on every run. It found the carried `gemma` format
+writing a turn's content untrimmed where the model's template trims it. Five faults came out of it: the line break after a block
 tag, which
 the engine takes off as `trim_blocks` does, was where the model's template
 had written one as an expression, so `<tools>` and the first tool ran

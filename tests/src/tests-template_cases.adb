@@ -1237,6 +1237,12 @@ package body Tests.Template_Cases is
          return (if Used > 0 then Room (1 .. Used - 1) else "");
       end File_Text;
 
+      --  The published templates with no carried format beside them.
+      type File_Name is access constant String;
+      Published : constant array (1 .. 2) of File_Name :=
+        [new String'("fixtures/gpt-oss-own.jinja"),
+         new String'("fixtures/qwen36-own.jinja")];
+
       --  One conversation, built the same way for both templates.
       type Shape is
         (Plain, With_System, Tools_No_System, Tools_With_System,
@@ -1423,6 +1429,40 @@ package body Tests.Template_Cases is
                Choices => True, Thoughts => True);
       Compare (Tmpl.Format_Gemma, "fixtures/gemma3-own.jinja",
                Choices => False, Thoughts => True, Tooled => False);
+
+      --  And two published templates this build carries no format for,
+      --  rendered on every shape without a refusal: what `tests cross`
+      --  sets beside jinja2, kept where a checkout runs it.
+      for Which in Shape loop
+         for File of Published loop
+            declare
+               Own    : Tmpl.Compiled;
+               Talk   : Conv.History;
+               Room   : String (1 .. 8192);
+               Last   : Natural;
+               Status : E.Error_Info;
+               Tooled : constant Boolean :=
+                 Which in Tools_No_System | Tools_With_System
+                          | Call_With_Text | Call_Without_Text | Two_Calls;
+            begin
+               Tmpl.Compile (Own, File_Text (File.all), Status => Status);
+               Assert (E.Is_Ok (Status),
+                       File.all & " did not compile: "
+                       & E.Error_Code'Image (Status.Code));
+               Build (Talk, Which);
+               Tmpl.Render
+                 (Own, Talk, "<s>", "</s>",
+                  Which not in Two_Calls | Reply_No_Prompt,
+                  Room, Last, Status,
+                  Tools => (if Tooled then Defs'Access else null));
+               Conv.Close (Talk);
+               Tmpl.Close (Own);
+               Assert (E.Is_Ok (Status),
+                       File.all & " refused " & Shape'Image (Which) & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end;
+         end loop;
+      end loop;
 
       Model_Runner.Tools.Close (Defs);
    end Carried_Formats_Match_The_Models_Own_Templates;
@@ -2883,7 +2923,8 @@ package body Tests.Template_Cases is
         (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
          "the carried qwen3-coder, minicpm and gemma formats render the "
          & "same bytes as the models' own templates, conversation for "
-         & "conversation");
+         & "conversation, and the gpt-oss and Qwen3.6 templates render "
+         & "every shape");
       Register_Routine
         (T, Templates_Are_Recognised_By_Their_Markers'Access,
          "a template's own text names the carried format it is written in, "

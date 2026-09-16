@@ -13,6 +13,7 @@ package body Tool_Commands is
    Name_Outside        : aliased constant String := "outside";
    Name_Tokenize       : aliased constant String := "tokenize";
    Name_Render         : aliased constant String := "render";
+   Name_Cross          : aliased constant String := "cross";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
@@ -54,7 +55,8 @@ package body Tool_Commands is
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
      " --model --system --prompt --assistant --calls --tool --tools"
-     & " --template --format --generation-prompt --think --no-think ";
+     & " --template --format --generation-prompt --think --no-think"
+     & " --show-template --show-tokens ";
    Opts_Likeness  : aliased constant String := " --model --names ";
    Opts_Imatrix   : aliased constant String :=
      " --model --text --chunk --chunks --threads --out ";
@@ -89,7 +91,8 @@ package body Tool_Commands is
    Takes_Render    : aliased constant String :=
      "--model PATH [--system TEXT] [--prompt TEXT] [--assistant TEXT]"
      & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
-     & " [--format NAME] [--generation-prompt] [--think | --no-think]";
+     & " [--format NAME] [--generation-prompt] [--think | --no-think]"
+     & " [--show-template | --show-tokens]";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Shader    : aliased constant String :=
      "SOURCE.comp COMPILED.spv [ROOT]";
@@ -189,7 +192,17 @@ package body Tool_Commands is
    Takes_Test : aliased constant String := "[--only PREFIX] [--times N]";
    Opts_Test  : aliased constant String := " --only --times ";
 
-   Held : constant array (1 .. 25) of Command :=
+   Says_Cross  : aliased constant String :=
+     "set a chat template beside Python's jinja2, conversation for "
+     & "conversation";
+   Takes_Cross : aliased constant String :=
+     "--model PATH [--template FILE | --format NAME | --expressions]"
+     & " [--think | --no-think] [--without-tools] [--without-reasoning]";
+   Opts_Cross  : aliased constant String :=
+     " --model --template --format --expressions --think --no-think"
+     & " --without-tools --without-reasoning ";
+
+   Held : constant array (1 .. 26) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -217,6 +230,8 @@ package body Tool_Commands is
       (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
        Opts_Tokenize'Access),
       (Name_Cut'Access, Takes_Cut'Access, Says_Cut'Access, Opts_Cut'Access),
+      (Name_Cross'Access, Takes_Cross'Access, Says_Cross'Access,
+       Opts_Cross'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
        Opts_Render'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,

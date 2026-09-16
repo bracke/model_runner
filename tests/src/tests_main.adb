@@ -59,6 +59,7 @@ with Agent_Eval;
 with Perplexity_Run;
 with Quantize_Run;
 with Speed_Run;
+with Crossing;
 with Tool_Commands;
 with Fuzzing;
 with Text_Fuzzing;
@@ -264,6 +265,10 @@ begin
             end if;
          end loop;
       end;
+   elsif Command = "cross" then
+      if Crossing.Run /= 0 then
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+      end if;
    elsif Command = "fuzz" then
       --  Mutation fuzzing over the GGUF parser. Every case is derived from the
       --  seed and the case number, so a failure replays exactly.
@@ -1133,8 +1138,35 @@ begin
 
             Model_Runner.GGUF.Containers.Reader.Parse
               (Item, Source, Status => Status);
+
+            --  The template's own text, and nothing else: what a crossing
+            --  against another implementation hands that implementation.
+            if E.Is_Ok (Status) and then Given ("--show-template") then
+               declare
+                  Text : constant String := Template_Text;
+               begin
+                  String'Write
+                    (Ada.Text_IO.Text_Streams.Stream
+                       (Ada.Text_IO.Standard_Output),
+                     Text);
+               end;
+               return;
+            end if;
+
             if E.Is_Ok (Status) then
                Model_Runner.Tokenizer.Load (Words, Item, Status => Status);
+            end if;
+
+            --  The two tokens a template names, as the crossing needs
+            --  them to hand jinja2 the same text this render was given.
+            if E.Is_Ok (Status) and then Given ("--show-tokens") then
+               Ada.Text_IO.Put_Line
+                 (Model_Runner.Tokenizer.Token_Text
+                    (Words, Model_Runner.Tokenizer.Beginning_Token (Words)));
+               Ada.Text_IO.Put_Line
+                 (Model_Runner.Tokenizer.Token_Text
+                    (Words, Model_Runner.Tokenizer.End_Token (Words)));
+               return;
             end if;
 
             if E.Is_Ok (Status) then

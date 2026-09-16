@@ -459,6 +459,13 @@ private
 
       Term_Condition,
 
+      --  "(A or B)" and "(A and B)" as values, which the language answers
+      --  with one operand or the other rather than with a truth: the
+      --  first that is true for or, the first that is false for and.
+      --  Index_At names the left operand and Length the right.
+      Term_Or,
+      Term_And,
+
       --  A choice written inside an expression, "(A if C else B)": Offset
       --  names the kept condition, Index_At the operand taken when it
       --  holds and Length the one taken otherwise, or zero for nothing.
@@ -764,7 +771,15 @@ private
       --  'is number': a number written, counted, measured or read out of
       --  JSON, and not the text of one.
       Compare_Is_Number,
-      Compare_Is_Not_Number);
+      Compare_Is_Not_Number,
+
+      --  'is sequence': what has a length and positions -- text, a list,
+      --  a mapping, the tools, the conversation, a turn's calls -- and
+      --  'is undefined', the opposite of defined.
+      Compare_Is_Sequence,
+      Compare_Is_Not_Sequence,
+      Compare_Is_Undefined,
+      Compare_Is_Not_Undefined);
 
    type Clause is record
       Negated : Boolean := False;

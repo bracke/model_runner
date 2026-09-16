@@ -1086,6 +1086,56 @@ package body Model_Runner.Templates is
             end;
          end if;
 
+         --  "A or B" and "A and B" where both sides are operands: one
+         --  side or the other, as the language answers them. Anything
+         --  with a comparison in it is not two operands and goes on to be
+         --  read as the condition it is.
+         declare
+            At_Or  : constant Natural := Top_Level_Word (Held, "or");
+            At_And : constant Natural := Top_Level_Word (Held, "and");
+            At_Word : constant Natural :=
+              (if At_Or /= 0 and then (At_And = 0 or else At_Or < At_And)
+               then At_Or else At_And);
+            Width  : constant Natural := (if At_Word = At_Or then 2 else 3);
+         begin
+            if At_Word /= 0 then
+               declare
+                  Left_Text  : constant String := Held (Held'First .. At_Word - 1);
+                  Right_Text : constant String :=
+                    Held (At_Word + Width .. Held'Last);
+                  Left, Right : Operand;
+                  Scan : Natural := Left_Text'First;
+                  Read : Boolean;
+               begin
+                  Read_Operand (Left_Text, Scan, Left, Read);
+                  if Read
+                    and then Skip_Spaces (Left_Text, Scan) > Left_Text'Last
+                  then
+                     Scan := Right_Text'First;
+                     Read_Operand (Right_Text, Scan, Right, Read);
+                     if Read
+                       and then Skip_Spaces (Right_Text, Scan) > Right_Text'Last
+                     then
+                        Keep (Left, Kept);
+                        if Kept = 0 then
+                           return;
+                        end if;
+                        Result.Index_At := Kept;
+                        Keep (Right, Kept);
+                        if Kept = 0 then
+                           return;
+                        end if;
+                        Result.Length := Kept;
+                        Result.Kind :=
+                          (if At_Word = At_Or then Term_Or else Term_And);
+                        Ok := True;
+                        return;
+                     end if;
+                  end if;
+               end;
+            end if;
+         end;
+
          Read_Condition (Held, Test, Valid);
          if not Valid then
             return;
@@ -1098,6 +1148,55 @@ package body Model_Runner.Templates is
          Result.Offset := Kept;
          Ok := True;
       end Read_Value_Group;
+
+      --  The whole of Text as one operand: a sum or a term, or failing
+      --  that a choice, a comparison or an "or" written as a value --
+      --  what an argument to a macro or a filter may be.
+      procedure Read_Expression
+        (Text   : String;
+         Result : out Operand;
+         Ok     : out Boolean)
+      is
+         Scan  : Natural := Text'First;
+         Group : Term;
+      begin
+         Read_Operand (Text, Scan, Result, Ok);
+         if Ok and then Skip_Spaces (Text, Scan) > Text'Last then
+            return;
+         end if;
+         Read_Value_Group (Model_Runner.Text.Trim (Text), Group, Ok);
+         if Ok then
+            Result := (Terms => [1 => Group, others => <>], Count => 1);
+         end if;
+      end Read_Expression;
+
+      --  Where the next top-level comma is in Text from From, or past
+      --  the end: outside quotes and brackets.
+      function Comma_After (Text : String; From : Natural) return Natural is
+         Depth : Natural := 0;
+         Quote : Character := ' ';
+      begin
+         for Index in From .. Text'Last loop
+            declare
+               C : constant Character := Text (Index);
+            begin
+               if Quote /= ' ' then
+                  if C = Quote then
+                     Quote := ' ';
+                  end if;
+               elsif C in ''' | '"' then
+                  Quote := C;
+               elsif C in '(' | '[' | '{' then
+                  Depth := Depth + 1;
+               elsif C in ')' | ']' | '}' then
+                  Depth := (if Depth > 0 then Depth - 1 else 0);
+               elsif C = ',' and then Depth = 0 then
+                  return Index;
+               end if;
+            end;
+         end loop;
+         return Text'Last + 1;
+      end Comma_After;
 
       --  The methods a template may write after a piece of text, and the
       --  spelling each is recognised by. Longest last, because the shorter
@@ -1681,42 +1780,55 @@ package body Model_Runner.Templates is
                      if Shut = 0 then
                         return;
                      end if;
-                     while Skip_Spaces (Inside, Cursor_At) <= Inside'Last loop
-                        declare
-                           Value : Operand;
-                           Read  : Boolean;
-                           Kept  : Natural;
-                           Next  : Natural;
-                        begin
-                           Read_Operand (Inside, Cursor_At, Value, Read);
-                           if not Read or else Given >= Max_Parameters then
-                              Result := Refused (Text (First .. Shut));
-                              From := Shut + 1;
-                              Ok := True;
-                              return;
-                           end if;
-                           Keep (Value, Kept);
-                           if Kept = 0 then
-                              return;
-                           end if;
-                           Given := Given + 1;
-                           if Start = 0 then
-                              Start := Kept;
-                           end if;
-                           Next := Skip_Spaces (Inside, Cursor_At);
-                           if Next <= Inside'Last then
-                              if Inside (Next) /= ',' then
+                     --  Each argument a whole expression, up to the next
+                     --  comma at the top level; read first and kept
+                     --  after, all in a row, for the reason a list's
+                     --  elements are.
+                     declare
+                        Held  : Operand_List;
+                     begin
+                        while Skip_Spaces (Inside, Cursor_At) <= Inside'Last
+                        loop
+                           declare
+                              Stop : constant Natural :=
+                                Comma_After (Inside, Cursor_At);
+                              Read : Boolean;
+                           begin
+                              if Given >= Max_Parameters
+                                or else Given >= Max_Literal_Elements
+                              then
                                  Result := Refused (Text (First .. Shut));
                                  From := Shut + 1;
                                  Ok := True;
                                  return;
                               end if;
-                              Cursor_At := Next + 1;
-                           else
-                              Cursor_At := Next;
-                           end if;
-                        end;
-                     end loop;
+                              Given := Given + 1;
+                              Read_Expression
+                                (Inside (Cursor_At .. Stop - 1), Held (Given),
+                                 Read);
+                              if not Read then
+                                 Result := Refused (Text (First .. Shut));
+                                 From := Shut + 1;
+                                 Ok := True;
+                                 return;
+                              end if;
+                              Cursor_At := Stop + 1;
+                           end;
+                        end loop;
+                        for Which in 1 .. Given loop
+                           declare
+                              Kept : Natural;
+                           begin
+                              Keep (Held (Which), Kept);
+                              if Kept = 0 then
+                                 return;
+                              end if;
+                              if Start = 0 then
+                                 Start := Kept;
+                              end if;
+                           end;
+                        end loop;
+                     end;
                      Result.Kind := Term_Macro;
                      Result.Offset := Macro_Named (Word);
                      Result.Index_At := Start;
@@ -2453,6 +2565,14 @@ package body Model_Runner.Templates is
                               return 3;
                            elsif Key = "d" or else Key = "default" then
                               return 1;
+                           elsif Key = "indent" then
+                              return 1;
+                           elsif Key = "ensure_ascii" or else Key = "sort_keys"
+                           then
+                              --  Taken and ignored: every byte written
+                              --  here is UTF-8 already, and a mapping is
+                              --  written in the order it holds.
+                              return 2;
                            end if;
                            return 0;
                         end Slot_Of_Keyword;
@@ -2554,7 +2674,7 @@ package body Model_Runner.Templates is
                         Result.Numeric := True;
                      elsif Word = "tojson" then
                         Step.Kind := Filter_JSON;
-                        Read_Arguments (0);
+                        Read_Arguments (2, 0);
                      elsif Word = "params" then
                         Step.Kind := Filter_Params;
                      elsif Word = "qwen_params" then
@@ -2932,6 +3052,14 @@ package body Model_Runner.Templates is
                         Current.Operator :=
                           (if Denied then Compare_Is_Not_Number
                            else Compare_Is_Number);
+                     elsif Text (First .. Last) = "sequence" then
+                        Current.Operator :=
+                          (if Denied then Compare_Is_Not_Sequence
+                           else Compare_Is_Sequence);
+                     elsif Text (First .. Last) = "undefined" then
+                        Current.Operator :=
+                          (if Denied then Compare_Is_Not_Undefined
+                           else Compare_Is_Undefined);
                      elsif Text (First .. Last) = "iterable" then
                         Current.Operator :=
                           (if Denied then Compare_Is_Not_Iterable
@@ -4262,14 +4390,29 @@ package body Model_Runner.Templates is
             end if;
             Depth := Depth - 1;
 
-         elsif Model_Runner.Text.Starts_With (Trimmed, "call ") then
+         elsif Model_Runner.Text.Starts_With (Trimmed, "call ")
+           or else Model_Runner.Text.Starts_With (Trimmed, "call(")
+         then
             --  {% call m(args) %} ... {% endcall %}: the body becomes a
             --  macro of its own, entered from caller() inside m, and the
             --  call is made once the body has been read.
             declare
-               Source : constant String :=
+               Whole  : constant String :=
                  Model_Runner.Text.Trim
-                   (Trimmed (Trimmed'First + 5 .. Trimmed'Last));
+                   (Trimmed (Trimmed'First + 4 .. Trimmed'Last));
+
+               --  {% call(x, y) m(...) %}: the names in the brackets are
+               --  the body's parameters, which caller(a, b) binds.
+               Params_End : constant Natural :=
+                 (if Whole'Length > 0 and then Whole (Whole'First) = '('
+                  then Closes_At (Whole, Whole'First) else 0);
+               Params : constant String :=
+                 (if Params_End = 0 then ""
+                  else Whole (Whole'First .. Params_End));
+               Source : constant String :=
+                 (if Params_End = 0 then Whole
+                  else Model_Runner.Text.Trim
+                         (Whole (Params_End + 1 .. Whole'Last)));
                Value  : Operand;
                Scan   : Natural := Source'First;
                Valid  : Boolean;
@@ -4289,7 +4432,8 @@ package body Model_Runner.Templates is
                end if;
                Compile_Macro
                  ("__caller" & Model_Runner.Text.Image
-                    (Long_Long_Integer (Item.Program_Used)) & "()");
+                    (Long_Long_Integer (Item.Program_Used))
+                  & (if Params = "" then "()" else Params));
                if E.Is_Error (Status) or else Depth = 0 then
                   return;
                end if;
@@ -5015,12 +5159,31 @@ package body Model_Runner.Templates is
       --  The JSON a value is, as text: a mapping or list as it stands, a
       --  tool as the definitions hold it, text as a JSON string, none as
       --  null.
+      function Listed (Value : Held) return String;
+      function Element_Of_Listed (One : Held) return String;
+
       function JSON_Text (Value : Held) return String is
       begin
          case Value.Kind is
             when Value_Data => return Text_Of (Value);
             when Value_JSON =>
                return Offered_Tools.Definition (Tools.all, Value.Start);
+            when Value_Message => return Element_Of_Listed (Value);
+            when Value_List | Value_Tools => return Listed (Value);
+            when Value_Call =>
+               if Value.Index = 0 then
+                  return Listed (Value);
+               end if;
+               if Value.Start = 0 or else Value.Start > Count
+                 or else Value.Index > Conv.Call_Count (Messages, Value.Start)
+               then
+                  return "null";
+               end if;
+               return "{""name"": "
+                 & Quoted (Conv.Call_Name (Messages, Value.Start, Value.Index))
+                 & ", ""arguments"": "
+                 & Conv.Call_Arguments (Messages, Value.Start, Value.Index)
+                 & "}";
             when Value_Text => return Quoted (Text_Of (Value));
             when Value_Number => return Text_Of (Value);
             when Value_None => return "null";
@@ -6339,7 +6502,7 @@ package body Model_Runner.Templates is
                return Run_Macro (Value);
 
             when Term_List | Term_Dict | Term_Loop_Previous | Term_Loop_Next
-               | Term_Condition | Term_Choice =>
+               | Term_Condition | Term_Choice | Term_Or | Term_And =>
                return Printed (Base_Of (Value));
 
             when Term_Unsupported =>
@@ -7139,15 +7302,60 @@ package body Model_Runner.Templates is
 
       --  A term as a value: what it names, then each method in turn, then
       --  each filter, each taking what the one before it made.
+      --  The elements of a list as spans, for the filters that walk one.
+      Max_Elements : constant := 4096;
+      type Span_Array is array (1 .. Max_Elements) of Span;
+
+      procedure Elements_Of
+        (Src : String; Spans : out Span_Array; Count : out Natural);
+      function List_Of
+        (Src : String; Spans : Span_Array; Count : Natural) return Held;
+
       function Method_On (Value : Held; Step : Method_Step) return Held is
       begin
          case Step.Kind is
             when Method_None =>
                return Value;
 
+            when Method_Cut_From | Method_Cut_To =>
+               --  A cut through a list keeps the elements from or before
+               --  the position, counted as the language counts them; a
+               --  cut through text is a cut through text.
+               if Value.Kind in Value_Tools | Value_List | Value_Call
+                 or else (Value.Kind = Value_Data
+                          and then Is_JSON_List (Text_Of (Value)))
+               then
+                  declare
+                     Src   : constant String := Listed (Value);
+                     Spans : Span_Array;
+                     Count : Natural;
+                     Where : Long_Long_Integer :=
+                       Number_Of (Value_Of (Item.Operands.all (Step.At_Operand)));
+                     Kept  : Span_Array;
+                     Held_Count : Natural := 0;
+                  begin
+                     Elements_Of (Src, Spans, Count);
+                     if Where < 0 then
+                        Where := Long_Long_Integer'Max
+                          (0, Long_Long_Integer (Count) + Where);
+                     end if;
+                     for Index in 1 .. Count loop
+                        if (Step.Kind = Method_Cut_From
+                            and then Long_Long_Integer (Index) > Where)
+                          or else (Step.Kind = Method_Cut_To
+                                   and then Long_Long_Integer (Index) <= Where)
+                        then
+                           Held_Count := Held_Count + 1;
+                           Kept (Held_Count) := Spans (Index);
+                        end if;
+                     end loop;
+                     return List_Of (Src, Kept, Held_Count);
+                  end;
+               end if;
+               return As_Text (Applied (Step, Printed (Value)));
+
             when Method_Strip | Method_Left_Strip | Method_Right_Strip
-               | Method_Split_First | Method_Split_Last
-               | Method_Cut_From | Method_Cut_To =>
+               | Method_Split_First | Method_Split_Last =>
                return As_Text (Applied (Step, Printed (Value)));
 
             when Method_Split_Whole =>
@@ -7389,6 +7597,72 @@ package body Model_Runner.Templates is
          return Ada.Strings.Unbounded.To_String (R);
       end Listed;
 
+      --  JSON text written out again with each container's members on
+      --  lines of their own, Width blanks deeper a level, as Python's
+      --  json.dumps(indent=Width) writes it.
+      function Indented_JSON (Src : String; Width : Natural) return String is
+         R     : Ada.Strings.Unbounded.Unbounded_String;
+         Level : Natural := 0;
+         Quote : Boolean := False;
+         Index : Natural := Src'First;
+
+         procedure Break_Line is
+            Pad : constant String (1 .. Level * Width) := [others => ' '];
+         begin
+            Ada.Strings.Unbounded.Append (R, ASCII.LF & Pad);
+         end Break_Line;
+
+         --  Whether the container opening at Index is empty.
+         function Empty_Ahead return Boolean is
+            Look : constant Natural := Past_Blanks (Src, Index + 1);
+         begin
+            return Look <= Src'Last and then Src (Look) in ']' | '}';
+         end Empty_Ahead;
+      begin
+         while Index <= Src'Last loop
+            declare
+               C : constant Character := Src (Index);
+            begin
+               if Quote then
+                  Ada.Strings.Unbounded.Append (R, C);
+                  if C = '\' and then Index < Src'Last then
+                     Index := Index + 1;
+                     Ada.Strings.Unbounded.Append (R, Src (Index));
+                  elsif C = '"' then
+                     Quote := False;
+                  end if;
+               elsif C = '"' then
+                  Quote := True;
+                  Ada.Strings.Unbounded.Append (R, C);
+               elsif C in '[' | '{' then
+                  Ada.Strings.Unbounded.Append (R, C);
+                  if Empty_Ahead then
+                     Index := Past_Blanks (Src, Index + 1);
+                     Ada.Strings.Unbounded.Append (R, Src (Index));
+                  else
+                     Level := Level + 1;
+                     Break_Line;
+                  end if;
+               elsif C in ']' | '}' then
+                  Level := (if Level > 0 then Level - 1 else 0);
+                  Break_Line;
+                  Ada.Strings.Unbounded.Append (R, C);
+               elsif C = ',' then
+                  Ada.Strings.Unbounded.Append (R, C);
+                  Break_Line;
+               elsif C = ':' then
+                  Ada.Strings.Unbounded.Append (R, ": ");
+               elsif C in ' ' | ASCII.LF | ASCII.CR | ASCII.HT then
+                  null;
+               else
+                  Ada.Strings.Unbounded.Append (R, C);
+               end if;
+            end;
+            Index := Index + 1;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (R);
+      end Indented_JSON;
+
       --  Whether a value passes a test named in a select or reject, with
       --  the argument the test takes where it takes one.
       function Passes (V : Held; Test : String; Arg : Natural) return Boolean
@@ -7452,10 +7726,6 @@ package body Model_Runner.Templates is
          end if;
          return False;
       end Passes;
-
-      --  The elements of a list as spans, for the filters that walk one.
-      Max_Elements : constant := 4096;
-      type Span_Array is array (1 .. Max_Elements) of Span;
 
       procedure Elements_Of
         (Src : String; Spans : out Span_Array; Count : out Natural) is
@@ -7521,6 +7791,19 @@ package body Model_Runner.Templates is
                return As_Number (Long_Long_Integer (Length_Of (Value)));
 
             when Filter_JSON =>
+               --  Indented where asked, as Python indents: one element a
+               --  line, a nested container opening on the line of its
+               --  key, and an empty one staying on one line.
+               if Step.Arg1 /= 0 then
+                  declare
+                     Width : constant Natural :=
+                       Natural'Max
+                         (0, Natural (Number_Of
+                               (Value_Of (Item.Operands.all (Step.Arg1)))));
+                  begin
+                     return As_Text (Indented_JSON (JSON_Text (Value), Width));
+                  end;
+               end if;
                return As_Text (JSON_Text (Value));
 
             when Filter_Params =>
@@ -8158,6 +8441,17 @@ package body Model_Runner.Templates is
                                  then 1 else 0),
                        others => <>);
 
+            when Term_Or | Term_And =>
+               declare
+                  Left : constant Held :=
+                    Held_Of (Item.Operands.all (Value.Index_At));
+               begin
+                  if Is_Truthy (Left) = (Value.Kind = Term_Or) then
+                     return Left;
+                  end if;
+                  return Held_Of (Item.Operands.all (Value.Length));
+               end;
+
             when Term_Choice =>
                if Truth_Of (Item.Conditions.all (Value.Offset)) then
                   return Held_Of (Item.Operands.all (Value.Index_At));
@@ -8556,7 +8850,22 @@ package body Model_Runner.Templates is
                      else Printed (Right));
                   Found  : Boolean := False;
                begin
-                  if Right.Kind = Value_Data and then Is_JSON_List (Held) then
+                  if Right.Kind = Value_Message then
+                     --  A message named by position: the fields it has,
+                     --  as "'x' in message" answers them.
+                     Found := Needle = "role" or else Needle = "content"
+                       or else (Needle = "tool_calls"
+                                and then Right.Start in 1 .. Count
+                                and then Conv.Call_Count (Messages, Right.Start)
+                                         > 0);
+                  elsif Right.Kind = Value_Data and then Is_JSON_Mapping (Held)
+                  then
+                     --  Whether the mapping has a member of that name.
+                     Found := Member_Of (Held, Needle).Kind /= Value_Undefined;
+                  elsif Right.Kind = Value_JSON then
+                     Found := Member_Of (JSON_Text (Right), Needle).Kind
+                              /= Value_Undefined;
+                  elsif Right.Kind = Value_Data and then Is_JSON_List (Held) then
                      --  Whether the left side is one of the list's
                      --  elements, which is the other question this word
                      --  asks.
@@ -8669,6 +8978,25 @@ package body Model_Runner.Templates is
                      then Says else not Says);
                end;
 
+            when Compare_Is_Sequence | Compare_Is_Not_Sequence =>
+               declare
+                  V    : constant Held := Held_Of (Value.Left);
+                  Says : constant Boolean :=
+                    V.Kind in Value_Text | Value_Data | Value_JSON
+                              | Value_Tools | Value_List
+                    or else (V.Kind = Value_Call and then V.Index = 0);
+               begin
+                  Result :=
+                    (if Value.Operator = Compare_Is_Sequence
+                     then Says else not Says);
+               end;
+
+            when Compare_Is_Undefined | Compare_Is_Not_Undefined =>
+               Result :=
+                 (if Value.Operator = Compare_Is_Undefined
+                  then not Is_Defined (Value.Left)
+                  else Is_Defined (Value.Left));
+
             when Compare_Is_Iterable | Compare_Is_Not_Iterable =>
                --  What can be walked: a list, a mapping, text -- which the
                --  language walks character by character -- the tools, a
@@ -8744,6 +9072,8 @@ package body Model_Runner.Templates is
             Assign_Text (Where, Decoded (Src (Value.First .. Value.Last)));
          elsif Is_JSON_Integer (Src (Value.First .. Value.Last)) then
             Assign_Text (Where, Src (Value.First .. Value.Last), Value_Number);
+         elsif Src (Value.First .. Value.Last) in "true" | "false" | "null" then
+            Store (Where, Read_Out (Src (Value.First .. Value.Last)));
          else
             Slots (Where) :=
               (Kind => Value_Data,

@@ -55,6 +55,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`tests cross`, and every template on this machine passes it.** The
+  crossing against Python's jinja2 lived in scripts in a scratch
+  directory; it is a command now, `tests cross --model PATH [--format
+  NAME | --template FILE | --expressions] [--think | --no-think]
+  [--without-tools] [--without-reasoning]`, carrying the Python that asks
+  jinja2 as text, so a checkout runs it and a machine without python3
+  skips it. Nine conversations a template, twelve one-line suites for
+  the expressions, a line a case and a diff where the two differ; a
+  conversation both sides refuse is agreed on. Run over every model file
+  here -- TinyLlama, Qwen2, Qwen3 in three sizes, Qwen3-MoE, Qwen3.5 in
+  two sizes, Qwen3.6, Qwen3-Coder, MiniCPM, Phi-3, Gemma 3 -- and over
+  gpt-oss's harmony template from its published file, every byte agrees.
+  Getting there took `is sequence` and `is undefined`, `(A or B)` and `(A
+  and B)` as values -- `(tool.parameters.required or [])` -- a macro's or
+  a filter's argument being any expression, a slice through a list --
+  `loop_messages[loop.index:]` -- `'x' in MAPPING` and `'x' in
+  messages[0]`, `tojson(indent=N)` written as Python writes it, `tojson`
+  on a message, a list of them or a turn's calls, and `{% call(x) m()
+  %}` with `caller(v)` handing arguments to the block. `tests render`
+  takes `--show-template` and `--show-tokens`, which is how the crossing
+  reads a model's own template and its two tokens out of its file. The
+  gpt-oss and Qwen3.6 templates are fixtures the suite renders on every
+  shape.
 - **Numbers, the list filters, mapping literals, break and continue,
   filter and call blocks.** A number is a value of its own kind now --
   written, counted, measured, read out of a schema or assigned -- so `i +

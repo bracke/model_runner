@@ -76,9 +76,12 @@ package body Template_Registry is
                    & "{{ messages[loop.index0 + 1].role }}{% endfor %}"),
        Works),
 
-      (new String'("`'x' in TEXT`, `'x' not in TEXT`, `'x' in LIST`"),
+      (new String'("`'x' in TEXT`, `'x' not in TEXT`, `'x' in LIST`, "
+                   & "`'x' in MAPPING`"),
        new String'("{% if 'b' in 'abc' and 'z' not in 'abc' %}y{% endif %}"
-                   & "{% set l = ['a', 'b'] %}{% if 'b' in l %}y{% endif %}"),
+                   & "{% set l = ['a', 'b'] %}{% if 'b' in l %}y{% endif %}"
+                   & "{% if 'a' in {'a': 1} and 'role' in messages[0] %}m"
+                   & "{% endif %}"),
        Works),
 
       (new String'("The line a block tag stands on"),
@@ -91,10 +94,13 @@ package body Template_Registry is
                    & "{{ 10 - (3 - 1) }}"),
        Works),
 
-      (new String'("`TEXT[a:b]`, `TEXT[a:]`, `TEXT[:b]`"),
+      (new String'("`TEXT[a:b]`, `TEXT[a:]`, `TEXT[:b]`, `LIST[a:]`, "
+                   & "`LIST[:b]`"),
        new String'("{{ messages[1].content[:1] }}"
                    & "{{ messages[1].content[1:] }}"
-                   & "{{ messages[1].content[-1:] }}"),
+                   & "{{ messages[1].content[-1:] }}"
+                   & "{% for m in messages[1:] %}{{ m.role }}{% endfor %}"
+                   & "{{ [1, 2, 3][:2] | join }}"),
        Works),
 
       (new String'("`\| first`, `\| last`, `\| min`"),
@@ -179,8 +185,9 @@ package body Template_Registry is
                    & "{% endfor %}{% endif %}{% endfor %}"),
        Works),
 
-      (new String'("`\| tojson`"),
-       new String'("{{ 'text' | tojson }}{{ ['a', 1] | tojson }}"),
+      (new String'("`\| tojson`, `\| tojson(indent=N)`"),
+       new String'("{{ 'text' | tojson }}{{ ['a', 1] | tojson }}"
+                   & "{{ messages[0] | tojson }}{{ messages | tojson(indent=2) }}"),
        Works),
 
       (new String'("List literals `['a', 'b']`, `[]`"),
@@ -203,13 +210,15 @@ package body Template_Registry is
        Works),
 
       (new String'("`a == b`, `x is defined` and their like as values, "
-                   & "`(A if C else B)`"),
+                   & "`(A if C else B)`, `(A or B)`, `(A and B)`"),
        new String'("[{{ 1 == 1 }}][{{ nothing is defined }}][{{ true }}]"
                    & "{% set ok = 1 == 2 %}{% if ok %}T{% endif %}{{ ok }}"
                    & "{% if (1 == 1) != (2 == 3) %}y{% endif %}"
                    & "{% for message in messages %}"
                    & "{{ message.role + ('!' if loop.first else '') }}"
-                   & "{% endfor %}"),
+                   & "{% endfor %}{{ (nothing or 'd') }}{{ ('a' and 'b') }}"
+                   & "{% macro m(l) %}{{ l | length }}{% endmacro %}"
+                   & "{{ m(nothing or []) }}"),
        Works),
 
       (new String'("`loop.previtem`, `loop.nextitem`"),
@@ -261,9 +270,9 @@ package body Template_Registry is
                    & "{% if i == '1' %}!{% endif %}"),
        Works),
 
-      (new String'("`is defined`, `is none`, `is true`, `is false`, "
-                   & "`is string`, `is number`, `is mapping`, `is iterable`, "
-                   & "`is not ...`"),
+      (new String'("`is defined`, `is undefined`, `is none`, `is true`, "
+                   & "`is false`, `is string`, `is number`, `is mapping`, "
+                   & "`is iterable`, `is sequence`, `is not ...`"),
        new String'("{% if not tools is defined %}{% set tools = none %}"
                    & "{% endif %}{% if tools is none %}a{% endif %}"
                    & "{% if bos_token is not none %}b{% endif %}"
@@ -271,7 +280,9 @@ package body Template_Registry is
                    & "{% if bos_token is string %}d{% endif %}"
                    & "{% set l = [] %}{% if l is iterable and l is not "
                    & "mapping %}e{% endif %}"
-                   & "{% if messages[0].nothing is defined %}!{% endif %}"),
+                   & "{% if messages[0].nothing is defined %}!{% endif %}"
+                   & "{% if l is sequence and nothing is undefined %}f"
+                   & "{% endif %}"),
        Works),
 
       (new String'("`'field' in message`"),
@@ -313,9 +324,10 @@ package body Template_Registry is
        new String'("{% filter upper %}ab{{ 'c' }}{% endfilter %}"),
        Works),
 
-      (new String'("`{% call name(a) %} ... {% endcall %}` and `caller()`"),
-       new String'("{% macro box(t) %}<{{ t }}>{{ caller() }}</{{ t }}>"
-                   & "{% endmacro %}{% call box('b') %}in{% endcall %}"),
+      (new String'("`{% call(x) name(a) %} ... {% endcall %}` and "
+                   & "`caller(v)`"),
+       new String'("{% macro box(t) %}<{{ t }}>{{ caller(1) }}</{{ t }}>"
+                   & "{% endmacro %}{% call(n) box('b') %}in{{ n }}{% endcall %}"),
        Works),
 
       (new String'("Mapping literals `{'a': 1}`, `.keys()`, `.values()`, "
