@@ -3067,6 +3067,8 @@ package body Tests.CLI_Cases is
               "run m.gguf --raw --prompt hi --mmproj eyes.gguf");
       Expect (E.CLI_Repeated_Option,
               "run m.gguf --prompt hi --mmproj a.gguf --mmproj b.gguf");
+      Expect (E.CLI_Picture_Needs_Projector,
+              "run m.gguf --prompt hi --pan-and-scan");
       Expect (E.CLI_Conflicting_System_Sources,
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
@@ -5585,6 +5587,14 @@ package body Tests.CLI_Cases is
       Assert (Model_Runner.Text.To_String
                 (Read ("--mmproj", "eyes.gguf").Projector_Path) = "eyes.gguf",
               "--mmproj did not reach the projector path");
+      declare
+         Cut : Opt.Command;
+         Status : E.Error_Info;
+      begin
+         Reading ("--mmproj=eyes.gguf", "--pan-and-scan", Cut, Status);
+         Assert (E.Is_Ok (Status) and then Cut.Pan_And_Scan,
+                 "--pan-and-scan did not reach the crops");
+      end;
 
       --  Stopping.
       Assert (Read ("--stop-token", "11").Stop_Token_Count = 1,

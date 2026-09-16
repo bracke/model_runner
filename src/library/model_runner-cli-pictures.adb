@@ -1,6 +1,8 @@
 with Ada.Calendar;
 with Ada.Strings.Unbounded;
+with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Bytes;
 with Model_Runner.Images;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
@@ -14,9 +16,14 @@ package body Model_Runner.CLI.Pictures is
    package T renames Model_Runner.Tensors;
    package US renames Ada.Strings.Unbounded;
 
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Gen.Crop_Counts, Gen.Crop_Counts_Access);
+
    use type Ada.Calendar.Time;
    use type N.Element_Count;
    use type T.Real_Array_Access;
+   use type Gen.Crop_Counts_Access;
+   use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Tokenizer.Token_Id;
 
    --  The files a list of parts names as pictures: each part whose type
@@ -137,6 +144,14 @@ package body Model_Runner.CLI.Pictures is
          return;
       end if;
 
+      --  The words the reference processor sets a picture with crops
+      --  among, and its crops apart. Gemma 3's, which is the one projector
+      --  read here.
+      Item.Lead := Model_Runner.Text.To_Bounded ("Here is the original image ");
+      Item.Bridge := Model_Runner.Text.To_Bounded
+        (" and here are some crops to help you see better ");
+      Item.Gap := Model_Runner.Text.To_Bounded (" ");
+
       Item.Width := Model_Runner.Llama.Config (Model).Embedding;
       if Model_Runner.Vision.Row_Width (Item.Eyes) /= Item.Width then
          Status := E.Make (E.Arch_Invalid_Dimensions);
@@ -188,9 +203,10 @@ package body Model_Runner.CLI.Pictures is
       Messages : Conv.History;
       Into     : in out Gen.Picture_Set;
       Team     : Model_Runner.Backend.CPU.Pool_Reference;
+      Crops    : Boolean := False;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Reporter : access procedure
-        (Index, Total : Positive; Milliseconds : Natural) := null;
+        (Index, Total : Positive; Rows, Milliseconds : Natural) := null;
       Status   : out E.Error_Info)
    is
       Paths : array (1 .. Max_Pictures) of US.Unbounded_String;
@@ -239,54 +255,128 @@ package body Model_Runner.CLI.Pictures is
       Into.Soft := Item.Soft;
       Into.Closer := Item.Closer;
       Into.Per_Picture := Per;
+      Into.Crop_Lead := Item.Lead;
+      Into.Crop_Bridge := Item.Bridge;
+      Into.Crop_Gap := Item.Gap;
 
       if Total <= Into.Count then
          return;
       end if;
 
-      --  Room for every picture, the rows already held copied over.
+      --  A crop count for every picture, the ones held copied over.
       declare
-         Grown : T.Real_Array_Access;
+         Grown : constant Gen.Crop_Counts_Access :=
+           new Gen.Crop_Counts'(1 .. Total => 0);
       begin
-         T.Allocate (N.Element_Count (Total) * Row_Elements, Grown);
-         if Grown = null then
-            Status := E.Make (E.Memory_Allocation_Failed);
-            E.Add_Text (Status, "category", "pictures", E.Param_Identifier);
-            return;
+         if Into.Crops /= null then
+            for Index in Into.Crops.all'Range loop
+               if Index <= Total then
+                  Grown.all (Index) := Into.Crops.all (Index);
+               end if;
+            end loop;
+            Free (Into.Crops);
          end if;
-         if Into.Rows /= null and then Into.Count > 0 then
-            Grown (0 .. N.Element_Count (Into.Count) * Row_Elements - 1) :=
-              Into.Rows (0 .. N.Element_Count (Into.Count) * Row_Elements - 1);
-         end if;
-         T.Free (Into.Rows);
-         Into.Rows := Grown;
+         Into.Crops := Grown;
       end;
 
       for Index in Into.Count + 1 .. Total loop
          declare
             Picture : Model_Runner.Images.Raster;
-            Rows    : T.Real_Array_Access;
+            Grid    : Model_Runner.Images.Tiling := Model_Runner.Images.Uncut;
+            Tiles   : Positive := 1;
             Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-            At_Row  : constant N.Element_Count :=
-              N.Element_Count (Index - 1) * Row_Elements;
+            Held    : constant N.Element_Count :=
+              (if Into.Rows = null then 0 else Into.Rows.all'Length);
+            At_Row  : N.Element_Count := Held;
+
+            --  One picture -- the whole, or a crop -- encoded to the rows
+            --  after those held so far.
+            procedure Encode_One (Shown : Model_Runner.Images.Raster) is
+               Rows : T.Real_Array_Access;
+            begin
+               Model_Runner.Vision.Encode
+                 (Item.Eyes, Shown, Team, Rows, Cancel, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Into.Rows (At_Row .. At_Row + Rows.all'Length - 1) := Rows.all;
+               At_Row := At_Row + Rows.all'Length;
+               T.Free (Rows);
+            end Encode_One;
          begin
             Model_Runner.Images.Load
               (US.To_String (Paths (Index)), Picture, Status);
             if E.Is_Error (Status) then
                return;
             end if;
-            Model_Runner.Vision.Encode
-              (Item.Eyes, Picture, Team, Rows, Cancel, Status);
+
+            if Crops and then Picture.Width > 0 and then Picture.Height > 0
+            then
+               Grid := Model_Runner.Images.Pan_And_Scan
+                 (Picture.Width, Picture.Height);
+               Tiles := 1 + Grid.Across * Grid.Down;
+            end if;
+
+            --  Room for this picture's rows, whole and crops, past the
+            --  rows already held.
+            declare
+               Grown : T.Real_Array_Access;
+            begin
+               T.Allocate
+                 (Held + N.Element_Count (Tiles) * Row_Elements, Grown);
+               if Grown = null then
+                  Model_Runner.Images.Free (Picture);
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  E.Add_Text (Status, "category", "pictures", E.Param_Identifier);
+                  return;
+               end if;
+               if Into.Rows /= null and then Held > 0 then
+                  Grown (0 .. Held - 1) := Into.Rows (0 .. Held - 1);
+               end if;
+               T.Free (Into.Rows);
+               Into.Rows := Grown;
+            end;
+
+            Encode_One (Picture);
+
+            if E.Is_Ok (Status) and then Tiles > 1 then
+               Rows_Loop :
+               for Row in 0 .. Grid.Down - 1 loop
+                  for Column in 0 .. Grid.Across - 1 loop
+                     declare
+                        Left, Top : Natural;
+                        Wide, Tall : Positive;
+                        Piece : Model_Runner.Images.Raster;
+                     begin
+                        Model_Runner.Images.Crop_Bounds
+                          (Picture.Width, Picture.Height, Grid, Column, Row,
+                           Left, Top, Wide, Tall);
+                        Model_Runner.Images.Crop
+                          (Picture, Left, Top, Wide, Tall, Piece);
+                        if Piece.Pixels = null then
+                           Status := E.Make (E.Memory_Allocation_Failed);
+                           E.Add_Text
+                             (Status, "category", "pictures", E.Param_Identifier);
+                        else
+                           Encode_One (Piece);
+                           Model_Runner.Images.Free (Piece);
+                        end if;
+                     end;
+                     exit Rows_Loop when E.Is_Error (Status);
+                  end loop;
+               end loop Rows_Loop;
+            end if;
+
             Model_Runner.Images.Free (Picture);
             if E.Is_Error (Status) then
                return;
             end if;
-            Into.Rows (At_Row .. At_Row + Rows.all'Length - 1) := Rows.all;
-            T.Free (Rows);
+
+            Into.Crops.all (Index) := Tiles - 1;
             Into.Count := Index;
             if Reporter /= null then
                Reporter
-                 (Index, Total,
+                 (Index, Total, Tiles * Per,
                   Natural (Float (Ada.Calendar.Clock - Started) * 1000.0));
             end if;
          end;
@@ -300,6 +390,7 @@ package body Model_Runner.CLI.Pictures is
    procedure Release (Item : in out Gen.Picture_Set) is
    begin
       T.Free (Item.Rows);
+      Free (Item.Crops);
       Item := Gen.No_Pictures;
    end Release;
 

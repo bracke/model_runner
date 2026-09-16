@@ -82,6 +82,78 @@ package Model_Runner.Images is
       Height : Positive;
       Result : out Raster);
 
+   --  A rectangle of a picture, copied out.
+   --
+   --  @param Source The picture.
+   --  @param Left Column the crop starts at.
+   --  @param Top Row the crop starts at.
+   --  @param Width Columns wanted; cut at the picture's edge.
+   --  @param Height Rows wanted; cut at the picture's edge.
+   --  @param Result The crop, or an empty raster when the rectangle lies
+   --    outside the picture or the allocation failed.
+   procedure Crop
+     (Source : Raster;
+      Left   : Natural;
+      Top    : Natural;
+      Width  : Positive;
+      Height : Positive;
+      Result : out Raster);
+
+   --  How a picture is cut into crops for pan-and-scan: a grid of tiles
+   --  across the longer side, the whole picture being shown as well. The
+   --  reference pipeline's rule -- a picture whose longer side is at
+   --  least Min_Ratio times its shorter is cut into as many tiles along
+   --  it as the ratio rounds to, at least two, at most Max_Crops, none
+   --  narrower than Min_Crop pixels; a picture nearer square, or too
+   --  small to cut, is not cut at all.
+   type Tiling is record
+      Across : Natural := 0;
+      Down   : Natural := 0;
+   end record;
+
+   --  No crops at all.
+   Uncut : constant Tiling := (0, 0);
+
+   --  The crops a picture of a size gets.
+   --
+   --  @param Width The picture's width.
+   --  @param Height The picture's height.
+   --  @param Min_Crop Narrowest a crop may be, in pixels.
+   --  @param Max_Crops Most crops along the longer side.
+   --  @param Min_Ratio The longer side over the shorter, below which
+   --    the picture is left whole.
+   --  @return The grid, or Uncut.
+   function Pan_And_Scan
+     (Width     : Positive;
+      Height    : Positive;
+      Min_Crop  : Positive := 256;
+      Max_Crops : Positive := 4;
+      Min_Ratio : Float := 1.2) return Tiling;
+
+   --  The rectangle one crop of a grid covers: the picture's side divided
+   --  into the grid's count, rounded up, the last crop cut at the edge.
+   --
+   --  @param Width The picture's width.
+   --  @param Height The picture's height.
+   --  @param Grid The tiling.
+   --  @param Column Which crop across, from zero.
+   --  @param Row Which crop down, from zero.
+   --  @param Left Where the crop starts.
+   --  @param Top Where the crop starts.
+   --  @param Crop_Width How wide it is.
+   --  @param Crop_Height How tall it is.
+   procedure Crop_Bounds
+     (Width       : Positive;
+      Height      : Positive;
+      Grid        : Tiling;
+      Column      : Natural;
+      Row         : Natural;
+      Left        : out Natural;
+      Top         : out Natural;
+      Crop_Width  : out Positive;
+      Crop_Height : out Positive)
+   with Pre => Column < Grid.Across and then Row < Grid.Down;
+
    --  Release a raster's pixels. Idempotent.
    --
    --  @param Item Raster to release.

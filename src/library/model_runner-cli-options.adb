@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 104) of Registry_Row :=
+   Registry : constant array (1 .. 105) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -176,6 +176,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--mmproj"),
        [Command_Run => True, others => False], Text ("mmproj")),
+      (Text ("--pan-and-scan"),
+       [Command_Run => True, others => False], Text ("pan_and_scan")),
       (Text ("--embed-model"),
        [Command_Run => True, others => False], Text ("embed_model")),
       (Text ("--memory-file"),
@@ -2050,6 +2052,14 @@ package body Model_Runner.CLI.Options is
                      Result.Projector_Path := T.To_Bounded (Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--pan-and-scan" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Pan_And_Scan := True;
+
                   elsif Name = "--embed-model" then
                      Mark (Flag_Embed_Model, Name, Good);
                      if not Good then
@@ -2684,6 +2694,14 @@ package body Model_Runner.CLI.Options is
       if Result.Raw and then not T.Is_Empty (Result.Projector_Path) then
          Status := E.Make (E.CLI_Raw_Mode_Conflict);
          E.Add_Text (Status, "option", "--mmproj", E.Param_Identifier);
+         return;
+      end if;
+
+      --  Crops are of a picture, and a picture needs the projector.
+      if Result.Pan_And_Scan and then T.Is_Empty (Result.Projector_Path) then
+         Status := E.Make (E.CLI_Picture_Needs_Projector);
+         E.Add_Text (Status, "option", "--pan-and-scan", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--mmproj", E.Param_Identifier);
          return;
       end if;
 

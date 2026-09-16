@@ -1,5 +1,6 @@
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Streams.Stream_IO;
+with Ada.Unchecked_Deallocation;
 with AUnit.Assertions;
 with Interfaces;
 
@@ -45,6 +46,9 @@ package body Tests.Vision_Cases is
    use type N.Wide_Real;
    use type T.Real_Array_Access;
    use type Vocab.Token_Id;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Gen.Crop_Counts, Gen.Crop_Counts_Access);
 
    package Wide_Math is
      new Ada.Numerics.Generic_Elementary_Functions (N.Wide_Real);
@@ -346,6 +350,75 @@ package body Tests.Vision_Cases is
                  & Natural'Image (Pixel (Result, 0, 0, 0))
                  & Natural'Image (Pixel (Result, 1, 0, 0)));
          Images.Free (Result);
+         Images.Free (Source);
+      end;
+
+      --  Pan-and-scan, by the reference's rule: a picture 1.2 times as
+      --  long as it is wide is cut, one nearer square is not; the count
+      --  is the ratio rounded half up, at least two, at most four, and
+      --  held to crops of 256 pixels -- a picture too narrow for two of
+      --  them is left whole however long it is.
+      declare
+         use type Images.Tiling;
+         function Plan (Width, Height : Positive) return Images.Tiling
+         is (Images.Pan_And_Scan (Width, Height));
+      begin
+         Assert (Plan (896, 896) = Images.Uncut,
+                 "a square picture was cut");
+         Assert (Plan (1000, 900) = Images.Uncut,
+                 "a picture nearer square than 1.2 was cut");
+         Assert (Plan (1920, 1080) = (Across => 2, Down => 1),
+                 "a 16:9 picture was not cut in two across");
+         Assert (Plan (1080, 1920) = (Across => 1, Down => 2),
+                 "a 9:16 picture was not cut in two down");
+         Assert (Plan (1000, 400) = (Across => 3, Down => 1),
+                 "a picture two and a half times as wide was not cut in three");
+         Assert (Plan (4000, 500) = (Across => 4, Down => 1),
+                 "a picture eight times as wide was cut into more than four");
+         Assert (Plan (600, 300) = (Across => 2, Down => 1),
+                 "a picture twice as wide, 300 tall, was not cut in two");
+         Assert (Plan (600, 200) = Images.Uncut,
+                 "a picture 200 tall was cut into crops shorter than 256");
+         Assert (Plan (300, 100) = Images.Uncut,
+                 "a picture 300 wide was cut into crops narrower than 256");
+      end;
+
+      --  A crop's bounds and its pixels: the side divided into the
+      --  count, rounded up, the last crop what is left; and the pixels
+      --  are the source's at that offset.
+      declare
+         Source, Piece : Images.Raster;
+         Left, Top : Natural;
+         Wide, Tall : Positive;
+         Data : B.Byte_Array (0 .. 3 * 5 * 2 - 1);
+      begin
+         Images.Crop_Bounds
+           (1000, 400, (Across => 3, Down => 1), 2, 0, Left, Top, Wide, Tall);
+         Assert (Left = 668 and then Top = 0 and then Wide = 332
+                 and then Tall = 400,
+                 "the last of three crops of 1000 is not 332 from 668");
+         Images.Crop_Bounds
+           (1000, 400, (Across => 3, Down => 1), 0, 0, Left, Top, Wide, Tall);
+         Assert (Left = 0 and then Wide = 334,
+                 "the first of three crops of 1000 is not 334 wide");
+
+         --  Five pixels by two, each byte its own index.
+         for Index in Data'Range loop
+            Data (Index) := B.Byte (Index);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6 5 2 255 ") & Data, "test", Source, Status);
+         Assert (E.Is_Ok (Status), "the five-by-two PPM did not decode");
+         Images.Crop (Source, 3, 1, 4, 4, Piece);
+         Assert (Piece.Width = 2 and then Piece.Height = 1,
+                 "a crop past the edge was not cut to what is there");
+         Assert (Pixel (Piece, 0, 0, 0) = 3 * (5 + 3)
+                 and then Pixel (Piece, 1, 0, 2) = 3 * (5 + 4) + 2,
+                 "the crop's pixels are not the source's at its offset");
+         Images.Free (Piece);
+         Images.Crop (Source, 5, 0, 1, 1, Piece);
+         Assert (Piece.Pixels = null,
+                 "a crop outside the picture was not empty");
          Images.Free (Source);
       end;
    end Pictures_Decode_And_Resample;
@@ -866,7 +939,7 @@ package body Tests.Vision_Cases is
       pragma Unreferenced (T2);
       Image : B.Byte_Array_Access;
    begin
-      Tiny_Model.Build (Image);
+      Tiny_Model.Build (Image, Room => 64);
 
       declare
          Held   : aliased constant B.Byte_Array := Image.all;
@@ -914,7 +987,7 @@ package body Tests.Vision_Cases is
          Request.Has_Seed := True;
          Request.Add_Beginning := True;
 
-         L.Open (Live, Ready, 16, Status => Status);
+         L.Open (Live, Ready, 64, Status => Status);
          Assert (E.Is_Ok (Status), "the session did not open");
 
          --  Without pictures, "cab" is the beginning, c and what follows.
@@ -974,6 +1047,113 @@ package body Tests.Vision_Cases is
                null, null, Pictures => Pictures, Outcome => Outcome);
             Assert (Gen.Generated_Text (Outcome) = First_Text,
                     "the same picture twice answered differently");
+         end;
+
+         --  With two crops, the marker opens out into the words the
+         --  reference sets a cut picture among -- here the pieces "b",
+         --  "a" and "b", which the tiny vocabulary spells -- and three
+         --  frames: the whole picture's and one a crop.
+         declare
+            Lead, Bridge, Gap : Vocab.Token_Array (1 .. 8);
+            Lead_Count, Bridge_Count, Gap_Count : Natural;
+            Expected : Vocab.Token_Array (1 .. 64);
+            Count    : Natural := 0;
+            Plain    : Natural;
+            At_Marker : Natural := Natural'Last;
+
+            procedure Put (Token : Vocab.Token_Id) is
+            begin
+               Count := Count + 1;
+               Expected (Count) := Token;
+            end Put;
+
+            procedure Frame is
+            begin
+               Put (Pictures.Marker);
+               for Row in 1 .. Per loop
+                  Put (Pictures.Soft);
+               end loop;
+               Put (Pictures.Closer);
+            end Frame;
+         begin
+            Vocab.Encode (Words.all, "b", False, False, Lead, Lead_Count, Status);
+            Vocab.Encode (Words.all, "a", False, False, Bridge, Bridge_Count, Status);
+            Vocab.Encode (Words.all, "b", False, False, Gap, Gap_Count, Status);
+            Assert (Lead_Count > 0 and then Bridge_Count > 0 and then Gap_Count > 0,
+                    "the pieces the crops are set among did not tokenize");
+
+            --  The plain prompt once more, for where its marker stands.
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
+               null, Outcome => Outcome);
+            Plain := Outcome.Prompt_Tokens;
+            for Index in 0 .. Plain - 1 loop
+               if L.Committed_Token (Live, Index) = Pictures.Marker then
+                  At_Marker := Index;
+                  exit;
+               end if;
+            end loop;
+            for Index in 0 .. At_Marker - 1 loop
+               Put (L.Committed_Token (Live, Index));
+            end loop;
+            for Index in 1 .. Lead_Count loop
+               Put (Lead (Index));
+            end loop;
+            Frame;
+            for Index in 1 .. Bridge_Count loop
+               Put (Bridge (Index));
+            end loop;
+            Frame;
+            for Index in 1 .. Gap_Count loop
+               Put (Gap (Index));
+            end loop;
+            Frame;
+            for Index in At_Marker + 1 .. Plain - 1 loop
+               Put (L.Committed_Token (Live, Index));
+            end loop;
+
+            Pictures.Crops := new Gen.Crop_Counts'(1 => 2);
+            Pictures.Crop_Lead := Model_Runner.Text.To_Bounded ("b");
+            Pictures.Crop_Bridge := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Crop_Gap := Model_Runner.Text.To_Bounded ("b");
+            T.Free (Pictures.Rows);
+            T.Allocate (3 * Per * Width, Pictures.Rows);
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run with a cut picture failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the prompt with a cut picture is"
+                    & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
+                    & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the prompt with a cut picture is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            --  Without crops for that picture, the words are not written.
+            Pictures.Crops.all (1) := 0;
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (Outcome.Prompt_Tokens = Plain + Per + 1,
+                    "a picture with no crops was set among the words");
+            Free (Pictures.Crops);
          end;
 
          --  Two pictures given and one marked, or one given and none

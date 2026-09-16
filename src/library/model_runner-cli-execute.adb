@@ -2169,16 +2169,15 @@ package body Model_Runner.CLI.Execute is
       is
          Named : Boolean := False;
 
-         procedure Note (Index, Total : Positive; Milliseconds : Natural) is
+         procedure Note
+           (Index, Total : Positive; Rows, Milliseconds : Natural) is
          begin
             if Item.Level = Opt.Verbose then
                Pres.Put_Note
                  (Screen, "cli.note.picture_encoded",
                   [Loc.Named ("index", T.Image (Long_Long_Integer (Index))),
                    Loc.Named ("total", T.Image (Long_Long_Integer (Total))),
-                   Loc.Named
-                     ("value",
-                      T.Image (Long_Long_Integer (Pictures.Per_Picture))),
+                   Loc.Named ("value", T.Image (Long_Long_Integer (Rows))),
                    Loc.Named
                      ("count", T.Image (Long_Long_Integer (Milliseconds)))]);
             end if;
@@ -2213,8 +2212,8 @@ package body Model_Runner.CLI.Execute is
          end if;
 
          Model_Runner.CLI.Pictures.Gather
-           (Seer, Messages, Pictures, Team, Cancel'Unchecked_Access,
-            Note'Access, Condition);
+           (Seer, Messages, Pictures, Team, Item.Pan_And_Scan,
+            Cancel'Unchecked_Access, Note'Access, Condition);
       end Gather_Pictures;
 
       procedure Fail (Reason : E.Error_Info) is

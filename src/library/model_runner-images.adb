@@ -72,6 +72,118 @@ package body Model_Runner.Images is
    end Make;
 
    ----------
+   -- Crop --
+   ----------
+
+   procedure Crop
+     (Source : Raster;
+      Left   : Natural;
+      Top    : Natural;
+      Width  : Positive;
+      Height : Positive;
+      Result : out Raster)
+   is
+      Columns : constant Integer :=
+        Integer'Min (Width, Source.Width - Left);
+      Rows    : constant Integer :=
+        Integer'Min (Height, Source.Height - Top);
+   begin
+      Result := (others => <>);
+      if Source.Pixels = null or else Columns <= 0 or else Rows <= 0 then
+         return;
+      end if;
+
+      Make (Columns, Rows, Result);
+      if Result.Pixels = null then
+         return;
+      end if;
+
+      for Y in 0 .. Rows - 1 loop
+         declare
+            From : constant B.Byte_Count :=
+              3 * (B.Byte_Count (Top + Y) * B.Byte_Count (Source.Width)
+                   + B.Byte_Count (Left));
+            Into : constant B.Byte_Count :=
+              3 * B.Byte_Count (Y) * B.Byte_Count (Columns);
+            Span : constant B.Byte_Count := 3 * B.Byte_Count (Columns);
+         begin
+            Result.Pixels.all (Into .. Into + Span - 1) :=
+              Source.Pixels.all (From .. From + Span - 1);
+         end;
+      end loop;
+   end Crop;
+
+   ------------------
+   -- Pan_And_Scan --
+   ------------------
+
+   function Pan_And_Scan
+     (Width     : Positive;
+      Height    : Positive;
+      Min_Crop  : Positive := 256;
+      Max_Crops : Positive := 4;
+      Min_Ratio : Float := 1.2) return Tiling
+   is
+      Longer  : constant Positive := Positive'Max (Width, Height);
+      Shorter : constant Positive := Positive'Min (Width, Height);
+      Ratio   : constant Float := Float (Longer) / Float (Shorter);
+
+      --  The ratio rounded half up, held to what the shortest crop
+      --  allows, to at least two and to the most allowed -- in that
+      --  order, which is the reference's and matters where the picture is
+      --  narrow: a picture 300 wide with a minimum of 256 rounds to one
+      --  crop, is raised to two, and is then found too narrow to cut.
+      Count : Natural := Natural (Float'Floor (Ratio + 0.5));
+   begin
+      if Ratio < Min_Ratio then
+         return Uncut;
+      end if;
+
+      Count := Natural'Min (Longer / Min_Crop, Count);
+      Count := Natural'Max (2, Count);
+      Count := Natural'Min (Max_Crops, Count);
+
+      declare
+         Along_Longer  : constant Positive :=
+           (Longer + Count - 1) / Count;
+      begin
+         if Positive'Min (Along_Longer, Shorter) < Min_Crop then
+            return Uncut;
+         end if;
+      end;
+
+      if Width >= Height then
+         return (Across => Count, Down => 1);
+      else
+         return (Across => 1, Down => Count);
+      end if;
+   end Pan_And_Scan;
+
+   -----------------
+   -- Crop_Bounds --
+   -----------------
+
+   procedure Crop_Bounds
+     (Width       : Positive;
+      Height      : Positive;
+      Grid        : Tiling;
+      Column      : Natural;
+      Row         : Natural;
+      Left        : out Natural;
+      Top         : out Natural;
+      Crop_Width  : out Positive;
+      Crop_Height : out Positive)
+   is
+      Each_Wide : constant Positive := (Width + Grid.Across - 1) / Grid.Across;
+      Each_Tall : constant Positive := (Height + Grid.Down - 1) / Grid.Down;
+   begin
+      Left := Column * Each_Wide;
+      Top  := Row * Each_Tall;
+      Crop_Width  := Positive'Min (Each_Wide, Width - Left);
+      Crop_Height := Positive'Min (Each_Tall, Height - Top);
+   end Crop_Bounds;
+
+   ----------
    -- Free --
    ----------
 

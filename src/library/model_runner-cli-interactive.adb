@@ -279,7 +279,8 @@ package body Model_Runner.CLI.Interactive is
             end if;
          end if;
          Model_Runner.CLI.Pictures.Gather
-           (Seer, Messages, Pictures, L.Workers (Session), Status => Outcome);
+           (Seer, Messages, Pictures, L.Workers (Session), Item.Pan_And_Scan,
+            Status => Outcome);
       end Gather_Pictures;
 
       procedure Release_Pictures is

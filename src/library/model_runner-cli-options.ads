@@ -457,6 +457,10 @@ package Model_Runner.CLI.Options is
       --  the model's second file, holding the image encoder and the map
       --  into the text model's width.
       Projector_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
+      --  Pan and scan: show a wide or tall picture whole and then in
+      --  crops along its longer side, as the reference processor can.
+      Pan_And_Scan : Boolean := False;
       Draft_Tokens : Natural := 4;
 
       --  Or propose them out of the context, with no model at all: what

@@ -14,12 +14,21 @@
 --  and encodes every image part with a path that the picture set does not
 --  hold yet, so that calling it again after a turn was added encodes only
 --  the new picture.
+--
+--  Pan-and-scan, when asked for, shows a wide or tall picture twice: whole,
+--  and then in two to four crops along its longer side, each encoded as a
+--  picture of its own and set in the prompt among the reference
+--  processor's words -- "Here is the original image ... and here are some
+--  crops to help you see better". A picture near square, or too small to
+--  cut into crops of 256 pixels, is shown whole only, as the reference
+--  shows it.
 with Model_Runner.Backend.CPU;
 with Model_Runner.Cancellation;
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
+with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Vision;
 
@@ -71,9 +80,12 @@ package Model_Runner.CLI.Pictures is
    --  @param Messages The conversation.
    --  @param Into The picture set, extended.
    --  @param Team The pool to encode on, or null for the calling task.
+   --  @param Crops Whether to pan and scan: cut a wide or tall picture
+   --    into crops shown after the whole.
    --  @param Cancel Stop request, or null.
    --  @param Reporter Called after each picture, or null: with
-   --    @param Index its number, @param Total the total named and
+   --    @param Index its number, @param Total the total named,
+   --    @param Rows the rows it took, crops included, and
    --    @param Milliseconds the milliseconds it took.
    --  @param Status Success, IO_Open_Failed, IO_Image_Unreadable,
    --    Memory_Allocation_Failed, Generation_Cancelled, or
@@ -83,9 +95,10 @@ package Model_Runner.CLI.Pictures is
       Messages : Model_Runner.Conversation.History;
       Into     : in out Model_Runner.Generation.Picture_Set;
       Team     : Model_Runner.Backend.CPU.Pool_Reference;
+      Crops    : Boolean := False;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Reporter : access procedure
-        (Index, Total : Positive; Milliseconds : Natural) := null;
+        (Index, Total : Positive; Rows, Milliseconds : Natural) := null;
       Status   : out Model_Runner.Errors.Error_Info);
 
    --  Release a picture set's rows and forget its pictures.
@@ -101,6 +114,8 @@ private
       Width  : Natural := 0;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
+      Lead, Bridge, Gap : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
    end record;
 
 end Model_Runner.CLI.Pictures;

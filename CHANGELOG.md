@@ -81,6 +81,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A wide or tall picture can be shown in crops, `--pan-and-scan`.** The
+  reference processor's rule: a picture whose longer side is 1.2 times its
+  shorter is cut along it into as many crops as the ratio rounds to, two at
+  least and four at most, none under 256 pixels, and shown whole first;
+  each crop is encoded as a picture of its own, and the prompt sets the
+  frames among the processor's own words, "Here is the original image ...
+  and here are some crops to help you see better", which the model was
+  trained to see. On a 1920 by 1080 poster the whole picture alone read
+  the publisher's name in the fine print as "Fabelabwe Verlag"; with two
+  crops it reads "Pabel-Moewig Verlag", which is what the poster says.
+  Three tiles cost three encodes. `Model_Runner.Images` gained `Crop`,
+  `Pan_And_Scan` and `Crop_Bounds`; the picture set carries a crop count
+  a picture and the words; the option needs `--mmproj`.
 - **A picture's rows see each other, and the device takes the encoder's
   products.** In the text model the 256 rows a picture stands behind
   attended causally, each to itself and before; the reference lets them
