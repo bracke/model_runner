@@ -444,6 +444,16 @@ private
       --  plus and minus and wrong once a product is written outside it.
       Term_Group,
 
+      --  A comparison or test written as a value -- "x is defined" in the
+      --  output, "(a == b) != (c == d)" in a condition: Offset names the
+      --  kept condition, and the term is worth true or false.
+      Term_Condition,
+
+      --  A choice written inside an expression, "(A if C else B)": Offset
+      --  names the kept condition, Index_At the operand taken when it
+      --  holds and Length the one taken otherwise, or zero for nothing.
+      Term_Choice,
+
       --  Something this engine cannot evaluate, carried through compilation
       --  so that a template is refused for what it does rather than for what
       --  it contains. Offset and Length name the construct, for the error
@@ -557,7 +567,14 @@ private
       --  A mapping's entries, which a loop walks two names at a time. The
       --  value is the mapping itself; what the method says is how it will
       --  be walked, and a loop over one written without it walks the same.
-      Method_Items);
+      Method_Items,
+
+      --  One element of what came before, by a position kept as an
+      --  operand, and one member of it, by a name kept as an operand:
+      --  "content[0]['text']", "messages[0].role[0]", "x.split(s)[i]".
+      --  Written after a term as its methods are, and read in that order.
+      Method_Index,
+      Method_Member);
 
    --  One method and where its one argument was kept: the characters to
    --  take off, or the marker to cut at.

@@ -55,6 +55,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Gemma 3's own template renders, and a comparison is a value.** The
+  template Gemma 3 ships compares two bracketed conditions -- `(message
+  ['role'] == 'user') != (loop.index0 % 2 == 0)` -- and writes a choice
+  inside an expression, `(first_user_prefix if loop.first else "")`,
+  and each was a refusal. A comparison or test is a value now wherever
+  an expression is: printed as Python prints a truth, assigned with
+  `set`, compared with another; `true`, `false` and `none` print as
+  `True`, `False` and `None`, as they do there, and `| tojson` writes
+  them as JSON. A choice inside brackets takes one operand or the other
+  by its condition, or nothing without an `else`. Positions and members
+  chain after a term in any order -- `content[0].text`, `l[i][j]`,
+  `t['function'].name`, `s.split(m)[1].strip()` -- and a quoted name in
+  brackets is the member it names. A macro's body reads the names
+  outside it and keeps its own assignments to itself, as the language
+  scopes it, where its `set`s used to leak. Gemma 3's own template is
+  crossed against jinja2 and kept as a fixture beside the carried
+  `gemma` format, which now trims a turn's content as the model's
+  template does.
 - **The templates Qwen3-Coder and MiniCPM ship render as they are.** Both
   were stood in for by a carried format because the engine held nothing
   but text: a list written out, `| items` over a schema, `is iterable`,

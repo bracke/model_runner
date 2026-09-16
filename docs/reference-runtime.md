@@ -436,7 +436,10 @@ the same script with `--template FILE` in place of `--format NAME` runs
 them against `jinja2` on the same conversations, every byte agreeing; the
 two files are fixtures, and the suite renders each beside its carried
 format on those conversations, so the crossing the script made once is
-made on every run. Five faults came out of it: the line break after a block
+made on every run. Gemma 3's own template renders too, and is crossed
+and kept the same way on the conversations without tools, which its
+template has no half for; it found the carried `gemma` format writing a
+turn's content untrimmed where the model's template trims it. Five faults came out of it: the line break after a block
 tag, which
 the engine takes off as `trim_blocks` does, was where the model's template
 had written one as an expression, so `<tools>` and the first tool ran

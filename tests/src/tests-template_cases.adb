@@ -1079,6 +1079,43 @@ package body Tests.Template_Cases is
             & " {% endmacro %}{{ m(['a', 'b']) }}", "<a><b>",
             "a list passed to a macro and -%} inside it");
 
+      --  A comparison or test is a value: printed as Python prints a
+      --  truth, assigned, compared with another, and true and false and
+      --  none print as Python prints them.
+      Same ("[{{ 1 == 1 }}][{{ nothing is defined }}][{{ true }}]"
+            & "[{{ false }}][{{ none }}][{{ 'ab'.startswith('a') }}]",
+            "[True][False][True][False][None][True]",
+            "truths printed as Python prints them");
+      Same ("{% set ok = 1 == 2 %}{% if ok %}T{% else %}F{% endif %}"
+            & "{{ ok }}{{ ok | tojson }}", "FFalsefalse",
+            "a comparison assigned and read back");
+      Same ("{% if (1 == 1) != (2 == 3) %}y{% endif %}"
+            & "{% if (1 == 1) == (2 == 3) %}n{% endif %}"
+            & "{% if not (1 == 2) and (3 == 3) %}z{% endif %}", "yz",
+            "two bracketed conditions compared");
+
+      --  A choice written inside an expression, which is how Gemma's
+      --  template puts a system message in front of the first turn only.
+      Same ("{% for m in messages %}{{ m.role + ('!' if loop.first else '') }}"
+            & "{% endfor %}", "user!assistanttool",
+            "a choice inside a sum");
+      Same ("{% set p = 'x' %}{{ (p if false) }}[{{ (p if true) }}]", "[x]",
+            "a choice without an else");
+
+      --  Positions and members chained after a term, however it began.
+      Same ("{% set l = [['b', 'c'], 'd'] %}{{ l[0][1] }}{{ l[1][0] }}"
+            & "{{ messages[0].role[0] }}{{ messages[0]['content'][0] }}"
+            & "{{ 'a|b'.split('|')[1].upper() }}"
+            & "{% for t in tools %}{{ t.function.parameters.properties"
+            & ".op.enum[1] }}{{ t['function'].name }}{% endfor %}",
+            "cdu<b-calc", "an index after an index, a path or a cut");
+
+      --  A macro's body reads the names outside it and keeps its own
+      --  assignments to itself, as the language scopes it.
+      Same ("{% set x = 'o' %}{% macro m() %}{{ x }}{% set x = 'i' %}"
+            & "{{ x }}{% endmacro %}{{ m() }}{{ x }}", "oio",
+            "a macro reads outer names and its sets stay inside");
+
       --  A loop over a name never assigned is refused as the output
       --  refuses it, and a field a turn has not got is nothing.
       Same ("{% for x in nothing %}x{% endfor %}",
@@ -1090,12 +1127,12 @@ package body Tests.Template_Cases is
       Model_Runner.Tools.Close (Defs);
    end Values_Render_As_The_Language_Would;
 
-   --  The carried qwen3-coder and minicpm formats are the same bytes as
-   --  the models' own templates, and the engine can say so itself now
-   --  that it renders both: each format and the model's own file, read
-   --  from fixtures, rendered on the same conversations and compared
-   --  byte for byte. The model's own file is what jinja2 was crossed
-   --  against, so this is the crossing kept in the suite.
+   --  The carried qwen3-coder, minicpm and gemma formats are the same
+   --  bytes as the models' own templates, and the engine can say so
+   --  itself now that it renders all three: each format and the model's
+   --  own file, read from fixtures, rendered on the same conversations
+   --  and compared byte for byte. The model's own file is what jinja2
+   --  was crossed against, so this is the crossing kept in the suite.
    procedure Carried_Formats_Match_The_Models_Own_Templates
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1204,11 +1241,14 @@ package body Tests.Template_Cases is
       --  Choices says whether the caller's thinking choice is tried too,
       --  and Thoughts whether a history carrying <think> blocks is: the
       --  carried qwen3-coder format writes both as Qwen3.5's template
-      --  does, which Qwen3-Coder's own says nothing about.
+      --  does, which Qwen3-Coder's own says nothing about. Tooled says
+      --  whether the conversations with tools are: Gemma's own template
+      --  has no tool half, and the carried format's is this build's own.
       procedure Compare
         (Format    : Tmpl.Chat_Format; Own_File : String;
          Choices   : Boolean;
-         Thoughts  : Boolean)
+         Thoughts  : Boolean;
+         Tooled    : Boolean := True)
       is
          use type Tmpl.Thinking_Choice;
          Carried, Own : Tmpl.Compiled;
@@ -1227,6 +1267,10 @@ package body Tests.Template_Cases is
             for Choice in Tmpl.Thinking_Choice loop
                if (Choices or else Choice = Tmpl.Thinking_Unstated)
                  and then (Thoughts or else Which /= Reasoning)
+                 and then (Tooled
+                           or else Which not in Tools_No_System
+                                     | Tools_With_System | Call_With_Text
+                                     | Call_Without_Text | Two_Calls)
                then
                   declare
                      Talk       : Conv.History;
@@ -1300,6 +1344,8 @@ package body Tests.Template_Cases is
                Choices => False, Thoughts => False);
       Compare (Tmpl.Format_MiniCPM, "fixtures/minicpm-own.jinja",
                Choices => True, Thoughts => True);
+      Compare (Tmpl.Format_Gemma, "fixtures/gemma3-own.jinja",
+               Choices => False, Thoughts => True, Tooled => False);
 
       Model_Runner.Tools.Close (Defs);
    end Carried_Formats_Match_The_Models_Own_Templates;
@@ -2756,8 +2802,9 @@ package body Tests.Template_Cases is
          & "the language does it, and a loop's assignments stay its own");
       Register_Routine
         (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
-         "the carried qwen3-coder and minicpm formats render the same bytes "
-         & "as the models' own templates, conversation for conversation");
+         "the carried qwen3-coder, minicpm and gemma formats render the "
+         & "same bytes as the models' own templates, conversation for "
+         & "conversation");
       Register_Routine
         (T, Templates_Are_Recognised_By_Their_Markers'Access,
          "a template's own text names the carried format it is written in, "

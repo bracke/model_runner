@@ -188,6 +188,10 @@ package body Model_Runner.Templates is
          --  a run of tool answers is folded into one user turn between
          --  <tool_response> tags, Gemma having no tool role either.
          --
+         --  A turn's content is trimmed, as the model's own template
+         --  trims it; the system message folded in front is not, as it
+         --  is not there either.
+         --
          --  The line break that ends the role is written inside each branch
          --  rather than after the endif, because a line break standing
          --  straight after a block tag belongs to the template's own shape
@@ -215,7 +219,7 @@ package body Model_Runner.Templates is
            & "{% endif %}"
            & "{% elif message.role == 'assistant' %}"
            & "<start_of_turn>model" & LF
-           & "{{ message.content }}"
+           & "{{ message.content | trim }}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
            & "<tool_call>" & LF
@@ -247,7 +251,7 @@ package body Model_Runner.Templates is
            & "{% endfor %}" & LF & LF
            & "{% endif %}"
            & "{% endif %}"
-           & "{{ message.content }}<end_of_turn>" & LF
+           & "{{ message.content | trim }}<end_of_turn>" & LF
            & "{% endif %}"
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
@@ -962,6 +966,131 @@ package body Model_Runner.Templates is
          Result : out Operand;
          Ok     : out Boolean);
 
+      procedure Read_Condition
+        (Text   : String;
+         Result : out Condition;
+         Ok     : out Boolean);
+
+      --  Where a word stands on its own at the top level of Text: outside
+      --  quotes and brackets, with blanks on both sides. Zero when it does
+      --  not. What tells "(A if C else B)" from a group holding a sum.
+      function Top_Level_Word (Text : String; Word : String) return Natural is
+         Depth : Natural := 0;
+         Quote : Character := ' ';
+         Index : Natural := Text'First;
+      begin
+         while Index <= Text'Last loop
+            declare
+               C : constant Character := Text (Index);
+            begin
+               if Quote /= ' ' then
+                  if C = Quote then
+                     Quote := ' ';
+                  end if;
+               elsif C in ''' | '"' then
+                  Quote := C;
+               elsif C in '(' | '[' | '{' then
+                  Depth := Depth + 1;
+               elsif C in ')' | ']' | '}' then
+                  Depth := (if Depth > 0 then Depth - 1 else 0);
+               elsif Depth = 0 and then C = ' '
+                 and then Index + Word'Length + 1 <= Text'Last
+                 and then Text (Index + 1 .. Index + Word'Length) = Word
+                 and then Text (Index + Word'Length + 1) = ' '
+               then
+                  return Index + 1;
+               end if;
+            end;
+            Index := Index + 1;
+         end loop;
+         return 0;
+      end Top_Level_Word;
+
+      --  A bracketed group that is not a sum: a choice written inside an
+      --  expression, "(A if C else B)", or a comparison or test written
+      --  as a value, "(a == b)", "(x is defined)". Ok is False when it is
+      --  neither.
+      procedure Read_Value_Group
+        (Held   : String;
+         Result : out Term;
+         Ok     : out Boolean)
+      is
+         At_If   : constant Natural := Top_Level_Word (Held, "if");
+         At_Else : constant Natural :=
+           (if At_If = 0 then 0 else Top_Level_Word (Held, "else"));
+         Test    : Condition;
+         Valid   : Boolean;
+         Kept    : Natural;
+      begin
+         Result := (others => <>);
+         Ok := False;
+
+         if At_If /= 0 and then (At_Else = 0 or else At_Else > At_If) then
+            declare
+               Taken_Text : constant String := Held (Held'First .. At_If - 1);
+               Test_Text  : constant String :=
+                 (if At_Else = 0 then Held (At_If + 2 .. Held'Last)
+                  else Held (At_If + 2 .. At_Else - 1));
+               Other_Text : constant String :=
+                 (if At_Else = 0 then ""
+                  else Held (At_Else + 4 .. Held'Last));
+               Taken, Other : Operand;
+               Scan : Natural := Taken_Text'First;
+               Read : Boolean;
+            begin
+               Read_Operand (Taken_Text, Scan, Taken, Read);
+               if not Read
+                 or else Skip_Spaces (Taken_Text, Scan) <= Taken_Text'Last
+               then
+                  return;
+               end if;
+               Read_Condition (Test_Text, Test, Valid);
+               if not Valid then
+                  return;
+               end if;
+               Keep (Taken, Kept);
+               if Kept = 0 then
+                  return;
+               end if;
+               Result.Kind := Term_Choice;
+               Result.Index_At := Kept;
+               Keep (Test, Kept);
+               if Kept = 0 then
+                  return;
+               end if;
+               Result.Offset := Kept;
+               if Model_Runner.Text.Trim (Other_Text) /= "" then
+                  Scan := Other_Text'First;
+                  Read_Operand (Other_Text, Scan, Other, Read);
+                  if not Read
+                    or else Skip_Spaces (Other_Text, Scan) <= Other_Text'Last
+                  then
+                     return;
+                  end if;
+                  Keep (Other, Kept);
+                  if Kept = 0 then
+                     return;
+                  end if;
+                  Result.Length := Kept;
+               end if;
+               Ok := True;
+               return;
+            end;
+         end if;
+
+         Read_Condition (Held, Test, Valid);
+         if not Valid then
+            return;
+         end if;
+         Keep (Test, Kept);
+         if Kept = 0 then
+            return;
+         end if;
+         Result.Kind := Term_Condition;
+         Result.Offset := Kept;
+         Ok := True;
+      end Read_Value_Group;
+
       --  The methods a template may write after a piece of text, and the
       --  spelling each is recognised by. Longest last, because the shorter
       --  of two that end alike would match the longer one first.
@@ -1638,7 +1767,11 @@ package body Model_Runner.Templates is
                                        Tail_From := After + 2;
                                        Tail_To := Ends - 2;
                                     else
-                                       return;
+                                       --  A second position rather than a
+                                       --  field: left for the index read
+                                       --  after the term.
+                                       Field := 3;
+                                       Ends := After - 1;
                                     end if;
                                  end;
                                  After := Ends + 1;
@@ -1974,7 +2107,23 @@ package body Model_Runner.Templates is
                         Shut := Shut + 1;
                      end loop;
 
-                     exit when Shut > Text'Last or else Colon = 0;
+                     exit when Shut > Text'Last;
+
+                     --  No colon: one element by position, of whatever
+                     --  came before -- a list, a cut, a text.
+                     if Colon = 0 then
+                        declare
+                           Added : Boolean;
+                        begin
+                           Add_Cut (Text (Scan + 1 .. Shut - 1), Method_Index,
+                                    Added);
+                           if not Added then
+                              Result := Refused (Text (Scan .. Shut));
+                           end if;
+                           From := Shut + 1;
+                           goto Read_On;
+                        end;
+                     end if;
 
                      declare
                         Front : constant String :=
@@ -2015,9 +2164,45 @@ package body Model_Runner.Templates is
                   end if;
                end loop;
 
-               exit when Doing = Method_None
+               --  A dotted name that is not a method called: one member
+               --  of what came before, which is how a path goes on after
+               --  an index -- content[0].text.
+               if Doing = Method_None
                  or else Ends > Text'Last
-                 or else Text (Ends) /= '(';
+                 or else Text (Ends) /= '('
+               then
+                  declare
+                     Stop : Natural := Scan + 1;
+                     Named : Operand;
+                     Kept  : Natural;
+                     Stored : Boolean;
+                  begin
+                     while Stop <= Text'Last
+                       and then Text (Stop) in 'a' .. 'z' | 'A' .. 'Z'
+                                               | '0' .. '9' | '_'
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+                     exit when Stop = Scan + 1
+                       or else (Stop <= Text'Last and then Text (Stop) = '(')
+                       or else Result.Chained >= Max_Methods;
+
+                     Named.Count := 1;
+                     Named.Terms (1).Kind := Term_Literal;
+                     Store_Literal
+                       (Text (Scan + 1 .. Stop - 1), Named.Terms (1).Offset,
+                        Named.Terms (1).Length, Stored);
+                     exit when not Stored;
+                     Keep (Named, Kept);
+                     exit when Kept = 0;
+                     Result.Chained := Result.Chained + 1;
+                     Result.Methods (Result.Chained) :=
+                       (Kind => Method_Member, At_Operand => Kept,
+                        Second_At => 0);
+                     From := Stop;
+                     goto Read_On;
+                  end;
+               end if;
 
                From := Ends;
                Add_Method (Text, Doing, From, Result, Taken);
@@ -2280,11 +2465,25 @@ package body Model_Runner.Templates is
                         Group_Depth := Group_Depth - 1;
 
                         --  All of it, or none: a group with anything left
-                        --  unread in it is not the sum it looks like.
+                        --  unread in it is not the sum it looks like -- it
+                        --  may be a choice or a comparison written as a
+                        --  value, which are read as such.
                         if not Read
                           or else Skip_Spaces (Held, Scan) <= Held'Last
                         then
-                           return;
+                           declare
+                              Group : Term;
+                              Valid : Boolean;
+                           begin
+                              Group_Depth := Group_Depth + 1;
+                              Read_Value_Group (Held, Group, Valid);
+                              Group_Depth := Group_Depth - 1;
+                              if not Valid or else not Push (Group, Joined) then
+                                 return;
+                              end if;
+                              From := Shut + 1;
+                              goto Joined_On;
+                           end;
                         end if;
 
                         declare
@@ -2309,6 +2508,7 @@ package body Model_Runner.Templates is
                end if;
             end;
 
+            <<Joined_On>>
             declare
                Next : constant Natural := Skip_Spaces (Text, From);
             begin
@@ -2590,7 +2790,23 @@ package body Model_Runner.Templates is
                      if Held = 0 then
                         return;
                      end if;
-                     Current.Sub_At := Held;
+
+                     --  A group compared with something -- "(a == b) !=
+                     --  (c == d)" -- is a value on the left of a test
+                     --  rather than a condition of its own.
+                     Current.Left :=
+                       (Terms => [1 => (Kind => Term_Condition, Offset => Held,
+                                        others => <>),
+                                  others => <>],
+                        Count => 1);
+                     Read_Test (Text, From, Current, Taken);
+                     if not Taken then
+                        return;
+                     end if;
+                     if Current.Operator = Compare_None then
+                        Current.Left := (others => <>);
+                        Current.Sub_At := Held;
+                     end if;
                   end;
                else
                   Read_Operand (Text, From, Current.Left, Taken);
@@ -2934,6 +3150,7 @@ package body Model_Runner.Templates is
                      --  opening bracket and means something else; it is
                      --  told apart by the colon, and is handled below.
                      if Inside'Length > 0
+                       and then Inside (Inside'First) not in ''' | '"'
                        and then (for all Letter of Inside => Letter /= ':')
                      then
                         Read_Operand (Inside, Where_At, Index, Taken);
@@ -3099,8 +3316,19 @@ package body Model_Runner.Templates is
                   if not Valid
                     or else Skip_Spaces (Rest, From) <= Rest'Last
                   then
-                     Refuse (Text, Where);
-                     return;
+                     --  Or a comparison assigned, "set ok = a == b".
+                     declare
+                        Group : Term;
+                        Read  : Boolean;
+                     begin
+                        Read_Value_Group (Rest, Group, Read);
+                        if not Read then
+                           Refuse (Text, Where);
+                           return;
+                        end if;
+                        Value := (Terms => [1 => Group, others => <>],
+                                  Count => 1);
+                     end;
                   end if;
 
                   Keep (Value, Kept);
@@ -4070,6 +4298,23 @@ package body Model_Runner.Templates is
                           or else Skip_Spaces (Text_Slice, From)
                                   <= Text_Slice'Last
                         then
+                           --  Or a test or comparison written in the
+                           --  output, "x is defined", which is a value
+                           --  too.
+                           declare
+                              Group : Term;
+                              Read  : Boolean;
+                           begin
+                              Read_Value_Group (Text_Slice, Group, Read);
+                              if Read then
+                                 Value := (Terms => [1 => Group, others => <>],
+                                           Count => 1);
+                                 Valid := True;
+                              end if;
+                           end;
+                        end if;
+
+                        if not Valid then
                            Refuse (Text_Slice, Where);
                         else
                            declare
@@ -4163,6 +4408,12 @@ package body Model_Runner.Templates is
       --  the front of it.
       type Value_Kind is
         (Value_Undefined, Value_Text, Value_None, Value_List,
+
+         --  True or false, which is what a comparison written as a value
+         --  is worth, and what true and false are. Held as Start: one for
+         --  true, and in a slot as Offset. Printed as Python prints it,
+         --  and read in a condition as the truth it is.
+         Value_Boolean,
 
          --  A mapping or a list, as JSON text in the pool: what a member
          --  of a tool's schema, a call's arguments, a list written out or
@@ -4283,9 +4534,11 @@ package body Model_Runner.Templates is
       --  Defined with the values' filters below, once the text they are
       --  built from is at hand.
       function Base_Of (Value : Term) return Held;
+      function Indexed (Value : Held; Key : String) return Held;
       function Resolve (Value : Term) return Held;
       function Is_Sum (Value : Operand) return Boolean;
       function Held_Of (Value : Operand) return Held;
+      function Truth_Of (Value : Condition) return Boolean;
 
       --  The JSON a value is, as text: a mapping or list as it stands, a
       --  tool as the definitions hold it, text as a JSON string, none as
@@ -4298,6 +4551,8 @@ package body Model_Runner.Templates is
                return Offered_Tools.Definition (Tools.all, Value.Start);
             when Value_Text => return Quoted (Text_Of (Value));
             when Value_None => return "null";
+            when Value_Boolean =>
+               return (if Value.Start = 1 then "true" else "false");
             when others => return "";
          end case;
       end JSON_Text;
@@ -4459,6 +4714,14 @@ package body Model_Runner.Templates is
       end Decoded;
 
       --  A member of a mapping by name, or nothing.
+      --  A value read out of JSON: a string is text, decoded, so that
+      --  what is done to it -- indexed, measured, asked whether it begins
+      --  with something -- is done to the text; anything else stays
+      --  JSON.
+      function Read_Out (Src : String) return Held
+      is (if Is_JSON_String (Src) then As_Text (Decoded (Src))
+          else As_Data (Src));
+
       function Member_Of (Src : String; Name : String) return Held is
          Cursor : Natural;
          Key, Value : Span;
@@ -4472,7 +4735,7 @@ package body Model_Runner.Templates is
             Next_Member (Src, Cursor, Key, Value, Found);
             exit when not Found;
             if Decoded (Src (Key.First .. Key.Last)) = Name then
-               return As_Data (Src (Value.First .. Value.Last));
+               return Read_Out (Src (Value.First .. Value.Last));
             end if;
          end loop;
          return Nothing;
@@ -4510,7 +4773,7 @@ package body Model_Runner.Templates is
             Next_Element (Src, Cursor, Value, Found);
             exit when not Found;
             if Seen = Target_Index then
-               return As_Data (Src (Value.First .. Value.Last));
+               return Read_Out (Src (Value.First .. Value.Last));
             end if;
             Seen := Seen + 1;
          end loop;
@@ -4617,6 +4880,9 @@ package body Model_Runner.Templates is
             when Value_Text => return Text_Of (Value);
             when Value_Data => return Pythonic (Text_Of (Value));
             when Value_JSON => return JSON_Text (Value);
+            when Value_Boolean =>
+               return (if Value.Start = 1 then "True" else "False");
+            when Value_None => return "None";
             when others => return "";
          end case;
       end Printed;
@@ -4648,6 +4914,9 @@ package body Model_Runner.Templates is
                return (Kind => Value_Tools, others => <>);
             when Value_None =>
                return (Kind => Value_None, others => <>);
+            when Value_Boolean =>
+               return (Kind => Value_Boolean, Start => Holder.Offset,
+                       others => <>);
             when Value_Undefined =>
                return Nothing;
          end case;
@@ -4814,6 +5083,7 @@ package body Model_Runner.Templates is
       begin
          case Value.Kind is
             when Value_Undefined | Value_None => return False;
+            when Value_Boolean => return Value.Start = 1;
             when Value_Text =>
                declare
                   T : constant String := Text_Of (Value);
@@ -4861,6 +5131,9 @@ package body Model_Runner.Templates is
                Slots (Where) := (Kind => Value_Tools, others => <>);
             when Value_None =>
                Slots (Where) := (Kind => Value_None, others => <>);
+            when Value_Boolean =>
+               Slots (Where) := (Kind => Value_Boolean, Offset => Value.Start,
+                                 others => <>);
             when Value_Undefined =>
                Slots (Where) := (Kind => Value_Undefined, others => <>);
          end case;
@@ -4883,7 +5156,13 @@ package body Model_Runner.Templates is
          Over_Tools,      --  the tools offered
          Over_Messages,   --  a list of messages
          Over_Calls,      --  a turn's calls
-         Legacy_List, Legacy_Calls, Legacy_Range);
+         Legacy_List, Legacy_Calls, Legacy_Range,
+
+         --  Not a loop: a macro call, on the same stack because it scopes
+         --  names the same way -- what the body assigns is the body's own
+         --  and is put back when it returns, a namespace's field aside --
+         --  and so that loop.index inside a macro is not the caller's.
+         Macro_Call);
 
       type Loop_State is record
          Kind    : Loop_Kind := Legacy_List;
@@ -5238,12 +5517,11 @@ package body Model_Runner.Templates is
       --  recursion a recursion rather than a loop over one set of names.
       function Run_Macro (Value : Term) return String is
          M      : Macro renames Item.Macros (Value.Offset);
-         Saved  : array (1 .. Max_Parameters) of Slot;
          Mark   : constant Natural := Last;
          Resume : constant Natural := Position;
          Given  : array (1 .. Max_Parameters) of Held;
       begin
-         if Call_Depth >= Max_Depth then
+         if Call_Depth >= Max_Depth or else Loop_Depth >= Max_Loops then
             Refuse (M.Name.Offset, M.Name.Length, E.Template_Nesting_Too_Deep);
             return "";
          end if;
@@ -5262,8 +5540,10 @@ package body Model_Runner.Templates is
             end if;
          end loop;
 
+         --  The body's names are its own: what it assigns, its parameters
+         --  included, is put back when it returns, as a loop's are.
+         Push_Loop ((Kind => Macro_Call, others => <>));
          for P in 1 .. M.Count loop
-            Saved (P) := Slots (M.Slots (P));
             Slots (M.Slots (P)) := (Kind => Value_Undefined, others => <>);
             Store (M.Slots (P), Given (P));
          end loop;
@@ -5279,9 +5559,7 @@ package body Model_Runner.Templates is
          Call_Depth := Call_Depth - 1;
          Returned := False;
 
-         for P in 1 .. M.Count loop
-            Slots (M.Slots (P)) := Saved (P);
-         end loop;
+         Pop_Loop;
          Position := Resume;
 
          declare
@@ -5448,6 +5726,8 @@ package body Model_Runner.Templates is
                                  .. Holder.Offset + Holder.Length));
                      when Value_None =>
                         return "";
+                     when Value_Boolean =>
+                        return (if Holder.Offset = 1 then "true" else "");
                      when Value_Undefined =>
                         --  A name never assigned is nothing. Asked about in
                         --  a condition that is the answer -- a template
@@ -5506,7 +5786,8 @@ package body Model_Runner.Templates is
             when Term_Macro =>
                return Run_Macro (Value);
 
-            when Term_List | Term_Loop_Previous | Term_Loop_Next =>
+            when Term_List | Term_Loop_Previous | Term_Loop_Next
+               | Term_Condition | Term_Choice =>
                return Printed (Base_Of (Value));
 
             when Term_Unsupported =>
@@ -5544,8 +5825,9 @@ package body Model_Runner.Templates is
       begin
          case Step.Kind is
             when Method_None | Method_Starts_With | Method_Ends_With
-               | Method_Replace | Method_Items =>
-               --  The four are answered on values, in Method_On.
+               | Method_Replace | Method_Items | Method_Index
+               | Method_Member =>
+               --  These are answered on values, in Method_On.
                return Held;
 
             when Method_Strip | Method_Left_Strip | Method_Right_Strip =>
@@ -6362,8 +6644,17 @@ package body Model_Runner.Templates is
                                = Wanted;
                      end if;
                   end if;
-                  return As_Text (if Yes then "true" else "");
+                  return (Kind => Value_Boolean, Start => (if Yes then 1 else 0),
+                          others => <>);
                end;
+
+            when Method_Index =>
+               return Indexed
+                 (Value, Value_Of (Item.Operands.all (Step.At_Operand)));
+
+            when Method_Member =>
+               return Along
+                 (Value, Value_Of (Item.Operands.all (Step.At_Operand)));
 
             when Method_Replace =>
                declare
@@ -6476,6 +6767,21 @@ package body Model_Runner.Templates is
          end case;
       end Filter_On;
 
+      --  What is inside a bracket after a value: a position where it is
+      --  a number, and a member's name where it is not -- t['function']
+      --  and t.function are the same member.
+      function Indexed (Value : Held; Key : String) return Held is
+         Numeric : constant Boolean :=
+           Key'Length > 0
+           and then (for all C of Key => C in '0' .. '9' | '-')
+           and then Key (Key'Last) in '0' .. '9';
+      begin
+         if Numeric then
+            return Element_At (Value, Number_Of (Key));
+         end if;
+         return Along (Value, Key);
+      end Indexed;
+
       function Base_Of (Value : Term) return Held is
       begin
          case Value.Kind is
@@ -6490,9 +6796,8 @@ package body Model_Runner.Templates is
                               .. Value.Path_At + Value.Path_Len));
                   end if;
                   if Value.Indexes then
-                     R := Element_At
-                       (R, Number_Of
-                             (Value_Of (Item.Operands.all (Value.Index_At))));
+                     R := Indexed
+                       (R, Value_Of (Item.Operands.all (Value.Index_At)));
                   end if;
                   if Value.Tail_Len > 0 then
                      R := Along
@@ -6624,6 +6929,28 @@ package body Model_Runner.Templates is
                   return As_Text (Value_Of (Inner));
                end;
 
+            when Term_True =>
+               return (Kind => Value_Boolean, Start => 1, others => <>);
+            when Term_False =>
+               return (Kind => Value_Boolean, Start => 0, others => <>);
+            when Term_None =>
+               return (Kind => Value_None, others => <>);
+
+            when Term_Condition =>
+               return (Kind => Value_Boolean,
+                       Start => (if Truth_Of (Item.Conditions.all (Value.Offset))
+                                 then 1 else 0),
+                       others => <>);
+
+            when Term_Choice =>
+               if Truth_Of (Item.Conditions.all (Value.Offset)) then
+                  return Held_Of (Item.Operands.all (Value.Index_At));
+               elsif Value.Length = 0 then
+                  return Nothing;
+               else
+                  return Held_Of (Item.Operands.all (Value.Length));
+               end if;
+
             when Term_Unsupported =>
                if Value.Why = E.Template_Unknown_Variable then
                   if not Testing then
@@ -6665,6 +6992,13 @@ package body Model_Runner.Templates is
                           E.Template_Unknown_Variable);
                end if;
                return "";
+            when Value_Boolean | Value_None =>
+               --  Truth in a condition, and Python's spelling in the
+               --  output.
+               if Testing then
+                  return (if Is_Truthy (R) then "true" else "");
+               end if;
+               return Printed (R);
             when Value_Tools | Value_List | Value_Message | Value_Call
                | Value_JSON =>
                --  Positions, not text. A condition asks whether there is
@@ -6873,10 +7207,6 @@ package body Model_Runner.Templates is
          end loop;
          return Result (1 .. Filled);
       end Value_Of;
-
-      --  Truth of one clause. A bare operand is true when it is non-empty,
-      --  which matches how the supported boolean terms are written.
-      function Truth_Of (Value : Condition) return Boolean;
 
       --  Whether a name has been given a value on the path taken so far.
       --  Asking is not reading: a name the template never assigns is a name
@@ -7132,6 +7462,22 @@ package body Model_Runner.Templates is
 
       --  Bind a loop's variable to its element, and its key where the
       --  loop walks a mapping.
+      --  Bind a name to one span of a container's JSON: a string as its
+      --  decoded text, anything else as the JSON where it lies.
+      procedure Bind_Span
+        (Where : Natural; Src : String; Value : Span; Base : Natural) is
+      begin
+         if Is_JSON_String (Src (Value.First .. Value.Last)) then
+            Assign_Text (Where, Decoded (Src (Value.First .. Value.Last)));
+         else
+            Slots (Where) :=
+              (Kind => Value_Data,
+               Offset => Base + Value.First - Src'First,
+               Length => Value.Last - Value.First + 1,
+               Start => 1);
+         end if;
+      end Bind_Span;
+
       procedure Bind_Element (L : in out Loop_State) is
       begin
          case L.Kind is
@@ -7146,11 +7492,7 @@ package body Model_Runner.Templates is
                   if L.Kind = Over_Elements then
                      Next_Element (Src, Cursor, Value, Found);
                      if Found then
-                        Slots (L.Var) :=
-                          (Kind => Value_Data,
-                           Offset => L.Base + Value.First - Src'First,
-                           Length => Value.Last - Value.First + 1,
-                           Start => 1);
+                        Bind_Span (L.Var, Src, Value, L.Base);
                      end if;
                   else
                      --  A mapping walked: the first name is the key, as
@@ -7161,11 +7503,7 @@ package body Model_Runner.Templates is
                         Assign_Text
                           (L.Var, Decoded (Src (Key.First .. Key.Last)));
                         if L.Key /= 0 then
-                           Slots (L.Key) :=
-                             (Kind => Value_Data,
-                              Offset => L.Base + Value.First - Src'First,
-                              Length => Value.Last - Value.First + 1,
-                              Start => 1);
+                           Bind_Span (L.Key, Src, Value, L.Base);
                         end if;
                      end if;
                   end if;

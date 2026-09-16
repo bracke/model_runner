@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 46) of Example :=
+   Held : constant array (1 .. 47) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -147,8 +147,9 @@ package body Template_Registry is
 
       (new String'("`{% macro name(p, q='x') %} ... {% endmacro %}` and "
                    & "`{{ name(a, b) }}`"),
-       new String'("{% macro m(p, q='!') %}{{ p }}{{ q }}{% endmacro %}"
-                   & "{{ m('a') }}{{ m('b', '?') | upper }}"),
+       new String'("{% macro m(p, q='!') %}{{ p }}{{ q }}{% set o = 'i' %}"
+                   & "{% endmacro %}{% set o = 'o' %}"
+                   & "{{ m('a') }}{{ m('b', '?') | upper }}{{ o }}"),
        Works),
 
       (new String'("`{% for name in tools %}`"),
@@ -190,12 +191,25 @@ package body Template_Registry is
                    & "{{ m(l) }}"),
        Works),
 
-      (new String'("`NAME[EXPR]`, `NAME[-1]`, `a.b.c`, `LIST[i].field`"),
-       new String'("{% set l = ['a', 'b', 'c'] %}{% set i = 1 %}"
-                   & "{{ l[i] }}{{ l[i + 1] }}{{ l[-1] }}{{ l[9] }}"
+      (new String'("`NAME[EXPR]`, `NAME[-1]`, `a.b.c`, `LIST[i].field`, "
+                   & "`LIST[i][j]`, `NAME['member']`"),
+       new String'("{% set l = ['a', ['b', 'c']] %}{% set i = 1 %}"
+                   & "{{ l[i] }}{{ l[i - 1] }}{{ l[-1] }}{{ l[9] }}"
+                   & "{{ l[1][0] }}{{ l[0][0] }}"
                    & "{% set ns = namespace(a='x') %}{{ ns.a }}"
-                   & "{% set r = messages[0].role %}{{ r[0] }}"
+                   & "{{ messages[0].role[0] }}{{ messages[0]['role'][0] }}"
+                   & "{{ 'a|b'.split('|')[1].upper() }}"
                    & "{{ messages[1].content }}"),
+       Works),
+
+      (new String'("`a == b`, `x is defined` and their like as values, "
+                   & "`(A if C else B)`"),
+       new String'("[{{ 1 == 1 }}][{{ nothing is defined }}][{{ true }}]"
+                   & "{% set ok = 1 == 2 %}{% if ok %}T{% endif %}{{ ok }}"
+                   & "{% if (1 == 1) != (2 == 3) %}y{% endif %}"
+                   & "{% for message in messages %}"
+                   & "{{ message.role + ('!' if loop.first else '') }}"
+                   & "{% endfor %}"),
        Works),
 
       (new String'("`loop.previtem`, `loop.nextitem`"),
