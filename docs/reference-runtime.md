@@ -445,9 +445,9 @@ Gemma 3's walks, MiniCPM's writes nothing for, and Qwen3-Coder's and
 gpt-oss's refuse on both sides, a text and a list added together -- and
 which, given a `"path"` and `run --mmproj PATH`, is a picture the model
 sees: decoded, resampled and encoded by `Model_Runner.Vision`, its rows
-read where the template's marker stands, and with `--pan-and-scan` shown
-whole and then in crops, the marker opened out among the reference
-processor's words -- a reply given as parts and a
+read where the template's marker stands -- the marker set between the
+reference processor's two line breaks before the prompt is tokenized,
+and with `--pan-and-scan` among its words too, whole and then in crops -- a reply given as parts and a
 tool's answer given as parts, which Gemma 3's template walks, MiniCPM's
 writes as nothing and as JSON, and Qwen3-Coder's refuses -- with
 the caller's `--think` and `--no-think` each where the template

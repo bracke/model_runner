@@ -302,15 +302,24 @@ package Model_Runner.Generation is
    --  template writes where a picture is, the soft token each row stands
    --  behind, and the closer.
    --
+   --  The marker is also given as text, Marker_Text, because the
+   --  reference processor rewrites the rendered prompt before it
+   --  tokenizes: every marker becomes Frame_Before, the marker and
+   --  Frame_After -- two line breaks either side, for Gemma 3 -- and the
+   --  tokenizer meets the whole, so that the template's own line break
+   --  and the frame's run together into the one token the model was
+   --  trained on. The rewrite is done here, on the text, for the same
+   --  reason.
+   --
    --  A picture may come with crops -- pan-and-scan, the reference's name
    --  for showing a wide or tall picture whole and then in pieces, each
    --  piece encoded as a picture of its own. Crops holds, per picture,
    --  how many crops follow it, and the rows of a picture with crops are
    --  the whole picture's rows and then each crop's. In the prompt such a
    --  picture is written the way the reference writes it: Crop_Lead, the
-   --  whole picture's tokens, Crop_Bridge, and then each crop's tokens
-   --  with Crop_Gap between two -- the words being the processor's own,
-   --  which the model was trained to see.
+   --  whole picture's frame, Crop_Bridge, and then each crop's frame with
+   --  Crop_Gap between two -- the words being the processor's own, which
+   --  the model was trained to see -- and the frames opened out as above.
    type Crop_Counts is array (Positive range <>) of Natural;
    type Crop_Counts_Access is access Crop_Counts;
 
@@ -324,6 +333,9 @@ package Model_Runner.Generation is
       Per_Picture : Natural := 0;
       Count       : Natural := 0;
       Rows        : Model_Runner.Tensors.Real_Array_Access := null;
+      Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Frame_Before : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Frame_After : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crops       : Crop_Counts_Access := null;
       Crop_Lead   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crop_Bridge : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
@@ -368,9 +380,10 @@ package Model_Runner.Generation is
    --    token the template wrote is opened out into the marker, Per_Picture
    --    soft tokens and the closer, and the soft tokens read the picture's
    --    rows in place of their embedding; the prompt must mark as many
-   --    pictures as are given, in their order. A picture with crops is
-   --    opened out into the reference's words around the whole picture
-   --    and each crop, every one framed the same way.
+   --    pictures as are given, in their order. Before the prompt is
+   --    tokenized each marker's text is set between Frame_Before and
+   --    Frame_After, and a picture with crops among the reference's
+   --    words, the whole picture and each crop framed the same way.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
    procedure Generate
      (Source   : Model_Runner.Llama.Model'Class;

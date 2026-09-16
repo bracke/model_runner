@@ -55,6 +55,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A picture's marker is framed as the reference processor frames it.**
+  Gemma 3's processor rewrites the rendered prompt before it tokenizes:
+  every `<start_of_image>` becomes `\n\n<start_of_image>…<end_of_image>\n\n`.
+  This build wrote the marker bare, as llama.cpp does, so the prompt
+  differed from what the model was trained on by the frame -- and the
+  frame is not four tokens of its own: the template's `user\n` and the
+  frame's `\n\n` run together into the one three-line-break token. So the
+  rewrite is done on the text, before tokenizing, and the crops' words go
+  the same way; the picture set names the marker's text and the frame's
+  two halves, and a suite case checks the tokens are the rewritten text's.
 - **A progressive JPEG from libjpeg was refused, `MR-IO-0010 ... jpeg
   MARKER_UNEXPECTED`.** Fixed in jpeglib, the native Ada codec this build
   decodes with: a DC refinement scan of several components is interleaved

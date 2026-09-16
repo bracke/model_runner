@@ -1049,111 +1049,112 @@ package body Tests.Vision_Cases is
                     "the same picture twice answered differently");
          end;
 
-         --  With two crops, the marker opens out into the words the
-         --  reference sets a cut picture among -- here the pieces "b",
-         --  "a" and "b", which the tiny vocabulary spells -- and three
-         --  frames: the whole picture's and one a crop.
+         --  The marker's text is rewritten before the prompt is tokenized,
+         --  as the reference processor rewrites it: set between the frame's
+         --  halves, and with two crops among the words a cut picture is
+         --  set among -- here "a" and "b", which the tiny vocabulary
+         --  spells -- with a frame a crop. The tokens committed are those
+         --  of the rewritten text, each marker opened out, which is what
+         --  lets the frame and the template's own text run together into
+         --  whatever token the vocabulary has for both.
          declare
-            Lead, Bridge, Gap : Vocab.Token_Array (1 .. 8);
-            Lead_Count, Bridge_Count, Gap_Count : Natural;
-            Expected : Vocab.Token_Array (1 .. 64);
+            Expected : Vocab.Token_Array (1 .. 128);
             Count    : Natural := 0;
-            Plain    : Natural;
-            At_Marker : Natural := Natural'Last;
+            Read     : Natural;
 
-            procedure Put (Token : Vocab.Token_Id) is
-            begin
-               Count := Count + 1;
-               Expected (Count) := Token;
-            end Put;
+            --  What the last run, one picture and no frame, committed.
+            Framed   : constant Natural := Outcome.Prompt_Tokens;
 
-            procedure Frame is
+            --  The tokens of a text with every marker opened out.
+            procedure Expect (Text : String) is
+               Raw : Vocab.Token_Array (1 .. 128);
             begin
-               Put (Pictures.Marker);
-               for Row in 1 .. Per loop
-                  Put (Pictures.Soft);
+               Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the expected text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Closer;
+                  end if;
                end loop;
-               Put (Pictures.Closer);
-            end Frame;
-         begin
-            Vocab.Encode (Words.all, "b", False, False, Lead, Lead_Count, Status);
-            Vocab.Encode (Words.all, "a", False, False, Bridge, Bridge_Count, Status);
-            Vocab.Encode (Words.all, "b", False, False, Gap, Gap_Count, Status);
-            Assert (Lead_Count > 0 and then Bridge_Count > 0 and then Gap_Count > 0,
-                    "the pieces the crops are set among did not tokenize");
+            end Expect;
 
-            --  The plain prompt once more, for where its marker stands.
+            procedure Check (What : String) is
+            begin
+               Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                       "the run with " & What & " failed: "
+                       & E.Error_Code'Image (Outcome.Error.Code));
+               Assert (Outcome.Prompt_Tokens = Count,
+                       "the prompt with " & What & " is"
+                       & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
+                       & Natural'Image (Count));
+               for Index in 1 .. Count loop
+                  Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                          "token" & Natural'Image (Index)
+                          & " of the prompt with " & What & " is "
+                          & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                          & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+               end loop;
+            end Check;
+         begin
+            --  Framed: "cab" with the marker "c" set between an "a" and
+            --  an "a" is "acaab", and the tokens are that text's. (Not a
+            --  "b" before it: the tiny vocabulary has a piece "bc", and
+            --  the marker would vanish into it -- which is the point of
+            --  rewriting the text, and not what this checks.)
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Frame_Before := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Frame_After := Model_Runner.Text.To_Bounded ("a");
+            Expect ("acaab");
+            Assert (Count > Framed, "the frame added nothing");
             L.Reset (Live);
             Gen.Release (Outcome);
             Gen.Generate
               (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
-               null, Outcome => Outcome);
-            Plain := Outcome.Prompt_Tokens;
-            for Index in 0 .. Plain - 1 loop
-               if L.Committed_Token (Live, Index) = Pictures.Marker then
-                  At_Marker := Index;
-                  exit;
-               end if;
-            end loop;
-            for Index in 0 .. At_Marker - 1 loop
-               Put (L.Committed_Token (Live, Index));
-            end loop;
-            for Index in 1 .. Lead_Count loop
-               Put (Lead (Index));
-            end loop;
-            Frame;
-            for Index in 1 .. Bridge_Count loop
-               Put (Bridge (Index));
-            end loop;
-            Frame;
-            for Index in 1 .. Gap_Count loop
-               Put (Gap (Index));
-            end loop;
-            Frame;
-            for Index in At_Marker + 1 .. Plain - 1 loop
-               Put (L.Committed_Token (Live, Index));
-            end loop;
+               null, Pictures => Pictures, Outcome => Outcome);
+            Check ("a framed picture");
 
+            --  And with two crops: lead, frame, bridge, frame, gap, frame.
             Pictures.Crops := new Gen.Crop_Counts'(1 => 2);
-            Pictures.Crop_Lead := Model_Runner.Text.To_Bounded ("b");
-            Pictures.Crop_Bridge := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Crop_Lead := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Crop_Bridge := Model_Runner.Text.To_Bounded ("ab");
             Pictures.Crop_Gap := Model_Runner.Text.To_Bounded ("b");
+            Expect ("a" & "aca" & "ab" & "aca" & "b" & "aca" & "ab");
             T.Free (Pictures.Rows);
             T.Allocate (3 * Per * Width, Pictures.Rows);
             for Value of Pictures.Rows.all loop
                Value := Next;
             end loop;
-
             L.Reset (Live);
             Gen.Release (Outcome);
             Gen.Generate
               (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
                null, Pictures => Pictures, Outcome => Outcome);
-            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
-                    "the run with a cut picture failed: "
-                    & E.Error_Code'Image (Outcome.Error.Code));
-            Assert (Outcome.Prompt_Tokens = Count,
-                    "the prompt with a cut picture is"
-                    & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
-                    & Natural'Image (Count));
-            for Index in 1 .. Count loop
-               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
-                       "token" & Natural'Image (Index)
-                       & " of the prompt with a cut picture is "
-                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
-                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
-            end loop;
+            Check ("a cut picture");
 
-            --  Without crops for that picture, the words are not written.
-            Pictures.Crops.all (1) := 0;
+            --  A crop's markers are the rewrite's own: a prompt marking
+            --  the one picture is right, and one marking none is refused
+            --  as before.
             L.Reset (Live);
             Gen.Release (Outcome);
             Gen.Generate
-              (Ready, Live, "cab", Request, Stop, null, null, null, null, null,
+              (Ready, Live, "ab", Request, Stop, null, null, null, null, null,
                null, Pictures => Pictures, Outcome => Outcome);
-            Assert (Outcome.Prompt_Tokens = Plain + Per + 1,
-                    "a picture with no crops was set among the words");
+            Assert (Gen."=" (Outcome.Reason, Gen.Runtime_Error)
+                    and then Outcome.Error.Code = E.Generation_Picture_Count_Mismatch,
+                    "a cut picture with no marker was not refused");
+
             Free (Pictures.Crops);
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Frame_Before := Model_Runner.Text.Empty;
+            Pictures.Frame_After := Model_Runner.Text.Empty;
          end;
 
          --  Two pictures given and one marked, or one given and none

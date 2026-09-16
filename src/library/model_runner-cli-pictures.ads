@@ -114,6 +114,8 @@ private
       Width  : Natural := 0;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
+      Marker_Text, Before, After : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
       Lead, Bridge, Gap : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
    end record;

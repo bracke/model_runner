@@ -1,4 +1,6 @@
 with Ada.Exceptions;
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Lookup;
@@ -123,6 +125,81 @@ package body Model_Runner.Generation is
         L.Vocabulary (Source);
       Longest  : constant Natural :=
         Model_Runner.Stops.Longest_String (Stop_Set);
+
+      --  How many markers the rewrite below adds for crops, so the count
+      --  of markers in the prompt can be checked against the pictures.
+      Crops_Written : Natural := 0;
+
+      --  The prompt as the reference processor rewrites it before
+      --  tokenizing: each marker's text set between the frame's two
+      --  halves, and a picture with crops among the processor's words,
+      --  every frame the same. Nothing changes where the set names no
+      --  marker text, and a marker past the pictures given is left as it
+      --  stands for the count check to refuse.
+      function Written return String is
+         Marker : constant String :=
+           Model_Runner.Text.To_String (Pictures.Marker_Text);
+         Frame  : constant String :=
+           Model_Runner.Text.To_String (Pictures.Frame_Before)
+           & Marker
+           & Model_Runner.Text.To_String (Pictures.Frame_After);
+         Result : Ada.Strings.Unbounded.Unbounded_String;
+         From   : Positive := Prompt'First;
+         Which  : Natural := 0;
+      begin
+         if Marker = "" then
+            return Prompt;
+         end if;
+
+         while From <= Prompt'Last loop
+            declare
+               At_Marker : constant Natural :=
+                 Ada.Strings.Fixed.Index (Prompt (From .. Prompt'Last), Marker);
+            begin
+               if At_Marker = 0 then
+                  Ada.Strings.Unbounded.Append
+                    (Result, Prompt (From .. Prompt'Last));
+                  exit;
+               end if;
+
+               Ada.Strings.Unbounded.Append
+                 (Result, Prompt (From .. At_Marker - 1));
+               Which := Which + 1;
+
+               declare
+                  Crops : constant Natural :=
+                    (if Pictures.Crops /= null
+                       and then Which in Pictures.Crops.all'Range
+                     then Pictures.Crops.all (Which) else 0);
+               begin
+                  if Crops = 0 then
+                     Ada.Strings.Unbounded.Append (Result, Frame);
+                  else
+                     Ada.Strings.Unbounded.Append
+                       (Result,
+                        Model_Runner.Text.To_String (Pictures.Crop_Lead)
+                        & Frame
+                        & Model_Runner.Text.To_String (Pictures.Crop_Bridge));
+                     for Crop in 1 .. Crops loop
+                        if Crop > 1 then
+                           Ada.Strings.Unbounded.Append
+                             (Result,
+                              Model_Runner.Text.To_String (Pictures.Crop_Gap));
+                        end if;
+                        Ada.Strings.Unbounded.Append (Result, Frame);
+                     end loop;
+                     Crops_Written := Crops_Written + Crops;
+                  end if;
+               end;
+
+               From := At_Marker + Marker'Length;
+            end;
+         end loop;
+
+         return Ada.Strings.Unbounded.To_String (Result);
+      end Written;
+
+      Shown : constant String := Written;
 
       Sampler : S.Sampler;
 
@@ -529,7 +606,7 @@ package body Model_Runner.Generation is
       --  that was too small to find out.
       Tokens :=
         new Vocab.Token_Array
-          (1 .. Natural'Max (L.Capacity (Session), Prompt'Length + 2));
+          (1 .. Natural'Max (L.Capacity (Session), Shown'Length + 2));
 
       if Logits = null or else Pending = null then
          Conclude (Runtime_Error, E.Make (E.Memory_Allocation_Failed));
@@ -557,7 +634,7 @@ package body Model_Runner.Generation is
       --  nearly two, where two honest implementations of the same
       --  arithmetic differ by hundredths.
       Vocab.Encode
-        (Words.all, Prompt,
+        (Words.all, Shown,
          Item.Add_Beginning and then Vocab.Adds_Beginning (Words.all),
          False, Tokens.all, Prompt_Count, Status);
       if E.Is_Error (Status) then
@@ -582,13 +659,17 @@ package body Model_Runner.Generation is
                end if;
             end loop;
 
-            if Marked /= Pictures.Count
+            --  Every crop stands behind a marker of its own, written by
+            --  the rewrite above; what the prompt must have marked is the
+            --  pictures.
+            if Marked /= Pictures.Count + Crops_Written
               or else (Marked > 0
                        and then (Pictures.Rows = null
                                  or else Pictures.Soft = Vocab.No_Token))
             then
                Status := E.Make (E.Generation_Picture_Count_Mismatch);
-               E.Add_Integer (Status, "expected", Long_Long_Integer (Marked));
+               E.Add_Integer
+                 (Status, "expected", Long_Long_Integer (Marked - Crops_Written));
                E.Add_Integer (Status, "count", Long_Long_Integer (Pictures.Count));
                Conclude (Runtime_Error, Status);
                Cleanup;
@@ -597,121 +678,28 @@ package body Model_Runner.Generation is
 
             if Marked > 0 then
                declare
-                  --  The words a picture with crops is set among, as
-                  --  tokens: each piece on its own, which is how the
-                  --  reference's tokenizer meets them too, a special
-                  --  token on either side.
-                  subtype Piece is Vocab.Token_Array (1 .. Model_Runner.Text.Max_Length);
-                  Lead, Bridge, Gap : Piece;
-                  Lead_Count, Bridge_Count, Gap_Count : Natural := 0;
-
-                  procedure Words_Of
-                    (Text : Model_Runner.Text.Bounded; Into : out Piece; Count : out Natural)
-                  is
-                     Said : E.Error_Info;
-                  begin
-                     Count := 0;
-                     if not Model_Runner.Text.Is_Empty (Text) then
-                        Vocab.Encode
-                          (Words.all, Model_Runner.Text.To_String (Text), False, False,
-                           Into, Count, Said);
-                        if E.Is_Error (Said) then
-                           Count := 0;
-                        end if;
-                     end if;
-                  end Words_Of;
-
-                  --  How many tokens the crops add over the pictures
-                  --  themselves: a frame a crop, and the words.
-                  function Crop_Tokens return Natural is
-                     Sum : Natural := 0;
-                  begin
-                     if Pictures.Crops = null then
-                        return 0;
-                     end if;
-                     for Crops of Pictures.Crops.all loop
-                        if Crops > 0 then
-                           Sum := Sum
-                             + Lead_Count + Bridge_Count
-                             + (Crops - 1) * Gap_Count
-                             + Crops * (1 + Pictures.Per_Picture
-                                        + (if Pictures.Closer /= Vocab.No_Token
-                                           then 1 else 0));
-                        end if;
-                     end loop;
-                     return Sum;
-                  end Crop_Tokens;
-
-                  Extra  : Natural;
-                  Opened : Token_Buffer;
-                  Filled : Natural := 0;
-                  Which  : Natural := 0;
-
-                  procedure Put (Token : Vocab.Token_Id) is
-                  begin
-                     Filled := Filled + 1;
-                     Opened.all (Filled) := Token;
-                  end Put;
-
-                  procedure Put (Tokens : Piece; Count : Natural) is
-                  begin
-                     for Index in 1 .. Count loop
-                        Put (Tokens (Index));
-                     end loop;
-                  end Put;
-
-                  --  One picture's tokens: the marker, the soft tokens its
-                  --  rows stand behind, and the closer.
-                  procedure Frame is
-                  begin
-                     Put (Pictures.Marker);
-                     for Row in 1 .. Pictures.Per_Picture loop
-                        Put (Pictures.Soft);
-                     end loop;
-                     if Pictures.Closer /= Vocab.No_Token then
-                        Put (Pictures.Closer);
-                     end if;
-                  end Frame;
-               begin
-                  Words_Of (Pictures.Crop_Lead, Lead, Lead_Count);
-                  Words_Of (Pictures.Crop_Bridge, Bridge, Bridge_Count);
-                  Words_Of (Pictures.Crop_Gap, Gap, Gap_Count);
-
-                  Extra :=
+                  Extra  : constant Natural :=
                     Marked * (Pictures.Per_Picture
                               + (if Pictures.Closer /= Vocab.No_Token
-                                 then 1 else 0))
-                    + Crop_Tokens;
-                  Opened :=
+                                 then 1 else 0));
+                  Opened : constant Token_Buffer :=
                     new Vocab.Token_Array
                       (1 .. Natural'Max (Tokens.all'Length,
                                          Prompt_Count + Extra));
-
+                  Filled : Natural := 0;
+               begin
                   for Index in 1 .. Prompt_Count loop
-                     if Tokens.all (Index) /= Pictures.Marker then
-                        Put (Tokens.all (Index));
-                     else
-                        Which := Which + 1;
-                        declare
-                           Crops : constant Natural :=
-                             (if Pictures.Crops /= null
-                                and then Which in Pictures.Crops.all'Range
-                              then Pictures.Crops.all (Which) else 0);
-                        begin
-                           if Crops = 0 then
-                              Frame;
-                           else
-                              Put (Lead, Lead_Count);
-                              Frame;
-                              Put (Bridge, Bridge_Count);
-                              for Crop in 1 .. Crops loop
-                                 if Crop > 1 then
-                                    Put (Gap, Gap_Count);
-                                 end if;
-                                 Frame;
-                              end loop;
-                           end if;
-                        end;
+                     Filled := Filled + 1;
+                     Opened.all (Filled) := Tokens.all (Index);
+                     if Tokens.all (Index) = Pictures.Marker then
+                        for Row in 1 .. Pictures.Per_Picture loop
+                           Filled := Filled + 1;
+                           Opened.all (Filled) := Pictures.Soft;
+                        end loop;
+                        if Pictures.Closer /= Vocab.No_Token then
+                           Filled := Filled + 1;
+                           Opened.all (Filled) := Pictures.Closer;
+                        end if;
                      end if;
                   end loop;
                   Free_Tokens (Tokens);

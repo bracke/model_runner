@@ -144,9 +144,13 @@ package body Model_Runner.CLI.Pictures is
          return;
       end if;
 
-      --  The words the reference processor sets a picture with crops
-      --  among, and its crops apart. Gemma 3's, which is the one projector
-      --  read here.
+      --  What the reference processor writes round a picture before it
+      --  tokenizes -- two line breaks either side of the marker -- and the
+      --  words it sets a picture with crops among, and its crops apart.
+      --  Gemma 3's, which is the one projector read here.
+      Item.Marker_Text := Model_Runner.Text.To_Bounded ("<start_of_image>");
+      Item.Before := Model_Runner.Text.To_Bounded (ASCII.LF & ASCII.LF);
+      Item.After := Item.Before;
       Item.Lead := Model_Runner.Text.To_Bounded ("Here is the original image ");
       Item.Bridge := Model_Runner.Text.To_Bounded
         (" and here are some crops to help you see better ");
@@ -255,6 +259,9 @@ package body Model_Runner.CLI.Pictures is
       Into.Soft := Item.Soft;
       Into.Closer := Item.Closer;
       Into.Per_Picture := Per;
+      Into.Marker_Text := Item.Marker_Text;
+      Into.Frame_Before := Item.Before;
+      Into.Frame_After := Item.After;
       Into.Crop_Lead := Item.Lead;
       Into.Crop_Bridge := Item.Bridge;
       Into.Crop_Gap := Item.Gap;
