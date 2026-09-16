@@ -99,6 +99,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A round's members bring pictures.** `Serving.Admit` takes the rows
+  given at a prompt's marker tokens, and `Llama.Evaluate_Round` a set of
+  rows a member: each member's rows are read by its own positions, a run
+  of one member's picture ends where its rows do, and a member with rows
+  reuses no prefix of the seat's last caller, nor the caller after it any
+  of its -- two prompts alike token for token may show two pictures. Two
+  members with pictures and one without, served in one round, say what
+  each would alone. What the test found beside that: a round of one member
+  answered with nothing. A round asks for every row's distribution and a
+  batch gives that only where there is room for every position, so a lone
+  member reading a prompt longer than the server's gather sampled from
+  whatever the last round left in the rows. A round of one is a batch now,
+  and its one row is the batch's own answer.
+- **The reference's rows are recorded, and `tests see --expect` holds them.**
+  `tests/fixtures/vision-crossing/qwen35-0.8b.expect` records three rows
+  the reference vision tower makes of the small picture beside it, and
+  `tests see --mmproj MMPROJ --image PICTURE --expect FILE` compares this
+  build's rows against them, the grid and the count too, each row within a
+  hundredth of its norm -- they sit within three ten-thousandths. A checkout
+  with the projector file reruns that much of the crossing with no Python.
 - **The pictures are crossed with the reference runtime.** Two scripts under
   `tests/fixtures/vision-crossing/` set this build beside `transformers`:
   Gemma 3's prompt rewrite -- the frame and the pan-and-scan words -- gives

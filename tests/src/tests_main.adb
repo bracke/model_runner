@@ -411,6 +411,7 @@ begin
          Threads   : constant Natural :=
            Natural'Value (Option ("--threads", "0"));
          Dump      : constant String := Option ("--dump", "");
+         Expect    : constant String := Option ("--expect", "");
          On_Device : Boolean := False;
          Eyes      : Model_Runner.Vision.Encoder;
          Picture   : Model_Runner.Images.Raster;
@@ -517,6 +518,135 @@ begin
                         Ada.Text_IO.Put_Line (File, Value'Image);
                      end loop;
                      Ada.Text_IO.Close (File);
+                  end;
+               end if;
+
+               --  Against what the reference runtime made of the same
+               --  picture, recorded: the grid, the row count, and the rows
+               --  recorded in full, each within the tolerance of its own
+               --  norm.
+               if Expect /= "" then
+                  declare
+                     File : Ada.Text_IO.File_Type;
+                     Tolerance : Model_Runner.Numerics.Wide_Real := 0.01;
+                     Failed : Boolean := False;
+                     Checked : Natural := 0;
+
+                     procedure Fail (Why : String) is
+                     begin
+                        Failed := True;
+                        Ada.Text_IO.Put_Line ("see: expectation not met: " & Why);
+                     end Fail;
+
+                     --  The words of a line, one at a time.
+                     function Word (Line : String; Which : Positive) return String is
+                        Start : Natural := Line'First;
+                        Count : Natural := 0;
+                     begin
+                        while Start <= Line'Last loop
+                           while Start <= Line'Last and then Line (Start) = ' ' loop
+                              Start := Start + 1;
+                           end loop;
+                           exit when Start > Line'Last;
+                           declare
+                              Stop : Natural := Start;
+                           begin
+                              while Stop <= Line'Last and then Line (Stop) /= ' ' loop
+                                 Stop := Stop + 1;
+                              end loop;
+                              Count := Count + 1;
+                              if Count = Which then
+                                 return Line (Start .. Stop - 1);
+                              end if;
+                              Start := Stop;
+                           end;
+                        end loop;
+                        return "";
+                     end Word;
+                  begin
+                     Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Expect);
+                     while not Ada.Text_IO.End_Of_File (File) loop
+                        declare
+                           Line : constant String := Ada.Text_IO.Get_Line (File);
+                           Key  : constant String := Word (Line, 1);
+                        begin
+                           if Key = "tolerance" then
+                              Tolerance :=
+                                Model_Runner.Numerics.Wide_Real'Value (Word (Line, 2));
+                           elsif Key = "grid" then
+                              if Natural'Value (Word (Line, 2)) /= Grid_Rows
+                                or else Natural'Value (Word (Line, 3)) /= Grid_Columns
+                              then
+                                 Fail ("the grid is" & Grid_Rows'Image & " by"
+                                       & Grid_Columns'Image & ", not "
+                                       & Word (Line, 2) & " by " & Word (Line, 3));
+                              end if;
+                           elsif Key = "rows" then
+                              if Model_Runner.Numerics.Element_Count'Value (Word (Line, 2))
+                                /= Rows.all'Length / Width
+                              then
+                                 Fail ("the rows are"
+                                       & Model_Runner.Numerics.Element_Count'Image
+                                           (Rows.all'Length / Width)
+                                       & ", not " & Word (Line, 2));
+                              end if;
+                           elsif Key = "width" then
+                              if Model_Runner.Numerics.Element_Count'Value (Word (Line, 2))
+                                /= Width
+                              then
+                                 Fail ("the width is" & Width'Image & ", not " & Word (Line, 2));
+                              end if;
+                           elsif Key = "row" then
+                              declare
+                                 Index : constant Model_Runner.Numerics.Element_Count :=
+                                   Model_Runner.Numerics.Element_Count'Value (Word (Line, 2));
+                                 Apart, Norm : Model_Runner.Numerics.Wide_Real := 0.0;
+                              begin
+                                 if (Index + 1) * Width > Rows.all'Length then
+                                    Fail ("row" & Index'Image & " is past the rows");
+                                 else
+                                    for D in 0 .. Width - 1 loop
+                                       declare
+                                          Wanted : constant Model_Runner.Numerics.Wide_Real :=
+                                            Model_Runner.Numerics.Wide_Real'Value
+                                              (Word (Line, 3 + Natural (D)));
+                                          Got : constant Model_Runner.Numerics.Wide_Real :=
+                                            Model_Runner.Numerics.Wide_Real
+                                              (Rows (Index * Width + D));
+                                       begin
+                                          Apart := Apart + (Got - Wanted) ** 2;
+                                          Norm := Norm + Wanted ** 2;
+                                       end;
+                                    end loop;
+                                    Checked := Checked + 1;
+                                    Ada.Text_IO.Put_Line
+                                      ("row" & Index'Image & " apart by"
+                                       & Model_Runner.Numerics.Wide_Real'Image
+                                           (Model_Runner.Numerics.Sqrt (Apart)
+                                            / Model_Runner.Numerics.Sqrt (Norm))
+                                       & " of its norm");
+                                    if Model_Runner.Numerics.Sqrt (Apart)
+                                      > Tolerance * Model_Runner.Numerics.Sqrt (Norm)
+                                    then
+                                       Fail ("row" & Index'Image & " is further from the "
+                                             & "reference's than the tolerance");
+                                    end if;
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                     if Checked = 0 then
+                        Fail ("the expectation records no row");
+                     end if;
+                     if Failed then
+                        Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+                     else
+                        Ada.Text_IO.Put_Line
+                          ("see: the expectation is met," & Checked'Image
+                           & " rows within the tolerance");
+                     end if;
                   end;
                end if;
             end;

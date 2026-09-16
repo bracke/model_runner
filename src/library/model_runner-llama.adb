@@ -11905,13 +11905,16 @@ package body Model_Runner.Llama is
       Beside : Session_Group := Alone;
       Shares : Row_Counts := Even_Shares;
       Given  : Given_Rows := No_Given_Rows;
+      Givens : Given_Rows_List := No_Givens;
       Status : out E.Error_Info)
    is
       Settings  : constant Configuration := Source.Settings;
       Width     : constant Element_Count := Element_Count (Settings.Embedding);
 
-      --  How many of the given rows this batch has taken so far.
-      Taken     : Element_Count := 0;
+      --  How many of the given rows each member has taken so far: one
+      --  count for a batch, one a member for a round.
+      Taken_By  : array (0 .. Element_Count (Beside'Length)) of Element_Count :=
+        [others => 0];
 
       --  Where each position's run of given rows ends: a picture's rows
       --  attend to each other both ways, as the reference lets them, so a
@@ -11982,6 +11985,16 @@ package body Model_Runner.Llama is
       is (if not Rounding or else Row_Owner (Which) = 0
           then Item'Unchecked_Access
           else Beside (Beside'First + Natural (Row_Owner (Which)) - 1));
+
+      --  The rows given for row Which's member: the round's set for that
+      --  member where sets were given a member -- a round of one member
+      --  is a batch, whose every row is the first set's -- else the one
+      --  set.
+      function Given_Of (Which : Element_Count) return Given_Rows
+      is (if Givens'Length > 0
+            and then Natural (Row_Owner (Which)) < Givens'Length
+          then Givens (Givens'First + Natural (Row_Owner (Which)))
+          else Given);
 
       --  Where row Which sits in that session's cache.
       function Sits_At (Which : Element_Count) return Element_Count
@@ -12379,21 +12392,27 @@ package body Model_Runner.Llama is
       for Which in 0 .. Count - 1 loop
          Sees_To (Which) := Which;
       end loop;
-      if Given.Rows /= null
-        and then not Given.Causal
-        and then Given.Token /= Model_Runner.Tokenizer.No_Token
-      then
-         declare
-            Which : Element_Count := 0;
-         begin
-            while Which < Count loop
-               if Tokens (Tokens'First + Natural (Which)) = Given.Token then
+      declare
+         Which : Element_Count := 0;
+      begin
+         while Which < Count loop
+            declare
+               Mine : constant Given_Rows := Given_Of (Which);
+            begin
+               if Mine.Rows /= null
+                 and then not Mine.Causal
+                 and then Mine.Token /= Model_Runner.Tokenizer.No_Token
+                 and then Tokens (Tokens'First + Natural (Which)) = Mine.Token
+               then
                   declare
                      Ends : Element_Count := Which;
                   begin
+                     --  A run ends with its member's rows: two members'
+                     --  pictures side by side in a round are two runs.
                      while Ends + 1 < Count
+                       and then Row_Owner (Ends + 1) = Row_Owner (Which)
                        and then Tokens (Tokens'First + Natural (Ends + 1))
-                                = Given.Token
+                                = Mine.Token
                      loop
                         Ends := Ends + 1;
                      end loop;
@@ -12406,9 +12425,9 @@ package body Model_Runner.Llama is
                else
                   Which := Which + 1;
                end if;
-            end loop;
-         end;
-      end if;
+            end;
+         end loop;
+      end;
 
       --  Embedding lookup for every token of the batch -- or the row given
       --  for it, which stands as it is: the scale a model applies to its
@@ -12419,29 +12438,33 @@ package body Model_Runner.Llama is
             Token  : constant Token_Id :=
               Tokens (Tokens'First + Natural (Which));
          begin
-            if Given.Rows /= null and then Token = Given.Token then
+            if Given_Of (Which).Rows /= null
+              and then Token = Given_Of (Which).Token
+            then
                declare
+                  Mine   : constant Given_Rows := Given_Of (Which);
+                  Taken  : Element_Count renames Taken_By (Row_Owner (Which));
                   Row_At : constant Element_Count :=
-                    (Given.First + Taken) * Width;
+                    (Mine.First + Taken) * Width;
                begin
-                  if Row_At + Width > Given.Rows.all'Length then
+                  if Row_At + Width > Mine.Rows.all'Length then
                      Status := E.Make (E.Tensor_Out_Of_Bounds);
                      E.Add_Integer
-                       (Status, "index", Long_Long_Integer (Given.First + Taken));
+                       (Status, "index", Long_Long_Integer (Mine.First + Taken));
                   else
                      Acts.all (Origin .. Origin + Width - 1) :=
-                       Given.Rows.all (Row_At .. Row_At + Width - 1);
+                       Mine.Rows.all (Row_At .. Row_At + Width - 1);
 
                      --  Where the row stands in its picture, for a
                      --  rotation whose positions have three parts; a row
                      --  with no place given stands where a text token
                      --  would.
-                     if Given.Places /= null
-                       and then Given.First + Taken in Given.Places.all'Range
+                     if Mine.Places /= null
+                       and then Mine.First + Taken in Mine.Places.all'Range
                      then
                         Set_Mark
                           (Held_By (Which).all, Natural (Sits_At (Which)),
-                           Given.Places.all (Given.First + Taken), True);
+                           Mine.Places.all (Mine.First + Taken), True);
                      else
                         Set_Mark (Held_By (Which).all, Natural (Sits_At (Which)));
                      end if;
@@ -14246,6 +14269,7 @@ package body Model_Runner.Llama is
       Logits  : T.Real_Array_Access;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Shares  : Row_Counts := Even_Shares;
+      Givens  : Given_Rows_List := No_Givens;
       Status  : out E.Error_Info)
    is
       Settings   : constant Configuration := Source.Settings;
@@ -14359,6 +14383,27 @@ package body Model_Runner.Llama is
       --  cent of a generated token, so most of the round's saving survives
       --  the arrangement.
 
+      --  A round of one member is a batch, and its one row of logits is
+      --  the batch's own answer -- the last position's -- put where the
+      --  member's row goes. Asked for as every row's distribution, as a
+      --  round of several asks, a batch answers only when the caller has
+      --  room for every position of it, and a server's room is a row a
+      --  member: a lone member reading a prompt longer than the server's
+      --  gather got no logits at all and sampled from the last round's.
+      if Members'Length = 1 then
+         Evaluate_Batch
+           (Item   => Members (Members'First).all,
+            Source => Source,
+            Tokens => Tokens,
+            Logits => Logits.all (Logits.all'First
+                                  .. Logits.all'First + Vocabulary - 1),
+            Cancel => Cancel,
+            Given  => (if Givens'Length > 0 then Givens (Givens'First)
+                       else No_Given_Rows),
+            Status => Status);
+         return;
+      end if;
+
       --  The single row Evaluate_Batch also answers with, which a round has
       --  no use for: its rows come back through Logits.
       T.Allocate (Vocabulary, Aside);
@@ -14378,6 +14423,7 @@ package body Model_Runner.Llama is
          Cancel => Cancel,
          Beside => Members (Members'First + 1 .. Members'Last),
          Shares => Shares,
+         Givens => Givens,
          Status => Status);
 
       T.Free (Aside);

@@ -206,6 +206,27 @@ word repeated. Its recording is `tests/fixtures/gemma3-4b.expect`; on the
 campaign's first task it now writes the reference runtime's `<tool_call>`
 byte for byte, and scores ten of ten.
 
+### The two vision projectors, Gemma 3's and Qwen3.5's
+
+| | |
+|---|---|
+| Files | `gemma-3-4b-it-mmproj-f16.gguf`, `qwen3.5-0.8b-mmproj-f16.gguf` |
+| Size | 851 251 104 and 204 987 232 bytes |
+| Source | `unsloth/gemma-3-4b-it-GGUF` (`mmproj-F16.gguf`) and `unsloth/Qwen3.5-0.8B-GGUF` (`mmproj-F16.gguf`) on Hugging Face |
+| Upstream models | `google/gemma-3-4b-it`, `Qwen/Qwen3.5-0.8B` |
+| Licence | Gemma Terms of Use; Apache 2.0 |
+
+The second file a multimodal model ships, holding its image encoder and
+the map into the text width, as llama.cpp's converter writes it. Gemma 3's
+names the dinosaur in a photograph and reads a poster's fine print with
+`--pan-and-scan`; Qwen3.5's does both with the 0.8B text model, and its
+rows were set beside the reference vision tower: `tests/fixtures/
+vision-crossing/qwen35-0.8b.expect` records three rows the reference makes
+of `plaza.png` beside it, which `tests see --expect` compares this build's
+against, and `record.py` there writes it afresh. The picture is a drawing
+of three shapes on a gradient, 256 by 160, made by a few lines of Pillow
+so that nobody's photograph need be committed.
+
 ### jina-embeddings-v2-base-en, F16 and Q8_0
 
 | | |

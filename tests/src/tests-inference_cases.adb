@@ -2768,6 +2768,229 @@ package body Tests.Inference_Cases is
       Stepped (3);
    end Round_Members_Get_What_They_Would_Alone;
 
+   --  Members of a round may bring pictures: rows given at the prompt's
+   --  marker tokens, each member's read by its own rows alone. Two members
+   --  with pictures -- one a run of two rows, one of three, the runs
+   --  attending both ways as Gemma's do -- served in one round say what
+   --  each would say alone, token for token, and their picture-less
+   --  neighbour too. And a caller whose prompt is the seat's last caller's
+   --  token for token, but with other rows, reuses none of it: it says what
+   --  it would say alone with its own rows.
+   procedure Served_Members_Bring_Pictures
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+
+      Steps : constant := 4;
+      type Trail is array (1 .. Steps) of Vocab.Token_Id;
+
+      Soft : constant Vocab.Token_Id := 12;   --  <0x64>, which no prompt of letters spells
+
+      First_Prompt  : constant Vocab.Token_Array (1 .. 4) := [1, Soft, Soft, 4];
+      Second_Prompt : constant Vocab.Token_Array (1 .. 6) := [1, 5, Soft, Soft, Soft, 6];
+      Third_Prompt  : constant Vocab.Token_Array (1 .. 3) := [1, 7, 8];
+
+      Width : constant N.Element_Count := Tiny_Model.Embedding;
+      Rows_A, Rows_B, Rows_C : Model_Runner.Tensors.Real_Array_Access;
+
+      Seed : Interfaces.Unsigned_32 := 97;
+      function Next return N.Real is
+         use Interfaces;
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return N.Real (Shift_Right (Seed, 8) mod 2000) / 1000.0 - 1.0;
+      end Next;
+
+      procedure Said_Alone
+        (Under  : in out L.Model'Class;
+         Prompt : Vocab.Token_Array;
+         Given  : L.Given_Rows;
+         Into   : out Trail;
+         Status : out E.Error_Info)
+      is
+         Live  : L.Session;
+         Row   : Logit_Vector := [others => 0.0];
+         Token : Vocab.Token_Id;
+      begin
+         Into := [others => Vocab.No_Token];
+         L.Open (Live, Under, Status => Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         L.Evaluate_Batch (Live, Under, Prompt, Row, Given => Given, Status => Status);
+         for Step in Trail'Range loop
+            exit when E.Is_Error (Status);
+            Token := Vocab.Token_Id (Best_Of (Row));
+            Into (Step) := Token;
+            L.Evaluate (Live, Under, Token, Row, Status => Status);
+         end loop;
+         L.Close (Live);
+      end Said_Alone;
+
+      --  What a member said, greedily, once it has finished.
+      procedure Said_Served
+        (Serve : in out Model_Runner.Serving.Server;
+         Who   : Model_Runner.Serving.Member_Id;
+         Into  : out Trail)
+      is
+         Got  : Vocab.Token_Array (1 .. 64);
+         Last : Natural;
+         Done : Boolean;
+      begin
+         Into := [others => Vocab.No_Token];
+         Model_Runner.Serving.Take (Serve, Who, Got, Last, Done);
+         for Step in 1 .. Natural'Min (Last, Steps) loop
+            Into (Step) := Got (Step);
+         end loop;
+      end Said_Served;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Status : E.Error_Info;
+         Given_A, Given_B, Given_C : L.Given_Rows;
+         Alone_A, Alone_B, Alone_C, Alone_A_With_C : Trail;
+      begin
+         Start (Under);
+
+         Model_Runner.Tensors.Allocate (2 * Width, Rows_A);
+         Model_Runner.Tensors.Allocate (3 * Width, Rows_B);
+         Model_Runner.Tensors.Allocate (2 * Width, Rows_C);
+         for Value of Rows_A.all loop
+            Value := Next;
+         end loop;
+         for Value of Rows_B.all loop
+            Value := Next;
+         end loop;
+         for Value of Rows_C.all loop
+            Value := Next;
+         end loop;
+         Given_A := (Token => Soft, Rows => Rows_A, First => 0, others => <>);
+         Given_B := (Token => Soft, Rows => Rows_B, First => 0, others => <>);
+         Given_C := (Token => Soft, Rows => Rows_C, First => 0, others => <>);
+
+         Said_Alone (Under.Ready, First_Prompt, Given_A, Alone_A, Status);
+         Assert (E.Is_Ok (Status), "the first would not run alone");
+
+         --  A round of one member is a batch, and answers with its last
+         --  row where the member's row goes. It answered with nothing: a
+         --  round of several asks for every row's distribution, a batch
+         --  gives that only where there is room for every position, and a
+         --  lone member reading a prompt longer than the server's gather
+         --  sampled from whatever the rows held.
+         declare
+            Live_1, Live_2 : aliased L.Session;
+            Row_1 : Logit_Vector := [others => 0.0];
+            Row_2 : Model_Runner.Tensors.Real_Array_Access;
+            Group : L.Session_Group (1 .. 1);
+         begin
+            Model_Runner.Tensors.Allocate (N.Element_Count (Tiny_Model.Vocabulary), Row_2);
+            L.Open (Live_1, Under.Ready, Status => Status);
+            L.Open (Live_2, Under.Ready, Status => Status);
+            L.Evaluate_Batch (Live_1, Under.Ready, First_Prompt, Row_1, Given => Given_A, Status => Status);
+            Group (1) := Live_2'Unchecked_Access;
+            L.Evaluate_Round (Group, Under.Ready, First_Prompt, Row_2, Shares => [1 => 4],
+                              Givens => [1 => Given_A], Status => Status);
+            Assert (E.Is_Ok (Status), "a round of one failed");
+            declare
+               Row_2_V : Logit_Vector := [others => 0.0];
+            begin
+               Row_2_V := Logit_Vector (Row_2 (0 .. N.Element_Count (Tiny_Model.Vocabulary) - 1));
+               Assert (Best_Of (Row_1) = Best_Of (Row_2_V),
+                       "a round of one with rows differs from a batch with rows:"
+                       & N.Element_Count'Image (Best_Of (Row_1)) & N.Element_Count'Image (Best_Of (Row_2_V)));
+            end;
+            L.Close (Live_1);
+            L.Close (Live_2);
+            Model_Runner.Tensors.Free (Row_2);
+         end;
+         Said_Alone (Under.Ready, Second_Prompt, Given_B, Alone_B, Status);
+         Assert (E.Is_Ok (Status), "the second would not run alone");
+         Said_Alone (Under.Ready, Third_Prompt, L.No_Given_Rows, Alone_C, Status);
+         Assert (E.Is_Ok (Status), "the third would not run alone");
+         Said_Alone (Under.Ready, First_Prompt, Given_C, Alone_A_With_C, Status);
+         Assert (E.Is_Ok (Status), "the first with other rows would not run alone");
+         Assert (Alone_A /= Alone_A_With_C,
+                 "two pictures behind the same prompt say the same, so this "
+                 & "fixture cannot tell a reused prefix from its own");
+
+         declare
+            Serve : Model_Runner.Serving.Server (Capacity => 3);
+            use type Model_Runner.Serving.Member_Id;
+            One, Two, Three, Again : Model_Runner.Serving.Member_Id;
+            Terms : Model_Runner.Serving.Terms;
+            Said  : Trail;
+         begin
+            Terms.Sampling.Temperature := 0.0;
+            Terms.Sampling.Repeat_Penalty := 1.0;
+            Terms.Limit := Steps;
+
+            Model_Runner.Serving.Open (Serve, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the server did not open");
+
+            Model_Runner.Serving.Admit
+              (Serve, First_Prompt, Terms, One, Status, Given => Given_A);
+            Assert (E.Is_Ok (Status) and then One /= 0, "the first was not admitted");
+            Model_Runner.Serving.Admit
+              (Serve, Second_Prompt, Terms, Two, Status, Given => Given_B);
+            Assert (E.Is_Ok (Status) and then Two /= 0, "the second was not admitted");
+            Model_Runner.Serving.Admit (Serve, Third_Prompt, Terms, Three, Status);
+            Assert (E.Is_Ok (Status) and then Three /= 0, "the third was not admitted");
+
+            while Model_Runner.Serving.Serving (Serve) > 0 loop
+               Model_Runner.Serving.Step (Serve, Status => Status);
+               Assert (E.Is_Ok (Status), "a round failed: "
+                       & E.Error_Code'Image (Status.Code));
+               exit when Model_Runner.Serving.Gathered (Serve) = 0;
+            end loop;
+
+            Said_Served (Serve, One, Said);
+            Assert (Said = Alone_A, "the first member with a picture did not say what it would alone");
+            Said_Served (Serve, Two, Said);
+            Assert (Said = Alone_B, "the second member with a picture did not say what it would alone");
+            Said_Served (Serve, Three, Said);
+            Assert (Said = Alone_C, "the member without a picture did not say what it would alone");
+            Model_Runner.Serving.Retire (Serve, One);
+            Model_Runner.Serving.Retire (Serve, Two);
+            Model_Runner.Serving.Retire (Serve, Three);
+
+            --  The first prompt again, with the third rows, in whichever
+            --  seat: no prefix is reused, and it says what it would alone.
+            Model_Runner.Serving.Admit
+              (Serve, First_Prompt, Terms, Again, Status, Given => Given_C);
+            Assert (E.Is_Ok (Status) and then Again /= 0, "the repeat was not admitted");
+            while Model_Runner.Serving.Serving (Serve) > 0 loop
+               Model_Runner.Serving.Step (Serve, Status => Status);
+               Assert (E.Is_Ok (Status), "a later round failed");
+               exit when Model_Runner.Serving.Gathered (Serve) = 0;
+            end loop;
+            Said_Served (Serve, Again, Said);
+            Assert (Said = Alone_A_With_C,
+                    "a repeated prompt with other rows reused the first picture:"
+                    & Vocab.Token_Id'Image (Said (1)) & Vocab.Token_Id'Image (Said (2))
+                    & Vocab.Token_Id'Image (Said (3)) & Vocab.Token_Id'Image (Said (4))
+                    & " where alone with them says" & Vocab.Token_Id'Image (Alone_A_With_C (1))
+                    & Vocab.Token_Id'Image (Alone_A_With_C (2)) & Vocab.Token_Id'Image (Alone_A_With_C (3))
+                    & Vocab.Token_Id'Image (Alone_A_With_C (4))
+                    & " and with the first picture" & Vocab.Token_Id'Image (Alone_A (1))
+                    & Vocab.Token_Id'Image (Alone_A (2)) & Vocab.Token_Id'Image (Alone_A (3))
+                    & Vocab.Token_Id'Image (Alone_A (4)));
+            Model_Runner.Serving.Retire (Serve, Again);
+
+            Model_Runner.Serving.Close (Serve);
+         end;
+
+         Model_Runner.Tensors.Free (Rows_A);
+         Model_Runner.Tensors.Free (Rows_B);
+         Model_Runner.Tensors.Free (Rows_C);
+      end;
+
+      B.Free (Image);
+   end Served_Members_Bring_Pictures;
+
    --  A server gives each member what it would have got alone.
    --
    --  The round primitive is held bit for bit by the test above. What this
@@ -9881,6 +10104,11 @@ package body Tests.Inference_Cases is
         (T, Served_Members_Get_What_They_Would_Alone'Access,
          "a server gives each member the tokens it would have generated on "
          & "its own, and retires it on its own stop");
+      Register_Routine
+        (T, Served_Members_Bring_Pictures'Access,
+         "members of a round bring pictures, each read by its own rows, and "
+         & "say what they would alone; a repeated prompt with other rows "
+         & "reuses no prefix");
       Register_Routine
         (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
          "a model whose matrices are larger than the device will hold is "

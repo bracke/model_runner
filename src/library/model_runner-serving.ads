@@ -195,6 +195,13 @@ package Model_Runner.Serving is
    --  @param Item The server.
    --  @param Prompt The tokens this member starts from.
    --  @param With_Terms Its sampler, its stops and its limit.
+   --  @param Given The rows standing in for embeddings at the prompt's
+   --    marker tokens -- a picture's rows -- or none. The rows are the
+   --    caller's, read by the rounds that carry this member's prompt and
+   --    not copied, so they must outlive the member. A member with rows
+   --    reuses no prefix of the seat's last caller, and the caller after it
+   --    reuses none of its: two prompts alike token for token may show two
+   --    pictures.
    --  @param Who Which member it became, or No_Member on a refusal.
    --  @param Status Success, Generation_Batch_Too_Large where the server is
    --    full, Tensor_Shape_Mismatch where the prompt is longer than the room
@@ -204,7 +211,9 @@ package Model_Runner.Serving is
       Prompt     : Token_Array;
       With_Terms : Terms;
       Who        : out Member_Id;
-      Status     : out Model_Runner.Errors.Error_Info);
+      Status     : out Model_Runner.Errors.Error_Info;
+      Given      : Model_Runner.Llama.Given_Rows :=
+        Model_Runner.Llama.No_Given_Rows);
 
    --  One round: everything ready moves one step.
    --
@@ -328,6 +337,12 @@ private
         [others => Model_Runner.Tokenizer.No_Token];
       Length  : Natural := 0;
       Read    : Natural := 0;
+
+      --  The rows given at the prompt's marker tokens, the caller's own,
+      --  and whether the seat's last caller gave any: a prefix read with
+      --  one picture's rows is no prefix for another's.
+      Given   : Model_Runner.Llama.Given_Rows := Model_Runner.Llama.No_Given_Rows;
+      Gave    : Boolean := False;
 
       --  The token this member will contribute to the next round, and the
       --  ones it has said that nobody has taken yet.

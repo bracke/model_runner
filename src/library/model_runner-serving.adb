@@ -187,7 +187,8 @@ package body Model_Runner.Serving is
       Prompt     : Token_Array;
       With_Terms : Terms;
       Who        : out Member_Id;
-      Status     : out Model_Runner.Errors.Error_Info)
+      Status     : out Model_Runner.Errors.Error_Info;
+      Given      : L.Given_Rows := L.No_Given_Rows)
    is
       Free_Seat : Natural := 0;
    begin
@@ -225,7 +226,9 @@ package body Model_Runner.Serving is
             if Item.Seats (Which).State = Free then
                declare
                   Shared : constant Natural :=
-                    (if Item.Reuse then Agreeing (Item.Seats (Which), Prompt)
+                    (if Item.Reuse and then Given.Rows = null
+                       and then not Item.Seats (Which).Gave
+                     then Agreeing (Item.Seats (Which), Prompt)
                      else 0);
                begin
                   if Free_Seat = 0 or else Shared > Best then
@@ -257,7 +260,10 @@ package body Model_Runner.Serving is
          --  first one paid.
          Seat_Here.Kept :=
            (if Item.Reuse and then Seat_Here.Seated
+              and then Given.Rows = null and then not Seat_Here.Gave
             then Agreeing (Seat_Here, Prompt) else 0);
+         Seat_Here.Given := Given;
+         Seat_Here.Gave := Given.Rows /= null;
 
          if Seat_Here.Seated and then Seat_Here.Kept > 0 then
             --  What both callers sent stays where it is; everything above
@@ -416,9 +422,11 @@ package body Model_Runner.Serving is
       declare
          Group  : L.Session_Group (1 .. Taken);
          Counts : L.Row_Counts (1 .. Taken);
+         Givens : L.Given_Rows_List (1 .. Taken) := [others => L.No_Given_Rows];
          Tokens : V.Token_Array (1 .. Rows);
 
          At_Row : Natural := 0;
+         Any_Given : Boolean := False;
       begin
          for Row in 1 .. Taken loop
             declare
@@ -430,6 +438,24 @@ package body Model_Runner.Serving is
                if Here.Read < Here.Length then
                   Tokens (At_Row + 1 .. At_Row + Share (Row)) :=
                     Here.Prompt (Here.Read + 1 .. Here.Read + Share (Row));
+
+                  --  The member's rows, from the one after those its
+                  --  earlier stretches took: as many as the marker stood
+                  --  in what was read.
+                  if Here.Given.Rows /= null then
+                     declare
+                        Before : N.Element_Count := 0;
+                     begin
+                        for Index in 1 .. Here.Read loop
+                           if Here.Prompt (Index) = Here.Given.Token then
+                              Before := Before + 1;
+                           end if;
+                        end loop;
+                        Givens (Row) := Here.Given;
+                        Givens (Row).First := Here.Given.First + Before;
+                        Any_Given := True;
+                     end;
+                  end if;
                else
                   Tokens (At_Row + 1) := Here.Next;
                end if;
@@ -441,7 +467,9 @@ package body Model_Runner.Serving is
          L.Evaluate_Round
            (Members => Group, Source => Item.Source.all,
             Tokens => Tokens, Logits => Item.Rows,
-            Cancel => Cancel, Shares => Counts, Status => Status);
+            Cancel => Cancel, Shares => Counts,
+            Givens => (if Any_Given then Givens else L.No_Givens),
+            Status => Status);
 
          if E.Is_Error (Status) then
             --  A round that refused committed nothing, so every member of

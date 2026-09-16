@@ -216,9 +216,9 @@ package body Tool_Commands is
    Says_See  : aliased constant String :=
      "run a picture through a vision projector and report its rows";
    Takes_See : aliased constant String :=
-     "--mmproj PATH --image FILE [--threads N] [--device] [--dump FILE]";
+     "--mmproj PATH --image FILE [--threads N] [--device] [--dump FILE] [--expect FILE]";
    Opts_See  : aliased constant String :=
-     " --mmproj --image --threads --device --dump ";
+     " --mmproj --image --threads --device --dump --expect ";
 
    Held : constant array (1 .. 28) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

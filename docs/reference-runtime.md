@@ -680,6 +680,15 @@ photograph's prompt: the reference's five likeliest are ` A` -0.56, ` a`
 -1.54, `A` -2.81, ` An` -3.73, ` It` -3.73; this build's, on the Q8_0 text
 weights, ` A` -0.61, ` a` -1.36, `A` -3.11, ` It` -3.67, ` An` -3.88.
 
+What the scripts found is also held without them: `tests/fixtures/
+vision-crossing/qwen35-0.8b.expect` records three rows the reference tower
+makes of the small picture beside it -- the first, the middle and the last
+of seventy-seven -- and `tests see --mmproj MMPROJ --image plaza.png --expect
+qwen35-0.8b.expect` compares this build's rows against them, each within a
+hundredth of its norm; they sit within three ten-thousandths. `record.py`
+there writes the file afresh from the reference. A checkout with the
+projector file, and no Python, reruns that much of the crossing.
+
 The pixels are the one place the two references part. The processor the
 model was trained through, and llama.cpp, resize with PIL: bicubic with
 a = -0.5, in two passes of 22-bit fixed point, each rounded to a byte.

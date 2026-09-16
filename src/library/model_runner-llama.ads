@@ -1290,6 +1290,11 @@ package Model_Runner.Llama is
 
    No_Given_Rows : constant Given_Rows := (others => <>);
 
+   --  One set of given rows a member of a round, in the members' order.
+   type Given_Rows_List is array (Positive range <>) of Given_Rows;
+
+   No_Givens : constant Given_Rows_List (1 .. 0) := [others => <>];
+
    --  Largest number of tokens one batched call will evaluate. A batch holds
    --  activations for every token in it, so this bounds that working set
    --  rather than letting a long prompt decide it.
@@ -1364,6 +1369,8 @@ package Model_Runner.Llama is
    --    reaches the model: the template writes a marker token wherever
    --    one stands, the encoder's rows are handed here, and the model
    --    reads them where it would have read the marker's embedding.
+   --  @param Givens For a round, the rows given a member in the members'
+   --    order, read in place of Given; see Evaluate_Round.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
@@ -1375,6 +1382,7 @@ package Model_Runner.Llama is
       Beside : Session_Group := Alone;
       Shares : Row_Counts := Even_Shares;
       Given  : Given_Rows := No_Given_Rows;
+      Givens : Given_Rows_List := No_Givens;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  One token from each of several sessions, in one pass over the weights.
@@ -1405,6 +1413,11 @@ package Model_Runner.Llama is
    --  @param Logits Receives Vocabulary logits a member -- the member's last
    --    row -- in the members' order.
    --  @param Cancel Stops between layers, as evaluation does everywhere.
+   --  @param Givens The rows given in place of embeddings, one set a
+   --    member in the members' order -- a picture's rows behind its marker
+   --    -- or none. A member's set is read by its own rows alone: First
+   --    counts the rows its earlier stretches took, and a run of its
+   --    marker's positions ends where its rows do.
    --  @param Status Success, or the first refusal.
    procedure Evaluate_Round
      (Members : Session_Group;
@@ -1413,6 +1426,7 @@ package Model_Runner.Llama is
       Logits  : Model_Runner.Tensors.Real_Array_Access;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Shares  : Row_Counts := Even_Shares;
+      Givens  : Given_Rows_List := No_Givens;
       Status  : out Model_Runner.Errors.Error_Info);
 
    --  What a session has committed, as bytes.
