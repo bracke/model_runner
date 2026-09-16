@@ -312,6 +312,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A model larger than the device's budget answered differently one run
+  in six.** A sequence still in flight pins the matrices it reads so that
+  the next sequence, recorded while it runs, cannot give them back; the
+  pin was one tick below the clock, and the clock ticks once for every
+  matrix acquired, so it pinned the last matrix the running sequence took
+  and none of the others. The next layer gave one of those back, kept its
+  buffer, and uploaded its own weights into it while the device was still
+  reading -- which is what the eviction test caught, always by the same
+  amount, since the eviction order is the same and only the timing is
+  not. The pin is the reading the running sequence began at now, and a
+  caller that pins nothing -- one product at a time, a matrix held at
+  load -- settles everything in flight before it makes room, rather than
+  after. A sequence that cannot run after the one before carried its
+  activation out reads that activation back before the host takes the
+  layer over, where it started from a copy a layer old. `tests test`
+  takes `--only PREFIX` and `--times N`, which is how a case that fails
+  one run in six is cornered.
 - **Gemma 3's rotary stretch reaches the global layers alone.** The 4B and
   up state `rope.scaling linear 8`, and the engine applied it to every
   layer; the reference runtime keeps a separate scale for the windowed

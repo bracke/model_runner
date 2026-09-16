@@ -7957,8 +7957,15 @@ package body Model_Runner.Templates is
       --  offered some. Left undefined otherwise, which is what makes
       --  "if tools" false for a caller who offered none -- the same answer a
       --  template gets from a build that had never heard of them.
-      if Item.Tools_Slot /= 0 and then Tool_Count > 0 then
-         Slots (Item.Tools_Slot) := (Kind => Value_Tools, others => <>);
+      --  The tools, and none where none were offered: defined either
+      --  way, as the reference implementation passes them -- tools=None
+      --  -- so a template asking "tools is defined" gets the answer it
+      --  was written against, and "if tools", "tools is none" and "tools
+      --  is iterable" each say what they say there.
+      if Item.Tools_Slot /= 0 then
+         Slots (Item.Tools_Slot) :=
+           (if Tool_Count > 0 then (Kind => Value_Tools, others => <>)
+            else (Kind => Value_None, others => <>));
       end if;
 
       --  And the name a reasoning model's template asks after, where it asks

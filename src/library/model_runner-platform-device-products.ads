@@ -1175,6 +1175,23 @@ package Model_Runner.Platform.Device.Products is
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False);
 
+   --  The activation the last sequence left on the device, read back.
+   --
+   --  A sequence that carries out leaves the host's copy of the activation
+   --  behind, and a sequence that then cannot run -- a matrix the budget
+   --  has no room for while the one before is still reading the others --
+   --  hands the layer back to the host, which must start from what the
+   --  device holds and not from what it last saw. Everything in flight is
+   --  waited for first.
+   --
+   --  @param Item Ready engine.
+   --  @param Target Receives the activation, as many elements as it holds.
+   --  @param Ok True when it was read.
+   procedure Fetch_Carried
+     (Item   : in out Engine;
+      Target : out Model_Runner.Numerics.Real_Array;
+      Ok     : out Boolean);
+
    --  One position attending to everything a cache holds.
    --
    --  The scores against every key in range, the bound where the architecture
@@ -1837,6 +1854,15 @@ private
       --  that nothing has waited for yet.
       Pending     : Boolean := False;
       Pending_Two : Boolean := False;
+
+      --  The clock reading each slot's sequence began at, so that the
+      --  matrices it is still reading -- every one used at or after that
+      --  reading -- can be pinned while it runs. The clock ticks once for
+      --  every matrix acquired, so a sequence that acquires several sits
+      --  several ticks below the clock, and a pin one tick below the clock
+      --  left all but its last matrix free to be given back under it.
+      Began     : Interfaces.Unsigned_64 := 0;
+      Began_Two : Interfaces.Unsigned_64 := 0;
 
       --  What a submission signals, and what the one after it waits on.
       --

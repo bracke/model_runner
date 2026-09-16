@@ -2333,6 +2333,23 @@ package body Model_Runner.Backend.Device is
          Ran, Cancelled, Cancel, Carry_In, Carry_Out);
 
       if Cancelled or else not Ran then
+         --  A layer handed back to the host after the one before carried
+         --  its answer out starts from that answer, read back from where
+         --  the device left it; the host's copy is a layer old.
+         if not Cancelled and then Carry_In then
+            declare
+               Fetched : Boolean;
+            begin
+               Products.Fetch_Carried
+                 (Engine,
+                  Into.all (Into.all'First
+                            .. Into.all'First + Slots * Width - 1),
+                  Fetched);
+               if not Fetched then
+                  return;
+               end if;
+            end;
+         end if;
          return;
       end if;
 

@@ -186,9 +186,12 @@ package body Tool_Commands is
      " --model --threads --backend --anyway --wait --trace --report "
      & "--chat-template --context-size --arith ";
 
+   Takes_Test : aliased constant String := "[--only PREFIX] [--times N]";
+   Opts_Test  : aliased constant String := " --only --times ";
+
    Held : constant array (1 .. 25) of Command :=
-     [(Name_Test'Access, Nothing'Access, Says_Test'Access,
-       Opts_None'Access),
+     [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
+       Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
        Opts_Check'Access),
       (Name_Conformance'Access, Takes_Conform'Access,

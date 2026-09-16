@@ -1708,7 +1708,7 @@ package body Tests.Template_Cases is
       --  The same constructs inside a branch the conversation does not enter
       --  cost nothing, which is the point of refusing late.
       Assert (Render_Status
-                ("{% if tools is defined %}{{ raise_exception('no') }}"
+                ("{% if tools %}{{ raise_exception('no') }}"
                  & "{% endif %}ok") = E.No_Error,
               "a refusal in an untaken branch stopped the render");
 

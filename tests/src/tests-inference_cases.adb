@@ -9422,6 +9422,12 @@ package body Tests.Inference_Cases is
          --  The same weights read the same way, so the same bits. A
          --  tolerance would let a reused buffer hand back the last
          --  matrix's weights in the elements a short read did not cover.
+         --  This failed one run in six for a while, always by the same
+         --  amount: the sequence in flight was pinning only the last
+         --  matrix it had taken, the others were given back under it and
+         --  the next layer's weights written into their buffers while the
+         --  device still read them. `tests test --only "llama inference :
+         --  a model larger" --times 60` is how it was cornered.
          Assert (Apart = 0.0,
                  "a model that does not fit answers" & N.Real'Image (Apart)
                  & " away from the same model when it does, so a buffer "

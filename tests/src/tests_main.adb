@@ -15,7 +15,9 @@ with AUnit;
 with AUnit.Reporter.Text;
 with Case_Timing;
 with Device_Bench;
+with AUnit.Options;
 with AUnit.Run;
+with AUnit.Test_Filters;
 
 with Tests.Suite;
 with Checks;
@@ -232,9 +234,36 @@ begin
    end if;
 
    if Command = "test" then
-      if Run_Suite (Reporter) /= AUnit.Success then
-         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-      end if;
+      --  The whole suite, or the cases whose name begins with --only,
+      --  run --times over: how a case that fails one run in three is
+      --  cornered.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Only   : constant String := Option ("--only", "");
+         Times  : constant Positive :=
+           Positive'Value (Option ("--times", "1"));
+         Filter : aliased AUnit.Test_Filters.Name_Filter;
+         Chosen : AUnit.Options.AUnit_Options := AUnit.Options.Default_Options;
+      begin
+         if Only /= "" then
+            AUnit.Test_Filters.Set_Name (Filter, Only);
+            Chosen.Filter := Filter'Unchecked_Access;
+         end if;
+         for Turn in 1 .. Times loop
+            if Run_Suite (Reporter, Chosen) /= AUnit.Success then
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
+         end loop;
+      end;
    elsif Command = "fuzz" then
       --  Mutation fuzzing over the GGUF parser. Every case is derived from the
       --  seed and the case number, so a failure replays exactly.

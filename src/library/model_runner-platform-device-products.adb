@@ -28,6 +28,7 @@ with Model_Runner.Shaders;
 --  is what that convention is for.
 package body Model_Runner.Platform.Device.Products is
 
+
    use type Interfaces.C.int;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -3954,6 +3955,23 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Weight_Buffer = Null_Handle then
+         --  Not resident, so room is about to be made: a matrix given back,
+         --  a kept buffer written over. A caller that pins nothing -- one
+         --  product at a time, a matrix held at load -- is one that will
+         --  wait for its own work, and what may still be in flight is the
+         --  sequence before it, which may be reading the very matrix about
+         --  to go, or the buffer about to be written. So everything in
+         --  flight finishes first. It used to be settled after acquiring,
+         --  which is when the damage was already done: a model larger than
+         --  the budget answered differently one run in six.
+         if Pinned = Interfaces.Unsigned_64'Last then
+            Settle (Item, Good);
+            if not Good then
+               Ok := False;
+               return;
+            end if;
+         end if;
+
          --  Where the weights already are, when the caller asked for that.
          --
          --  It saves memory and never time, and the difference was measured
@@ -4194,6 +4212,13 @@ package body Model_Runner.Platform.Device.Products is
       Item.Sets_Two := Sets;
 
       declare
+         Began : constant Interfaces.Unsigned_64 := Item.Began;
+      begin
+         Item.Began := Item.Began_Two;
+         Item.Began_Two := Began;
+      end;
+
+      declare
          Queries : constant Address := Item.Queries;
       begin
          Item.Queries := Item.Queries_Two;
@@ -4371,6 +4396,45 @@ package body Model_Runner.Platform.Device.Products is
 
       Await (Item, Ok, Cancelled, Cancel);
    end Submit_And_Wait;
+
+   -------------------
+   -- Fetch_Carried --
+   -------------------
+
+   procedure Fetch_Carried
+     (Item   : in out Engine;
+      Target : out Model_Runner.Numerics.Real_Array;
+      Ok     : out Boolean)
+   is
+      Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Target'Length) * 4;
+   begin
+      Ok := False;
+      Target := [others => 0.0];
+
+      if Item.Result_Buffer = Null_Handle or else Item.Result_Bytes < Bytes
+      then
+         return;
+      end if;
+
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      Standing (Item, Item.Result_Memory, Item.Result_At,
+                Item.Result_Bytes, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      declare
+         Held : Model_Runner.Numerics.Real_Array (Target'Range)
+           with Import, Address => Item.Result_At;
+      begin
+         Target := Held;
+      end;
+   end Fetch_Carried;
 
    --  Everything in flight finished, which is what the host must do before
    --  it writes anything a submission may still be reading -- the
@@ -6996,12 +7060,19 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       Item.Clock := Item.Clock + 1;
+      Item.Began := Item.Clock;
 
       --  A matrix the sequence still in flight is reading may not be given
-      --  back either, so the floor is one clock lower where there is one.
+      --  back either: the floor is the reading that sequence began at,
+      --  less one, so that everything it acquired -- one tick each -- is
+      --  above it. It used to be one tick below this clock, which pinned
+      --  the last matrix that sequence took and none of the others, and a
+      --  model that does not fit gave one of those back and uploaded
+      --  another matrix into its buffer while the device was still
+      --  reading it.
       Pinned :=
-        (if Item.Pending_Two and then Item.Clock > 1
-         then Item.Clock - 1 else Item.Clock);
+        (if Item.Pending_Two and then Item.Began_Two >= 1
+         then Item.Began_Two - 1 else Item.Clock);
 
       --  Every matrix in place before the first dispatch is written down.
       --  This is the whole point of the arrangement: acquiring a matrix can

@@ -2480,6 +2480,36 @@ package body Tests.Backend_Cases is
          Assert (not Added,
                  "a chained attention with nothing to chain to was taken");
 
+         --  An answer carried out stays on the device, and the host can
+         --  ask for it back: what the next layer starts from when the
+         --  sequence that should have read it there cannot run.
+         declare
+            Left    : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            Fetched : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Identity.all'Address,
+               Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+               0, Products.Values_F32,
+               Natural (Span), Natural (Span), Added);
+            Assert (Added, "a sequence would not take the product again");
+
+            Products.Run (Engine, Steps, Query, 1, Left, Ok, Halted,
+                          Carry_Out => True);
+            Assert (Ok, "a sequence carrying its answer out was refused");
+
+            Products.Fetch_Carried (Engine, Fetched, Ok);
+            Assert (Ok, "the carried activation would not come back");
+
+            for Index in 0 .. Span - 1 loop
+               Assert (abs (Fetched (Index) - Query (Index)) <= Near,
+                       "the activation read back is not what the device "
+                       & "was left holding, at component"
+                       & N.Element_Count'Image (Index));
+            end loop;
+         end;
+
          Model_Runner.Bytes.Free (Identity);
       end;
 
