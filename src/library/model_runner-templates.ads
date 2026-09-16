@@ -152,27 +152,37 @@ with Model_Runner.Tools;
 --  Tools. A caller may offer the model tools, and a template that reads
 --  them writes their definitions into the prompt itself. What this engine
 --  gives such a template is the name tools -- false when nothing was
---  offered, which is exactly what "if tools" asks -- a loop over it, and
---  the tojson filter that writes one out.
+--  offered, which is exactly what "if tools" asks -- a loop over it, each
+--  tool's members along a dotted path, its schema walked as a mapping, and
+--  the tojson filter that writes any of it out.
 --
 --  And what the model asks for back. A turn may carry tool calls beside its
 --  text, which is what message.tool_calls asks about and what the loop over
---  it walks; each call answers to tool_call.name and tool_call.arguments.
---  A call kept as the text the model wrote would reach the next turn too --
---  it is still in the reply -- but it would reach it in the model's own
---  spelling rather than in the one the template writes, and the two are not
---  the same bytes. A template's own branch is the only thing that knows
---  which they should be.
+--  it walks; each call answers to tool_call.name and tool_call.arguments,
+--  and the arguments are a mapping walked or read by name. A call kept as
+--  the text the model wrote would reach the next turn too -- it is still in
+--  the reply -- but it would reach it in the model's own spelling rather
+--  than in the one the template writes, and the two are not the same
+--  bytes. A template's own branch is the only thing that knows which they
+--  should be.
+--
+--  Values. A name holds what it was assigned: text, a number, a list the
+--  template wrote out or cut, a mapping read out of a schema, one message,
+--  one call, the tools. Each is walked, indexed, asked about -- is string,
+--  is mapping, is iterable, in -- and written as the language does it, and
+--  a name assigned inside a loop's body is the body's own, put back when
+--  the loop ends, as the language scopes it. A name whose every assignment
+--  is a number is a number wherever it is read.
 --
 --  Expressions outside the subset -- functions this engine does not carry,
---  list literals, mappings walked, indexing into anything but messages --
---  compile to an instruction that refuses when it is reached. Templates shipped with
---  current models describe tool calling in branches a conversation of plain
---  messages never enters, and refusing the template for a branch nobody takes
---  refuses the model. Refusing at the point of use refuses only what was
---  actually asked for; nothing is approximated and nothing is guessed,
---  because reaching one of these ends the render with
---  Template_Unsupported_Construct naming the construct.
+--  a message printed whole -- compile to an instruction that refuses when
+--  it is reached. Templates shipped with current models describe tool
+--  calling in branches a conversation of plain messages never enters, and
+--  refusing the template for a branch nobody takes refuses the model.
+--  Refusing at the point of use refuses only what was actually asked for;
+--  nothing is approximated and nothing is guessed, because reaching one of
+--  these ends the render with Template_Unsupported_Construct naming the
+--  construct.
 --
 --  The engine cannot open a file, read the environment, start a process,
 --  reach the network or load a library, because it contains no operation that
@@ -417,6 +427,17 @@ private
       --  wrote is the value.
       Term_Macro,
 
+      --  A list written out: Index_At the first of its elements among the
+      --  kept operands and Length how many. Its value is a JSON array made
+      --  of them when it is read, each element a number where it is one by
+      --  construction and a string otherwise.
+      Term_List,
+
+      --  loop.previtem and loop.nextitem: the message before and after the
+      --  one a list loop has bound, or nothing at either end.
+      Term_Loop_Previous,
+      Term_Loop_Next,
+
       --  A bracketed sum, kept as an operand of its own and read as one
       --  value: Offset names the kept operand. A group used to be spliced
       --  into the sum around it, which is right while the only joins are
@@ -474,7 +495,11 @@ private
       --  a text with one piece replaced by another.
       Filter_Lower, Filter_Upper, Filter_Capitalize, Filter_Title,
       Filter_Int, Filter_String, Filter_Safe, Filter_Default,
-      Filter_Replace);
+      Filter_Replace,
+
+      --  The smallest number in a list, which a template writes to take
+      --  the shorter of two counts.
+      Filter_Min);
 
    --  One filter and where its arguments were kept, as operands: the
    --  stand-in for default, the two texts for replace.
@@ -518,13 +543,29 @@ private
       --  is counted as the language counts one: from the end where it is
       --  negative, and no further than the text goes either way.
       Method_Cut_From,
-      Method_Cut_To);
+      Method_Cut_To,
+
+      --  Whether the text begins or ends with the argument, answered as a
+      --  condition answers: "true" or nothing.
+      Method_Starts_With,
+      Method_Ends_With,
+
+      --  The text with every occurrence of the first argument replaced by
+      --  the second, which is the one method here that takes two.
+      Method_Replace,
+
+      --  A mapping's entries, which a loop walks two names at a time. The
+      --  value is the mapping itself; what the method says is how it will
+      --  be walked, and a loop over one written without it walks the same.
+      Method_Items);
 
    --  One method and where its one argument was kept: the characters to
    --  take off, or the marker to cut at.
    type Method_Step is record
       Kind : Method_Kind := Method_None;
       At_Operand : Natural := 0;
+      --  The second argument, where the method takes two.
+      Second_At  : Natural := 0;
    end record;
 
    --  How many methods may follow one another. Four is what the template
@@ -577,6 +618,22 @@ private
       --  and its like. Zero where Offset holds the index as the template
       --  wrote it.
       Index_At : Natural := 0;
+
+      --  A path of member names read off a value: tool.parameters.properties
+      --  is the name tool with the path parameters.properties. Held as a
+      --  slice of the compiled source pool, and empty where there is none.
+      --  Read off a mapping member by member, off a message as its fields,
+      --  off a call as its name and arguments. Where the term is indexed,
+      --  Path leads to what is indexed and Tail is read off the element:
+      --  message.tool_calls[i].name.
+      Path_At  : Natural := 0;
+      Path_Len : Natural := 0;
+      Tail_At  : Natural := 0;
+      Tail_Len : Natural := 0;
+
+      --  Whether a term with Index_At indexes the value it names rather
+      --  than naming a message of a list by position.
+      Indexes  : Boolean := False;
 
       --  What is done to the text once it has been read, in the order it is
       --  written. A template that cuts a reply at its reasoning marker and
@@ -638,7 +695,14 @@ private
       Compare_Is_False,
       Compare_Is_Not_False,
       Compare_Is_String,
-      Compare_Is_Not_String);
+      Compare_Is_Not_String,
+
+      --  'is mapping' and 'is iterable', which a template asks of a value
+      --  read out of a tool's schema before it walks it.
+      Compare_Is_Mapping,
+      Compare_Is_Not_Mapping,
+      Compare_Is_Iterable,
+      Compare_Is_Not_Iterable);
 
    type Clause is record
       Negated : Boolean := False;
@@ -697,17 +761,10 @@ private
       --  when it walks the conversation by index rather than by loop.
       Op_Set_Message,
 
-      --  Walk the tools a caller offered, binding each to a name. A loop of
-      --  its own rather than the list loop with another list in it: what it
-      --  binds is not a message and has no role and no content, and the
-      --  fields a message has are the fields the list loop can read.
-      Op_Tool_Begin,
-      Op_Tool_Next,
-
-      --  Walk the calls the bound message asked for. A third loop for the
-      --  third thing there is to walk, and for the same reason as the
-      --  second: a call is not a message and not a tool, and what can be
-      --  read from one is neither's fields.
+      --  Walk the calls the bound message asked for. A loop of its own
+      --  rather than the list loop with another list in it: a call is not
+      --  a message, and what can be read from one is not a message's
+      --  fields.
       Op_Call_Begin,
       Op_Call_Next,
 
@@ -716,6 +773,20 @@ private
       --  names the variable in Offset.
       Op_Capture_Begin,
       Op_Capture_End,
+
+      --  Assign whatever a term is worth -- text, a mapping or list, a
+      --  message, a call, the tools -- to the name in Offset, keeping its
+      --  kind. Value_At names the operand.
+      Op_Set_Value,
+
+      --  Walk whatever the operand at Value_At is worth: the elements of a
+      --  list, the entries of a mapping, the tools, the messages of a list
+      --  or the calls of a turn. Offset names the loop's variable, Length
+      --  the second one where a mapping is walked two names at a time,
+      --  and zero otherwise. The loop keeps where it has got to in the
+      --  variable's own slot, which is what lets these nest.
+      Op_Each_Begin,
+      Op_Each_Next,
 
       --  The end of a macro's body, which hands the text it wrote back to
       --  the call that ran it. A macro is defined by a jump over its body
@@ -751,6 +822,10 @@ private
       --  name it binds is not one this engine reads fields from and the
       --  name message goes on meaning whatever it meant outside the loop.
       Binds    : Boolean := True;
+
+      --  Whether a list loop walks its list from the end, which is what a
+      --  template writes as messages[::-1] to find the last question asked.
+      Reversed : Boolean := False;
    end record;
 
    type Instruction_Array is array (1 .. Max_Instructions) of Instruction;

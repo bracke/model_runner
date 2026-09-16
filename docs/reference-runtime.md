@@ -418,20 +418,26 @@ check as for a template that arrives in a model file -- and the format for
 Gemma, whose turns are called something else, is the one that could be wrong
 without the output showing it.
 
-And the two carried formats that stand in for a model's own template,
-`qwen3-coder` and `minicpm`, each against `jinja2` reading *the model's own
-template* rather than its own source -- which is the check that matters for
-a stand-in, since the point of one is to be the bytes the model was trained
-on. `tests render --model PATH --format NAME` renders the carried format
-with the model's own tokens, and a script hands the same conversation to
-`jinja2` with the model's template, `trim_blocks` and `lstrip_blocks` on
-and `tojson` as `transformers` defines it. Eight conversations for
-Qwen3-Coder and nine for MiniCPM, byte for byte: with and without a system
-turn, tools offered -- with enums, defaults, nested items, required lists
-and a return -- a call turn with text and one without, two calls answered
-by two tool turns, reasoning kept in the exchange in progress and dropped
-from an earlier one, and for MiniCPM the caller's `--think` and `--no-think`
-each. Five faults came out of it: the line break after a block tag, which
+And the two carried formats that were written to stand in for a model's own
+template, `qwen3-coder` and `minicpm`, each against `jinja2` reading *the
+model's own template* rather than its own source -- which is the check that
+matters for a stand-in, since the point of one is to be the bytes the model
+was trained on. `tests render --model PATH --format NAME` renders the
+carried format with the model's own tokens, and a script hands the same
+conversation to `jinja2` with the model's template, `trim_blocks` and
+`lstrip_blocks` on and `tojson` as `transformers` defines it. Eight
+conversations for Qwen3-Coder and nine for MiniCPM, byte for byte: with and
+without a system turn, tools offered -- with enums, defaults, nested items,
+required lists and a return -- a call turn with text and one without, two
+calls answered by two tool turns, reasoning kept in the exchange in progress
+and dropped from an earlier one, and for MiniCPM the caller's `--think` and
+`--no-think` each. The models' own templates render in this engine now, and
+the same script with `--template FILE` in place of `--format NAME` runs
+them against `jinja2` on the same conversations, every byte agreeing; the
+two files are fixtures, and the suite renders each beside its carried
+format on those conversations, so the crossing the script made once is
+made on every run. Five faults came out of it: the line break after a block
+tag, which
 the engine takes off as `trim_blocks` does, was where the model's template
 had written one as an expression, so `<tools>` and the first tool ran
 together -- `+%}` keeps it now, as the language spells that; a tool was

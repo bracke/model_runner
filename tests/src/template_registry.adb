@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 43) of Example :=
+   Held : constant array (1 .. 46) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -43,8 +43,13 @@ package body Template_Registry is
        new String'("{{ 'a' + 'b' }}{{ 'a' ~ 1 + 2 }}"),
        Works),
 
-      (new String'("`{% for message in LIST %}`"),
-       new String'("{% for message in messages %}x{% endfor %}"),
+      (new String'("`{% for name in LIST %}`, "
+                   & "`{% for key, value in MAPPING %}`, `LIST[::-1]`"),
+       new String'("{% for message in messages %}x{% endfor %}"
+                   & "{% for m in messages[::-1] %}{{ m.role }}{% endfor %}"
+                   & "{% set o = 'a' %}{% for m in messages %}"
+                   & "{% set o = 'b' %}{% for n in messages %}"
+                   & "{{ loop.index }}{% endfor %}{% endfor %}{{ o }}"),
        Works),
 
       (new String'("`{% for name in range(a, b, c) %}`"),
@@ -71,8 +76,9 @@ package body Template_Registry is
                    & "{{ messages[loop.index0 + 1].role }}{% endfor %}"),
        Works),
 
-      (new String'("`'x' in TEXT`, `'x' not in TEXT`"),
-       new String'("{% if 'b' in 'abc' and 'z' not in 'abc' %}y{% endif %}"),
+      (new String'("`'x' in TEXT`, `'x' not in TEXT`, `'x' in LIST`"),
+       new String'("{% if 'b' in 'abc' and 'z' not in 'abc' %}y{% endif %}"
+                   & "{% set l = ['a', 'b'] %}{% if 'b' in l %}y{% endif %}"),
        Works),
 
       (new String'("The line a block tag stands on"),
@@ -91,16 +97,25 @@ package body Template_Registry is
                    & "{{ messages[1].content[-1:] }}"),
        Works),
 
-      (new String'("`\| first`, `\| last`"),
-       new String'("{{ 'a-b'.split('-')|first }}{{ 'a-b'.split('-')|last }}"),
+      (new String'("`\| first`, `\| last`, `\| min`"),
+       new String'("{{ 'a-b'.split('-')|first }}{{ 'a-b'.split('-')|last }}"
+                   & "{{ [3, 1, 2] | min }}"),
        Works),
 
-      (new String'("`.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, "
-                   & "`.split(S)[0]`, `.split(S)[-1]`"),
-       new String'("{% set t = 'a|b|c' %}"
+      (new String'("`.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, `.split(S)`, "
+                   & "`.startswith(S)`, `.endswith(S)`, `.replace(A, B)`, "
+                   & "`.items()`"),
+       new String'("{% set t = 'a|b|c' %}{% set m = 'a' %}"
                    & "{{ t.split('|')[0] }}{{ t.split('|')[-1] }}"
+                   & "{{ t.split('|') | length }}"
                    & "{{ t.strip('a') }}{{ t.lstrip('a') }}"
-                   & "{{ t.rstrip('c') }}"),
+                   & "{{ t.rstrip('c') }}"
+                   & "{% if t.startswith(m) and t.endswith('c') %}y{% endif %}"
+                   & "{{ t.replace('|', m ~ '-') }}"
+                   & "{% for message in messages %}"
+                   & "{% for tool_call in message.tool_calls %}"
+                   & "{% for k, v in tool_call.arguments.items() %}"
+                   & "{{ k }}{% endfor %}{% endfor %}{% endfor %}"),
        Works),
 
       (new String'("`strftime_now(FORMAT)`"),
@@ -140,23 +155,55 @@ package body Template_Registry is
        new String'("{% for tool in tools %}{{ tool | tojson }}{% endfor %}"),
        Works),
 
-      (new String'("`{% for tool_call in message.tool_calls %}`"),
+      (new String'("`{% for name in message.tool_calls %}`, "
+                   & "`message.tool_calls[i]`"),
        new String'("{% for message in messages %}"
-                   & "{% for tool_call in message.tool_calls %}"
-                   & "{{ tool_call.name }}{% endfor %}{% endfor %}"),
+                   & "{% for c in message.tool_calls %}"
+                   & "{{ c.name }}{% endfor %}"
+                   & "{% if message.tool_calls %}"
+                   & "{{ message.tool_calls[0].name }}{% endif %}"
+                   & "{% endfor %}"),
        Works),
 
       (new String'("`message.tool_calls`, `tool_call.name`, "
-                   & "`tool_call.arguments`"),
+                   & "`tool_call.arguments`, `tool_call.function`"),
        new String'("{% for message in messages %}"
                    & "{% if message.tool_calls %}"
                    & "{% for tool_call in message.tool_calls %}"
-                   & "{{ tool_call.name }}{{ tool_call.arguments }}"
+                   & "{% if tool_call.function is defined %}"
+                   & "{% set tool_call = tool_call.function %}{% endif %}"
+                   & "{{ tool_call.name }}{{ tool_call.arguments | tojson }}"
+                   & "{% for k, v in tool_call.arguments | items %}"
+                   & "{{ k }}={{ v }}{% endfor %}"
                    & "{% endfor %}{% endif %}{% endfor %}"),
        Works),
 
       (new String'("`\| tojson`"),
-       new String'("{{ 'text' | tojson }}"),
+       new String'("{{ 'text' | tojson }}{{ ['a', 1] | tojson }}"),
+       Works),
+
+      (new String'("List literals `['a', 'b']`, `[]`"),
+       new String'("{% set l = ['a', 'b'] %}{% set none_at_all = [] %}"
+                   & "{{ l }}{{ l | length }}{{ none_at_all | length }}"
+                   & "{% for x in l %}{{ x }}{% endfor %}"
+                   & "{% macro m(items) %}{{ items[1] }}{% endmacro %}"
+                   & "{{ m(l) }}"),
+       Works),
+
+      (new String'("`NAME[EXPR]`, `NAME[-1]`, `a.b.c`, `LIST[i].field`"),
+       new String'("{% set l = ['a', 'b', 'c'] %}{% set i = 1 %}"
+                   & "{{ l[i] }}{{ l[i + 1] }}{{ l[-1] }}{{ l[9] }}"
+                   & "{% set ns = namespace(a='x') %}{{ ns.a }}"
+                   & "{% set r = messages[0].role %}{{ r[0] }}"
+                   & "{{ messages[1].content }}"),
+       Works),
+
+      (new String'("`loop.previtem`, `loop.nextitem`"),
+       new String'("{% for message in messages %}"
+                   & "{% if loop.previtem and loop.previtem.role != 'tool' %}"
+                   & "p{% endif %}{% if not loop.last and "
+                   & "loop.nextitem.role == 'user' %}n{% endif %}"
+                   & "{% endfor %}"),
        Works),
 
       (new String'("`{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}`"),
@@ -199,12 +246,15 @@ package body Template_Registry is
        Works),
 
       (new String'("`is defined`, `is none`, `is true`, `is false`, "
-                   & "`is string`, `is not ...`"),
+                   & "`is string`, `is mapping`, `is iterable`, `is not ...`"),
        new String'("{% if not tools is defined %}{% set tools = none %}"
                    & "{% endif %}{% if tools is none %}a{% endif %}"
                    & "{% if bos_token is not none %}b{% endif %}"
                    & "{% if true is true and false is false %}c{% endif %}"
-                   & "{% if bos_token is string %}d{% endif %}"),
+                   & "{% if bos_token is string %}d{% endif %}"
+                   & "{% set l = [] %}{% if l is iterable and l is not "
+                   & "mapping %}e{% endif %}"
+                   & "{% if messages[0].nothing is defined %}!{% endif %}"),
        Works),
 
       (new String'("`'field' in message`"),
@@ -246,10 +296,9 @@ package body Template_Registry is
        new String'("{{ bos_token | urlencode }}"),
        Refused_At_Render),
 
-      (new String'("`.strftime` on anything, other function calls, list "
-                   & "literals, `\| items`, `is iterable`, `is mapping`, a "
-                   & "loop over anything but the four things there are to "
-                   & "walk, indexing by anything but a number"),
+      (new String'("`.strftime` on anything, other function calls, a "
+                   & "message or a list of them printed whole, indexing by a "
+                   & "name that holds no number"),
        new String'("{{ messages[i]['role'] }}"),
        Refused_At_Render),
 

@@ -1067,11 +1067,11 @@ package body Tests.Sampling_Cases is
       --  raise_exception refuses too, as the template's own no.
       Refuse ("{{ raise_exception('no') }}", "raise_exception");
       Refuse ("{{ messages[i]['role'] }}", "indexing by a variable");
-      Refuse ("{{ messages[0]['tool_calls'] }}", "an unknown message field");
+      Refuse ("{{ messages[0] }}", "a message printed whole");
       Refuse ("{% for x in other %}x{% endfor %}", "iteration over a non-list");
       Refuse ("{{ unknown_variable }}", "an unknown variable");
       Refuse ("{% set p = open('/etc/passwd') %}{{ p }}", "a function call");
-      Refuse ("{{ message['content'] | tojson }}", "an unknown filter");
+      Refuse ("{{ message['content'] | urlencode }}", "an unknown filter");
 
       --  And the constructs that moved into the subset.
       declare

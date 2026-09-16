@@ -55,6 +55,45 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The templates Qwen3-Coder and MiniCPM ship render as they are.** Both
+  were stood in for by a carried format because the engine held nothing
+  but text: a list written out, `| items` over a schema, `is iterable`,
+  `is mapping`, `.startswith` with a name for its argument, a slice
+  stepped backwards and a loop's neighbours were each a refusal. A
+  template holds values now -- a list it wrote, a mapping read out of a
+  tool's schema or a call's arguments, one message, one call, the tools --
+  and walks, indexes, asks about and writes them as the language does:
+  `{% for k, v in mapping | items %}` and `.items()`, `[::-1]`,
+  `loop.previtem` and `loop.nextitem`, `NAME[i + 1]`, `NAME[-1]`, members
+  along a dotted path before or after an index, `is mapping`, `is
+  iterable`, `'x' in LIST`, `.startswith(S)`, `.endswith(S)`,
+  `.replace(A, B)` with S, A and B any expression, `| min`, `| tojson` on
+  any value, a loop over any value under any name and loops that nest,
+  each with its own `loop`, and a list passed to a macro. A `.split(S)`
+  kept whole is a list, printed as Python prints one. A name assigned
+  inside a loop's body is the body's own and is put back when the loop
+  ends, as the language scopes it -- MiniCPM's template builds its call
+  text inside one loop and reads the name after, and what it reads is
+  what the name held before, which is what jinja2 does with it -- and a
+  namespace's field is the one thing a loop assigns for after. A name
+  whose every assignment is a number is a number wherever it is read, so
+  `i + 1` is a sum where `i` was set from a count. A tag closed with `-%}`
+  strips what follows it, which it never did: the tag after it set the
+  flag before the text between them was flushed. Qwen3-Coder's own
+  template and MiniCPM's now render byte for byte what jinja2 renders from
+  them on the same eight and nine conversations the carried formats were
+  crossed on, `--think` and `--no-think` included; the two files are
+  fixtures now, and the suite renders each beside its carried format on
+  every one of those conversations, so the claim that the carried format
+  is the model's own bytes is checked by the engine rather than by a
+  script. The carried formats stay as `--chat-template` choices and as
+  stand-ins for a template that will not compile; neither model needs one
+  now. Reading a field a turn has not got is nothing rather than a
+  refusal, as the language prints its undefined and as every template's
+  unguarded read of an optional field is written; a loop over a name never
+  assigned is refused as reading one is, and a loop over `tools` when none
+  were offered is an empty walk. `tests render` prints the construct a
+  refusal names beside its code.
 - **The two carried formats are the models' own bytes, tools and all.**
   `qwen3-coder` offered tools as JSON where the model reads a `<function>`
   element with its parameters walked out of the schema; the `qwen_tool`

@@ -1203,9 +1203,21 @@ begin
             end if;
 
             if E.Is_Error (Status) then
-               Ada.Text_IO.Put_Line
+               Ada.Text_IO.Put
                  (Ada.Text_IO.Standard_Error,
                   "render: " & E.Diagnostic_Code (Status.Code));
+               --  And the construct refused, when the engine named one.
+               for P in 1 .. Status.Parameter_Total loop
+                  if E."=" (Status.Parameters (P).Kind, E.Param_Text) then
+                     Ada.Text_IO.Put
+                       (Ada.Text_IO.Standard_Error,
+                        " " & Model_Runner.Text.To_String
+                                (Status.Parameters (P).Name)
+                        & "=" & Model_Runner.Text.To_String
+                                  (Status.Parameters (P).Text_Value));
+                  end if;
+               end loop;
+               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             else
                --  Through the stream rather than through Put, because

@@ -1,5 +1,6 @@
 with AUnit.Assertions;
 with Ada.Calendar.Formatting;
+with Ada.Text_IO;
 with Ada.Calendar.Time_Zones;
 
 with Interfaces;
@@ -896,6 +897,413 @@ package body Tests.Template_Cases is
             "a macro that never returns");
    end Expressions_Render_As_The_Language_Would;
 
+   --  The value model: what a template holds that is not text -- a list it
+   --  wrote out, a mapping read out of a schema, a turn's calls and their
+   --  arguments -- walked, indexed, asked about and written, the way the
+   --  language does it. Everything here is a construct Qwen3-Coder's or
+   --  MiniCPM's own template uses, and the two are set beside jinja2
+   --  reading those templates conversation for conversation.
+   procedure Values_Render_As_The_Language_Would
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Defs : aliased Model_Runner.Tools.Definitions;
+
+      --  What a template renders with two messages and one tool whose
+      --  schema has an enum, a nested list and a required list, plus a
+      --  turn that called it; or the code it refused with, as text.
+      function Rendered (Source : String) return String is
+         Item   : Tmpl.Compiled;
+         Status : E.Error_Info;
+         Talk   : Conv.History;
+         Asked  : Model_Runner.Tools.Calls;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+      begin
+         Tmpl.Compile (Item, Source, Status => Status);
+         if E.Is_Error (Status) then
+            Tmpl.Close (Item);
+            return "compile: " & E.Error_Code'Image (Status.Code);
+         end if;
+         Conv.Open (Talk, Status => Status);
+         Conv.Append (Talk, Conv.User_Role, "<tool_response>x", Status);
+         Conv.Append_Asking (Talk, "Let me see.", Status);
+         Model_Runner.Tools.Read_Calls
+           (Asked,
+            "<tool_call>{""name"": ""calc"", ""arguments"": "
+            & "{""a"": 2, ""op"": ""+"", ""tags"": [""x"", ""y""]}}"
+            & "</tool_call>",
+            Status);
+         Conv.Append_Call
+           (Talk, Model_Runner.Tools.Called (Asked, 1),
+            Model_Runner.Tools.Arguments (Asked, 1), Status);
+         Model_Runner.Tools.Close (Asked);
+         Conv.Append (Talk, Conv.Tool_Role, "5", Status);
+         Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status,
+                      Tools => Defs'Access);
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+         if E.Is_Error (Status) then
+            return "render: " & E.Error_Code'Image (Status.Code)
+              & (if Status.Parameter_Total > 0
+                 then " " & Model_Runner.Text.To_String
+                              (Status.Parameters (1).Text_Value)
+                 else "");
+         end if;
+         return Room (1 .. Last);
+      end Rendered;
+
+      procedure Same (Source, Expected, What : String) is
+         Got : constant String := Rendered (Source);
+      begin
+         Assert (Got = Expected,
+                 What & ": " & Source & " rendered (" & Got
+                 & ") where the language writes (" & Expected & ")");
+      end Same;
+
+      Status : E.Error_Info;
+   begin
+      Model_Runner.Tools.Read
+        (Defs,
+         "[{""type"": ""function"", ""function"": {""name"": ""calc"", "
+         & """description"": "" d "", ""parameters"": {""type"": ""object"", "
+         & """properties"": {""a"": {""type"": ""integer"", "
+         & """description"": ""left""}, ""op"": {""type"": ""string"", "
+         & """enum"": [""+"", ""-""]}, ""tags"": {""type"": ""array"", "
+         & """items"": {""type"": ""string""}}}, "
+         & """required"": [""a"", ""op""]}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      --  A list written out is a value: walked, measured, indexed, asked
+      --  whether it holds something, and printed as Python prints one.
+      Same ("{% set l = ['a', 'b'] %}{{ l }}", "['a', 'b']",
+            "a list literal printed");
+      Same ("{% set l = [] %}{{ l | length }}", "0", "an empty list");
+      Same ("{% set l = [3, 1, 2] %}{{ l | min }}", "1", "min of a list");
+      Same ("{% set l = ['a', 'b'] %}{% for x in l %}<{{ x }}>{% endfor %}",
+            "<a><b>", "a list literal walked");
+      Same ("{% set l = ['a', 'b'] %}{{ l[1] }}{{ l[1 - 1] }}", "ba",
+            "a list indexed by a number and by a sum");
+      Same ("{% set l = ['a', 'b'] %}{% if 'b' in l %}y{% endif %}"
+            & "{% if 'c' not in l %}n{% endif %}", "yn",
+            "in and not in on a list");
+      Same ("{% set l = [1, 2] %}{% if l is iterable %}i{% endif %}"
+            & "{% if l is not mapping %}m{% endif %}"
+            & "{% if 'x' is iterable %}t{% endif %}", "imt",
+            "is iterable and is mapping on a list and on text");
+
+      --  A tool's schema is a mapping: members by path, walked two names
+      --  at a time with items, asked whether they are there, written
+      --  with tojson.
+      Same ("{% for t in tools %}{{ t.function.name }}"
+            & "{{ t.function.parameters.properties.a.type }}{% endfor %}",
+            "calcinteger", "members along a path");
+      Same ("{% for t in tools %}{% for k, v in "
+            & "t.function.parameters.properties | items %}{{ k }}="
+            & "{{ v.type }};{% endfor %}{% endfor %}",
+            "a=integer;op=string;tags=array;", "a mapping walked with items");
+      Same ("{% for t in tools %}{% for k in "
+            & "t.function.parameters.properties %}{{ k }}{% endfor %}"
+            & "{% endfor %}", "aoptags", "a mapping walked yields its keys");
+      Same ("{% for t in tools %}{% set p = t.function.parameters %}"
+            & "{% if p is mapping %}m{% endif %}"
+            & "{% if p.required is defined %}r{% endif %}"
+            & "{% if p.nothing is defined %}!{% endif %}"
+            & "{{ p.required | length }}{% endfor %}", "mr2",
+            "a mapping asked about and assigned by value");
+      Same ("{% for t in tools %}{% for e in "
+            & "t.function.parameters.properties.op.enum %}`{{ e }}`"
+            & "{% endfor %}{{ t.function.parameters.properties.tags.items "
+            & "| tojson }}{% endfor %}",
+            "`+``-`{""type"": ""string""}",
+            "a list inside a schema walked and a member written as JSON");
+      Same ("{% for t in tools %}{{ t.function.description | trim }}"
+            & "{{ t.function.parameters.properties.a.type | string }}"
+            & "{% endfor %}", "dinteger", "filters on schema members");
+      Same ("{% for t in tools %}{% if t.function is defined %}"
+            & "{% set t = t.function %}{% endif %}{{ t.name }}{% endfor %}",
+            "calc", "a loop's name rebound to its own member");
+
+      --  A turn's calls and their arguments walked the same way, and the
+      --  loop's neighbours read through loop.previtem and loop.nextitem.
+      Same ("{% for message in messages %}{% if message.tool_calls is "
+            & "defined and message.tool_calls is iterable %}"
+            & "{% for c in message.tool_calls %}{{ c.name }}("
+            & "{% for k, v in c.arguments | items %}{{ k }}={{ v }},"
+            & "{% endfor %}){% endfor %}{% endif %}{% endfor %}",
+            "calc(a=2,op=+,tags=['x', 'y'],)",
+            "a call's arguments walked and written");
+      Same ("{% for message in messages %}{% if message.role == 'tool' %}"
+            & "{% if loop.previtem and loop.previtem.role != 'tool' %}"
+            & "[{% endif %}{{ message.content }}"
+            & "{% if loop.last or loop.nextitem.role != 'tool' %}]"
+            & "{% endif %}{% endif %}{% endfor %}", "[5]",
+            "the neighbours of a loop's item");
+      Same ("{% for message in messages[::-1] %}{{ message.role[0] }}"
+            & "{% endfor %}", "tau", "the conversation walked backwards");
+      Same ("{% for m in messages %}{{ loop.index }}{% for n in messages %}"
+            & "{{ loop.index }}{% endfor %}{% endfor %}",
+            "112321233123", "a loop inside a loop, each with its own count");
+
+      --  Text methods with variables, and the string methods a template
+      --  takes a reply apart with.
+      Same ("{% set m = '<tool_response>' %}{% if messages[0].content"
+            & ".startswith(m) %}s{% endif %}{% if not messages[0].content"
+            & ".endswith('x') %}!{% endif %}", "s",
+            "startswith and endswith with a variable");
+      Same ("{% set d = 'A' %}{{ 'a-a'.replace('a', d) }}"
+            & "{{ 'b'.replace('b', 'c' ~ 'd') }}", "A-Acd",
+            "replace with a variable and an expression");
+      Same ("{% set parts = 'a<s>b<s>c'.split('<s>') %}{{ parts[0] }}"
+            & "{{ parts | length }}{{ parts[-1] }}", "a3c",
+            "a cut kept whole, indexed and measured");
+
+      --  A name assigned inside a loop's body is the body's own and the
+      --  name outside is untouched, as the language scopes it; a
+      --  namespace's field is what a loop assigns for after.
+      Same ("{% set x = 'o' %}{% for m in messages %}{% set x = 'i' %}"
+            & "{% endfor %}{{ x }}", "o", "a set in a loop does not leak");
+      Same ("{% set ns = namespace(x='o') %}{% for m in messages %}"
+            & "{% set ns.x = 'i' %}{% endfor %}{{ ns.x }}", "i",
+            "a namespace field set in a loop is kept");
+      Same ("{% for m in messages %}{% set x %}{{ m.role }}{% endset %}"
+            & "{{ x }}{% endfor %}[{% if x is defined %}!{% endif %}]",
+            "userassistanttool[]",
+            "a block set inside a loop");
+
+      --  A tag closed with -%} strips what follows it, in a macro as
+      --  anywhere else.
+      Same ("{% if true -%}   x{% endif %}", "x", "-%} strips the text after");
+      Same ("{% macro m(l) %}{% for i in l -%}  <{{ i }}>{% endfor -%}"
+            & " {% endmacro %}{{ m(['a', 'b']) }}", "<a><b>",
+            "a list passed to a macro and -%} inside it");
+
+      --  A loop over a name never assigned is refused as the output
+      --  refuses it, and a field a turn has not got is nothing.
+      Same ("{% for x in nothing %}x{% endfor %}",
+            "render: TEMPLATE_UNKNOWN_VARIABLE nothing",
+            "a loop over a name never assigned");
+      Same ("{{ messages[0].nothing }}[{% if messages[0].nothing is defined %}"
+            & "!{% endif %}]", "[]", "a field a turn has not got");
+
+      Model_Runner.Tools.Close (Defs);
+   end Values_Render_As_The_Language_Would;
+
+   --  The carried qwen3-coder and minicpm formats are the same bytes as
+   --  the models' own templates, and the engine can say so itself now
+   --  that it renders both: each format and the model's own file, read
+   --  from fixtures, rendered on the same conversations and compared
+   --  byte for byte. The model's own file is what jinja2 was crossed
+   --  against, so this is the crossing kept in the suite.
+   procedure Carried_Formats_Match_The_Models_Own_Templates
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Defs : aliased Model_Runner.Tools.Definitions;
+
+      --  A template file's text, less the line break a file ends with
+      --  and a template written as one line does not.
+      function File_Text (Path : String) return String is
+         Held : Ada.Text_IO.File_Type;
+         Room : String (1 .. 32_768);
+         Used : Natural := 0;
+      begin
+         Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Path);
+         while not Ada.Text_IO.End_Of_File (Held) loop
+            declare
+               Line : constant String := Ada.Text_IO.Get_Line (Held);
+            begin
+               Room (Used + 1 .. Used + Line'Length) := Line;
+               Used := Used + Line'Length + 1;
+               Room (Used) := Character'Val (10);
+            end;
+         end loop;
+         Ada.Text_IO.Close (Held);
+         return (if Used > 0 then Room (1 .. Used - 1) else "");
+      end File_Text;
+
+      --  One conversation, built the same way for both templates.
+      type Shape is
+        (Plain, With_System, Tools_No_System, Tools_With_System,
+         Call_With_Text, Call_Without_Text, Two_Calls, Reply_No_Prompt,
+         Reasoning);
+
+      procedure Build (Talk : in out Conv.History; Which : Shape) is
+         Asked  : Model_Runner.Tools.Calls;
+         Status : E.Error_Info;
+      begin
+         Conv.Open (Talk, Status => Status);
+         case Which is
+            when Plain =>
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+            when With_System | Tools_With_System =>
+               Conv.Set_System (Talk, "Be brief.", Status);
+               Conv.Append (Talk, Conv.User_Role, "add", Status);
+            when Tools_No_System =>
+               Conv.Append (Talk, Conv.User_Role, "add 2 and 3", Status);
+            when Call_With_Text | Call_Without_Text =>
+               Conv.Append (Talk, Conv.User_Role, "add", Status);
+               Conv.Append_Asking
+                 (Talk, (if Which = Call_With_Text
+                         then "  Let me compute.  " else ""), Status);
+               Model_Runner.Tools.Read_Calls
+                 (Asked,
+                  "<tool_call>{""name"": ""calc"", ""arguments"": "
+                  & "{""a"": 2, ""op"": ""+"", ""b"": 3, ""exact"": true}}"
+                  & "</tool_call>",
+                  Status);
+               Conv.Append_Call
+                 (Talk, Model_Runner.Tools.Called (Asked, 1),
+                  Model_Runner.Tools.Arguments (Asked, 1), Status);
+               Model_Runner.Tools.Close (Asked);
+               Conv.Append (Talk, Conv.Tool_Role, "5", Status);
+               if Which = Call_With_Text then
+                  Conv.Append (Talk, Conv.Tool_Role, "5 again", Status);
+                  Conv.Append (Talk, Conv.User_Role, "thanks", Status);
+               end if;
+            when Two_Calls =>
+               Conv.Append (Talk, Conv.User_Role, "add", Status);
+               Conv.Append_Asking (Talk, "", Status);
+               Model_Runner.Tools.Read_Calls
+                 (Asked,
+                  "<tool_call>{""name"": ""calc"", ""arguments"": "
+                  & "{""a"": 1, ""op"": ""+"", ""b"": 1}}</tool_call>"
+                  & "<tool_call>{""name"": ""weather"", ""arguments"": "
+                  & "{""city"": ""Odense""}}</tool_call>",
+                  Status);
+               for C in 1 .. 2 loop
+                  Conv.Append_Call
+                    (Talk, Model_Runner.Tools.Called (Asked, C),
+                     Model_Runner.Tools.Arguments (Asked, C), Status);
+               end loop;
+               Model_Runner.Tools.Close (Asked);
+               Conv.Append (Talk, Conv.Tool_Role, "2", Status);
+               Conv.Append (Talk, Conv.Tool_Role, "rain", Status);
+               Conv.Append (Talk, Conv.Assistant_Role, "done", Status);
+            when Reply_No_Prompt =>
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+               Conv.Append (Talk, Conv.Assistant_Role, "yo", Status);
+            when Reasoning =>
+               Conv.Append (Talk, Conv.User_Role, "q1", Status);
+               Conv.Append
+                 (Talk, Conv.Assistant_Role,
+                  "<think>" & Character'Val (10) & "first"
+                  & Character'Val (10) & "</think>" & Character'Val (10)
+                  & Character'Val (10) & "A1", Status);
+               Conv.Append (Talk, Conv.User_Role, "q2", Status);
+               Conv.Append
+                 (Talk, Conv.Assistant_Role,
+                  "<think>" & Character'Val (10) & "second"
+                  & Character'Val (10) & "</think>" & Character'Val (10)
+                  & Character'Val (10) & "A2", Status);
+         end case;
+         Assert (E.Is_Ok (Status), "the conversation would not build");
+      end Build;
+
+      --  Choices says whether the caller's thinking choice is tried too,
+      --  and Thoughts whether a history carrying <think> blocks is: the
+      --  carried qwen3-coder format writes both as Qwen3.5's template
+      --  does, which Qwen3-Coder's own says nothing about.
+      procedure Compare
+        (Format    : Tmpl.Chat_Format; Own_File : String;
+         Choices   : Boolean;
+         Thoughts  : Boolean)
+      is
+         use type Tmpl.Thinking_Choice;
+         Carried, Own : Tmpl.Compiled;
+         Status       : E.Error_Info;
+      begin
+         Tmpl.Compile
+           (Carried, Tmpl.Built_In (Tmpl.Format_Name (Format)),
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the carried format did not compile");
+         Tmpl.Compile (Own, File_Text (Own_File), Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the model's own template did not compile: "
+                 & E.Error_Code'Image (Status.Code));
+
+         for Which in Shape loop
+            for Choice in Tmpl.Thinking_Choice loop
+               if (Choices or else Choice = Tmpl.Thinking_Unstated)
+                 and then (Thoughts or else Which /= Reasoning)
+               then
+                  declare
+                     Talk       : Conv.History;
+                     Tooled     : constant Boolean :=
+                       Which in Tools_No_System | Tools_With_System
+                                | Call_With_Text | Call_Without_Text
+                                | Two_Calls;
+                     Generation : constant Boolean :=
+                       Which not in Two_Calls | Reply_No_Prompt;
+                     A, B       : String (1 .. 8192);
+                     A_Last, B_Last : Natural;
+                     Status_A, Status_B : E.Error_Info;
+                  begin
+                     Build (Talk, Which);
+                     Tmpl.Render
+                       (Carried, Talk, "<s>", "</s>", Generation,
+                        A, A_Last, Status_A, Thinking => Choice,
+                        Tools => (if Tooled then Defs'Access else null));
+                     Tmpl.Render
+                       (Own, Talk, "<s>", "</s>", Generation,
+                        B, B_Last, Status_B, Thinking => Choice,
+                        Tools => (if Tooled then Defs'Access else null));
+                     Conv.Close (Talk);
+                     Assert (E.Is_Ok (Status_A),
+                             Tmpl.Format_Name (Format) & " did not render "
+                             & Shape'Image (Which) & ": "
+                             & E.Error_Code'Image (Status_A.Code));
+                     Assert (E.Is_Ok (Status_B),
+                             "the model's own " & Tmpl.Format_Name (Format)
+                             & " template did not render "
+                             & Shape'Image (Which) & ": "
+                             & E.Error_Code'Image (Status_B.Code));
+                     Assert (A (1 .. A_Last) = B (1 .. B_Last),
+                             "the carried " & Tmpl.Format_Name (Format)
+                             & " format and the model's own template differ on "
+                             & Shape'Image (Which) & " "
+                             & Tmpl.Thinking_Choice'Image (Choice)
+                             & ": carried (" & A (1 .. A_Last) & ") own ("
+                             & B (1 .. B_Last) & ")");
+                  end;
+               end if;
+            end loop;
+         end loop;
+
+         Tmpl.Close (Carried);
+         Tmpl.Close (Own);
+      end Compare;
+
+      Status : E.Error_Info;
+   begin
+      Model_Runner.Tools.Read
+        (Defs,
+         "[{""type"": ""function"", ""function"": {""name"": ""calc"", "
+         & """description"": "" Evaluate a binary arithmetic operation. "", "
+         & """parameters"": {""type"": ""object"", ""properties"": {"
+         & """a"": {""type"": ""integer"", ""description"": ""left operand""}, "
+         & """op"": {""type"": ""string"", ""enum"": [""+"", ""-"", ""*"", ""/""], "
+         & """description"": ""the operator""}, ""b"": {""type"": ""integer""}, "
+         & """exact"": {""type"": ""boolean"", ""default"": false, ""minimum"": 0}, "
+         & """tags"": {""type"": ""array"", ""items"": {""type"": ""string""}}}, "
+         & """required"": [""a"", ""op"", ""b""]}, ""return"": {""type"": ""number""}}}, "
+         & "{""type"": ""function"", ""function"": {""name"": ""weather"", "
+         & """description"": ""Look up the weather."", ""parameters"": {"
+         & """type"": ""object"", ""properties"": {""city"": {""type"": ""string"", "
+         & """description"": ""which city"", ""enum"": [""Aarhus"", ""Odense""], "
+         & """required"": [""city""]}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      Compare (Tmpl.Format_Qwen3_Coder, "fixtures/qwen3-coder-own.jinja",
+               Choices => False, Thoughts => False);
+      Compare (Tmpl.Format_MiniCPM, "fixtures/minicpm-own.jinja",
+               Choices => True, Thoughts => True);
+
+      Model_Runner.Tools.Close (Defs);
+   end Carried_Formats_Match_The_Models_Own_Templates;
+
    procedure Ordinary_Template_Renders
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1220,17 +1628,19 @@ package body Tests.Template_Cases is
       --  never asks for it has asked for nothing wrong -- and every template
       --  shipped with a current model describes tool calling in branches a
       --  conversation of plain messages never enters.
-      --  The four things there are to walk are the conversation, a count,
-      --  the tools and one turn's calls. Anything else is a loop over
-      --  something this engine does not hold.
+      --  A loop walks whatever its operand is worth -- the conversation,
+      --  a count, the tools, one turn's calls, a list or mapping read out
+      --  of a schema or written in the template. A name never assigned is
+      --  worth nothing, and is refused as it is in the output rather than
+      --  walked as an empty list.
       Assert (Render_Status ("{% for item in whatever %}x{% endfor %}")
-              = E.Template_Unsupported_Construct,
-              "iteration over something other than messages was accepted");
+              = E.Template_Unknown_Variable,
+              "iteration over a name never assigned was accepted");
       Assert (Render_Status ("{% for other in message.tool_calls %}x"
                              & "{% endfor %}")
-              = E.Template_Unsupported_Construct,
+              = E.No_Error,
               "a call loop binding a name that is not tool_call was "
-              & "accepted");
+              & "refused");
       --  raise_exception is the template refusing in its author's words,
       --  and the words are the diagnostic.
       Assert (Render_Status ("{{ raise_exception('no') }}")
@@ -1275,12 +1685,14 @@ package body Tests.Template_Cases is
       Assert (Render_Status ("{{ message.content | trim }}") = E.No_Error,
               "the trim filter was refused");
 
-      --  Names the engine does not know are refused, not rendered empty.
+      --  Names the engine does not know are refused, not rendered empty;
+      --  a field a turn has not got is empty, as Jinja prints its
+      --  undefined, because that is what every template's "is defined"
+      --  and unguarded read of an optional field are written against.
       Assert (Render_Status ("{{ nonsense }}") = E.Template_Unknown_Variable,
               "an unknown variable was accepted");
-      Assert (Render_Status ("{{ message.nonsense }}")
-              = E.Template_Unknown_Variable,
-              "an unknown message field was accepted");
+      Assert (Render_Status ("{{ message.nonsense }}") = E.No_Error,
+              "a field a turn has not got was refused");
 
       --  Syntax that does not close.
       Assert (Compile_Status ("{{ bos_token ") = E.Template_Syntax_Error,
@@ -1835,23 +2247,18 @@ package body Tests.Template_Cases is
       Assert (Render_Status ("{{ never }}") = E.Template_Unknown_Variable,
               "output reading a name never assigned was accepted");
 
-      --  A loop over the conversation may call its variable what it likes,
-      --  and what it may not do is read a field off it: the fields this
-      --  engine reads from a turn are read through the one name, and a name
-      --  that is not that one is a name nothing can be read from. Refused
-      --  where it is read rather than answered with the turn the loop
-      --  happens to be on, which would be right by accident.
+      --  A loop over the conversation may call its variable what it likes
+      --  and read a turn's fields through that name, as Jinja does.
       Assert (Render_Status
                 ("{% for other in messages %}{{ other.role }}{% endfor %}")
-              = E.Template_Unknown_Variable,
-              "a field read off a loop's own name was answered");
+              = E.No_Error,
+              "a field read off a loop's own name was refused");
 
-      --  A cut nothing said the side of answers with a list, and a list has
-      --  no spelling here. Said by either the position or the filter, and
-      --  refused where it is said by neither.
+      --  A cut nothing said the side of is a list, printed as Python
+      --  prints one.
       Assert (Render_Status ("{{ 'a</think>b'.split('</think>') }}")
-              = E.Template_Unsupported_Construct,
-              "a cut with neither end asked for was printed anyway");
+              = E.No_Error,
+              "a cut with neither end asked for was refused");
       Assert (Render_Status ("{{ 'a</think>b'.split('</think>')|last }}")
               = E.No_Error,
               "a cut whose side a filter names was refused");
@@ -2342,6 +2749,15 @@ package body Tests.Template_Cases is
         (T, Qwen3_Coder_Renders_Tool_Calls'Access,
          "the qwen3-coder format offers tools and writes a call in the "
          & "<function=..><parameter=..> form");
+      Register_Routine
+        (T, Values_Render_As_The_Language_Would'Access,
+         "lists, mappings, a schema's members, a call's arguments and the "
+         & "conversation are walked, indexed, asked about and written as "
+         & "the language does it, and a loop's assignments stay its own");
+      Register_Routine
+        (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
+         "the carried qwen3-coder and minicpm formats render the same bytes "
+         & "as the models' own templates, conversation for conversation");
       Register_Routine
         (T, Templates_Are_Recognised_By_Their_Markers'Access,
          "a template's own text names the carried format it is written in, "
