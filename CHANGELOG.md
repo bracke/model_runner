@@ -55,6 +55,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A progressive JPEG from libjpeg was refused, `MR-IO-0010 ... jpeg
+  MARKER_UNEXPECTED`.** Fixed in jpeglib, the native Ada codec this build
+  decodes with: a DC refinement scan of several components is interleaved
+  by MCU, a ZRL in an AC refinement scan ends on the sixteenth zero, and
+  the DC point transform is an arithmetic shift, so a negative odd DC
+  refines up rather than down. Every progressive file from another encoder
+  had met at least the first; the 1920 by 1080 poster the crops entry
+  reads is one.
 - **The device backend answered nonsense on Gemma, Gemma 2 and Gemma 3.**
   The attention shader has room for a head 128 wide, halved from 256 when
   it took eight queries a block, and the guard that sends a wider head to
