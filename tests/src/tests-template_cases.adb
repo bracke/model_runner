@@ -1313,7 +1313,7 @@ package body Tests.Template_Cases is
         (Plain, With_System, Tools_No_System, Tools_With_System,
          Call_With_Text, Call_Without_Text, Two_Calls, Reply_No_Prompt,
          Reasoning, Nested_Arguments, Wrapped_User, Two_Systems, Developer,
-         Parts_Content);
+         Parts_Content, Reply_Parts, Tool_Parts);
 
       procedure Build (Talk : in out Conv.History; Which : Shape) is
          Asked  : Model_Runner.Tools.Calls;
@@ -1431,6 +1431,29 @@ package body Tests.Template_Cases is
                  (Talk, Conv.User_Role,
                   "[{""type"": ""image""}, {""type"": ""text"", ""text"": "
                   & """ what is this ""}, {""type"": ""video""}]", Status);
+            when Reply_Parts =>
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+               Conv.Append_Parts
+                 (Talk, Conv.Assistant_Role,
+                  "[{""type"": ""text"", ""text"": "" a cat ""}, "
+                  & "{""type"": ""image""}]", Status);
+               Conv.Append (Talk, Conv.User_Role, "sure?", Status);
+            when Tool_Parts =>
+               Conv.Append (Talk, Conv.User_Role, "weather?", Status);
+               Conv.Append_Asking (Talk, "", Status);
+               Model_Runner.Tools.Read_Calls
+                 (Asked,
+                  "<tool_call>{""name"": ""weather"", ""arguments"": "
+                  & "{""city"": ""Aarhus""}}</tool_call>",
+                  Status);
+               Conv.Append_Call
+                 (Talk, Model_Runner.Tools.Called (Asked, 1),
+                  Model_Runner.Tools.Arguments (Asked, 1), Status);
+               Model_Runner.Tools.Close (Asked);
+               Conv.Append_Parts
+                 (Talk, Conv.Tool_Role,
+                  "[{""type"": ""text"", ""text"": ""12 C""}, "
+                  & "{""type"": ""image""}]", Status);
          end case;
          Assert (E.Is_Ok (Status), "the conversation would not build");
       end Build;
@@ -1475,7 +1498,7 @@ package body Tests.Template_Cases is
                      Tooled     : constant Boolean :=
                        Which in Tools_No_System | Tools_With_System
                                 | Call_With_Text | Call_Without_Text
-                                | Two_Calls | Nested_Arguments;
+                                | Two_Calls | Nested_Arguments | Tool_Parts;
                      Generation : constant Boolean :=
                        Which not in Two_Calls | Reply_No_Prompt;
                      A, B       : String (1 .. 8192);
@@ -1578,7 +1601,7 @@ package body Tests.Template_Cases is
                Tooled : constant Boolean :=
                  Which in Tools_No_System | Tools_With_System
                           | Call_With_Text | Call_Without_Text | Two_Calls
-                          | Nested_Arguments;
+                          | Nested_Arguments | Tool_Parts;
             begin
                Tmpl.Compile (Own, File_Text (File.all), Status => Status);
                Assert (E.Is_Ok (Status),
@@ -1593,8 +1616,9 @@ package body Tests.Template_Cases is
                Conv.Close (Talk);
                Tmpl.Close (Own);
                --  gpt-oss adds words to the content, so a list of parts
-               --  is refused -- as jinja2 refuses it, with a TypeError.
-               if Which = Parts_Content
+               --  is refused -- as jinja2 refuses it, with a TypeError --
+               --  in a user's turn and in a reply alike.
+               if Which in Parts_Content | Reply_Parts
                  and then File.all = "fixtures/gpt-oss-own.jinja"
                then
                   Assert (E."=" (Status.Code,
@@ -1687,6 +1711,23 @@ package body Tests.Template_Cases is
                  & Conv.Text_Of_Parts (Parts));
          Assert (Conv.Text_Of_Parts ("[{""type"": ""image""}]") = "",
                  "a picture alone has words");
+         --  Every escape the language has, and a surrogate pair as the
+         --  one character it spells.
+         Assert (Conv.Unescaped ("a\""b\\c\/d\be\ff\u00e9\ud83d\ude00")
+                   = "a""b\c/d" & ASCII.BS & "e" & ASCII.FF & "f"
+                     & Character'Val (16#C3#) & Character'Val (16#A9#)
+                     & Character'Val (16#F0#) & Character'Val (16#9F#)
+                     & Character'Val (16#98#) & Character'Val (16#80#),
+                 "the escapes of a JSON string were undone wrongly: "
+                 & Conv.Unescaped ("a\""b\\c\/d\be\ff\u00e9\ud83d\ude00"));
+         Assert (Conv.Unescaped ("\ud83d x\u12") = " xu12",
+                 "a lone surrogate or a short escape was not dropped: "
+                 & Conv.Unescaped ("\ud83d x\u12"));
+         Assert (Conv.Text_Of_Parts
+                   ("[{""type"": ""text"", ""text"": ""say \""hi\"" \u2014""}]")
+                   = "say ""hi"" " & Character'Val (16#E2#)
+                     & Character'Val (16#80#) & Character'Val (16#94#),
+                 "a part's text with escapes reads wrongly");
 
          Conv.Open (Talk, Status => Status);
          Conv.Append_Parts (Talk, Conv.User_Role, "what", Status);
@@ -1824,7 +1865,8 @@ package body Tests.Template_Cases is
                            Tooled  : constant Boolean :=
                              Which in Tools_No_System | Tools_With_System
                                       | Call_With_Text | Call_Without_Text
-                                      | Two_Calls | Nested_Arguments;
+                                      | Two_Calls | Nested_Arguments
+                                      | Tool_Parts;
                         begin
                            Cursor := Cursor + Integer'Max (Bytes, 0) + 1;
                            Cases := Cases + 1;
@@ -1859,7 +1901,7 @@ package body Tests.Template_Cases is
                end;
             end loop;
             Tmpl.Close (Own);
-            Assert (Cases >= 14, File.Record_File.all & " holds too few cases");
+            Assert (Cases >= 16, File.Record_File.all & " holds too few cases");
          end;
       end loop;
 

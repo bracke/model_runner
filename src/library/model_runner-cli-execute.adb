@@ -41,8 +41,7 @@ with Model_Runner.Text;
 with Model_Runner.Tools;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
-with Model_Runner.Images;
-with Model_Runner.Vision;
+with Model_Runner.CLI.Pictures;
 
 with Model_Runner.Agent;
 with Model_Runner.Tools.Builtin;
@@ -2127,9 +2126,12 @@ package body Model_Runner.CLI.Execute is
       Ignored   : E.Error_Info;
       Outcome   : Gen.Result;
 
-      --  The pictures the prompt shows, encoded once for every prompt
-      --  and step of the run: their rows, and the tokens that frame them.
+      --  The pictures the conversation shows, encoded once for every
+      --  prompt and step of the run: their rows, and the tokens that frame
+      --  them. The projector is opened once a picture is named and kept,
+      --  since a later turn may add one.
       Pictures  : Gen.Picture_Set;
+      Seer      : Model_Runner.CLI.Pictures.Seer;
 
       procedure Cleanup is
       begin
@@ -2151,139 +2153,47 @@ package body Model_Runner.CLI.Execute is
             Embed_Model_Ready := False;
          end if;
          Gen.Release (Outcome);
-         Model_Runner.Tensors.Free (Pictures.Rows);
+         Model_Runner.CLI.Pictures.Release (Pictures);
+         Model_Runner.CLI.Pictures.Close (Seer);
          Free_Text (Prompt);
       end Cleanup;
 
-      --  Most pictures one prompt may show.
-      Max_Pictures : constant := 16;
-
-      type Picture_Paths is array (1 .. Max_Pictures) of Opt.Text_Access;
-
-      --  The files the parts of the prompt name as pictures: each part
-      --  whose type is image, and its path -- or its url, which is a path
-      --  here, there being nothing to fetch with.
-      procedure Named_Pictures
-        (Parts : String; Paths : out Picture_Paths; Count : out Natural)
+      --  Encode the pictures the conversation names that are not yet in
+      --  Pictures, in the conversation's order: the ones the prompt's parts
+      --  name, and the ones a checkpoint read back names. Nothing to do
+      --  for a conversation naming none.
+      procedure Gather_Pictures
+        (Messages  : Conv.History;
+         Team      : Workers_CPU.Pool_Reference;
+         Condition : out E.Error_Info)
       is
-         I : Natural := Parts'First;
+         Named : Boolean := False;
 
-         procedure Skip_Blanks is
+         procedure Note (Index, Total : Positive; Milliseconds : Natural) is
          begin
-            while I <= Parts'Last
-              and then Parts (I) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
-            loop
-               I := I + 1;
-            end loop;
-         end Skip_Blanks;
-
-         --  A JSON string at I, I left past its closing quote.
-         function Read_String return String is
-            R : US.Unbounded_String;
-         begin
-            I := I + 1;
-            while I <= Parts'Last and then Parts (I) /= '"' loop
-               if Parts (I) = '\' and then I < Parts'Last then
-                  I := I + 1;
-                  case Parts (I) is
-                     when 'n' => US.Append (R, ASCII.LF);
-                     when 't' => US.Append (R, ASCII.HT);
-                     when others => US.Append (R, Parts (I));
-                  end case;
-               else
-                  US.Append (R, Parts (I));
-               end if;
-               I := I + 1;
-            end loop;
-            I := I + 1;
-            return US.To_String (R);
-         end Read_String;
-
-         Depth : Natural := 0;
-         Kind, Path : US.Unbounded_String;
-      begin
-         Paths := [others => null];
-         Count := 0;
-         while I <= Parts'Last loop
-            case Parts (I) is
-               when '{' =>
-                  Depth := Depth + 1;
-                  if Depth = 1 then
-                     Kind := US.Null_Unbounded_String;
-                     Path := US.Null_Unbounded_String;
-                  end if;
-                  I := I + 1;
-               when '}' =>
-                  if Depth = 1 and then Count < Max_Pictures
-                    and then (US.To_String (Kind) = "image"
-                              or else US.To_String (Kind) = "image_url")
-                    and then US.Length (Path) > 0
-                  then
-                     Count := Count + 1;
-                     Paths (Count) := new String'(US.To_String (Path));
-                  end if;
-                  Depth := Natural'Max (0, Depth - 1);
-                  I := I + 1;
-               when '"' =>
-                  declare
-                     Key : constant String := Read_String;
-                  begin
-                     Skip_Blanks;
-                     if I <= Parts'Last and then Parts (I) = ':' then
-                        I := I + 1;
-                        Skip_Blanks;
-                        if I <= Parts'Last and then Parts (I) = '"' then
-                           declare
-                              Value : constant String := Read_String;
-                           begin
-                              if Key = "type" and then Depth = 1 then
-                                 Kind := US.To_Unbounded_String (Value);
-                              elsif Key = "path" or else Key = "url" then
-                                 Path := US.To_Unbounded_String (Value);
-                              end if;
-                           end;
-                        end if;
-                     end if;
-                  end;
-               when others =>
-                  I := I + 1;
-            end case;
-         end loop;
-      end Named_Pictures;
-
-      --  Read and encode the pictures the prompt names, once, into
-      --  Pictures: the projector opened, each file decoded and run
-      --  through it, the rows laid end to end. Nothing to do for a
-      --  prompt that is text or names no picture.
-      procedure See_Pictures
-        (Team : Workers_CPU.Pool_Reference; Condition : out E.Error_Info) is
-         Paths : Picture_Paths;
-         Count : Natural;
-         Eyes  : Model_Runner.Vision.Encoder;
-         Words : constant access constant Model_Runner.Tokenizer.Vocabulary :=
-           L.Vocabulary (Prepared);
-         Width : constant N.Element_Count :=
-           N.Element_Count (L.Config (Prepared).Embedding);
-         use type Model_Runner.Tokenizer.Token_Id;
-         use type Model_Runner.Tensors.Real_Array_Access;
-
-         procedure Release is
-         begin
-            Model_Runner.Vision.Close (Eyes);
-            for Path of Paths loop
-               Free_Text (Path);
-            end loop;
-         end Release;
+            if Item.Level = Opt.Verbose then
+               Pres.Put_Note
+                 (Screen, "cli.note.picture_encoded",
+                  [Loc.Named ("index", T.Image (Long_Long_Integer (Index))),
+                   Loc.Named ("total", T.Image (Long_Long_Integer (Total))),
+                   Loc.Named
+                     ("value",
+                      T.Image (Long_Long_Integer (Pictures.Per_Picture))),
+                   Loc.Named
+                     ("count", T.Image (Long_Long_Integer (Milliseconds)))]);
+            end if;
+         end Note;
       begin
          Condition := E.Success;
-         if Item.Prompt_Kind /= Opt.Prompt_Parts
-           or else Item.Prompt_Parts_Text = null
-         then
-            return;
-         end if;
-
-         Named_Pictures (Item.Prompt_Parts_Text.all, Paths, Count);
-         if Count = 0 then
+         for Index in 1 .. Conv.Length (Messages) loop
+            if Model_Runner.CLI.Pictures.Names_A_Picture
+                 (Conv.Parts_At (Messages, Index))
+            then
+               Named := True;
+               exit;
+            end if;
+         end loop;
+         if not Named then
             return;
          end if;
 
@@ -2291,108 +2201,21 @@ package body Model_Runner.CLI.Execute is
             Condition := E.Make (E.CLI_Picture_Needs_Projector);
             E.Add_Text (Condition, "option", "--prompt-parts", E.Param_Identifier);
             E.Add_Text (Condition, "other", "--mmproj", E.Param_Identifier);
-            Release;
             return;
          end if;
 
-         --  The tokens a picture stands behind, which the model's
-         --  vocabulary has or has not.
-         Pictures.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
-         Pictures.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
-         Pictures.Closer := Model_Runner.Tokenizer.Find (Words.all, "<end_of_image>");
-         if Pictures.Marker = Model_Runner.Tokenizer.No_Token
-           or else Pictures.Soft = Model_Runner.Tokenizer.No_Token
-         then
-            Condition := E.Make (E.Arch_Vision_Tokens_Missing);
-            E.Add_Text
-              (Condition, "token",
-               (if Pictures.Marker = Model_Runner.Tokenizer.No_Token
-                then "<start_of_image>" else "<image_soft_token>"),
-               E.Param_Identifier);
-            Release;
-            return;
+         if not Model_Runner.CLI.Pictures.Is_Open (Seer) then
+            Model_Runner.CLI.Pictures.Open
+              (Seer, T.To_String (Item.Projector_Path), Prepared, Condition);
+            if E.Is_Error (Condition) then
+               return;
+            end if;
          end if;
 
-         Model_Runner.Vision.Open
-           (Eyes, T.To_String (Item.Projector_Path), Condition);
-         if E.Is_Error (Condition) then
-            Release;
-            return;
-         end if;
-
-         if N.Element_Count (Model_Runner.Vision.Row_Width (Eyes)) /= Width then
-            Condition := E.Make (E.Arch_Invalid_Dimensions);
-            E.Add_Integer
-              (Condition, "embedding",
-               Long_Long_Integer (Model_Runner.Vision.Row_Width (Eyes)));
-            E.Add_Integer (Condition, "heads", Long_Long_Integer (Width));
-            Release;
-            return;
-         end if;
-
-         Pictures.Per_Picture := Model_Runner.Vision.Rows_Per_Picture (Eyes);
-         Model_Runner.Tensors.Allocate
-           (N.Element_Count (Count) * N.Element_Count (Pictures.Per_Picture)
-            * Width,
-            Pictures.Rows);
-         if Pictures.Rows = null then
-            Condition := E.Make (E.Memory_Allocation_Failed);
-            E.Add_Text (Condition, "category", "pictures", E.Param_Identifier);
-            Release;
-            return;
-         end if;
-
-         for Index in 1 .. Count loop
-            declare
-               Picture : Model_Runner.Images.Raster;
-               Rows    : Model_Runner.Tensors.Real_Array_Access;
-               Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-               use type Ada.Calendar.Time;
-            begin
-               Model_Runner.Images.Load (Paths (Index).all, Picture, Condition);
-               if E.Is_Error (Condition) then
-                  Release;
-                  return;
-               end if;
-               Model_Runner.Vision.Encode
-                 (Eyes, Picture, Team, Rows, Cancel'Unchecked_Access,
-                  Condition);
-               Model_Runner.Images.Free (Picture);
-               if E.Is_Error (Condition) then
-                  Release;
-                  return;
-               end if;
-               declare
-                  At_Row : constant N.Element_Count :=
-                    N.Element_Count (Index - 1)
-                    * N.Element_Count (Pictures.Per_Picture) * Width;
-               begin
-                  Pictures.Rows (At_Row .. At_Row + Rows.all'Length - 1) :=
-                    Rows.all;
-               end;
-               Model_Runner.Tensors.Free (Rows);
-               Pictures.Count := Index;
-
-               if Item.Level = Opt.Verbose then
-                  Pres.Put_Note
-                    (Screen, "cli.note.picture_encoded",
-                     [Loc.Named ("index", T.Image (Long_Long_Integer (Index))),
-                      Loc.Named ("total", T.Image (Long_Long_Integer (Count))),
-                      Loc.Named
-                        ("value",
-                         T.Image (Long_Long_Integer
-                                    (Model_Runner.Vision.Image_Size (Eyes)))),
-                      Loc.Named
-                        ("count",
-                         T.Image (Long_Long_Integer
-                                    (Float (Ada.Calendar.Clock - Started)
-                                     * 1000.0)))]);
-               end if;
-            end;
-         end loop;
-
-         Release;
-      end See_Pictures;
+         Model_Runner.CLI.Pictures.Gather
+           (Seer, Messages, Pictures, Team, Cancel'Unchecked_Access,
+            Note'Access, Condition);
+      end Gather_Pictures;
 
       procedure Fail (Reason : E.Error_Info) is
       begin
@@ -2762,15 +2585,6 @@ package body Model_Runner.CLI.Execute is
             end;
          end if;
 
-         --  The pictures, before any prompt is rendered: the same rows
-         --  stand behind the prompt's markers on every prompt and every
-         --  step of an agent run.
-         See_Pictures (Team, Condition);
-         if E.Is_Error (Condition) then
-            Fail (Condition);
-            return;
-         end if;
-
          --  Interactive mode owns its own loop; it needs the same prepared model
          --  and session, so it is entered here rather than earlier.
          if Item.Prompt_Kind = Opt.Prompt_Interactive then
@@ -3103,6 +2917,9 @@ package body Model_Runner.CLI.Execute is
                      Conv.Append
                        (Messages, Conv.User_Role, Prompt.all, Condition);
                   end if;
+                  if E.Is_Ok (Condition) then
+                     Gather_Pictures (Messages, Team, Condition);
+                  end if;
                   if E.Is_Error (Condition) then
                      Conv.Close (Messages);
                      Fail (Condition);
@@ -3424,6 +3241,18 @@ package body Model_Runner.CLI.Execute is
                                  Conv.Append
                                    (Messages, Conv.Tool_Role, Spoken.all,
                                     Condition);
+                              elsif Opt."=" (Item.Turn_Kinds (Turn),
+                                             Opt.Turn_Tool_Parts)
+                              then
+                                 Conv.Append_Parts
+                                   (Messages, Conv.Tool_Role, Spoken.all,
+                                    Condition);
+                              elsif Opt."=" (Item.Turn_Kinds (Turn),
+                                             Opt.Turn_Assistant_Parts)
+                              then
+                                 Conv.Append_Parts
+                                   (Messages, Conv.Assistant_Role, Spoken.all,
+                                    Condition);
                               elsif Tools_Ready then
                                  Conv.Append_Reply
                                    (Messages, Spoken.all, Condition, Reading);
@@ -3447,6 +3276,14 @@ package body Model_Runner.CLI.Execute is
                            end if;
                         end;
                      end loop;
+
+                     Gather_Pictures (Messages, Team, Condition);
+                     if E.Is_Error (Condition) then
+                        Free_Text (Buffer);
+                        Conv.Close (Messages);
+                        Fail (Condition);
+                        return;
+                     end if;
 
                      Model_Runner.Templates.Render
                        (L.Template (Prepared).all, Messages,

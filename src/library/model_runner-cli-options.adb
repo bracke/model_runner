@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 102) of Registry_Row :=
+   Registry : constant array (1 .. 104) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -98,6 +98,10 @@ package body Model_Runner.CLI.Options is
        Text ("tool_result")),
       (Text ("--tool-result-file"), [Command_Run => True, others => False],
        Text ("tool_result_file")),
+      (Text ("--assistant-parts"), [Command_Run => True, others => False],
+       Text ("assistant_parts")),
+      (Text ("--tool-result-parts"), [Command_Run => True, others => False],
+       Text ("tool_result_parts")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
@@ -1309,6 +1313,18 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--tool-result-file" then
                      Turn_Value (Turn_Tool, True, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--assistant-parts" then
+                     Turn_Value (Turn_Assistant_Parts, False, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--tool-result-parts" then
+                     Turn_Value (Turn_Tool_Parts, False, Good);
                      if not Good then
                         return;
                      end if;
@@ -2677,8 +2693,11 @@ package body Model_Runner.CLI.Options is
          Status := E.Make (E.CLI_Raw_Mode_Conflict);
          E.Add_Text
            (Status, "option",
-            (if Result.Turn_Kinds (1) = Turn_Tool
-             then "--tool-result" else "--assistant"),
+            (case Result.Turn_Kinds (1) is
+                when Turn_Tool => "--tool-result",
+                when Turn_Tool_Parts => "--tool-result-parts",
+                when Turn_Assistant_Parts => "--assistant-parts",
+                when Turn_Assistant => "--assistant"),
             E.Param_Identifier);
          return;
       end if;
@@ -2703,8 +2722,11 @@ package body Model_Runner.CLI.Options is
          Status := E.Make (E.CLI_Option_Combination);
          E.Add_Text
            (Status, "option",
-            (if Result.Turn_Kinds (1) = Turn_Tool
-             then "--tool-result" else "--assistant"),
+            (case Result.Turn_Kinds (1) is
+                when Turn_Tool => "--tool-result",
+                when Turn_Tool_Parts => "--tool-result-parts",
+                when Turn_Assistant_Parts => "--assistant-parts",
+                when Turn_Assistant => "--assistant"),
             E.Param_Identifier);
          E.Add_Text (Status, "other", "--interactive", E.Param_Identifier);
          return;

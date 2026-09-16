@@ -275,3 +275,37 @@ Answer tersely.
 <|end|><|start|>user<|message|>hi<|end|><|start|>assistant
 case 14 unstated -1
 
+case 15 unstated -1
+
+case 16 unstated 1026
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>weather?<|end|><|start|>assistant to=functions.weather<|channel|>commentary json<|message|>{"city": "Aarhus"}<|call|><|start|>functions.weather to=assistant<|channel|>commentary<|message|>[{"type": "text", "text": "12 C"}, {"type": "image"}]<|end|><|start|>assistant

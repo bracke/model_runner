@@ -657,3 +657,100 @@ hi<|im_end|>
 
 case 14 unstated -1
 
+case 15 unstated -1
+
+case 16 unstated 2291
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+weather?<|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=weather>
+<parameter=city>
+Aarhus
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+[{'type': 'text', 'text': '12 C'}, {'type': 'image'}]
+</tool_response>
+<|im_end|>
+<|im_start|>assistant
+

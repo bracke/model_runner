@@ -231,9 +231,24 @@ package body Model_Runner.Templates is
            & "{% endif %}"
            & "{% elif message.role == 'assistant' %}"
            & "<start_of_turn>model" & LF
+           --  Walked as the model's own template walks a reply given as
+           --  parts, the same way it walks a user's.
+           & "{% if message.content is string %}"
            & "{{ message.content | trim }}"
+           & "{% else %}"
+           & "{% for item in message.content %}"
+           & "{% if item['type'] == 'image' %}<start_of_image>"
+           & "{% elif item['type'] == 'text' %}{{ item['text'] | trim }}"
+           & "{% endif %}"
+           & "{% endfor %}"
+           & "{% endif %}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
+           --  A call given in the reference's shape, the name and the
+           --  arguments under a function member, is read from there, as
+           --  the models' own templates read one.
+           & "{% if tool_call.function is defined %}"
+           & "{% set tool_call = tool_call.function %}{% endif %}"
            & "<tool_call>" & LF
            & "{""name"": ""{{ tool_call.name }}"", ""arguments"": "
            & "{{ tool_call.arguments | tojson }}}" & LF
@@ -402,7 +417,13 @@ package body Model_Runner.Templates is
            & "{% if message.content | trim +%}"
            & LF & "{{ message.content | trim }}" & LF
            & "{% endif %}"
-           & "{% for tool_call in message.tool_calls +%}"
+           & "{% for tool_call in message.tool_calls %}"
+           --  A call given in the reference's shape, the name and the
+           --  arguments under a function member, is read from there, as
+           --  the models' own templates read one. +%} keeps the line
+           --  break the model's own template writes before each call.
+           & "{% if tool_call.function is defined %}"
+           & "{% set tool_call = tool_call.function %}{% endif +%}"
            & LF & "<tool_call>" & LF & "<function=" & "{{ tool_call.name }}"
            & ">" & LF & "{{ tool_call.arguments | qwen_params }}"
            & "</function>" & LF & "</tool_call>"
@@ -422,8 +443,10 @@ package body Model_Runner.Templates is
            & "{% if loop.index0 > ns.last_query_index and reasoning %}"
            & "<think>" & LF & "{{ reasoning }}" & LF & "</think>" & LF & LF
            & "{% endif %}"
-           & "{{ content }}"
-           & "<|im_end|>" & LF
+           --  Joined with +, as the model's own template joins a reply to
+           --  its markers, so that a reply given as parts is refused as
+           --  that template refuses it.
+           & "{{ content + '<|im_end|>' }}" & LF
            & "{% else %}"
            --  Any other turn under its own name, a second system turn
            --  or a developer's, as the model's own template writes them --
@@ -516,21 +539,29 @@ package body Model_Runner.Templates is
            & "<|im_start|>user"
            & "{% endif +%}"
            & LF & "<tool_response>" & LF
-           & "{{ message.content }}" & LF
+           --  An answer given as parts is written as JSON, as the model's
+           --  own template writes one.
+           & "{% if message.content is string %}{{ message.content }}"
+           & "{% else %}{{ message.content | tojson }}{% endif +%}" & LF
            & "</tool_response>"
            & "{% if loop.last"
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<|im_end|>" & LF
            & "{% endif %}"
            & "{% elif message.role == 'assistant' %}"
-           & "{% if '</think>' in message.content %}"
-           & "{% set reasoning = message.content.split('</think>')[0]"
+           --  A reply is its words when it is words and nothing when it is
+           --  parts, as the model's own template reads one.
+           & "{% if message.content is string %}"
+           & "{% set spoken = message.content %}"
+           & "{% else %}{% set spoken = '' %}{% endif %}"
+           & "{% if '</think>' in spoken %}"
+           & "{% set reasoning = spoken.split('</think>')[0]"
            & ".rstrip('\n').split('<think>')[-1].lstrip('\n') %}"
-           & "{% set content = message.content.split('</think>')[-1]"
+           & "{% set content = spoken.split('</think>')[-1]"
            & ".lstrip('\n') %}"
            & "{% else %}"
            & "{% set reasoning = '' %}"
-           & "{% set content = message.content %}"
+           & "{% set content = spoken %}"
            & "{% endif %}"
            & "<|im_start|>assistant" & LF
            & "{% if loop.index0 > ns.last_query_index and reasoning %}"
@@ -539,6 +570,11 @@ package body Model_Runner.Templates is
            & "{{ content }}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
+           --  A call given in the reference's shape, the name and the
+           --  arguments under a function member, is read from there, as
+           --  the models' own templates read one.
+           & "{% if tool_call.function is defined %}"
+           & "{% set tool_call = tool_call.function %}{% endif %}"
            & "{% if (loop.first and content) or not loop.first +%}"
            & LF
            & "{% endif %}"

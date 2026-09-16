@@ -15,6 +15,7 @@ package body Tool_Commands is
    Name_Render         : aliased constant String := "render";
    Name_Cross          : aliased constant String := "cross";
    Name_See            : aliased constant String := "see";
+   Name_Records        : aliased constant String := "records";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
@@ -55,7 +56,7 @@ package body Tool_Commands is
    Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
-     " --model --system --developer --prompt --prompt-parts --assistant"
+     " --model --system --developer --prompt --prompt-parts --assistant-parts --tool-parts --assistant"
      & " --calls --tool --tools --template --format --generation-prompt"
      & " --think --no-think --show-template --show-tokens ";
    Opts_Likeness  : aliased constant String := " --model --names ";
@@ -91,8 +92,9 @@ package body Tool_Commands is
    Takes_Cut       : aliased constant String := "--pre NAME --texts PATH";
    Takes_Render    : aliased constant String :=
      "--model PATH [--system TEXT] [--developer TEXT] [--prompt TEXT]"
-     & " [--prompt-parts JSON] [--assistant TEXT]"
-     & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
+     & " [--prompt-parts JSON] [--assistant TEXT] [--assistant-parts JSON]"
+     & " [--calls JSON] [--tool TEXT] [--tool-parts JSON] [--tools JSON]"
+     & " [--template PATH]"
      & " [--format NAME] [--generation-prompt] [--think | --no-think]"
      & " [--show-template | --show-tokens]";
    Takes_Docs      : aliased constant String := "[ROOT]";
@@ -205,13 +207,19 @@ package body Tool_Commands is
      " --model --template --format --expressions --think --no-think"
      & " --without-tools --without-reasoning --record --bos --eos ";
 
+   Says_Records : aliased constant String :=
+     "write every fixture's jinja2 record afresh, the nine crossings "
+     & "the suite compares against";
+   Takes_Records : aliased constant String := "--model PATH";
+   Opts_Records  : aliased constant String := " --model ";
+
    Says_See  : aliased constant String :=
      "run a picture through a vision projector and report its rows";
    Takes_See : aliased constant String :=
      "--mmproj PATH --image FILE [--threads N] [--dump FILE]";
    Opts_See  : aliased constant String := " --mmproj --image --threads --dump ";
 
-   Held : constant array (1 .. 27) of Command :=
+   Held : constant array (1 .. 28) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -243,6 +251,8 @@ package body Tool_Commands is
        Opts_Cross'Access),
       (Name_See'Access, Takes_See'Access, Says_See'Access,
        Opts_See'Access),
+      (Name_Records'Access, Takes_Records'Access, Says_Records'Access,
+       Opts_Records'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
        Opts_Render'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,

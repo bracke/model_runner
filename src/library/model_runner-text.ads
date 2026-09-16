@@ -130,6 +130,14 @@ package Model_Runner.Text is
    --  @return Trimmed slice of Item.
    function Trim (Item : String) return String;
 
+   --  A string as JSON writes one, quotes included: the quote, the
+   --  backslash and the control characters escaped, everything else as
+   --  it stands.
+   --
+   --  @param Item Text to quote.
+   --  @return The JSON string.
+   function JSON_Quoted (Item : String) return String;
+
    --  The number spelled at the front of a string, or -1.
    --
    --  Reading stops at the first character that is not a digit, so "0-3" is

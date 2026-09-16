@@ -1,5 +1,6 @@
 with Ada.Strings.Unbounded;
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Conversation is
@@ -162,6 +163,92 @@ package body Model_Runner.Conversation is
          First_Call => 0, Calls => 0);
    end Add;
 
+   ---------------
+   -- Unescaped --
+   ---------------
+
+   function Unescaped (Escaped : String) return String is
+      R : Ada.Strings.Unbounded.Unbounded_String;
+      I : Natural := Escaped'First;
+
+      --  The four hex digits at I, or -1 where they are not.
+      function Hex_At (At_Index : Natural) return Integer is
+         Value : Integer := 0;
+      begin
+         if At_Index + 3 > Escaped'Last then
+            return -1;
+         end if;
+         for K in At_Index .. At_Index + 3 loop
+            declare
+               C : constant Character := Escaped (K);
+            begin
+               Value := Value * 16
+                 + (if C in '0' .. '9' then Character'Pos (C) - Character'Pos ('0')
+                    elsif C in 'a' .. 'f'
+                    then Character'Pos (C) - Character'Pos ('a') + 10
+                    elsif C in 'A' .. 'F'
+                    then Character'Pos (C) - Character'Pos ('A') + 10
+                    else 0);
+               if C not in '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' then
+                  return -1;
+               end if;
+            end;
+         end loop;
+         return Value;
+      end Hex_At;
+   begin
+      while I <= Escaped'Last loop
+         if Escaped (I) = '\' and then I < Escaped'Last then
+            I := I + 1;
+            case Escaped (I) is
+               when 'n' => Ada.Strings.Unbounded.Append (R, ASCII.LF);
+               when 't' => Ada.Strings.Unbounded.Append (R, ASCII.HT);
+               when 'r' => Ada.Strings.Unbounded.Append (R, ASCII.CR);
+               when 'b' => Ada.Strings.Unbounded.Append (R, ASCII.BS);
+               when 'f' => Ada.Strings.Unbounded.Append (R, ASCII.FF);
+               when 'u' =>
+                  declare
+                     Code : Integer := Hex_At (I + 1);
+                  begin
+                     if Code < 0 then
+                        Ada.Strings.Unbounded.Append (R, 'u');
+                     else
+                        I := I + 4;
+                        --  A high surrogate followed by \u and a low one is
+                        --  one character past the basic plane.
+                        if Code in 16#D800# .. 16#DBFF#
+                          and then I + 2 <= Escaped'Last
+                          and then Escaped (I + 1) = '\'
+                          and then Escaped (I + 2) = 'u'
+                        then
+                           declare
+                              Low : constant Integer := Hex_At (I + 3);
+                           begin
+                              if Low in 16#DC00# .. 16#DFFF# then
+                                 Code := 16#10000#
+                                   + (Code - 16#D800#) * 16#400#
+                                   + (Low - 16#DC00#);
+                                 I := I + 6;
+                              end if;
+                           end;
+                        end if;
+                        if Code not in 16#D800# .. 16#DFFF# then
+                           Ada.Strings.Unbounded.Append
+                             (R, Model_Runner.UTF8.Encode (Code));
+                        end if;
+                     end if;
+                  end;
+               when others =>
+                  Ada.Strings.Unbounded.Append (R, Escaped (I));
+            end case;
+         else
+            Ada.Strings.Unbounded.Append (R, Escaped (I));
+         end if;
+         I := I + 1;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (R);
+   end Unescaped;
+
    -------------------
    -- Text_Of_Parts --
    -------------------
@@ -182,26 +269,17 @@ package body Model_Runner.Conversation is
 
       --  A JSON string at I, decoded, I left past its closing quote.
       function Read_String return String is
-         S : Ada.Strings.Unbounded.Unbounded_String;
+         From : constant Natural := I + 1;
       begin
-         I := I + 1;
+         I := From;
          while I <= Trimmed'Last and then Trimmed (I) /= '"' loop
             if Trimmed (I) = '\' and then I < Trimmed'Last then
                I := I + 1;
-               case Trimmed (I) is
-                  when 'n' => Ada.Strings.Unbounded.Append (S, ASCII.LF);
-                  when 't' => Ada.Strings.Unbounded.Append (S, ASCII.HT);
-                  when 'r' => Ada.Strings.Unbounded.Append (S, ASCII.CR);
-                  when others =>
-                     Ada.Strings.Unbounded.Append (S, Trimmed (I));
-               end case;
-            else
-               Ada.Strings.Unbounded.Append (S, Trimmed (I));
             end if;
             I := I + 1;
          end loop;
          I := I + 1;
-         return Ada.Strings.Unbounded.To_String (S);
+         return Unescaped (Trimmed (From .. Natural'Min (I - 2, Trimmed'Last)));
       end Read_String;
    begin
       --  Every "text" key's string value, wherever it stands: a part has

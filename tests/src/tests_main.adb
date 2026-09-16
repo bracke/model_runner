@@ -7,6 +7,7 @@ with Ada.Calendar;
 pragma Unreserve_All_Interrupts;
 
 with Ada.Command_Line;
+with Ada.Directories;
 with Interfaces;
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
@@ -283,6 +284,112 @@ begin
       if Crossing.Run /= 0 then
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
       end if;
+   elsif Command = "records" then
+      --  The records the suite compares the five fixtures' renders
+      --  against, written afresh: each is `tests cross --record` over the
+      --  fixture with the tokens the records are made with, and the
+      --  reasoning models three times over, once a thinking choice. Kept
+      --  here rather than in a reader's shell history, so that a fifteenth
+      --  conversation is one command to record.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Model : constant String := Option ("--model", "");
+
+         type Recording is record
+            Fixture : access constant String;
+            Thinks  : access constant String;
+         end record;
+         Qwen3_Coder : aliased constant String := "qwen3-coder";
+         MiniCPM     : aliased constant String := "minicpm";
+         Gemma3      : aliased constant String := "gemma3";
+         Qwen36      : aliased constant String := "qwen36";
+         GPT_OSS     : aliased constant String := "gpt-oss";
+         Unstated    : aliased constant String := "";
+         Think       : aliased constant String := "--think";
+         No_Think    : aliased constant String := "--no-think";
+         Plan : constant array (1 .. 9) of Recording :=
+           [(Qwen3_Coder'Access, Unstated'Access),
+            (MiniCPM'Access, Unstated'Access),
+            (MiniCPM'Access, Think'Access),
+            (MiniCPM'Access, No_Think'Access),
+            (Gemma3'Access, Unstated'Access),
+            (Qwen36'Access, Unstated'Access),
+            (Qwen36'Access, Think'Access),
+            (Qwen36'Access, No_Think'Access),
+            (GPT_OSS'Access, Unstated'Access)];
+         Self  : constant String := Ada.Command_Line.Command_Name;
+         Failed : Boolean := False;
+      begin
+         if Model = "" then
+            Ada.Text_IO.Put_Line ("records: --model PATH is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         --  Every record is removed first: a record is appended to, so a
+         --  stale one would carry its cases twice.
+         for Item of Plan loop
+            declare
+               Record_File : constant String :=
+                 "fixtures/" & Item.Fixture.all & "-own.render";
+            begin
+               if Ada.Directories.Exists (Record_File) then
+                  Ada.Directories.Delete_File (Record_File);
+               end if;
+            end;
+         end loop;
+
+         for Item of Plan loop
+            declare
+               Fixture : constant String :=
+                 "fixtures/" & Item.Fixture.all & "-own.jinja";
+               Record_File : constant String :=
+                 "fixtures/" & Item.Fixture.all & "-own.render";
+               Args : GNAT.OS_Lib.Argument_List (1 .. 11) :=
+                 [new String'("cross"),
+                  new String'("--model"), new String'(Model),
+                  new String'("--template"), new String'(Fixture),
+                  new String'("--bos"), new String'("<s>"),
+                  new String'("--eos"), new String'("</s>"),
+                  new String'("--record"), new String'(Record_File)];
+               Status : Integer;
+            begin
+               if Item.Thinks.all = "" then
+                  Status := GNAT.OS_Lib.Spawn (Self, Args);
+               else
+                  declare
+                     use type GNAT.OS_Lib.Argument_List;
+                     More : GNAT.OS_Lib.Argument_List :=
+                       Args & [new String'(Item.Thinks.all)];
+                  begin
+                     Status := GNAT.OS_Lib.Spawn (Self, More);
+                     GNAT.OS_Lib.Free (More (More'Last));
+                  end;
+               end if;
+               for Index in Args'Range loop
+                  GNAT.OS_Lib.Free (Args (Index));
+               end loop;
+               Ada.Text_IO.Put_Line
+                 (Item.Fixture.all
+                  & (if Item.Thinks.all = "" then "" else " " & Item.Thinks.all)
+                  & (if Status = 0 then ": recorded" else ": FAILED"));
+               Failed := Failed or else Status /= 0;
+            end;
+         end loop;
+
+         if Failed then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
    elsif Command = "see" then
       --  A picture through a vision projector: how long it takes and what
       --  comes out, for a reader checking the encoder against a reference
@@ -1409,6 +1516,16 @@ begin
                         Index := Index + 2;
                      elsif Name = "--tool" then
                         Model_Runner.Conversation.Append
+                          (Talk, Model_Runner.Conversation.Tool_Role, Value,
+                           Status);
+                        Index := Index + 2;
+                     elsif Name = "--assistant-parts" then
+                        Model_Runner.Conversation.Append_Parts
+                          (Talk, Model_Runner.Conversation.Assistant_Role,
+                           Value, Status);
+                        Index := Index + 2;
+                     elsif Name = "--tool-parts" then
+                        Model_Runner.Conversation.Append_Parts
                           (Talk, Model_Runner.Conversation.Tool_Role, Value,
                            Status);
                         Index := Index + 2;

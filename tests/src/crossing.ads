@@ -25,7 +25,7 @@
 --    each written as a one-line template -- against jinja2:
 --    `tests cross --model PATH --expressions`.
 --
---  Fourteen conversations: plain, with a system turn, tools offered with
+--  Sixteen conversations: plain, with a system turn, tools offered with
 --  and without one, a call turn with text and one without, two calls
 --  answered by two tool turns, a reply with no generation prompt,
 --  reasoning kept in the exchange in progress and dropped from an earlier

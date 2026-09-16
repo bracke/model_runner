@@ -76,3 +76,14 @@ case 14 unstated 86
 <start_of_image>what is this<end_of_turn>
 <start_of_turn>model
 
+case 15 unstated 155
+<s><start_of_turn>user
+hi<end_of_turn>
+<start_of_turn>model
+a cat<start_of_image><end_of_turn>
+<start_of_turn>user
+sure?<end_of_turn>
+<start_of_turn>model
+
+case 16 unstated -1
+

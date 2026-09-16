@@ -215,8 +215,10 @@ package Model_Runner.CLI.Options is
    Max_Turns : constant := 32;
 
    --  What a turn beside the prompt is: the model's own previous reply, or
-   --  what a tool answered when the reply asked for one.
-   type Turn_Kind is (Turn_Assistant, Turn_Tool);
+   --  what a tool answered when the reply asked for one -- each as text,
+   --  or as a JSON list of parts.
+   type Turn_Kind is
+     (Turn_Assistant, Turn_Tool, Turn_Assistant_Parts, Turn_Tool_Parts);
 
    type Turn_Kind_List is array (1 .. Max_Turns) of Turn_Kind;
    type Turn_List is array (1 .. Max_Turns) of Text_Access;

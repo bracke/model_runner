@@ -26,14 +26,14 @@
 
 terminal_styles 0
 messages 0
-httpclient 1
-ssllib 38
-cryptolib 19
+httpclient 0
+ssllib 0
+cryptolib 0
 truststores 0
-hostkit 2
+hostkit 0
 zlib 0
 jpeglib 0
 awklib 0
-regexp 1
-project_tools 1
-tarlib 3
+regexp 0
+project_tools 0
+tarlib 0

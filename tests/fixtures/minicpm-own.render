@@ -213,6 +213,40 @@ case 14 unstated 53
 <|im_end|>
 <|im_start|>assistant
 
+case 15 unstated 121
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<|im_end|>
+<|im_start|>user
+sure?<|im_end|>
+<|im_start|>assistant
+
+case 16 unstated 1680
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+weather?<|im_end|>
+<|im_start|>assistant
+<function name="weather"><param name="city">Aarhus</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+[{"type": "text", "text": "12 C"}, {"type": "image"}]
+</tool_response><|im_end|>
+<|im_start|>assistant
+
 case 1 think 63
 <s><|im_start|>user
 hi<|im_end|>
@@ -436,6 +470,42 @@ hi<|im_end|>
 case 14 think 61
 <s><|im_start|>user
 <|im_end|>
+<|im_start|>assistant
+<think>
+
+case 15 think 129
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<|im_end|>
+<|im_start|>user
+sure?<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 16 think 1688
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+weather?<|im_end|>
+<|im_start|>assistant
+<function name="weather"><param name="city">Aarhus</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+[{"type": "text", "text": "12 C"}, {"type": "image"}]
+</tool_response><|im_end|>
 <|im_start|>assistant
 <think>
 
@@ -695,6 +765,48 @@ hi<|im_end|>
 case 14 no-think 72
 <s><|im_start|>user
 <|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 15 no-think 140
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<|im_end|>
+<|im_start|>user
+sure?<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 16 no-think 1699
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+weather?<|im_end|>
+<|im_start|>assistant
+<function name="weather"><param name="city">Aarhus</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+[{"type": "text", "text": "12 C"}, {"type": "image"}]
+</tool_response><|im_end|>
 <|im_start|>assistant
 <think>
 

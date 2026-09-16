@@ -239,4 +239,40 @@ package body Model_Runner.Text is
         and then Item (Item'Last - Suffix'Length + 1 .. Item'Last) = Suffix;
    end Ends_With;
 
+   -----------------
+   -- JSON_Quoted --
+   -----------------
+
+   function JSON_Quoted (Item : String) return String is
+      Digits_16 : constant String := "0123456789abcdef";
+      Room   : String (1 .. 6 * Item'Length + 2);
+      Filled : Natural := 0;
+
+      procedure Put (Piece : String) is
+      begin
+         Room (Filled + 1 .. Filled + Piece'Length) := Piece;
+         Filled := Filled + Piece'Length;
+      end Put;
+   begin
+      Put ("""");
+      for C of Item loop
+         case C is
+            when '"'      => Put ("\""");
+            when '\'      => Put ("\\");
+            when ASCII.LF => Put ("\n");
+            when ASCII.CR => Put ("\r");
+            when ASCII.HT => Put ("\t");
+            when Character'Val (0) .. Character'Val (8)
+               | Character'Val (11) .. Character'Val (12)
+               | Character'Val (14) .. Character'Val (31) =>
+               Put ("\u00"
+                    & Digits_16 (Digits_16'First + Character'Pos (C) / 16)
+                    & Digits_16 (Digits_16'First + Character'Pos (C) mod 16));
+            when others   => Put ([1 => C]);
+         end case;
+      end loop;
+      Put ("""");
+      return Room (1 .. Filled);
+   end JSON_Quoted;
+
 end Model_Runner.Text;

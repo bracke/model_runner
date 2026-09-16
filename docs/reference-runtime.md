@@ -428,7 +428,7 @@ to `jinja2` with the model's template, `trim_blocks` and `lstrip_blocks`
 on and `tojson` as `transformers` defines it. The Python that asks jinja2
 is carried inside the command, as text, so a checkout runs the crossing
 rather than a script somebody once had; a machine without python3 or
-jinja2 skips it. Fourteen conversations, byte for byte: with and without a
+jinja2 skips it. Sixteen conversations, byte for byte: with and without a
 system turn, tools offered -- with enums, defaults, nested items, required
 lists and a return -- a call turn with text and one without, two calls
 answered by two tool turns, a reply with no generation prompt, reasoning
@@ -445,13 +445,19 @@ Gemma 3's walks, MiniCPM's writes nothing for, and Qwen3-Coder's and
 gpt-oss's refuse on both sides, a text and a list added together -- and
 which, given a `"path"` and `run --mmproj PATH`, is a picture the model
 sees: decoded, resampled and encoded by `Model_Runner.Vision`, its rows
-read where the template's marker stands -- with
+read where the template's marker stands -- a reply given as parts and a
+tool's answer given as parts, which Gemma 3's template walks, MiniCPM's
+writes as nothing and as JSON, and Qwen3-Coder's refuses -- with
 the caller's `--think` and `--no-think` each where the template
 reads them; `--without-tools` and `--without-reasoning` leave out the
 shapes a carried format was never meant to match, which is how the
-`gemma` format -- whose model has no tool half -- and the `qwen3-coder`
-format -- which writes reasoning as Qwen3.5's template does -- are
-crossed. `tests cross --model PATH` alone sets the model's own template
+`gemma` and `qwen3-coder` formats -- which write reasoning as Qwen3.5's
+template does, where their models' say nothing -- are crossed; the
+three filters the carried `qwen3-coder` and `minicpm` formats stand on,
+`qwen_tool`, `qwen_params` and `params`, are said in Python inside the
+harness, the first by running Qwen3-Coder's own macro through jinja2, so
+every carried format crosses whole. `tests records --model PATH` writes
+the nine records the suite compares against afresh. `tests cross --model PATH` alone sets the model's own template
 beside jinja2 reading the same text, which every model file on this
 machine passes: TinyLlama, Qwen2, Qwen3 in three sizes, Qwen3-MoE,
 Qwen3.5 in two sizes, Qwen3.6, Qwen3-Coder, MiniCPM, Phi-3 and Gemma 3 --

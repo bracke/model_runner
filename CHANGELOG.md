@@ -55,6 +55,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A picture in the conversation, wherever the turn came from.** The
+  rows a picture becomes are gathered from the conversation's parts, in
+  their order, by `Model_Runner.CLI.Pictures`, rather than from the
+  option that added a turn: so `/image PATH` in interactive mode shows
+  the model a picture with the next line typed and it stays in the
+  conversation for the turns after, and a conversation read back from a
+  checkpoint -- a `/load`, an agent run resumed -- shows its pictures
+  again. A reply and a tool's answer may be given as parts too,
+  `--assistant-parts JSON` and `--tool-result-parts JSON` (`tests render
+  --assistant-parts`, `--tool-parts`), and the crossing holds every
+  template to them with two more conversations: Gemma 3's walks a reply
+  given as parts, MiniCPM's writes nothing for it and a tool's answer as
+  JSON, Qwen3-Coder's and gpt-oss's refuse it, and the carried formats
+  do each what their model's does. The carried formats read a call given
+  in the reference's shape, the name and arguments under a `function`
+  member, as the models' own templates do; and the three filters the
+  carried `qwen3-coder` and `minicpm` formats stand on are said in
+  Python inside the crossing harness, so `tests cross --format` crosses
+  every carried format whole. `tests records --model PATH` writes the
+  nine records the suite compares against. A JSON string's escapes are
+  undone whole -- `\b`, `\f`, `\uXXXX` and a surrogate pair as the one
+  character it spells -- by `Conversation.Unescaped`, one reader for the
+  parts and the pictures. The pinned crates' warning counts are recorded
+  as they now are, and jpeglib's object directory is found by name.
 - **A picture reaches the model.** `run --mmproj PATH --prompt-parts
   '[{"type": "image", "path": "FILE"}, {"type": "text", "text": "..."}]'`
   reads the picture and shows it to Gemma 3. The file is decoded here --

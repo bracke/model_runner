@@ -269,6 +269,15 @@ package Model_Runner.Conversation is
       Parts  : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The content of a JSON string, its escapes undone: the two-character
+   --  ones, the six-character \uXXXX, and a surrogate pair of those as
+   --  the one character it spells. A lone surrogate is dropped. The text
+   --  is what stands between the quotes, not the quotes.
+   --
+   --  @param Escaped The string's content as written.
+   --  @return The content as meant.
+   function Unescaped (Escaped : String) return String;
+
    --  The text parts of a JSON list of parts, run together: what a
    --  message given as parts reads as where text is wanted.
    --

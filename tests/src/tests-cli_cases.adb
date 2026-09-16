@@ -7692,7 +7692,8 @@ package body Tests.CLI_Cases is
       Catalog : aliased Model_Runner.Localization.Catalog;
 
       --  Run the loop over Lines and return what reached standard error.
-      function Conversed (Lines : String) return String is
+      function Conversed
+        (Lines : String; Projector : String := "") return String is
          Held    : aliased constant B.Byte_Array := Image.all;
          Rig     : Harness (Held'Access);
          Session : L.Session;
@@ -7720,6 +7721,7 @@ package body Tests.CLI_Cases is
 
          Options.Max_Tokens := 2;
          Options.Sampling.Temperature := 0.0;
+         Options.Projector_Path := Model_Runner.Text.To_Bounded (Projector);
 
          --  Statistics after every turn, so that a completed turn leaves a
          --  mark on standard error whether or not anything asks for one.
@@ -7850,6 +7852,33 @@ package body Tests.CLI_Cases is
                  & " of 5 figures");
       end;
 
+      --  A picture: named with no projector to read it, the command says
+      --  what to start with; named with one, the next line is a turn of
+      --  parts, and the model without the picture tokens refuses it by
+      --  name -- before the projector, which need not exist, is opened.
+      declare
+         Wanted : constant String :=
+           Model_Runner.Localization.Text
+             (Catalog, "cli.interactive.no_projector");
+         Said : constant String :=
+           Conversed ("/image obj/no-such.png" & ASCII.LF & "/exit" & ASCII.LF);
+      begin
+         Assert (Project_Tools.Text.Contains (Said, Wanted),
+                 "a picture without a projector was not told what to start "
+                 & "with: " & Said);
+      end;
+      declare
+         Said : constant String :=
+           Conversed ("/image obj/no-such.png" & ASCII.LF & "what is it"
+                      & ASCII.LF & "/exit" & ASCII.LF,
+                      Projector => "obj/no-such-projector.gguf");
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Said, E.Diagnostic_Code (E.Arch_Vision_Tokens_Missing)),
+                 "a picture shown to a model without the tokens was not "
+                 & "refused by name: " & Said);
+      end;
+
       --  End of file submits what is pending rather than dropping it. No
       --  /stats can be asked afterwards, so this reads the statistics the
       --  turn itself printed.
@@ -7948,6 +7977,8 @@ package body Tests.CLI_Cases is
       Reads ("/save   /tmp/a b.ckpt  ", I.Save_Conversation, "/tmp/a b.ckpt");
       Reads ("/save", I.Save_Conversation);
       Reads ("/load run.ckpt", I.Load_Conversation, "run.ckpt");
+      Reads ("/image cat.png", I.Show_Picture, "cat.png");
+      Reads ("/image", I.Show_Picture);
       Reads ("/load", I.Load_Conversation);
 
       --  What the empty argument then means, at the layer that acts on it.

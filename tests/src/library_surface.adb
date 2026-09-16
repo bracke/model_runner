@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 33) of Text_Access :=
+   Held : constant array (1 .. 34) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -77,6 +77,12 @@ package body Library_Surface is
       --  engine asks.
       new String'("Keep_Timeline"),
       new String'("Timeline_Report"),
+      --  The side of the square a vision projector reads. The command asks
+      --  the projector for the rows a picture becomes and their width and
+      --  resamples nothing itself; `tests see` prints the side, and a
+      --  program showing a reader what a projector will make of a picture
+      --  asks the same.
+      new String'("Image_Size"),
 
       --  Which roles of weight round their activations, as the backend was
       --  last told. The command tells and never asks back; a caller with

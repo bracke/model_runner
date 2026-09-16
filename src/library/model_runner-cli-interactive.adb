@@ -13,6 +13,7 @@ with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
+with Model_Runner.CLI.Pictures;
 
 package body Model_Runner.CLI.Interactive is
 
@@ -33,10 +34,12 @@ package body Model_Runner.CLI.Interactive is
          when Show_Tools => "/tools",
          when Tool_Result => "/tool",
          when Save_Conversation => "/save",
-         when Load_Conversation => "/load");
+         when Load_Conversation => "/load",
+         when Show_Picture => "/image");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
+   use type Model_Runner.Conversation.Role;
 
    package Conv renames Model_Runner.Conversation;
    package E renames Model_Runner.Errors;
@@ -196,6 +199,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
+                            | Show_Picture
                then
                   return (Kind, First, Last);
                else
@@ -237,6 +241,53 @@ package body Model_Runner.CLI.Interactive is
       Last_Result  : Gen.Result;
       Condition    : E.Error_Info;
       Leaving      : Boolean := False;
+
+      --  The pictures the conversation shows, gathered before every turn
+      --  from the turns as they stand; a picture named with /image goes
+      --  into the next turn typed, as a part beside its words.
+      Pictures     : Gen.Picture_Set;
+      Seer         : Model_Runner.CLI.Pictures.Seer;
+      Next_Picture : Text_Access := null;
+
+      --  Encode what the conversation names and Pictures does not hold.
+      procedure Gather_Pictures (Outcome : out E.Error_Info) is
+         Named : Boolean := False;
+      begin
+         Outcome := E.Success;
+         for Index in 1 .. Conv.Length (Messages) loop
+            if Model_Runner.CLI.Pictures.Names_A_Picture
+                 (Conv.Parts_At (Messages, Index))
+            then
+               Named := True;
+               exit;
+            end if;
+         end loop;
+         if not Named then
+            return;
+         end if;
+         if T.Is_Empty (Item.Projector_Path) then
+            Outcome := E.Make (E.CLI_Picture_Needs_Projector);
+            E.Add_Text (Outcome, "option", "/image", E.Param_Identifier);
+            E.Add_Text (Outcome, "other", "--mmproj", E.Param_Identifier);
+            return;
+         end if;
+         if not Model_Runner.CLI.Pictures.Is_Open (Seer) then
+            Model_Runner.CLI.Pictures.Open
+              (Seer, T.To_String (Item.Projector_Path), Prepared, Outcome);
+            if E.Is_Error (Outcome) then
+               return;
+            end if;
+         end if;
+         Model_Runner.CLI.Pictures.Gather
+           (Seer, Messages, Pictures, L.Workers (Session), Status => Outcome);
+      end Gather_Pictures;
+
+      procedure Release_Pictures is
+      begin
+         Model_Runner.CLI.Pictures.Release (Pictures);
+         Model_Runner.CLI.Pictures.Close (Seer);
+         Free_Text (Next_Picture);
+      end Release_Pictures;
 
       --  Render the committed conversation plus the pending user turn.
       procedure Render
@@ -313,6 +364,8 @@ package body Model_Runner.CLI.Interactive is
          elsif Asked.Kind = Reset then
             Conv.Clear (Messages);
             L.Reset (Session);
+            Model_Runner.CLI.Pictures.Release (Pictures);
+            Free_Text (Next_Picture);
             Have_Stats := False;
             Pres.Put_Note (Screen, "cli.interactive.reset_done");
 
@@ -441,6 +494,7 @@ package body Model_Runner.CLI.Interactive is
                   Model_Runner.CLI.Checkpoint.Load
                     (Path, Messages, Loaded, Outcome);
                   L.Reset (Session);
+                  Model_Runner.CLI.Pictures.Release (Pictures);
                   Have_Stats := False;
                   if E.Is_Error (Outcome) then
                      Pres.Report (Screen, Outcome);
@@ -454,6 +508,21 @@ package body Model_Runner.CLI.Interactive is
                         [Loc.Named ("detail", Path)]);
                   end if;
                end;
+            end if;
+
+         elsif Asked.Kind = Show_Picture then
+            --  A picture for the next turn: named now, shown when the
+            --  words that go with it are typed.
+            if Asked.First = 0 then
+               Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            elsif T.Is_Empty (Item.Projector_Path) then
+               Pres.Put_Note (Screen, "cli.interactive.no_projector");
+            else
+               Free_Text (Next_Picture);
+               Next_Picture := new String'(Line (Asked.First .. Asked.Last));
+               Pres.Put_Note
+                 (Screen, "cli.interactive.picture_pending",
+                  [Loc.Named ("detail", Next_Picture.all)]);
             end if;
 
          else
@@ -473,9 +542,29 @@ package body Model_Runner.CLI.Interactive is
          Outcome  : E.Error_Info;
          Request  : Gen.Request;
       begin
-         Conv.Append (Messages, Sender, Prompt, Outcome);
+         if Sender = Conv.User_Role and then Next_Picture /= null then
+            --  The words and the picture named for them, as one turn of
+            --  parts, the path quoted as JSON quotes it.
+            Conv.Append_Parts
+              (Messages, Sender,
+               "[{""type"": ""image"", ""path"": "
+               & Model_Runner.Text.JSON_Quoted (Next_Picture.all)
+               & "}, {""type"": ""text"", ""text"": "
+               & Model_Runner.Text.JSON_Quoted (Prompt) & "}]",
+               Outcome);
+            Free_Text (Next_Picture);
+         else
+            Conv.Append (Messages, Sender, Prompt, Outcome);
+         end if;
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
+            return;
+         end if;
+
+         Gather_Pictures (Outcome);
+         if E.Is_Error (Outcome) then
+            Pres.Report (Screen, Outcome);
+            Conv.Drop_Last (Messages, 1);
             return;
          end if;
 
@@ -525,6 +614,7 @@ package body Model_Runner.CLI.Interactive is
             Time     => Clock'Unchecked_Access,
             Seeds    => Seeds'Unchecked_Access,
             Cancel   => null,
+            Pictures => Pictures,
             Outcome  => Last_Result);
 
          Free_Text (Rendered);
@@ -763,12 +853,14 @@ package body Model_Runner.CLI.Interactive is
       Model_Runner.Stops.Close (Stop_Set);
       Conv.Close (Messages);
       Close (Typing);
+      Release_Pictures;
    exception
       when others =>
          Gen.Release (Last_Result);
          Model_Runner.Stops.Close (Stop_Set);
          Conv.Close (Messages);
          Close (Typing);
+         Release_Pictures;
          Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
          Status := E.Exit_Internal;
    end Run;
