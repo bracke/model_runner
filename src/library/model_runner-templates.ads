@@ -209,7 +209,7 @@ package Model_Runner.Templates is
    Max_Terms : constant := 32;
 
    --  Largest number of distinct names a template may read or assign.
-   Max_Variables : constant := 32;
+   Max_Variables : constant := 64;
 
    --  Largest total text a template's variables may hold during one render.
    Max_Variable_Bytes : constant := 65_536;
@@ -539,7 +539,10 @@ private
 
       --  One end of a list that is not a cut just made: a list filtered,
       --  a list of messages.
-      Filter_First, Filter_Last);
+      Filter_First, Filter_Last,
+
+      --  A value as a binary64, written as Python writes one.
+      Filter_Float);
 
    --  One filter and where its arguments were kept, as operands: the
    --  stand-in for default, the two texts for replace, a separator, a

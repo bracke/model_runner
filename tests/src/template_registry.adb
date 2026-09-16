@@ -135,7 +135,7 @@ package body Template_Registry is
 
       (new String'("`*`, `//`, `%`, `/`"),
        new String'("{{ 2 + 3 * 4 }}{{ (2 + 3) * 4 }}{{ -7 // 2 }}"
-                   & "{{ -7 % 2 }}{{ 8 / 2 }}"),
+                   & "{{ -7 % 2 }}{{ 8 / 2 }}{{ 7.5 // 2 }}"),
        Works),
 
       (new String'("`\| lower`, `\| upper`, `\| capitalize`, `\| title`, "
@@ -263,11 +263,12 @@ package body Template_Registry is
                    & "{% for message in rest %}m{% endfor %}"),
        Works),
 
-      (new String'("`true`, `false`, `none`, decimal numbers"),
+      (new String'("`true`, `false`, `none`, numbers"),
        new String'("{% if true and not false %}{{ 12 }}{% endif %}"
                    & "{% set n = none %}{{ True }}{{ False }}{{ None }}"
                    & "{% set i = 1 %}{{ i + 1 }}{% if i is number %}n{% endif %}"
-                   & "{% if i == '1' %}!{% endif %}"),
+                   & "{% if i == '1' %}!{% endif %}{{ 1.5 + 1 }}{{ 7 / 2 }}"
+                   & "{{ '3' | float }}{{ [2.5, 1] | min }}"),
        Works),
 
       (new String'("`is defined`, `is undefined`, `is none`, `is true`, "
@@ -381,7 +382,7 @@ package body Template_Registry is
        new String'("{{ never_assigned }}"),
        Refused_At_Render),
 
-      (new String'("More than 32 names, or more variable text than the pool "
+      (new String'("More than 64 names, or more variable text than the pool "
                    & "holds"),
        new String'(Too_Many_Names),
        Refused_At_Render)];

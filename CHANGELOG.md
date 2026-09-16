@@ -55,6 +55,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Numbers that are not whole, content that is a list of parts, and
+  the bounds by name.** A number with a point or an exponent -- written
+  in a template, read out of a schema or a call's arguments -- is
+  binary64 now: a sum with one in it, or with a `/` anywhere, is worked
+  out in binary64 and written as Python writes it, the fewest digits
+  that read back the same, so `7 / 2` is `3.5`, `8 / 2` is `4.0` and `0.1
+  + 0.2` is `0.30000000000000004`; `/` was refused unless it came out
+  whole. `| float` makes one, `| int` cuts one down, `sort`, `min` and
+  the orderings compare them as numbers, and the digits come from the C
+  library, which rounds them correctly where Ada's own image stops at
+  fifteen. The branches Gemma 3 and Qwen3.6 write for content that is a
+  list of parts -- an image, a video, a text -- which no conversation
+  here can hand them, are exercised with such lists: Qwen3.6's
+  `render_content` macro called from the end of its own file, Gemma 3's
+  branch written out, both in the suite and in `tests cross
+  --expressions`. A template may name 64 variables rather than 32, a
+  list or mapping written out holds 64 elements and is refused by name
+  past that, and a filter walking a list longer than 4096 elements
+  refuses naming that number where it used to answer for the front.
 - **`tests cross`, and every template on this machine passes it.** The
   crossing against Python's jinja2 lived in scripts in a scratch
   directory; it is a command now, `tests cross --model PATH [--format

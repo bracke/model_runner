@@ -5,6 +5,8 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Exceptions;
 with Ada.Unchecked_Deallocation;
+with Interfaces.C;
+with Interfaces.C.Strings;
 
 with Model_Runner.Text;
 
@@ -1368,7 +1370,7 @@ package body Model_Runner.Templates is
 
       --  How many elements a list or mapping written out may have, and
       --  the room they are read into before they are kept.
-      Max_Literal_Elements : constant := 32;
+      Max_Literal_Elements : constant := 64;
       type Operand_List is array (1 .. Max_Literal_Elements) of Operand;
 
       procedure Read_Bare_Term
@@ -1489,6 +1491,13 @@ package body Model_Runner.Templates is
                         Next  : Natural;
                      begin
                         if Given >= Max_Literal_Elements then
+                           --  Refused where it is read, by name: a list
+                           --  longer than this engine holds is outside
+                           --  the subset and says so, rather than leaving
+                           --  the expression around it unreadable.
+                           Result := Refused (Text (Index .. Shut));
+                           From := Shut + 1;
+                           Ok := True;
                            return;
                         end if;
                         Given := Given + 1;
@@ -1570,6 +1579,9 @@ package body Model_Runner.Templates is
                         Next  : Natural;
                      begin
                         if 2 * Pairs + 2 > Max_Literal_Elements then
+                           Result := Refused (Text (Index .. Shut));
+                           From := Shut + 1;
+                           Ok := True;
                            return;
                         end if;
                         Read_Operand (Inside, Scan, Held (2 * Pairs + 1), Read);
@@ -1678,6 +1690,32 @@ package body Model_Runner.Templates is
                while Index <= Text'Last and then Text (Index) in '0' .. '9' loop
                   Index := Index + 1;
                end loop;
+
+               --  A fraction and an exponent, where the number has them:
+               --  1.5, 2.5e-3. The point needs a digit after it, so that
+               --  a number in front of a member's name stays two things.
+               if Index < Text'Last and then Text (Index) = '.'
+                 and then Text (Index + 1) in '0' .. '9'
+               then
+                  Index := Index + 1;
+                  while Index <= Text'Last and then Text (Index) in '0' .. '9'
+                  loop
+                     Index := Index + 1;
+                  end loop;
+               end if;
+               if Index < Text'Last and then Text (Index) in 'e' | 'E'
+                 and then (Text (Index + 1) in '0' .. '9'
+                           or else (Text (Index + 1) in '+' | '-'
+                                    and then Index + 1 < Text'Last
+                                    and then Text (Index + 2) in '0' .. '9'))
+               then
+                  Index := Index + 2;
+                  while Index <= Text'Last and then Text (Index) in '0' .. '9'
+                  loop
+                     Index := Index + 1;
+                  end loop;
+               end if;
+
                Result.Kind := Term_Literal;
                Result.Numeric := True;
                Store_Literal
@@ -2691,6 +2729,10 @@ package body Model_Runner.Templates is
                         Step.Kind := Filter_Title;
                      elsif Word = "int" then
                         Step.Kind := Filter_Int;
+                        Result.Numeric := True;
+                        Read_Arguments (0);
+                     elsif Word = "float" then
+                        Step.Kind := Filter_Float;
                         Result.Numeric := True;
                         Read_Arguments (0);
                      elsif Word = "string" then
@@ -5061,6 +5103,10 @@ package body Model_Runner.Templates is
       Refused     : Boolean := False;
       Refused_At  : Natural := 0;
       Refused_Len : Natural := 0;
+
+      --  The bound a refusal names where it is a bound and not a
+      --  construct: the elements a filter walks.
+      Refused_Limit : Natural := 0;
       Refused_Why : E.Error_Code := E.Template_Unsupported_Construct;
 
       --  Refuse, naming a slice of the compiled source pool. The first
@@ -5109,6 +5155,14 @@ package body Model_Runner.Templates is
       procedure Assign_Text
         (Where : Natural; Value : String; Kind : Value_Kind := Value_Text);
       function Number_Of (Text : String) return Long_Long_Integer;
+      function Real_Of (Text : String) return Long_Float;
+      function Real_Image (X : Long_Float) return String;
+
+      --  Whether a number's text is not a whole number: a point or an
+      --  exponent in it. What decides whether a sum is worked out in
+      --  whole numbers or in binary64.
+      function Is_Real (Text : String) return Boolean
+      is (for some C of Text => C in '.' | 'e' | 'E');
 
       --  What a term is worth before it is text: the value itself, with
       --  its kind. Text and a mapping or list -- JSON, as the tools and a
@@ -5135,10 +5189,15 @@ package body Model_Runner.Templates is
           Text => Ada.Strings.Unbounded.To_Unbounded_String (Value),
           others => <>);
 
+      --  A number as its canonical text: a whole number as written, and
+      --  one that is not written as Python writes it, so that 1.50 and
+      --  1.0e15 print as 1.5 and 1000000000000000.0.
       function As_Number (Value : String) return Held
       is (Kind => Value_Number,
           Text => Ada.Strings.Unbounded.To_Unbounded_String
-                    (Model_Runner.Text.Trim (Value)),
+                    (if Is_Real (Value)
+                     then Real_Image (Real_Of (Model_Runner.Text.Trim (Value)))
+                     else Model_Runner.Text.Trim (Value)),
           others => <>);
 
       function As_Number (Value : Long_Long_Integer) return Held
@@ -5354,14 +5413,18 @@ package body Model_Runner.Templates is
       --  what is done to it -- indexed, measured, asked whether it begins
       --  with something -- is done to the text; anything else stays
       --  JSON.
-      function Is_JSON_Integer (Src : String) return Boolean
+      --  A JSON number, whole or not: digits with a sign, a point and an
+      --  exponent where it has them.
+      function Is_JSON_Number (Src : String) return Boolean
       is (Src'Length > 0
-          and then (for all C of Src => C in '0' .. '9' | '-')
-          and then Src (Src'Last) in '0' .. '9');
+          and then Src (Src'First) in '0' .. '9' | '-'
+          and then Src (Src'Last) in '0' .. '9'
+          and then (for all C of Src =>
+                      C in '0' .. '9' | '-' | '+' | '.' | 'e' | 'E'));
 
       function Read_Out (Src : String) return Held
       is (if Is_JSON_String (Src) then As_Text (Decoded (Src))
-          elsif Is_JSON_Integer (Src) then As_Number (Src)
+          elsif Is_JSON_Number (Src) then As_Number (Src)
           elsif Src = "null" then (Kind => Value_None, others => <>)
           elsif Src = "true" then (Kind => Value_Boolean, Start => 1, others => <>)
           elsif Src = "false" then (Kind => Value_Boolean, Start => 0, others => <>)
@@ -7216,7 +7279,8 @@ package body Model_Runner.Templates is
                | Filter_Min | Filter_Join | Filter_Map | Filter_Select
                | Filter_Reject | Filter_Select_Attr | Filter_Reject_Attr
                | Filter_Sort | Filter_Dict_Sort | Filter_Indent
-               | Filter_Unique | Filter_List | Filter_First | Filter_Last =>
+               | Filter_Unique | Filter_List | Filter_First | Filter_Last
+               | Filter_Float =>
                return Held;
 
             when Filter_Trim =>
@@ -7740,7 +7804,16 @@ package body Model_Runner.Templates is
          Cursor := Src'First + 1;
          loop
             Next_Element (Src, Cursor, Piece, More);
-            exit when not More or else Count >= Max_Elements;
+            exit when not More;
+            if Count >= Max_Elements then
+               --  A list longer than the filters walk refuses, naming the
+               --  bound, rather than answering for the front of it.
+               if not Refused then
+                  Refused_Limit := Max_Elements;
+               end if;
+               Refuse (0, 0, E.Template_Variables_Too_Large);
+               return;
+            end if;
             Count := Count + 1;
             Spans (Count) := Piece;
          end loop;
@@ -7769,7 +7842,7 @@ package body Model_Runner.Templates is
       function Before (A, B : Held; Fold : Boolean) return Boolean is
       begin
          if A.Kind = Value_Number and then B.Kind = Value_Number then
-            return Number_Of (Text_Of (A)) < Number_Of (Text_Of (B));
+            return Real_Of (Text_Of (A)) < Real_Of (Text_Of (B));
          end if;
          if Fold then
             return Ada.Characters.Handling.To_Lower (Printed (A))
@@ -7831,7 +7904,8 @@ package body Model_Runner.Templates is
                   Cursor : Natural;
                   Piece  : Span;
                   Found  : Boolean;
-                  Least  : Long_Long_Integer := 0;
+                  Least  : Long_Float := 0.0;
+                  Which  : Span := (1, 0);
                   Any    : Boolean := False;
                begin
                   if not Is_JSON_List (Src) then
@@ -7842,20 +7916,25 @@ package body Model_Runner.Templates is
                      Next_Element (Src, Cursor, Piece, Found);
                      exit when not Found;
                      declare
-                        N : constant Long_Long_Integer :=
-                          Number_Of (Decoded (Src (Piece.First .. Piece.Last)));
+                        N : constant Long_Float :=
+                          Real_Of (Decoded (Src (Piece.First .. Piece.Last)));
                      begin
                         if not Any or else N < Least then
                            Least := N;
+                           Which := Piece;
                         end if;
                         Any := True;
                      end;
                   end loop;
-                  return (if Any then As_Number (Least) else As_Text (""));
+                  return (if Any then Read_Out (Src (Which.First .. Which.Last))
+                          else As_Text (""));
                end;
 
             when Filter_Int =>
                return As_Number (Number_Of (Printed (Value)));
+
+            when Filter_Float =>
+               return As_Number (Real_Image (Real_Of (Printed (Value))));
 
             when Filter_First =>
                return Element_At
@@ -8651,6 +8730,129 @@ package body Model_Runner.Templates is
          return (if Signed then -Result else Result);
       end Number_Of;
 
+      --  A number's text as binary64, zero where it is not one.
+      function Real_Of (Text : String) return Long_Float is
+         Trimmed : constant String := Model_Runner.Text.Trim (Text);
+      begin
+         if Trimmed'Length = 0 then
+            return 0.0;
+         end if;
+         return Long_Float'Value (Trimmed);
+      exception
+         when others =>
+            return Long_Float (Number_Of (Trimmed));
+      end Real_Of;
+
+      --  A binary64 written as Python writes one: the fewest digits that
+      --  read back as the same number, a point and at least one digit
+      --  after it, and an exponent from 1e16 up and below 1e-4. The
+      --  digits come from the C library, which rounds them correctly;
+      --  Ada's own image does not go to seventeen.
+      function Real_Image (X : Long_Float) return String is
+         function Snprintf
+           (Buffer : Interfaces.C.Strings.chars_ptr;
+            Size   : Interfaces.C.size_t;
+            Format : Interfaces.C.Strings.chars_ptr;
+            Places : Interfaces.C.int;
+            Value  : Interfaces.C.double) return Interfaces.C.int
+           with Import, Convention => C_Variadic_3,
+                External_Name => "snprintf";
+
+         Room   : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ([1 .. 64 => ' ']);
+         Format : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ("%.*e");
+         Chosen : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         if X /= X then
+            Interfaces.C.Strings.Free (Room);
+            Interfaces.C.Strings.Free (Format);
+            return "nan";
+         elsif X > Long_Float'Last or else X < Long_Float'First then
+            Interfaces.C.Strings.Free (Room);
+            Interfaces.C.Strings.Free (Format);
+            return (if X > 0.0 then "inf" else "-inf");
+         end if;
+
+         for Places in 0 .. 16 loop
+            declare
+               Written : constant Interfaces.C.int :=
+                 Snprintf (Room, 64, Format, Interfaces.C.int (Places),
+                           Interfaces.C.double (X));
+               pragma Unreferenced (Written);
+               Said : constant String := Interfaces.C.Strings.Value (Room);
+            begin
+               Chosen := Ada.Strings.Unbounded.To_Unbounded_String (Said);
+               exit when Long_Float'Value (Said) = X;
+            end;
+         end loop;
+         Interfaces.C.Strings.Free (Room);
+         Interfaces.C.Strings.Free (Format);
+
+         --  d.ddde[+-]XX, taken apart and put together Python's way.
+         declare
+            Said     : constant String :=
+              Ada.Strings.Unbounded.To_String (Chosen);
+            At_E     : constant Natural := Ada.Strings.Fixed.Index (Said, "e");
+            Negative : constant Boolean := Said (Said'First) = '-';
+            Mantissa : constant String :=
+              Said ((if Negative then Said'First + 1 else Said'First)
+                    .. At_E - 1);
+            Exponent : constant Integer :=
+              Integer'Value (Said (At_E + 1 .. Said'Last));
+            Digits_Only : constant String :=
+              Mantissa (Mantissa'First)
+              & (if Mantissa'Length > 2
+                 then Mantissa (Mantissa'First + 2 .. Mantissa'Last) else "");
+            Sign : constant String := (if Negative then "-" else "");
+         begin
+            if Exponent >= 16 or else Exponent < -4 then
+               declare
+                  Exp_Image : constant String :=
+                    Model_Runner.Text.Image (Long_Long_Integer (abs Exponent));
+               begin
+                  return Sign & Mantissa & "e"
+                    & (if Exponent < 0 then "-" else "+")
+                    & (if Exp_Image'Length < 2 then "0" else "") & Exp_Image;
+               end;
+            elsif Exponent >= 0 then
+               declare
+                  Whole : constant Natural := Exponent + 1;
+               begin
+                  if Digits_Only'Length <= Whole then
+                     return Sign & Digits_Only
+                       & String'[1 .. Whole - Digits_Only'Length => '0']
+                       & ".0";
+                  end if;
+                  return Sign
+                    & Digits_Only (Digits_Only'First
+                                   .. Digits_Only'First + Whole - 1)
+                    & "."
+                    & Digits_Only (Digits_Only'First + Whole
+                                   .. Digits_Only'Last);
+               end;
+            else
+               return Sign & "0." & String'[1 .. -Exponent - 1 => '0']
+                 & Digits_Only;
+            end if;
+         end;
+      end Real_Image;
+
+      --  Whether a sum is worked out in binary64: any term that is not a
+      --  whole number, or a true division anywhere in it.
+      function Uses_Reals (Value : Operand) return Boolean is
+      begin
+         for Index in 1 .. Value.Count loop
+            if Index > 1 and then Value.Terms (Index).Join = Join_Divide then
+               return True;
+            end if;
+            if Is_Real (Value_Of (Value.Terms (Index))) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Uses_Reals;
+
       function Value_Of (Value : Operand) return String is
          --  Only the filled prefix is ever returned, but defining the whole
          --  buffer costs a kilobyte on a path that is not hot and removes the
@@ -8669,6 +8871,62 @@ package body Model_Runner.Templates is
          --  minus ends it. Zero divides nothing, and a division that does
          --  not come out whole is not a whole number, which is the only
          --  kind this engine writes: both refuse where they are read.
+         --  In binary64 where any term is not a whole number or a true
+         --  division stands anywhere, as the language works it: 7 / 2 is
+         --  3.5 and 8 / 2 is 4.0, and 1.5 + 1 is 2.5.
+         if Arithmetic and then Uses_Reals (Value) then
+            declare
+               Total   : Long_Float := 0.0;
+               Current : Long_Float :=
+                 (if Value.Count = 0 then 0.0
+                  else Real_Of (Value_Of (Value.Terms (1))));
+               Sign    : Join_Kind := Join_Plus;
+
+               procedure Settle is
+               begin
+                  if Sign = Join_Minus then
+                     Total := Total - Current;
+                  else
+                     Total := Total + Current;
+                  end if;
+               end Settle;
+            begin
+               for Index in 2 .. Value.Count loop
+                  declare
+                     Next : constant Long_Float :=
+                       Real_Of (Value_Of (Value.Terms (Index)));
+                     Join : constant Join_Kind := Value.Terms (Index).Join;
+                  begin
+                     case Join is
+                        when Join_Plus | Join_Minus | Join_Concat =>
+                           Settle;
+                           Sign := Join;
+                           Current := Next;
+                        when Join_Times =>
+                           Current := Current * Next;
+                        when Join_Divide | Join_Floor | Join_Modulo =>
+                           if Next = 0.0 then
+                              Refuse (Value.Terms (Index).Join_At,
+                                      Value.Terms (Index).Join_Len,
+                                      E.Template_Unsupported_Construct);
+                              return "0";
+                           end if;
+                           if Join = Join_Divide then
+                              Current := Current / Next;
+                           elsif Join = Join_Floor then
+                              Current := Long_Float'Floor (Current / Next);
+                           else
+                              Current :=
+                                Current - Next * Long_Float'Floor (Current / Next);
+                           end if;
+                     end case;
+                  end;
+               end loop;
+               Settle;
+               return Real_Image (Total);
+            end;
+         end if;
+
          if Arithmetic then
             declare
                Total   : Long_Long_Integer := 0;
@@ -8708,9 +8966,7 @@ package body Model_Runner.Templates is
                            end if;
                            if Join = Join_Modulo then
                               Current := Current mod Next;
-                           elsif Join = Join_Floor
-                             or else Current mod Next = 0
-                           then
+                           elsif Join = Join_Floor then
                               --  The language's // rounds towards minus
                               --  infinity, which is what mod pairs with.
                               Current := (Current - (Current mod Next)) / Next;
@@ -8906,17 +9162,36 @@ package body Model_Runner.Templates is
             when Compare_Less | Compare_Less_Or_Equal
                | Compare_Greater | Compare_Greater_Or_Equal =>
                declare
-                  Left  : constant Long_Long_Integer :=
-                    Number_Of (Value_Of (Value.Left));
-                  Right : constant Long_Long_Integer :=
-                    Number_Of (Value_Of (Value.Right));
+                  Left_Text  : constant String := Value_Of (Value.Left);
+                  Right_Text : constant String := Value_Of (Value.Right);
                begin
-                  Result :=
-                    (case Value.Operator is
-                        when Compare_Less             => Left < Right,
-                        when Compare_Less_Or_Equal    => Left <= Right,
-                        when Compare_Greater          => Left > Right,
-                        when others                   => Left >= Right);
+                  if Is_Real (Left_Text) or else Is_Real (Right_Text) then
+                     declare
+                        Left  : constant Long_Float := Real_Of (Left_Text);
+                        Right : constant Long_Float := Real_Of (Right_Text);
+                     begin
+                        Result :=
+                          (case Value.Operator is
+                              when Compare_Less          => Left < Right,
+                              when Compare_Less_Or_Equal => Left <= Right,
+                              when Compare_Greater       => Left > Right,
+                              when others                => Left >= Right);
+                     end;
+                  else
+                     declare
+                        Left  : constant Long_Long_Integer :=
+                          Number_Of (Left_Text);
+                        Right : constant Long_Long_Integer :=
+                          Number_Of (Right_Text);
+                     begin
+                        Result :=
+                          (case Value.Operator is
+                              when Compare_Less          => Left < Right,
+                              when Compare_Less_Or_Equal => Left <= Right,
+                              when Compare_Greater       => Left > Right,
+                              when others                => Left >= Right);
+                     end;
+                  end if;
                end;
 
             when Compare_Is_True | Compare_Is_Not_True
@@ -9070,7 +9345,7 @@ package body Model_Runner.Templates is
       begin
          if Is_JSON_String (Src (Value.First .. Value.Last)) then
             Assign_Text (Where, Decoded (Src (Value.First .. Value.Last)));
-         elsif Is_JSON_Integer (Src (Value.First .. Value.Last)) then
+         elsif Is_JSON_Number (Src (Value.First .. Value.Last)) then
             Assign_Text (Where, Src (Value.First .. Value.Last), Value_Number);
          elsif Src (Value.First .. Value.Last) in "true" | "false" | "null" then
             Store (Where, Read_Out (Src (Value.First .. Value.Last)));
@@ -9644,7 +9919,9 @@ package body Model_Runner.Templates is
             Status := E.Make (Refused_Why);
             if Refused_Why = E.Template_Variables_Too_Large then
                E.Add_Integer
-                 (Status, "limit", Long_Long_Integer (Pool'Length),
+                 (Status, "limit",
+                  Long_Long_Integer (if Refused_Limit /= 0 then Refused_Limit
+                                     else Pool'Length),
                   E.Param_Bytes);
             end if;
             if Refused_Len > 0 then

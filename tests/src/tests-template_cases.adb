@@ -828,15 +828,25 @@ package body Tests.Template_Cases is
       Same ("{{ 7 // 2 }}", "3", "floor division");
       Same ("{{ -7 // 2 }}", "-4", "floor division rounds down");
       Same ("{{ -7 % 2 }}", "1", "a remainder pairs with the floor");
-      Same ("{{ 8 / 2 }}", "4", "a division that comes out whole");
+      Same ("{{ 8 / 2 }}", "4.0", "a division is binary64, whole or not");
       Same ("{{ 2 * (3 + 4) * 2 }}", "28", "a group in the middle");
       Same ("{{ (messages | length) * 10 + 1 }}", "21",
             "a length in a product");
       Same ("{{ 'a' ~ 1 + 2 ~ 'b' }}", "a12b",
             "a tilde binds before a plus and makes text of it all");
       Same ("{{ (1 + 2) ~ 'b' }}", "3b", "a bracketed sum beside a tilde");
-      Same ("{{ 7 / 2 }}", "render: TEMPLATE_UNSUPPORTED_CONSTRUCT /",
-            "a division that does not come out whole");
+      Same ("{{ 7 / 2 }}", "3.5", "a division that does not come out whole");
+      Same ("{{ 0.1 + 0.2 }}|{{ 1.5 + 1 }}|{{ 2.5 * 2 }}|{{ 7.5 // 2 }}"
+            & "|{{ 7.5 % 2 }}|{{ 1e16 * 1.0 }}|{{ 1.0e15 }}|{{ 0.00001 * 1 }}"
+            & "|{{ 2.0 }}|{{ 1 / 3 }}|{{ -1.5 - 1 }}|{{ [2.5, 1.5, 3] | min }}"
+            & "|{{ [2.5, 1.5, 3] | sort | join(',') }}"
+            & "|{% if 1.5 > 1 and 0.5 < 1 %}c{% endif %}|{{ '3.7' | int }}"
+            & "{{ '3' | float }}{{ 1.25 | tojson }}|{{ 100.0 * 100 }}"
+            & "|{% if 1.5 is number %}n{% endif %}",
+            "0.30000000000000004|2.5|5.0|3.0|1.5|1e+16|1000000000000000.0"
+            & "|1e-05|2.0|0.3333333333333333|-2.5|1.5|1.5,2.5,3|c|33.01.25"
+            & "|10000.0|n",
+            "numbers that are not whole, written as Python writes them");
       Same ("{{ 7 // (2 - 2) }}",
             "render: TEMPLATE_UNSUPPORTED_CONSTRUCT //",
             "a division by zero");
@@ -1463,6 +1473,66 @@ package body Tests.Template_Cases is
             end;
          end loop;
       end loop;
+
+      --  The branches for content that is a list of parts -- an image, a
+      --  video, a text -- which no conversation here can hand a template,
+      --  because a turn's content is text: Qwen3.6's render_content macro
+      --  is called from the end of its own file with such a list, and
+      --  Gemma 3's branch is written out with one. Both are set beside
+      --  jinja2 by `tests cross --expressions`, the same lists in hand.
+      declare
+         Own    : Tmpl.Compiled;
+         Talk   : Conv.History;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+         Status : E.Error_Info;
+         Tail   : constant String :=
+           "|{% set add_vision_id = true %}{{ render_content([{'type': "
+           & "'image'}, {'text': ' t '}, {'video': 1}, {'image_url': 'u'}], "
+           & "true) }}|{{ image_count.value }}{{ video_count.value }}"
+           & "|{{ render_content('plain', false) }}"
+           & "|{{ render_content(none, false) }}|";
+         Wanted : constant String :=
+           "|Picture 1: <|vision_start|><|image_pad|><|vision_end|> t "
+           & "Video 1: <|vision_start|><|video_pad|><|vision_end|>"
+           & "Picture 2: <|vision_start|><|image_pad|><|vision_end|>|21"
+           & "|plain||";
+         Gemma_Branch : constant String :=
+           "{%- set content = [{'type': 'image'}, {'type': 'text', "
+           & "'text': ' hello '}] -%}{%- if content is string -%}"
+           & "{{ content | trim }}{%- elif content is iterable -%}"
+           & "{%- for item in content -%}{%- if item['type'] == 'image' -%}"
+           & "{{ '<start_of_image>' }}{%- elif item['type'] == 'text' -%}"
+           & "{{ item['text'] | trim }}{%- endif -%}{%- endfor -%}"
+           & "{%- else -%}{{ raise_exception(""Invalid content type"") }}"
+           & "{%- endif -%}";
+      begin
+         Tmpl.Compile
+           (Own, File_Text ("fixtures/qwen36-own.jinja") & Tail,
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the Qwen3.6 template with a tail did "
+                 & "not compile: " & E.Error_Code'Image (Status.Code));
+         Build (Talk, Plain);
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status);
+         Conv.Close (Talk);
+         Tmpl.Close (Own);
+         Assert (E.Is_Ok (Status), "render_content over a list refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Last >= Wanted'Length
+                 and then Room (Last - Wanted'Length + 1 .. Last) = Wanted,
+                 "render_content over a list of parts wrote: "
+                 & Room (1 .. Last));
+
+         Tmpl.Compile (Own, Gemma_Branch, Status => Status);
+         Assert (E.Is_Ok (Status), "Gemma's parts branch did not compile");
+         Build (Talk, Plain);
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status);
+         Conv.Close (Talk);
+         Tmpl.Close (Own);
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last)
+                   = "<start_of_image>hello",
+                 "Gemma's parts branch wrote: " & Room (1 .. Last));
+      end;
 
       Model_Runner.Tools.Close (Defs);
    end Carried_Formats_Match_The_Models_Own_Templates;
