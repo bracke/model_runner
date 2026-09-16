@@ -1,10 +1,11 @@
 with Ada.Calendar.Formatting;
 with Ada.Calendar.Time_Zones;
-with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Exceptions;
+with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
 with Ada.Unchecked_Deallocation;
+with Ada.Wide_Wide_Characters.Handling;
 with Interfaces.C;
 with Interfaces.C.Strings;
 
@@ -106,7 +107,8 @@ package body Model_Runner.Templates is
    --  What kind of block an open nesting level is, so that a closing tag can
    --  be checked against it.
    type Block_Kind is
-     (Block_For, Block_If, Block_Macro, Block_Set, Block_Filter, Block_Call);
+     (Block_For, Block_If, Block_Macro, Block_Set, Block_Filter, Block_Call,
+      Block_With);
 
    type Frame is record
       Kind        : Block_Kind := Block_If;
@@ -239,6 +241,12 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% endif %}"
            & "<end_of_turn>" & LF
+           & "{% elif message.role != 'user' %}"
+           --  A role the model never saw -- a second system turn, a
+           --  developer's -- is refused in its own template's words
+           --  rather than written as a turn it was not trained on.
+           & "{{ raise_exception('Conversation roles must alternate "
+           & "user/assistant/user/assistant/...') }}"
            & "{% else %}"
            & "<start_of_turn>{{ message.role }}" & LF
            & "{% if loop.first %}"
@@ -261,7 +269,18 @@ package body Model_Runner.Templates is
            & "{% endfor %}" & LF & LF
            & "{% endif %}"
            & "{% endif %}"
-           & "{{ message.content | trim }}<end_of_turn>" & LF
+           --  Content given as parts is walked as the model's own template
+           --  walks it: a picture is its marker, and words are trimmed.
+           & "{% if message.content is string %}"
+           & "{{ message.content | trim }}"
+           & "{% else %}"
+           & "{% for item in message.content %}"
+           & "{% if item['type'] == 'image' %}<start_of_image>"
+           & "{% elif item['type'] == 'text' %}{{ item['text'] | trim }}"
+           & "{% endif %}"
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "<end_of_turn>" & LF
            & "{% endif %}"
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
@@ -406,8 +425,13 @@ package body Model_Runner.Templates is
            & "{{ content }}"
            & "<|im_end|>" & LF
            & "{% else %}"
-           & "<|im_start|>{{ message.role }}" & LF
-           & "{{ message.content }}<|im_end|>" & LF
+           --  Any other turn under its own name, a second system turn
+           --  or a developer's, as the model's own template writes them --
+           --  joined with +, so that content given as parts is refused
+           --  the way that template's author refuses it, with words
+           --  added to a list.
+           & "{{ '<|im_start|>' + message.role + '\n' + message.content"
+           & " + '<|im_end|>' + '\n' }}"
            & "{% endif %}"
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
@@ -523,9 +547,14 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% endif %}"
            & "<|im_end|>" & LF
-           & "{% else %}"
+           & "{% elif message.role == 'user' or message.role == 'system' %}"
+           --  A user turn, or a system turn after the first, and no
+           --  other: the model's own template writes nothing for a role
+           --  it does not name -- and nothing for content given as parts,
+           --  which it reads as words only when it is words.
            & "<|im_start|>{{ message.role }}" & LF
-           & "{{ message.content }}<|im_end|>" & LF
+           & "{% if message.content is string %}{{ message.content }}"
+           & "{% endif %}<|im_end|>" & LF
            & "{% endif %}"
            & "{% endfor %}"
            & "{% if add_generation_prompt %}"
@@ -2605,6 +2634,21 @@ package body Model_Runner.Templates is
                               return 1;
                            elsif Key = "indent" then
                               return 1;
+                           elsif Key = "precision" or else Key = "linecount"
+                             or else Key = "slices"
+                           then
+                              return 1;
+                           elsif Key = "method" or else Key = "fill_with"
+                             or else Key = "start" or else Key = "count"
+                           then
+                              return (if Key = "count" then 3 else 2);
+                           elsif Key = "break_long_words" or else Key = "killwords"
+                           then
+                              return 2;
+                           elsif Key = "wrapstring" or else Key = "end" then
+                              return 3;
+                           elsif Key = "leeway" then
+                              return 3;
                            elsif Key = "ensure_ascii" or else Key = "sort_keys"
                            then
                               --  Taken and ignored: every byte written
@@ -2707,6 +2751,7 @@ package body Model_Runner.Templates is
                   begin
                      if Word = "trim" then
                         Step.Kind := Filter_Trim;
+                        Read_Arguments (1, 0);
                      elsif Word = "length" then
                         Step.Kind := Filter_Length;
                         Result.Numeric := True;
@@ -2735,6 +2780,63 @@ package body Model_Runner.Templates is
                         Step.Kind := Filter_Float;
                         Result.Numeric := True;
                         Read_Arguments (0);
+                     elsif Word = "round" then
+                        Step.Kind := Filter_Round;
+                        Result.Numeric := True;
+                        Read_Arguments (2, 0);
+                     elsif Word = "abs" then
+                        Step.Kind := Filter_Abs;
+                        Result.Numeric := True;
+                        Read_Arguments (0);
+                     elsif Word = "sum" then
+                        Step.Kind := Filter_Sum;
+                        Result.Numeric := True;
+                        Read_Arguments (2, 0);
+                     elsif Word = "count" then
+                        Step.Kind := Filter_Length;
+                        Result.Numeric := True;
+                     elsif Word = "urlencode" then
+                        Step.Kind := Filter_Urlencode;
+                        Read_Arguments (0);
+                     elsif Word = "batch" then
+                        Step.Kind := Filter_Batch;
+                        Read_Arguments (2, 1);
+                     elsif Word = "slice" then
+                        Step.Kind := Filter_Slice;
+                        Read_Arguments (2, 1);
+                     elsif Word = "groupby" then
+                        Step.Kind := Filter_Groupby;
+                        Read_Arguments (1, 1);
+                     elsif Word = "attr" then
+                        Step.Kind := Filter_Attr;
+                        Read_Arguments (1, 1);
+                     elsif Word = "wordwrap" then
+                        Step.Kind := Filter_Wordwrap;
+                        Read_Arguments (3, 0);
+                     elsif Word = "truncate" then
+                        Step.Kind := Filter_Truncate;
+                        Read_Arguments (3, 0);
+                     elsif Word = "center" then
+                        Step.Kind := Filter_Center;
+                        Read_Arguments (1, 0);
+                     elsif Word = "format" then
+                        Step.Kind := Filter_Format;
+                        Read_Arguments (3, 0);
+                     elsif Word = "striptags" then
+                        Step.Kind := Filter_Striptags;
+                        Read_Arguments (0);
+                     elsif Word = "pprint" then
+                        Step.Kind := Filter_Pprint;
+                        Read_Arguments (0);
+                     elsif Word = "random" then
+                        Step.Kind := Filter_Random;
+                        Read_Arguments (0);
+                     elsif Word = "reverse" then
+                        Step.Kind := Filter_Reverse;
+                        Read_Arguments (0);
+                     elsif Word = "max" then
+                        Step.Kind := Filter_Max;
+                        Read_Arguments (3, 0);
                      elsif Word = "string" then
                         Step.Kind := Filter_String;
                      elsif Word = "safe" then
@@ -2744,7 +2846,7 @@ package body Model_Runner.Templates is
                         Read_Arguments (1);
                      elsif Word = "replace" then
                         Step.Kind := Filter_Replace;
-                        Read_Arguments (2);
+                        Read_Arguments (3, 2);
                      elsif Word = "min" then
                         Step.Kind := Filter_Min;
                         Result.Numeric := True;
@@ -2959,7 +3061,13 @@ package body Model_Runner.Templates is
                Join_Len := 0;
                case Text (Next) is
                   when '-' => Joined := Join_Minus;
-                  when '*' => Joined := Join_Times;
+                  when '*' =>
+                     if Next < Text'Last and then Text (Next + 1) = '*' then
+                        Joined := Join_Power;
+                        From := Next + 2;
+                     else
+                        Joined := Join_Times;
+                     end if;
                   when '~' => Joined := Join_Concat;
                   when '%' | '/' =>
                      if Text (Next) = '%' then
@@ -2979,7 +3087,17 @@ package body Model_Runner.Templates is
                            return;
                         end if;
                      end;
-                  when others => Joined := Join_Plus;
+                  when others =>
+                     Joined := Join_Plus;
+                     declare
+                        Stored : Boolean;
+                     begin
+                        Store_Literal
+                          (Text (Next .. Next), Join_At, Join_Len, Stored);
+                        if not Stored then
+                           return;
+                        end if;
+                     end;
                end case;
             end;
          end loop;
@@ -4432,6 +4550,118 @@ package body Model_Runner.Templates is
             end if;
             Depth := Depth - 1;
 
+         elsif Model_Runner.Text.Starts_With (Trimmed, "with ")
+           or else Trimmed = "with"
+         then
+            --  {% with a = x, b = y %}: a scope of its own, the names
+            --  assigned in it put back at the endwith.
+            if Depth >= Max_Depth then
+               Fail (E.Template_Nesting_Too_Deep, "with");
+               return;
+            end if;
+            Emit ((Op => Op_Scope_Begin, others => <>), Where);
+            if Where = 0 then
+               return;
+            end if;
+            Depth := Depth + 1;
+            Frames (Depth) := (Kind => Block_With, others => <>);
+            declare
+               Rest : constant String :=
+                 Model_Runner.Text.Trim
+                   (Trimmed (Trimmed'First + 4 .. Trimmed'Last));
+               From : Natural := Rest'First;
+            begin
+               while From <= Rest'Last loop
+                  declare
+                     Stop : constant Natural := Comma_After (Rest, From);
+                  begin
+                     Compile_Set (Model_Runner.Text.Trim (Rest (From .. Stop - 1)));
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                     From := Stop + 1;
+                  end;
+               end loop;
+            end;
+
+         elsif Trimmed = "endwith" then
+            if Depth = 0 or else Frames (Depth).Kind /= Block_With then
+               Fail (E.Template_Unbalanced_Block, "endwith");
+               return;
+            end if;
+            Emit ((Op => Op_Scope_End, others => <>), Where);
+            if Where = 0 then
+               return;
+            end if;
+            Depth := Depth - 1;
+
+         elsif Model_Runner.Text.Starts_With (Trimmed, "do ") then
+            --  {% do EXPR %}: worked out and written nowhere -- unless it
+            --  grows a list or a mapping in place, name.append(v),
+            --  .extend(l) or .update(m), which is what the statement is
+            --  for.
+            declare
+               Rest  : constant String :=
+                 Model_Runner.Text.Trim
+                   (Trimmed (Trimmed'First + 3 .. Trimmed'Last));
+               Opens : constant Natural :=
+                 Ada.Strings.Fixed.Index (Rest, "(");
+               Dot   : constant Natural :=
+                 (if Opens = 0 then 0
+                  else Ada.Strings.Fixed.Index
+                         (Rest (Rest'First .. Opens - 1), ".",
+                          Ada.Strings.Backward));
+               Grows : constant Natural :=
+                 (if Dot = 0 or else Opens = 0 or else Opens < Dot
+                    or else Rest (Rest'Last) /= ')'
+                  then 0
+                  elsif Rest (Dot + 1 .. Opens - 1) = "append" then 1
+                  elsif Rest (Dot + 1 .. Opens - 1) = "extend" then 2
+                  elsif Rest (Dot + 1 .. Opens - 1) = "update" then 3
+                  else 0);
+               Value : Operand;
+               Valid : Boolean;
+               Kept  : Natural;
+            begin
+               if Grows /= 0
+                 and then (Is_Plain_Name (Rest (Rest'First .. Dot - 1))
+                           or else Is_Namespace_Field
+                                     (Rest (Rest'First .. Dot - 1)))
+               then
+                  Read_Expression (Rest (Opens + 1 .. Rest'Last - 1), Value, Valid);
+                  if Valid then
+                     Keep (Value, Kept);
+                     if Kept = 0 then
+                        return;
+                     end if;
+                     Emit ((Op => Op_Grow,
+                            Offset => Slot_Of (Rest (Rest'First .. Dot - 1)),
+                            Value_At => Kept, Length => Grows, others => <>),
+                           Where);
+                     if Where = 0 then
+                        return;
+                     end if;
+                     return;
+                  end if;
+               end if;
+               Read_Expression (Rest, Value, Valid);
+               if not Valid then
+                  Refuse (Body_Text, Where);
+                  if Where = 0 then
+                     return;
+                  end if;
+                  return;
+               end if;
+               Keep (Value, Kept);
+               if Kept = 0 then
+                  return;
+               end if;
+               Emit ((Op => Op_Discard, Value_At => Kept, others => <>), Where);
+               if Where = 0 then
+                  return;
+               end if;
+            end;
+
          elsif Model_Runner.Text.Starts_With (Trimmed, "call ")
            or else Model_Runner.Text.Starts_With (Trimmed, "call(")
          then
@@ -4904,7 +5134,67 @@ package body Model_Runner.Templates is
                   end if;
                   Trim_Next := Trim_After;
 
-                  if Statement then
+                  if Statement
+                    and then Model_Runner.Text.Trim
+                               (Source (Body_First .. Body_Last)) = "raw"
+                  then
+                     --  Everything up to the endraw is text, tags and all.
+                     declare
+                        At_End : Natural := Scan + 2;
+                        Found  : Natural := 0;
+                     begin
+                        while At_End + 1 <= Source'Last loop
+                           if Source (At_End .. At_End + 1) = "{%" then
+                              declare
+                                 Shut : Natural := At_End + 2;
+                              begin
+                                 while Shut + 1 <= Source'Last
+                                   and then Source (Shut .. Shut + 1) /= "%}"
+                                 loop
+                                    Shut := Shut + 1;
+                                 end loop;
+                                 if Shut + 1 <= Source'Last
+                                   and then Model_Runner.Text.Trim
+                                              (Source (At_End + 2 .. Shut - 1))
+                                            in "endraw" | "-endraw" | "endraw-"
+                                               | "-endraw-"
+                                 then
+                                    Found := At_End;
+                                    Scan := Shut;
+                                    exit;
+                                 end if;
+                              end;
+                           end if;
+                           At_End := At_End + 1;
+                        end loop;
+                        if Found = 0 then
+                           Fail (E.Template_Unbalanced_Block, "raw");
+                           return;
+                        end if;
+                        declare
+                           Raw_First : constant Natural :=
+                             Line_After (Body_Last + 3, True);
+                           Offset, Length : Natural;
+                           Stored : Boolean;
+                           Where  : Natural;
+                        begin
+                           if Found > Raw_First then
+                              Store_Literal
+                                (Source (Raw_First .. Found - 1), Offset,
+                                 Length, Stored);
+                              if not Stored then
+                                 Fail (E.Template_Too_Large, "literal");
+                                 return;
+                              end if;
+                              Emit ((Op => Op_Text, Offset => Offset,
+                                     Length => Length, others => <>), Where);
+                              if Where = 0 then
+                                 return;
+                              end if;
+                           end if;
+                        end;
+                     end;
+                  elsif Statement then
                      Compile_Statement (Source (Body_First .. Body_Last));
                      if E.Is_Error (Status) then
                         return;
@@ -5143,6 +5433,12 @@ package body Model_Runner.Templates is
       --  instruction, which leaves the loop instead of going round.
       Breaking   : Boolean := False;
 
+      --  The with blocks in progress: what every name held when each
+      --  began and where the pool stood, put back at its end.
+      Scopes      : array (1 .. Max_Depth) of Slot_Table;
+      Scope_Floor : array (1 .. Max_Depth) of Natural := [others => 0];
+      Scope_Depth : Natural := 0;
+
       --  One instruction, at Position. Declared here because a macro call
       --  runs the body from inside the value that asks for it.
       procedure Execute;
@@ -5157,6 +5453,8 @@ package body Model_Runner.Templates is
       function Number_Of (Text : String) return Long_Long_Integer;
       function Real_Of (Text : String) return Long_Float;
       function Real_Image (X : Long_Float) return String;
+      function Rounded (X : Long_Float; Places : Natural) return Long_Float;
+      function Fixed_Image (X : Long_Float; Places : Natural) return String;
 
       --  Whether a number's text is not a whole number: a point or an
       --  exponent in it. What decides whether a sum is worked out in
@@ -5633,6 +5931,24 @@ package body Model_Runner.Templates is
          end case;
       end Held_Of;
 
+      --  A message's content: its text, or the list of parts it was given
+      --  instead, which a template walks -- "content is string" is the
+      --  question every one of them asks first.
+      function Content_Of (At_Message : Natural) return Held is
+      begin
+         if At_Message = 0 or else At_Message > Count then
+            return Nothing;
+         end if;
+         declare
+            Parts : constant String := Conv.Parts_At (Messages, At_Message);
+         begin
+            if Parts'Length > 0 then
+               return As_Data (Parts);
+            end if;
+            return As_Text (Conv.Content_At (Messages, At_Message));
+         end;
+      end Content_Of;
+
       --  A message's field, a call's, a tool's or a mapping's member, by
       --  name. A field a message has not got is nothing, which is what a
       --  template's "is defined" is written to find out.
@@ -5646,7 +5962,7 @@ package body Model_Runner.Templates is
                   return As_Text
                     (Conv.Role_Name (Conv.Sender_At (Messages, Value.Start)));
                elsif Name = "content" then
-                  return As_Text (Conv.Content_At (Messages, Value.Start));
+                  return Content_Of (Value.Start);
                elsif Name = "tool_calls" then
                   if Conv.Call_Count (Messages, Value.Start) = 0 then
                      return Nothing;
@@ -5853,6 +6169,76 @@ package body Model_Runner.Templates is
          end case;
       end Store;
 
+      --  Grow the list or mapping a name holds in place: an element
+      --  appended, a list's elements appended, or a mapping's members
+      --  added -- {% do name.append(v) %} and its two siblings. A name
+      --  holding nothing grows from empty.
+      procedure Grow (Where : Natural; Value : Operand; How : Natural) is
+         Current : constant Held := Held_Of (Where);
+         Added   : constant Held := Held_Of (Value);
+         Src     : constant String :=
+           (if Current.Kind = Value_Data then Text_Of (Current)
+            elsif Current.Kind in Value_Tools | Value_List | Value_Call
+            then Listed (Current)
+            elsif How = 3 then "{}" else "[]");
+         R       : Ada.Strings.Unbounded.Unbounded_String;
+
+         --  The added value as JSON, a list's elements one by one.
+         function Added_JSON return String
+         is (if Added.Kind = Value_Undefined then "null"
+             elsif Added.Kind in Value_Tools | Value_List | Value_Call
+             then Listed (Added)
+             elsif Added.Kind = Value_Message then Element_Of_Listed (Added)
+             else JSON_Text (Added));
+      begin
+         if Where = 0 then
+            return;
+         end if;
+         case How is
+            when 1 | 2 =>
+               if not Is_JSON_List (Src) then
+                  return;
+               end if;
+               declare
+                  Inner : constant String :=
+                    Model_Runner.Text.Trim (Src (Src'First + 1 .. Src'Last - 1));
+                  More  : constant String :=
+                    (if How = 1 then Added_JSON
+                     else Model_Runner.Text.Trim
+                            (Added_JSON (Added_JSON'First + 1
+                                         .. Added_JSON'Last - 1)));
+               begin
+                  if How = 2 and then not Is_JSON_List (Added_JSON) then
+                     return;
+                  end if;
+                  Ada.Strings.Unbounded.Append (R, "[" & Inner);
+                  if Inner'Length > 0 and then More'Length > 0 then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  Ada.Strings.Unbounded.Append (R, More & "]");
+               end;
+            when others =>
+               if not Is_JSON_Mapping (Src) or else not Is_JSON_Mapping (Added_JSON)
+               then
+                  return;
+               end if;
+               declare
+                  Inner : constant String :=
+                    Model_Runner.Text.Trim (Src (Src'First + 1 .. Src'Last - 1));
+                  More  : constant String :=
+                    Model_Runner.Text.Trim
+                      (Added_JSON (Added_JSON'First + 1 .. Added_JSON'Last - 1));
+               begin
+                  Ada.Strings.Unbounded.Append (R, "{" & Inner);
+                  if Inner'Length > 0 and then More'Length > 0 then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  Ada.Strings.Unbounded.Append (R, More & "}");
+               end;
+         end case;
+         Assign_Data (Where, Ada.Strings.Unbounded.To_String (R));
+      end Grow;
+
       ------------------------------------------------------------------
       --  Loops, of every kind, on one stack
       ------------------------------------------------------------------
@@ -5919,7 +6305,9 @@ package body Model_Runner.Templates is
       --  The pool below the innermost loop's floor is what names held
       --  before it began, and is kept as it was until the loop ends.
       function Floor_Now return Natural
-      is (if Loop_Depth > 0 then Loops (Loop_Depth).Floor else 0);
+      is (Natural'Max
+            ((if Loop_Depth > 0 then Loops (Loop_Depth).Floor else 0),
+             (if Scope_Depth > 0 then Scope_Floor (Scope_Depth) else 0)));
 
       --  Whether a name is a namespace's field, which is spelled with a
       --  dot and is the one kind of name a loop's body assigns for after.
@@ -5930,34 +6318,33 @@ package body Model_Runner.Templates is
                                 + Item.Names (Where).Length)
           => Letter = '.');
 
+      --  Put every name back to what it held when a body began -- a
+      --  namespace's field aside -- and give the pool back to where it
+      --  stood, unless something that outlives the body was put there.
+      procedure Restore_Names (Saved : Slot_Table; Floor : Natural) is
+         Kept_Above : Boolean := False;
+      begin
+         for Index in 1 .. Item.Name_Used loop
+            if not Is_Namespace_Slot (Index) then
+               Slots (Index) := Saved (Index);
+            end if;
+            if Slots (Index).Kind in Value_Text | Value_Data | Value_Number
+              and then Slots (Index).Offset + Slots (Index).Length > Floor
+            then
+               Kept_Above := True;
+            end if;
+         end loop;
+         if not Kept_Above and then Pool_Used > Floor then
+            Pool_Used := Floor;
+         end if;
+      end Restore_Names;
+
       procedure Pop_Loop is
       begin
          if Loop_Depth = 0 then
             return;
          end if;
-
-         declare
-            L : Loop_State renames Loops (Loop_Depth);
-            Kept_Above : Boolean := False;
-         begin
-            for Index in 1 .. Item.Name_Used loop
-               if not Is_Namespace_Slot (Index) then
-                  Slots (Index) := L.Saved (Index);
-               end if;
-               if Slots (Index).Kind in Value_Text | Value_Data | Value_Number
-                 and then Slots (Index).Offset + Slots (Index).Length
-                          > L.Floor
-               then
-                  Kept_Above := True;
-               end if;
-            end loop;
-
-            --  The room the body used is free again unless something that
-            --  outlives the loop was put there.
-            if not Kept_Above and then Pool_Used > L.Floor then
-               Pool_Used := L.Floor;
-            end if;
-         end;
+         Restore_Names (Loops (Loop_Depth).Saved, Loops (Loop_Depth).Floor);
          Loop_Depth := Loop_Depth - 1;
       end Pop_Loop;
 
@@ -6841,12 +7228,15 @@ package body Model_Runner.Templates is
 
                   --  A value that is not a string is written as both
                   --  templates write it, printed by the language they are
-                  --  written in: true as True, null as None.
+                  --  written in: true as True, null as None, a mapping or
+                  --  a list as Python spells one.
                   Val : constant String :=
                     (if Quoted_One then Raw
                      elsif Raw = "true" then "True"
                      elsif Raw = "false" then "False"
                      elsif Raw = "null" then "None"
+                     elsif Raw'Length > 0 and then Raw (Raw'First) in '{' | '['
+                     then Pythonic (Raw)
                      else Raw);
                   CDATA : constant Boolean :=
                     Quoted_One
@@ -7270,8 +7660,79 @@ package body Model_Runner.Templates is
       --  What one filter makes of the text before it. The three that read
       --  the term rather than its text -- tojson and the two parameter
       --  writers -- are answered in Value_Of, where the term is at hand.
+      --  Text with its case changed, character by Unicode character
+      --  rather than byte by byte: the UTF-8 is decoded, each character
+      --  folded as the standard library folds it, and the text encoded
+      --  again. An 'ß' has no single upper case and becomes "SS", as
+      --  Python writes it.
+      type Recasing is (Lower, Upper, Capital, Title);
+
+      function Recased (Held : String; How : Recasing) return String is
+         package WW renames Ada.Wide_Wide_Characters.Handling;
+         package Coding renames Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+         Wide   : constant Wide_Wide_String := Coding.Decode (Held);
+         Result : Wide_Wide_String (1 .. 2 * Wide'Length);
+         Filled : Natural := 0;
+         Fresh  : Boolean := True;
+         Sharp  : constant Wide_Wide_Character := Wide_Wide_Character'Val (223);
+
+         procedure Add (C : Wide_Wide_Character) is
+         begin
+            Filled := Filled + 1;
+            Result (Filled) := C;
+         end Add;
+
+         procedure Add_Upper (C : Wide_Wide_Character) is
+         begin
+            if C = Sharp then
+               Add ('S');
+               Add ('S');
+            else
+               Add (WW.To_Upper (C));
+            end if;
+         end Add_Upper;
+      begin
+         for Index in Wide'Range loop
+            declare
+               C : constant Wide_Wide_Character := Wide (Index);
+            begin
+               case How is
+                  when Lower =>
+                     Add (WW.To_Lower (C));
+                  when Upper =>
+                     Add_Upper (C);
+                  when Capital =>
+                     if Index = Wide'First then
+                        Add_Upper (C);
+                     else
+                        Add (WW.To_Lower (C));
+                     end if;
+                  when Title =>
+                     if C in ' ' | '-' | '(' | '{' | '[' | '<'
+                       or else WW.Is_Space (C)
+                       or else C = Wide_Wide_Character'Val (10)
+                       or else C = Wide_Wide_Character'Val (9)
+                       or else C = Wide_Wide_Character'Val (13)
+                     then
+                        Add (C);
+                        Fresh := True;
+                     elsif Fresh then
+                        Add_Upper (C);
+                        Fresh := False;
+                     else
+                        Add (WW.To_Lower (C));
+                     end if;
+               end case;
+            end;
+         end loop;
+         return Coding.Encode (Result (1 .. Filled));
+      exception
+         when others =>
+            --  Bytes that are not UTF-8 are left as they are.
+            return Held;
+      end Recased;
+
       function Filtered (Step : Filter_Step; Held : String) return String is
-         package Chars renames Ada.Characters.Handling;
       begin
          case Step.Kind is
             when Filter_None | Filter_String | Filter_Safe | Filter_JSON
@@ -7280,49 +7741,57 @@ package body Model_Runner.Templates is
                | Filter_Reject | Filter_Select_Attr | Filter_Reject_Attr
                | Filter_Sort | Filter_Dict_Sort | Filter_Indent
                | Filter_Unique | Filter_List | Filter_First | Filter_Last
-               | Filter_Float =>
+               | Filter_Float | Filter_Round | Filter_Abs | Filter_Sum
+               | Filter_Urlencode | Filter_Batch | Filter_Slice
+               | Filter_Groupby | Filter_Attr | Filter_Wordwrap
+               | Filter_Truncate | Filter_Center | Filter_Format
+               | Filter_Striptags | Filter_Pprint | Filter_Random
+               | Filter_Reverse | Filter_Max =>
                return Held;
 
             when Filter_Trim =>
-               return Model_Runner.Text.Trim (Held);
+               --  Blanks, or the characters named, off both ends.
+               if Step.Arg1 = 0 then
+                  return Model_Runner.Text.Trim (Held);
+               end if;
+               declare
+                  Chars : constant String :=
+                    Value_Of (Item.Operands.all (Step.Arg1));
+                  First : Natural := Held'First;
+                  Last  : Natural := Held'Last;
+               begin
+                  while First <= Last
+                    and then (for some C of Chars => C = Held (First))
+                  loop
+                     First := First + 1;
+                  end loop;
+                  while Last >= First
+                    and then (for some C of Chars => C = Held (Last))
+                  loop
+                     Last := Last - 1;
+                  end loop;
+                  return Held (First .. Last);
+               end;
 
             when Filter_Length =>
                return Model_Runner.Text.Image (Long_Long_Integer (Held'Length));
 
             when Filter_Lower =>
-               return Chars.To_Lower (Held);
+               return Recased (Held, Lower);
 
             when Filter_Upper =>
-               return Chars.To_Upper (Held);
+               return Recased (Held, Upper);
 
             when Filter_Capitalize =>
                --  The first letter up and the rest down, as the language
                --  does it.
-               if Held'Length = 0 then
-                  return Held;
-               end if;
-               return Chars.To_Upper (Held (Held'First))
-                 & Chars.To_Lower (Held (Held'First + 1 .. Held'Last));
+               return Recased (Held, Capital);
 
             when Filter_Title =>
                --  Every word's first letter up and the rest down, a word
-               --  beginning after anything that is not a letter.
-               declare
-                  Result : String := Held;
-                  Fresh  : Boolean := True;
-               begin
-                  for Index in Result'Range loop
-                     if Chars.Is_Letter (Result (Index)) then
-                        Result (Index) :=
-                          (if Fresh then Chars.To_Upper (Result (Index))
-                           else Chars.To_Lower (Result (Index)));
-                        Fresh := False;
-                     else
-                        Fresh := True;
-                     end if;
-                  end loop;
-                  return Result;
-               end;
+               --  beginning after a blank or one of the language's own
+               --  word-openers: '-', '(', '{', '[', '<'.
+               return Recased (Held, Title);
 
             when Filter_Int =>
                return Model_Runner.Text.Image (Number_Of (Held));
@@ -7343,17 +7812,24 @@ package body Model_Runner.Templates is
                     Value_Of (Item.Operands.all (Step.Arg2));
                   Result   : Ada.Strings.Unbounded.Unbounded_String;
                   Index    : Natural := Held'First;
+
+                  --  At most this many, where a count was given.
+                  Allowed  : Long_Long_Integer :=
+                    (if Step.Arg3 = 0 then Long_Long_Integer'Last
+                     else Number_Of (Value_Of (Item.Operands.all (Step.Arg3))));
                begin
                   if Old_Text'Length = 0 then
                      return Held;
                   end if;
                   while Index <= Held'Last loop
-                     if Index + Old_Text'Length - 1 <= Held'Last
+                     if Allowed > 0
+                       and then Index + Old_Text'Length - 1 <= Held'Last
                        and then Held (Index .. Index + Old_Text'Length - 1)
                                 = Old_Text
                      then
                         Ada.Strings.Unbounded.Append (Result, New_Text);
                         Index := Index + Old_Text'Length;
+                        Allowed := Allowed - 1;
                      else
                         Ada.Strings.Unbounded.Append (Result, Held (Index));
                         Index := Index + 1;
@@ -7626,7 +8102,9 @@ package body Model_Runner.Templates is
                        & Quoted (Conv.Role_Name
                                    (Conv.Sender_At (Messages, At_Message)))
                        & ", ""content"": "
-                       & Quoted (Conv.Content_At (Messages, At_Message)));
+                       & (if Conv.Parts_At (Messages, At_Message) /= ""
+                          then Conv.Parts_At (Messages, At_Message)
+                          else Quoted (Conv.Content_At (Messages, At_Message))));
                   if Conv.Call_Count (Messages, At_Message) > 0 then
                      Add (", ""tool_calls"": [");
                      for Which in 1 .. Conv.Call_Count (Messages, At_Message)
@@ -7845,8 +8323,7 @@ package body Model_Runner.Templates is
             return Real_Of (Text_Of (A)) < Real_Of (Text_Of (B));
          end if;
          if Fold then
-            return Ada.Characters.Handling.To_Lower (Printed (A))
-                   < Ada.Characters.Handling.To_Lower (Printed (B));
+            return Recased (Printed (A), Lower) < Recased (Printed (B), Lower);
          end if;
          return Printed (A) < Printed (B);
       end Before;
@@ -7935,6 +8412,697 @@ package body Model_Runner.Templates is
 
             when Filter_Float =>
                return As_Number (Real_Image (Real_Of (Printed (Value))));
+
+            when Filter_Round =>
+               --  To the precision given, the common way -- to the
+               --  nearest, ties to even, as the language's round does --
+               --  or up or down where the method says so. Always a number
+               --  that is not whole, as the language answers.
+               declare
+                  Places : constant Natural :=
+                    (if Step.Arg1 = 0 then 0
+                     else Natural'Max
+                            (0, Natural (Number_Of
+                                  (Value_Of (Item.Operands.all (Step.Arg1))))));
+                  Method : constant String :=
+                    (if Step.Arg2 = 0 then "common"
+                     else Value_Of (Item.Operands.all (Step.Arg2)));
+                  X      : constant Long_Float := Real_Of (Printed (Value));
+                  Scale  : constant Long_Float := 10.0 ** Places;
+               begin
+                  if Method = "ceil" then
+                     return As_Number
+                       (Real_Image (Long_Float'Ceiling (X * Scale) / Scale));
+                  elsif Method = "floor" then
+                     return As_Number
+                       (Real_Image (Long_Float'Floor (X * Scale) / Scale));
+                  end if;
+                  --  A whole number stays whole, as the language's round
+                  --  answers an int with an int.
+                  if not Is_Real (Printed (Value)) then
+                     return Value;
+                  end if;
+                  return As_Number (Real_Image (Rounded (X, Places)));
+               end;
+
+            when Filter_Abs =>
+               declare
+                  Said : constant String := Printed (Value);
+               begin
+                  if Is_Real (Said) then
+                     return As_Number (Real_Image (abs Real_Of (Said)));
+                  end if;
+                  return As_Number (abs Number_Of (Said));
+               end;
+
+            when Filter_Sum =>
+               --  The elements added up, or one member of each, from the
+               --  start given: whole where every one is whole.
+               declare
+                  Src   : constant String := Listed (Value);
+                  Name  : constant String :=
+                    (if Step.Arg1 = 0 then ""
+                     else Value_Of (Item.Operands.all (Step.Arg1)));
+                  Start : constant String :=
+                    (if Step.Arg2 = 0 then "0"
+                     else Value_Of (Item.Operands.all (Step.Arg2)));
+                  Spans : Span_Array;
+                  Count : Natural;
+                  Whole : Long_Long_Integer := Number_Of (Start);
+                  Real  : Long_Float := Real_Of (Start);
+                  Reals : Boolean := Is_Real (Start);
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  for Index in 1 .. Count loop
+                     declare
+                        Each : constant Held :=
+                          Read_Out (Src (Spans (Index).First
+                                         .. Spans (Index).Last));
+                        Said : constant String :=
+                          Printed (if Name = "" then Each else Along (Each, Name));
+                     begin
+                        Reals := Reals or else Is_Real (Said);
+                        Whole := Whole + Number_Of (Said);
+                        Real := Real + Real_Of (Said);
+                     end;
+                  end loop;
+                  return (if Reals then As_Number (Real_Image (Real))
+                          else As_Number (Whole));
+               end;
+
+            when Filter_Urlencode =>
+               --  Text percent-encoded for a URL, as the language quotes
+               --  it: letters, digits, '-', '_', '.', '~' and '/' as they
+               --  are and every other byte as %XX; a mapping as key=value
+               --  pairs joined by '&', with a blank as '+'.
+               declare
+                  Hex : constant String := "0123456789ABCDEF";
+
+                  function Quoted_URL
+                    (Text : String; Blank_Plus : Boolean) return String
+                  is
+                     R : Ada.Strings.Unbounded.Unbounded_String;
+                  begin
+                     for C of Text loop
+                        if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9'
+                                | '-' | '_' | '.' | '~'
+                          or else (C = '/' and then not Blank_Plus)
+                        then
+                           Ada.Strings.Unbounded.Append (R, C);
+                        elsif C = ' ' and then Blank_Plus then
+                           Ada.Strings.Unbounded.Append (R, '+');
+                        else
+                           Ada.Strings.Unbounded.Append
+                             (R, '%' & Hex (Character'Pos (C) / 16 + 1)
+                              & Hex (Character'Pos (C) mod 16 + 1));
+                        end if;
+                     end loop;
+                     return Ada.Strings.Unbounded.To_String (R);
+                  end Quoted_URL;
+               begin
+                  if (Value.Kind = Value_Data
+                      and then Is_JSON_Mapping (Text_Of (Value)))
+                    or else Value.Kind = Value_JSON
+                  then
+                     declare
+                        Src    : constant String := JSON_Text (Value);
+                        Cursor : Natural := Src'First + 1;
+                        Key, Member : Span;
+                        Found  : Boolean;
+                        R      : Ada.Strings.Unbounded.Unbounded_String;
+                        Any    : Boolean := False;
+                     begin
+                        loop
+                           Next_Member (Src, Cursor, Key, Member, Found);
+                           exit when not Found;
+                           if Any then
+                              Ada.Strings.Unbounded.Append (R, '&');
+                           end if;
+                           Any := True;
+                           Ada.Strings.Unbounded.Append
+                             (R, Quoted_URL (Decoded (Src (Key.First .. Key.Last)),
+                                             True)
+                              & "="
+                              & Quoted_URL
+                                  (Printed (Read_Out (Src (Member.First
+                                                           .. Member.Last))),
+                                   True));
+                        end loop;
+                        return As_Text (Ada.Strings.Unbounded.To_String (R));
+                     end;
+                  end if;
+                  return As_Text (Quoted_URL (Printed (Value), False));
+               end;
+
+            when Filter_Batch | Filter_Slice =>
+               --  A list cut into batches of so many, or into so many
+               --  slices as even as they can be with the first ones
+               --  longer; a short last one filled where a filler was
+               --  given.
+               declare
+                  Src   : constant String := Listed (Value);
+                  N     : constant Natural :=
+                    Natural'Max
+                      (1, Natural (Number_Of
+                            (Value_Of (Item.Operands.all (Step.Arg1)))));
+                  Fill  : constant String :=
+                    (if Step.Arg2 = 0 then ""
+                     else JSON_Text (Held_Of (Item.Operands.all (Step.Arg2))));
+                  Spans : Span_Array;
+                  Count : Natural;
+                  R     : Ada.Strings.Unbounded.Unbounded_String;
+                  At_Element : Natural := 1;
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  Ada.Strings.Unbounded.Append (R, "[");
+                  if Step.Kind = Filter_Batch then
+                     declare
+                        Batches : constant Natural := (Count + N - 1) / N;
+                     begin
+                        for B in 1 .. Batches loop
+                           if B > 1 then
+                              Ada.Strings.Unbounded.Append (R, ", ");
+                           end if;
+                           Ada.Strings.Unbounded.Append (R, "[");
+                           for K in 1 .. N loop
+                              if K > 1 then
+                                 Ada.Strings.Unbounded.Append (R, ", ");
+                              end if;
+                              if At_Element <= Count then
+                                 Ada.Strings.Unbounded.Append
+                                   (R, Src (Spans (At_Element).First
+                                            .. Spans (At_Element).Last));
+                                 At_Element := At_Element + 1;
+                              elsif Fill /= "" then
+                                 Ada.Strings.Unbounded.Append (R, Fill);
+                              else
+                                 --  Nothing to fill with: the batch ends.
+                                 Ada.Strings.Unbounded.Head
+                                   (R, Ada.Strings.Unbounded.Length (R) - 2);
+                                 exit;
+                              end if;
+                           end loop;
+                           Ada.Strings.Unbounded.Append (R, "]");
+                        end loop;
+                     end;
+                  else
+                     declare
+                        Per    : constant Natural := Count / N;
+                        Longer : constant Natural := Count mod N;
+                     begin
+                        for S in 1 .. N loop
+                           declare
+                              Wanted : constant Natural :=
+                                Per + (if S <= Longer then 1 else 0);
+                           begin
+                              if S > 1 then
+                                 Ada.Strings.Unbounded.Append (R, ", ");
+                              end if;
+                              Ada.Strings.Unbounded.Append (R, "[");
+                              for K in 1 .. Wanted loop
+                                 if K > 1 then
+                                    Ada.Strings.Unbounded.Append (R, ", ");
+                                 end if;
+                                 Ada.Strings.Unbounded.Append
+                                   (R, Src (Spans (At_Element).First
+                                            .. Spans (At_Element).Last));
+                                 At_Element := At_Element + 1;
+                              end loop;
+                              if Fill /= "" and then Wanted < Per + 1
+                                and then Longer > 0
+                              then
+                                 if Wanted > 0 then
+                                    Ada.Strings.Unbounded.Append (R, ", ");
+                                 end if;
+                                 Ada.Strings.Unbounded.Append (R, Fill);
+                              end if;
+                              Ada.Strings.Unbounded.Append (R, "]");
+                           end;
+                        end loop;
+                     end;
+                  end if;
+                  Ada.Strings.Unbounded.Append (R, "]");
+                  return As_Data (Ada.Strings.Unbounded.To_String (R));
+               end;
+
+            when Filter_Groupby =>
+               --  The elements grouped by one member, in that member's
+               --  order, each group an object with the grouper and the
+               --  list -- what the language's namedtuple answers to, and
+               --  what two names over the result take apart.
+               declare
+                  Src   : constant String := Listed (Value);
+                  Name  : constant String :=
+                    Value_Of (Item.Operands.all (Step.Arg1));
+                  Spans : Span_Array;
+                  Count : Natural;
+                  Order : Span_Array;
+                  R     : Ada.Strings.Unbounded.Unbounded_String;
+
+                  function Key_Of (S : Span) return Held
+                  is (Along (Read_Out (Src (S.First .. S.Last)), Name));
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  Order := Spans;
+                  for I in 2 .. Count loop
+                     declare
+                        Moving : constant Span := Order (I);
+                        J      : Natural := I;
+                     begin
+                        while J > 1
+                          and then Before (Key_Of (Moving), Key_Of (Order (J - 1)),
+                                           False)
+                        loop
+                           Order (J) := Order (J - 1);
+                           J := J - 1;
+                        end loop;
+                        Order (J) := Moving;
+                     end;
+                  end loop;
+                  Ada.Strings.Unbounded.Append (R, "[");
+                  declare
+                     I : Natural := 1;
+                  begin
+                     while I <= Count loop
+                        declare
+                           Grouper : constant Held := Key_Of (Order (I));
+                           Said    : constant String := Printed (Grouper);
+                        begin
+                           if I > 1 then
+                              Ada.Strings.Unbounded.Append (R, ", ");
+                           end if;
+                           Ada.Strings.Unbounded.Append
+                             (R, "{""grouper"": "
+                              & (if Grouper.Kind = Value_Undefined then "null"
+                                 else JSON_Text (Grouper))
+                              & ", ""list"": [");
+                           declare
+                              First_In : Boolean := True;
+                           begin
+                              while I <= Count
+                                and then Printed (Key_Of (Order (I))) = Said
+                              loop
+                                 if not First_In then
+                                    Ada.Strings.Unbounded.Append (R, ", ");
+                                 end if;
+                                 First_In := False;
+                                 Ada.Strings.Unbounded.Append
+                                   (R, Src (Order (I).First .. Order (I).Last));
+                                 I := I + 1;
+                              end loop;
+                           end;
+                           Ada.Strings.Unbounded.Append (R, "]}");
+                        end;
+                     end loop;
+                  end;
+                  Ada.Strings.Unbounded.Append (R, "]");
+                  return As_Data (Ada.Strings.Unbounded.To_String (R));
+               end;
+
+            when Filter_Attr =>
+               --  An attribute and never an item, as the language has it:
+               --  every value here is a mapping, whose members are items,
+               --  so the answer is nothing, which is the answer jinja2
+               --  gives for a message's role asked for this way.
+               return Nothing;
+
+            when Filter_Wordwrap =>
+               --  Each line of the text wrapped at the width, words kept
+               --  whole unless one is longer than the width and breaking
+               --  it was not refused, the lines joined by the wrapstring.
+               declare
+                  T     : constant String := Printed (Value);
+                  Width : constant Natural :=
+                    (if Step.Arg1 = 0 then 79
+                     else Natural'Max
+                            (1, Natural (Number_Of
+                                  (Value_Of (Item.Operands.all (Step.Arg1))))));
+                  Break_Long : constant Boolean :=
+                    Step.Arg2 = 0
+                    or else Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
+                  Joiner : constant String :=
+                    (if Step.Arg3 = 0 then "" & ASCII.LF
+                     else Value_Of (Item.Operands.all (Step.Arg3)));
+                  R      : Ada.Strings.Unbounded.Unbounded_String;
+                  Line   : Ada.Strings.Unbounded.Unbounded_String;
+                  First_Line : Boolean := True;
+
+                  procedure End_Line is
+                  begin
+                     if not First_Line then
+                        Ada.Strings.Unbounded.Append (R, Joiner);
+                     end if;
+                     First_Line := False;
+                     Ada.Strings.Unbounded.Append (R, Line);
+                     Line := Ada.Strings.Unbounded.Null_Unbounded_String;
+                  end End_Line;
+
+                  procedure Add_Word (Word : String) is
+                     At_Word : Natural := Word'First;
+                  begin
+                     while At_Word <= Word'Last loop
+                        declare
+                           Have : constant Natural :=
+                             Ada.Strings.Unbounded.Length (Line);
+                           Rest : constant String := Word (At_Word .. Word'Last);
+                        begin
+                           if Have = 0 then
+                              if Rest'Length <= Width or else not Break_Long then
+                                 Ada.Strings.Unbounded.Append (Line, Rest);
+                                 At_Word := Word'Last + 1;
+                              else
+                                 Ada.Strings.Unbounded.Append
+                                   (Line, Rest (Rest'First .. Rest'First + Width - 1));
+                                 At_Word := At_Word + Width;
+                                 End_Line;
+                              end if;
+                           elsif Have + 1 + Rest'Length <= Width then
+                              Ada.Strings.Unbounded.Append (Line, ' ' & Rest);
+                              At_Word := Word'Last + 1;
+                           else
+                              End_Line;
+                           end if;
+                        end;
+                     end loop;
+                  end Add_Word;
+
+                  procedure Wrap_Line (Text : String) is
+                     I : Natural := Text'First;
+                  begin
+                     while I <= Text'Last loop
+                        if Text (I) in ' ' | ASCII.HT then
+                           I := I + 1;
+                        else
+                           declare
+                              J : Natural := I;
+                           begin
+                              while J <= Text'Last
+                                and then Text (J) not in ' ' | ASCII.HT
+                              loop
+                                 J := J + 1;
+                              end loop;
+                              Add_Word (Text (I .. J - 1));
+                              I := J;
+                           end;
+                        end if;
+                     end loop;
+                     End_Line;
+                  end Wrap_Line;
+
+                  From : Natural := T'First;
+               begin
+                  for I in T'Range loop
+                     if T (I) = ASCII.LF then
+                        Wrap_Line (T (From .. I - 1));
+                        From := I + 1;
+                     end if;
+                  end loop;
+                  Wrap_Line (T (From .. T'Last));
+                  return As_Text (Ada.Strings.Unbounded.To_String (R));
+               end;
+
+            when Filter_Truncate =>
+               --  Cut to the length with the ending in it, at a blank
+               --  unless words may be killed, and left alone within the
+               --  leeway, as the language cuts.
+               declare
+                  T      : constant String := Printed (Value);
+                  Length : constant Natural :=
+                    (if Step.Arg1 = 0 then 255
+                     else Natural'Max
+                            (0, Natural (Number_Of
+                                  (Value_Of (Item.Operands.all (Step.Arg1))))));
+                  Kill   : constant Boolean :=
+                    Step.Arg2 /= 0
+                    and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
+                  Ending : constant String :=
+                    (if Step.Arg3 = 0 then "..."
+                     else Value_Of (Item.Operands.all (Step.Arg3)));
+                  Leeway : constant Natural := 5;
+                  Keep_To : constant Integer := Length - Ending'Length;
+               begin
+                  if T'Length <= Length + Leeway or else Keep_To <= 0 then
+                     return As_Text (if Keep_To <= 0 then Ending else T);
+                  end if;
+                  if Kill then
+                     return As_Text
+                       (T (T'First .. T'First + Keep_To - 1) & Ending);
+                  end if;
+                  declare
+                     Cut  : constant String := T (T'First .. T'First + Keep_To - 1);
+                     Last : Natural := Cut'Last;
+                  begin
+                     while Last >= Cut'First and then Cut (Last) /= ' ' loop
+                        Last := Last - 1;
+                     end loop;
+                     if Last < Cut'First then
+                        return As_Text (Cut & Ending);
+                     end if;
+                     return As_Text (Cut (Cut'First .. Last - 1) & Ending);
+                  end;
+               end;
+
+            when Filter_Center =>
+               --  Centred in the width, the odd blank going left where
+               --  the width is odd, as Python centres.
+               declare
+                  T     : constant String := Printed (Value);
+                  Width : constant Natural :=
+                    (if Step.Arg1 = 0 then 80
+                     else Natural'Max
+                            (0, Natural (Number_Of
+                                  (Value_Of (Item.Operands.all (Step.Arg1))))));
+               begin
+                  if T'Length >= Width then
+                     return As_Text (T);
+                  end if;
+                  declare
+                     Pad   : constant Natural := Width - T'Length;
+                     Left  : constant Natural :=
+                       Pad / 2 + (if Pad mod 2 = 1 and then Width mod 2 = 1
+                                  then 1 else 0);
+                     Right : constant Natural := Pad - Left;
+                  begin
+                     return As_Text
+                       (String'[1 .. Left => ' '] & T & String'[1 .. Right => ' ']);
+                  end;
+               end;
+
+            when Filter_Format =>
+               --  printf's %s, %d, %i, %f with a precision, and %%, each
+               --  taking the next argument.
+               declare
+                  T    : constant String := Printed (Value);
+                  R    : Ada.Strings.Unbounded.Unbounded_String;
+                  Next : Natural := 1;
+                  I    : Natural := T'First;
+
+                  function Argument return String is
+                     At_Slot : constant Natural :=
+                       (case Next is
+                           when 1 => Step.Arg1,
+                           when 2 => Step.Arg2,
+                           when others => Step.Arg3);
+                  begin
+                     Next := Next + 1;
+                     return (if At_Slot = 0 then ""
+                             else Value_Of (Item.Operands.all (At_Slot)));
+                  end Argument;
+               begin
+                  while I <= T'Last loop
+                     if T (I) = '%' and then I < T'Last then
+                        declare
+                           J : Natural := I + 1;
+                           Places : Integer := -1;
+                        begin
+                           if T (J) = '.' then
+                              J := J + 1;
+                              Places := 0;
+                              while J <= T'Last and then T (J) in '0' .. '9' loop
+                                 Places := Places * 10
+                                   + Character'Pos (T (J)) - Character'Pos ('0');
+                                 J := J + 1;
+                              end loop;
+                           end if;
+                           if J > T'Last then
+                              Ada.Strings.Unbounded.Append (R, T (I .. T'Last));
+                              exit;
+                           end if;
+                           case T (J) is
+                              when '%' =>
+                                 Ada.Strings.Unbounded.Append (R, '%');
+                              when 's' =>
+                                 Ada.Strings.Unbounded.Append (R, Argument);
+                              when 'd' | 'i' =>
+                                 Ada.Strings.Unbounded.Append
+                                   (R, Model_Runner.Text.Image
+                                         (Number_Of (Argument)));
+                              when 'f' =>
+                                 Ada.Strings.Unbounded.Append
+                                   (R, Fixed_Image
+                                         (Real_Of (Argument),
+                                          (if Places < 0 then 6 else Places)));
+                              when others =>
+                                 Ada.Strings.Unbounded.Append (R, T (I .. J));
+                           end case;
+                           I := J + 1;
+                        end;
+                     else
+                        Ada.Strings.Unbounded.Append (R, T (I));
+                        I := I + 1;
+                     end if;
+                  end loop;
+                  return As_Text (Ada.Strings.Unbounded.To_String (R));
+               end;
+
+            when Filter_Striptags =>
+               --  Tags taken out and the blanks left run together.
+               declare
+                  T      : constant String := Printed (Value);
+                  R      : Ada.Strings.Unbounded.Unbounded_String;
+                  In_Tag : Boolean := False;
+                  Blank  : Boolean := True;
+               begin
+                  for C of T loop
+                     if In_Tag then
+                        In_Tag := C /= '>';
+                     elsif C = '<' then
+                        In_Tag := True;
+                     elsif C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+                        if not Blank then
+                           Ada.Strings.Unbounded.Append (R, ' ');
+                        end if;
+                        Blank := True;
+                     else
+                        Ada.Strings.Unbounded.Append (R, C);
+                        Blank := False;
+                     end if;
+                  end loop;
+                  return As_Text
+                    (Model_Runner.Text.Trim
+                       (Ada.Strings.Unbounded.To_String (R)));
+               end;
+
+            when Filter_Pprint =>
+               --  As Python prints the value: text in quotes, the rest as
+               --  it prints already.
+               if Value.Kind = Value_Text then
+                  declare
+                     T : constant String := Text_Of (Value);
+                     Q : constant Character :=
+                       (if (for some C of T => C = ''')
+                          and then (for all C of T => C /= '"')
+                        then '"' else ''');
+                     R : Ada.Strings.Unbounded.Unbounded_String;
+                  begin
+                     Ada.Strings.Unbounded.Append (R, Q);
+                     for C of T loop
+                        if C = '\' or else C = Q then
+                           Ada.Strings.Unbounded.Append (R, '\' & C);
+                        elsif C = ASCII.LF then
+                           Ada.Strings.Unbounded.Append (R, "\n");
+                        else
+                           Ada.Strings.Unbounded.Append (R, C);
+                        end if;
+                     end loop;
+                     Ada.Strings.Unbounded.Append (R, Q);
+                     return As_Text (Ada.Strings.Unbounded.To_String (R));
+                  end;
+               end if;
+               return As_Text (Printed (Value));
+
+            when Filter_Random =>
+               --  One element, chosen by the clock: a render with this in
+               --  it is not the same twice, which is what the filter is.
+               declare
+                  Src   : constant String := Listed (Value);
+                  Spans : Span_Array;
+                  Count : Natural;
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  if Count = 0 then
+                     return Nothing;
+                  end if;
+                  declare
+                     Seconds : constant Duration :=
+                       Ada.Calendar.Seconds (Ada.Calendar.Clock);
+                     Pick    : constant Natural :=
+                       Natural (Long_Float'Floor
+                                  (Long_Float (Seconds) * 1000.0))
+                       mod Count + 1;
+                  begin
+                     return Read_Out
+                       (Src (Spans (Pick).First .. Spans (Pick).Last));
+                  end;
+               end;
+
+            when Filter_Reverse =>
+               --  A list back to front, or text character by character.
+               if Value.Kind in Value_Data | Value_Tools | Value_List
+                                | Value_Call
+                 and then (Value.Kind /= Value_Data
+                           or else Is_JSON_List (Text_Of (Value)))
+               then
+                  declare
+                     Src   : constant String := Listed (Value);
+                     Spans : Span_Array;
+                     Count : Natural;
+                     Back  : Span_Array;
+                  begin
+                     Elements_Of (Src, Spans, Count);
+                     for I in 1 .. Count loop
+                        Back (I) := Spans (Count - I + 1);
+                     end loop;
+                     return List_Of (Src, Back, Count);
+                  end;
+               end if;
+               declare
+                  package Coding renames
+                    Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+                  Wide : constant Wide_Wide_String :=
+                    Coding.Decode (Printed (Value));
+                  Back : Wide_Wide_String (Wide'Range);
+               begin
+                  for I in Wide'Range loop
+                     Back (I) := Wide (Wide'Last - (I - Wide'First));
+                  end loop;
+                  return As_Text (Coding.Encode (Back));
+               exception
+                  when others =>
+                     return Value;
+               end;
+
+            when Filter_Max =>
+               --  The largest element, or the one whose member is, the
+               --  numbers as numbers and the rest as text.
+               declare
+                  Src   : constant String := Listed (Value);
+                  Name  : constant String :=
+                    (if Step.Arg3 = 0 then ""
+                     else Value_Of (Item.Operands.all (Step.Arg3)));
+                  Spans : Span_Array;
+                  Count : Natural;
+                  Best  : Natural := 0;
+
+                  function Key_Of (S : Span) return Held
+                  is (if Name = ""
+                      then Read_Out (Src (S.First .. S.Last))
+                      else Along (Read_Out (Src (S.First .. S.Last)), Name));
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  for I in 1 .. Count loop
+                     if Best = 0
+                       or else Before (Key_Of (Spans (Best)), Key_Of (Spans (I)),
+                                       True)
+                     then
+                        Best := I;
+                     end if;
+                  end loop;
+                  if Best = 0 then
+                     return Nothing;
+                  end if;
+                  return Read_Out (Src (Spans (Best).First .. Spans (Best).Last));
+               end;
 
             when Filter_First =>
                return Element_At
@@ -8507,6 +9675,8 @@ package body Model_Runner.Templates is
                | Term_Loop_Rev_Index_One =>
                return As_Number (Raw_Of (Value));
 
+            when Term_Message_Content =>
+               return Content_Of (Bound_Message);
             when Term_True =>
                return (Kind => Value_Boolean, Start => 1, others => <>);
             when Term_False =>
@@ -8675,6 +9845,39 @@ package body Model_Runner.Templates is
          return True;
       end Is_Sum;
 
+      --  Whether a '+' joins text to a list or a mapping, which the
+      --  language refuses -- a message whose content is a list of parts,
+      --  handed to a template that writes "'<|user|>' + message.content"
+      --  -- and which this refuses too, naming the join, rather than
+      --  running the text and the list's spelling together.
+      function Mixes_Text_And_Data (Value : Operand) return Boolean is
+      begin
+         if Value.Count < 2 then
+            return False;
+         end if;
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join = Join_Plus then
+               declare
+                  Left  : constant Held := Resolve (Value.Terms (Index - 1));
+                  Right : constant Held := Resolve (Value.Terms (Index));
+                  function Is_Data (H : Held) return Boolean
+                  is (H.Kind = Value_Data);
+               begin
+                  if Is_Data (Left) /= Is_Data (Right)
+                    and then (Left.Kind in Value_Text | Value_Data)
+                    and then (Right.Kind in Value_Text | Value_Data)
+                  then
+                     Refuse (Value.Terms (Index).Join_At,
+                             Value.Terms (Index).Join_Len,
+                             E.Template_Unsupported_Construct);
+                     return True;
+                  end if;
+               end;
+            end if;
+         end loop;
+         return False;
+      end Mixes_Text_And_Data;
+
       procedure Emit_Operand (Value : Operand) is
       begin
          --  A sum is printed as the number it comes to, and anything else
@@ -8683,6 +9886,9 @@ package body Model_Runner.Templates is
          --  prints has no bound worth holding in one place.
          if Is_Sum (Value) then
             Put (Value_Of (Value));
+            return;
+         end if;
+         if Mixes_Text_And_Data (Value) then
             return;
          end if;
 
@@ -8838,6 +10044,70 @@ package body Model_Runner.Templates is
          end;
       end Real_Image;
 
+      --  X to the power Y in binary64, through the C library's pow, which
+      --  is what the language calls.
+      function Powered (X, Y : Long_Float) return Long_Float is
+         function Pow (A, B : Interfaces.C.double) return Interfaces.C.double
+           with Import, Convention => C, External_Name => "pow";
+      begin
+         return Long_Float (Pow (Interfaces.C.double (X),
+                                 Interfaces.C.double (Y)));
+      end Powered;
+
+      --  X rounded to Places decimals, to the nearest and ties to even,
+      --  through the C library's formatting, which rounds the exact
+      --  binary64 as the language's round does.
+      function Rounded (X : Long_Float; Places : Natural) return Long_Float is
+         function Snprintf
+           (Buffer : Interfaces.C.Strings.chars_ptr;
+            Size   : Interfaces.C.size_t;
+            Format : Interfaces.C.Strings.chars_ptr;
+            Digits_After : Interfaces.C.int;
+            Value  : Interfaces.C.double) return Interfaces.C.int
+           with Import, Convention => C_Variadic_3,
+                External_Name => "snprintf";
+
+         Room   : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ([1 .. 400 => ' ']);
+         Format : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ("%.*f");
+         Written : constant Interfaces.C.int :=
+           Snprintf (Room, 400, Format, Interfaces.C.int (Places),
+                     Interfaces.C.double (X));
+         pragma Unreferenced (Written);
+         Said : constant String := Interfaces.C.Strings.Value (Room);
+      begin
+         Interfaces.C.Strings.Free (Room);
+         Interfaces.C.Strings.Free (Format);
+         return Real_Of (Said);
+      end Rounded;
+
+      --  X with Places digits after the point, as printf's %f writes it.
+      function Fixed_Image (X : Long_Float; Places : Natural) return String is
+         function Snprintf
+           (Buffer : Interfaces.C.Strings.chars_ptr;
+            Size   : Interfaces.C.size_t;
+            Format : Interfaces.C.Strings.chars_ptr;
+            Digits_After : Interfaces.C.int;
+            Value  : Interfaces.C.double) return Interfaces.C.int
+           with Import, Convention => C_Variadic_3,
+                External_Name => "snprintf";
+
+         Room   : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ([1 .. 400 => ' ']);
+         Format : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String ("%.*f");
+         Written : constant Interfaces.C.int :=
+           Snprintf (Room, 400, Format, Interfaces.C.int (Places),
+                     Interfaces.C.double (X));
+         pragma Unreferenced (Written);
+         Said : constant String := Interfaces.C.Strings.Value (Room);
+      begin
+         Interfaces.C.Strings.Free (Room);
+         Interfaces.C.Strings.Free (Format);
+         return Said;
+      end Fixed_Image;
+
       --  Whether a sum is worked out in binary64: any term that is not a
       --  whole number, or a true division anywhere in it.
       function Uses_Reals (Value : Operand) return Boolean is
@@ -8846,9 +10116,17 @@ package body Model_Runner.Templates is
             if Index > 1 and then Value.Terms (Index).Join = Join_Divide then
                return True;
             end if;
-            if Is_Real (Value_Of (Value.Terms (Index))) then
-               return True;
-            end if;
+            declare
+               Said : constant String := Value_Of (Value.Terms (Index));
+            begin
+               if Is_Real (Said)
+                 or else (Index > 1
+                          and then Value.Terms (Index).Join = Join_Power
+                          and then Number_Of (Said) < 0)
+               then
+                  return True;
+               end if;
+            end;
          end loop;
          return False;
       end Uses_Reals;
@@ -8874,21 +10152,33 @@ package body Model_Runner.Templates is
          --  In binary64 where any term is not a whole number or a true
          --  division stands anywhere, as the language works it: 7 / 2 is
          --  3.5 and 8 / 2 is 4.0, and 1.5 + 1 is 2.5.
+         --  Products before sums and powers before products, as the
+         --  language binds them: a factor is raised as it is read, folded
+         --  into the product when the next product join comes, and the
+         --  product is added to or taken from the total when a plus or a
+         --  minus ends it. Zero divides nothing, which refuses where it is
+         --  read. In binary64 where any term is not a whole number, a true
+         --  division stands anywhere, or a power has a negative exponent,
+         --  as the language works it: 7 / 2 is 3.5, 8 / 2 is 4.0, 2 ** -1
+         --  is 0.5 and 1.5 + 1 is 2.5.
          if Arithmetic and then Uses_Reals (Value) then
             declare
                Total   : Long_Float := 0.0;
-               Current : Long_Float :=
+               Product : Long_Float := 1.0;
+               Factor  : Long_Float :=
                  (if Value.Count = 0 then 0.0
                   else Real_Of (Value_Of (Value.Terms (1))));
                Sign    : Join_Kind := Join_Plus;
 
                procedure Settle is
                begin
+                  Product := Product * Factor;
                   if Sign = Join_Minus then
-                     Total := Total - Current;
+                     Total := Total - Product;
                   else
-                     Total := Total + Current;
+                     Total := Total + Product;
                   end if;
+                  Product := 1.0;
                end Settle;
             begin
                for Index in 2 .. Value.Count loop
@@ -8901,9 +10191,12 @@ package body Model_Runner.Templates is
                         when Join_Plus | Join_Minus | Join_Concat =>
                            Settle;
                            Sign := Join;
-                           Current := Next;
+                           Factor := Next;
+                        when Join_Power =>
+                           Factor := Powered (Factor, Next);
                         when Join_Times =>
-                           Current := Current * Next;
+                           Product := Product * Factor;
+                           Factor := Next;
                         when Join_Divide | Join_Floor | Join_Modulo =>
                            if Next = 0.0 then
                               Refuse (Value.Terms (Index).Join_At,
@@ -8911,13 +10204,17 @@ package body Model_Runner.Templates is
                                       E.Template_Unsupported_Construct);
                               return "0";
                            end if;
+                           Product := Product * Factor;
                            if Join = Join_Divide then
-                              Current := Current / Next;
+                              Factor := 1.0;
+                              Product := Product / Next;
                            elsif Join = Join_Floor then
-                              Current := Long_Float'Floor (Current / Next);
+                              Factor := 1.0;
+                              Product := Long_Float'Floor (Product / Next);
                            else
-                              Current :=
-                                Current - Next * Long_Float'Floor (Current / Next);
+                              Factor := 1.0;
+                              Product :=
+                                Product - Next * Long_Float'Floor (Product / Next);
                            end if;
                      end case;
                   end;
@@ -8930,18 +10227,21 @@ package body Model_Runner.Templates is
          if Arithmetic then
             declare
                Total   : Long_Long_Integer := 0;
-               Current : Long_Long_Integer :=
+               Product : Long_Long_Integer := 1;
+               Factor  : Long_Long_Integer :=
                  (if Value.Count = 0 then 0
                   else Number_Of (Value_Of (Value.Terms (1))));
                Sign    : Join_Kind := Join_Plus;
 
                procedure Settle is
                begin
+                  Product := Product * Factor;
                   if Sign = Join_Minus then
-                     Total := Total - Current;
+                     Total := Total - Product;
                   else
-                     Total := Total + Current;
+                     Total := Total + Product;
                   end if;
+                  Product := 1;
                end Settle;
             begin
                for Index in 2 .. Value.Count loop
@@ -8954,9 +10254,12 @@ package body Model_Runner.Templates is
                         when Join_Plus | Join_Minus | Join_Concat =>
                            Settle;
                            Sign := Join;
-                           Current := Next;
+                           Factor := Next;
+                        when Join_Power =>
+                           Factor := Factor ** Natural (Next);
                         when Join_Times =>
-                           Current := Current * Next;
+                           Product := Product * Factor;
+                           Factor := Next;
                         when Join_Divide | Join_Floor | Join_Modulo =>
                            if Next = 0 then
                               Refuse (Value.Terms (Index).Join_At,
@@ -8964,17 +10267,14 @@ package body Model_Runner.Templates is
                                       E.Template_Unsupported_Construct);
                               return "0";
                            end if;
+                           Product := Product * Factor;
+                           Factor := 1;
                            if Join = Join_Modulo then
-                              Current := Current mod Next;
-                           elsif Join = Join_Floor then
+                              Product := Product mod Next;
+                           else
                               --  The language's // rounds towards minus
                               --  infinity, which is what mod pairs with.
-                              Current := (Current - (Current mod Next)) / Next;
-                           else
-                              Refuse (Value.Terms (Index).Join_At,
-                                      Value.Terms (Index).Join_Len,
-                                      E.Template_Unsupported_Construct);
-                              return "0";
+                              Product := (Product - (Product mod Next)) / Next;
                            end if;
                      end case;
                   end;
@@ -8982,6 +10282,10 @@ package body Model_Runner.Templates is
                Settle;
                return Model_Runner.Text.Image (Total);
             end;
+         end if;
+
+         if Mixes_Text_And_Data (Value) then
+            return "";
          end if;
 
          for Index in 1 .. Value.Count loop
@@ -9065,19 +10369,22 @@ package body Model_Runner.Templates is
                   Right : constant String := Value_Of (Value.Right);
                   Same  : Boolean := Left = Right;
                begin
-                  if Same then
-                     declare
-                        L : constant Held := Held_Of (Value.Left);
-                        R : constant Held := Held_Of (Value.Right);
-                     begin
-                        if (L.Kind = Value_Number) /= (R.Kind = Value_Number)
-                          and then L.Kind in Value_Text | Value_Number
-                          and then R.Kind in Value_Text | Value_Number
-                        then
-                           Same := False;
-                        end if;
-                     end;
-                  end if;
+                  declare
+                     L : constant Held := Held_Of (Value.Left);
+                     R : constant Held := Held_Of (Value.Right);
+                  begin
+                     if L.Kind = Value_Number and then R.Kind = Value_Number
+                     then
+                        --  Two numbers are equal as numbers: 1.0 and 1.
+                        Same := Real_Of (Text_Of (L)) = Real_Of (Text_Of (R));
+                     elsif Same
+                       and then (L.Kind = Value_Number) /= (R.Kind = Value_Number)
+                       and then L.Kind in Value_Text | Value_Number
+                       and then R.Kind in Value_Text | Value_Number
+                     then
+                        Same := False;
+                     end if;
+                  end;
                   Result :=
                     (if Value.Operator = Compare_Equal then Same else not Same);
                end;
@@ -9372,6 +10679,19 @@ package body Model_Runner.Templates is
                   if L.Kind = Over_Elements then
                      Next_Element (Src, Cursor, Value, Found);
                      if Found and then L.Key /= 0
+                       and then Is_JSON_Mapping (Src (Value.First .. Value.Last))
+                       and then Member_Of (Src (Value.First .. Value.Last),
+                                           "grouper").Kind /= Value_Undefined
+                     then
+                        --  A group from groupby: the grouper and the list.
+                        declare
+                           Piece : constant String :=
+                             Src (Value.First .. Value.Last);
+                        begin
+                           Store (L.Var, Member_Of (Piece, "grouper"));
+                           Store (L.Key, Member_Of (Piece, "list"));
+                        end;
+                     elsif Found and then L.Key /= 0
                        and then Is_JSON_List (Src (Value.First .. Value.Last))
                      then
                         --  Two names over a list of pairs take the pair
@@ -9636,6 +10956,36 @@ package body Model_Runner.Templates is
 
                when Op_Set_Caller =>
                   Pending_Caller := Step.Offset;
+                  Position := Position + 1;
+
+               when Op_Scope_Begin =>
+                  if Scope_Depth < Max_Depth then
+                     Scope_Depth := Scope_Depth + 1;
+                     Scopes (Scope_Depth) := Slots;
+                     Scope_Floor (Scope_Depth) := Pool_Used;
+                  end if;
+                  Position := Position + 1;
+
+               when Op_Scope_End =>
+                  if Scope_Depth > 0 then
+                     Restore_Names (Scopes (Scope_Depth),
+                                    Scope_Floor (Scope_Depth));
+                     Scope_Depth := Scope_Depth - 1;
+                  end if;
+                  Position := Position + 1;
+
+               when Op_Discard =>
+                  declare
+                     Ignored : constant String :=
+                       Value_Of (Item.Operands.all (Step.Value_At));
+                     pragma Unreferenced (Ignored);
+                  begin
+                     Position := Position + 1;
+                  end;
+
+               when Op_Grow =>
+                  Grow (Step.Offset, Item.Operands.all (Step.Value_At),
+                        Step.Length);
                   Position := Position + 1;
 
                when Op_Set_Text =>

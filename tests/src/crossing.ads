@@ -25,10 +25,14 @@
 --    each written as a one-line template -- against jinja2:
 --    `tests cross --model PATH --expressions`.
 --
---  Nine conversations: plain, with a system turn, tools offered with and
---  without one, a call turn with text and one without, two calls answered
---  by two tool turns, a reply with no generation prompt, and reasoning
---  kept in the exchange in progress and dropped from an earlier one.
+--  Fourteen conversations: plain, with a system turn, tools offered with
+--  and without one, a call turn with text and one without, two calls
+--  answered by two tool turns, a reply with no generation prompt,
+--  reasoning kept in the exchange in progress and dropped from an earlier
+--  one, a call whose arguments nest mappings and lists, a user turn
+--  wrapped in a tool answer's markers, two system turns, a developer
+--  turn, and a user turn whose content is a list of parts -- an image,
+--  a text, a video.
 --  `--think` and `--no-think` say what the caller says about reasoning;
 --  `--without-tools` and `--without-reasoning` leave out the shapes a
 --  carried format was never meant to match.

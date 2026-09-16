@@ -1,0 +1,703 @@
+date 2026-09-16
+case 1 unstated 55
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 2 unstated 94
+<s><|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 3 unstated 1467
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+
+case 4 unstated 1470
+<s><|im_start|>system
+Be brief.
+
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+
+case 5 unstated 1758
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+  Let me compute.  
+<function name="calc"><param name="a">2</param><param name="op">+</param><param name="b">3</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+
+case 6 unstated 1695
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">2</param><param name="op">*</param><param name="b">3</param><param name="exact">True</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+
+case 7 unstated 1786
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">1</param><param name="op">+</param><param name="b">1</param></function>
+<function name="weather"><param name="city">Odense</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+done<|im_end|>
+
+case 8 unstated 68
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+yo<|im_end|>
+
+case 9 unstated 180
+<s><|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+
+case 10 unstated 1736
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">{'x': 1, 'y': [True, None]}</param><param name="l">[1, 'two']</param><param name="s">str</param><param name="n">2.5</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+
+case 11 unstated 195
+<s><|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+
+case 12 unstated 128
+<s><|im_start|>system
+First.<|im_end|>
+<|im_start|>system
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 13 unstated 55
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 14 unstated 53
+<s><|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+
+case 1 think 63
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 2 think 102
+<s><|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 3 think 1475
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 4 think 1478
+<s><|im_start|>system
+Be brief.
+
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 5 think 1766
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+  Let me compute.  
+<function name="calc"><param name="a">2</param><param name="op">+</param><param name="b">3</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 6 think 1703
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">2</param><param name="op">*</param><param name="b">3</param><param name="exact">True</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 7 think 1786
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">1</param><param name="op">+</param><param name="b">1</param></function>
+<function name="weather"><param name="city">Odense</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+done<|im_end|>
+
+case 8 think 68
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+yo<|im_end|>
+
+case 9 think 188
+<s><|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 10 think 1744
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">{'x': 1, 'y': [True, None]}</param><param name="l">[1, 'two']</param><param name="s">str</param><param name="n">2.5</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 11 think 203
+<s><|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 12 think 136
+<s><|im_start|>system
+First.<|im_end|>
+<|im_start|>system
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 13 think 63
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 14 think 61
+<s><|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 1 no-think 74
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 2 no-think 113
+<s><|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 3 no-think 1486
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 4 no-think 1489
+<s><|im_start|>system
+Be brief.
+
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 5 no-think 1777
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+  Let me compute.  
+<function name="calc"><param name="a">2</param><param name="op">+</param><param name="b">3</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 6 no-think 1714
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">2</param><param name="op">*</param><param name="b">3</param><param name="exact">True</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 7 no-think 1786
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">1</param><param name="op">+</param><param name="b">1</param></function>
+<function name="weather"><param name="city">Odense</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+done<|im_end|>
+
+case 8 no-think 68
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+yo<|im_end|>
+
+case 9 no-think 199
+<s><|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 10 no-think 1755
+<s><|im_start|>system
+# Tools
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+Tool usage guidelines:
+- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.
+- When calling a function, return an XML object within <function ... </function> using:
+<function name="function-name"><param name="param-name">param-value</param></function>
+- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<function name="calc"><param name="a">{'x': 1, 'y': [True, None]}</param><param name="l">[1, 'two']</param><param name="s">str</param><param name="n">2.5</param></function><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 11 no-think 214
+<s><|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 12 no-think 147
+<s><|im_start|>system
+First.<|im_end|>
+<|im_start|>system
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 13 no-think 74
+<s><|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 14 no-think 72
+<s><|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+

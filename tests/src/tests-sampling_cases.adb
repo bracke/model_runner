@@ -1071,7 +1071,7 @@ package body Tests.Sampling_Cases is
       Refuse ("{% for x in other %}x{% endfor %}", "iteration over a non-list");
       Refuse ("{{ unknown_variable }}", "an unknown variable");
       Refuse ("{% set p = open('/etc/passwd') %}{{ p }}", "a function call");
-      Refuse ("{{ message['content'] | urlencode }}", "an unknown filter");
+      Refuse ("{{ message['content'] | xmlattr }}", "an unknown filter");
 
       --  And the constructs that moved into the subset.
       declare

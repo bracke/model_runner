@@ -1,0 +1,659 @@
+date 2026-09-16
+case 1 unstated 52
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 2 unstated 91
+<|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 3 unstated 2054
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+
+case 4 unstated 1969
+<|im_start|>system
+Be brief.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+
+case 5 unstated 2374
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+Let me compute.
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+3
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response>
+<|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+
+case 6 unstated 2318
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
+*
+</parameter>
+<parameter=b>
+3
+</parameter>
+<parameter=exact>
+True
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response>
+<|im_end|>
+<|im_start|>assistant
+
+case 7 unstated 2428
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=calc>
+<parameter=a>
+1
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+1
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=weather>
+<parameter=city>
+Odense
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response>
+<|im_end|>
+<|im_start|>assistant
+done<|im_end|>
+
+case 8 unstated 65
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+yo<|im_end|>
+
+case 9 unstated 201
+<|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+<think>
+first
+</think>
+
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+
+case 10 unstated 2359
+<|im_start|>system
+You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.
+
+You have access to the following functions:
+
+<tools>
+<function>
+<name>calc</name>
+<description>Evaluate a binary arithmetic operation.</description>
+<parameters>
+<parameter>
+<name>a</name>
+<type>integer</type>
+<description>left operand</description>
+</parameter>
+<parameter>
+<name>op</name>
+<type>string</type>
+<description>the operator</description>
+<enum>[`+`, `-`, `*`, `/`]</enum>
+</parameter>
+<parameter>
+<name>b</name>
+<type>integer</type>
+</parameter>
+<parameter>
+<name>exact</name>
+<type>boolean</type>
+<default>False</default>
+<minimum>0</minimum>
+</parameter>
+<parameter>
+<name>tags</name>
+<type>array</type>
+<items>{"type": "string"}</items>
+</parameter>
+<required>[`a`, `op`, `b`]</required>
+</parameters>
+<return>{"type": "number"}</return>
+</function>
+<function>
+<name>weather</name>
+<description>Look up the weather.</description>
+<parameters>
+<parameter>
+<name>city</name>
+<type>string</type>
+<description>which city</description>
+<enum>[`Aarhus`, `Odense`]</enum>
+<required>[`city`]</required>
+</parameter>
+</parameters>
+</function>
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=calc>
+<parameter=a>
+{'x': 1, 'y': [True, None]}
+</parameter>
+<parameter=l>
+[1, 'two']
+</parameter>
+<parameter=s>
+str
+</parameter>
+<parameter=n>
+2.5
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response>
+<|im_end|>
+<|im_start|>assistant
+
+case 11 unstated 192
+<|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+
+case 12 unstated 125
+<|im_start|>system
+First.<|im_end|>
+<|im_start|>system
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 13 unstated 100
+<|im_start|>developer
+Answer tersely.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+
+case 14 unstated -1
+

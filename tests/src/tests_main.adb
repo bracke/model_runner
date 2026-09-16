@@ -254,6 +254,7 @@ begin
            Positive'Value (Option ("--times", "1"));
          Filter : aliased AUnit.Test_Filters.Name_Filter;
          Chosen : AUnit.Options.AUnit_Options := AUnit.Options.Default_Options;
+         Suite_Failed : Boolean := False;
       begin
          if Only /= "" then
             AUnit.Test_Filters.Set_Name (Filter, Only);
@@ -262,8 +263,18 @@ begin
          for Turn in 1 .. Times loop
             if Run_Suite (Reporter, Chosen) /= AUnit.Success then
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               Suite_Failed := True;
             end if;
          end loop;
+
+         --  One line at the end saying which, because a test that raised
+         --  prints ERROR where a test that asserted prints FAIL, and a
+         --  reader looking for the one has missed the other.
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            (if Suite_Failed
+             then "suite: FAILED -- look for FAIL and ERROR lines above"
+             else "suite: passed"));
       end;
    elsif Command = "cross" then
       if Crossing.Run /= 0 then
@@ -573,6 +584,11 @@ begin
            and then Run_Suite (Reporter) /= AUnit.Success
          then
             Failed := True;
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "suite: FAILED -- look for FAIL and ERROR lines above");
+         elsif not Repository_Only then
+            Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, "suite: passed");
          end if;
 
          --  What the suite cost, which nothing said until now. Four stages
@@ -1192,6 +1208,18 @@ begin
             --  reads tools writes it differently from both other roles.
             declare
                Index : Natural := 2;
+
+               --  Where the first --system stands, which Set_System took.
+               function First_System_At return Natural is
+               begin
+                  for At_Word in 2 .. Ada.Command_Line.Argument_Count loop
+                     if Ada.Command_Line.Argument (At_Word) = "--system" then
+                        return At_Word;
+                     end if;
+                  end loop;
+                  return 0;
+               end First_System_At;
+               First_System : constant Natural := First_System_At;
             begin
                while E.Is_Ok (Status)
                  and then Index < Ada.Command_Line.Argument_Count
@@ -1205,6 +1233,25 @@ begin
                      if Name = "--prompt" then
                         Model_Runner.Conversation.Append
                           (Talk, Model_Runner.Conversation.User_Role, Value,
+                           Status);
+                        Index := Index + 2;
+                     elsif Name = "--developer" then
+                        Model_Runner.Conversation.Append
+                          (Talk, Model_Runner.Conversation.Developer_Role,
+                           Value, Status);
+                        Index := Index + 2;
+                     elsif Name = "--prompt-parts" then
+                        --  A user turn whose content is a list of parts.
+                        Model_Runner.Conversation.Append_Parts
+                          (Talk, Model_Runner.Conversation.User_Role, Value,
+                           Status);
+                        Index := Index + 2;
+                     elsif Name = "--system" and then Index > First_System
+                     then
+                        --  A second system turn, appended where it stands:
+                        --  the first was set before the loop.
+                        Model_Runner.Conversation.Append
+                          (Talk, Model_Runner.Conversation.System_Role, Value,
                            Status);
                         Index := Index + 2;
                      elsif Name = "--assistant" then

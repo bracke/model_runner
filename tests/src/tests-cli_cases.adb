@@ -3059,6 +3059,10 @@ package body Tests.CLI_Cases is
 
       Expect (E.CLI_Conflicting_Prompt_Sources,
               "run m.gguf --prompt a --prompt-file b");
+      Expect (E.CLI_Conflicting_Prompt_Sources,
+              "run m.gguf --prompt-file b --prompt-parts []");
+      Expect (E.CLI_Raw_Mode_Conflict,
+              "run m.gguf --raw --prompt-parts []");
       Expect (E.CLI_Conflicting_System_Sources,
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
@@ -5563,6 +5567,17 @@ package body Tests.CLI_Cases is
       Assert (Model_Runner.Text.To_String
                 (Read ("--prompt-file", "p.txt").Prompt_Path) = "p.txt",
               "--prompt-file did not reach the prompt path");
+      declare
+         Parts : constant Opt.Command :=
+           Read ("--prompt-parts", "[{""type"": ""image""}]");
+      begin
+         Assert (Parts.Prompt_Kind = Opt.Prompt_Parts,
+                 "--prompt-parts is not a prompt source");
+         Assert (Parts.Prompt_Parts_Text /= null
+                 and then Parts.Prompt_Parts_Text.all
+                   = "[{""type"": ""image""}]",
+                 "--prompt-parts did not reach the parts");
+      end;
 
       --  Stopping.
       Assert (Read ("--stop-token", "11").Stop_Token_Count = 1,

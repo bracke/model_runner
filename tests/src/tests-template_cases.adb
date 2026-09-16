@@ -1,10 +1,13 @@
 with AUnit.Assertions;
 with Ada.Calendar.Formatting;
-with Ada.Text_IO;
+with Ada.Directories;
+with Ada.Strings.Unbounded;
+with Ada.Streams.Stream_IO;
 with Ada.Calendar.Time_Zones;
 
 with Interfaces;
 
+with Model_Runner.CLI.Checkpoint;
 with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
@@ -1203,6 +1206,32 @@ package body Tests.Template_Cases is
             & Character'Val (10) & "  c| ab|Bab|a,True|TrueNone",
             "indent, the case methods, null read out, capitalised words");
 
+      --  The text filters that shape output, with blocks, raw blocks and
+      --  do statements that grow a list or a mapping in place -- each
+      --  crossed against jinja2 by `tests cross --expressions`.
+      Same ("{{ 'ab' | center(5) }}|{{ 'hello world foo' | truncate(9) }}|"
+            & "{{ 'Hello world this is a test' | wordwrap(10) }}|"
+            & "{{ '%s is %d and %.2f %%' | format('x', 3, 1.5) }}|"
+            & "{{ '<b>hi</b> <i>there</i>  x' | striptags }}|{{ 'x' | pprint }}"
+            & "|{{ 'abc' | reverse }}{{ [1, 2, 3] | reverse | list | tojson }}"
+            & "|{{ [1, 5, 3] | max }}{{ [{'n': 2}, {'n': 5}] | max(attribute='n') }}",
+            "  ab |hello...|Hello" & Character'Val (10) & "world this"
+            & Character'Val (10) & "is a test|x is 3 and 1.50 %|hi there x"
+            & "|'x'|cba[3, 2, 1]|5{'n': 5}",
+            "the text filters that shape output");
+      Same ("{% with a = 1, b = 'x' %}{{ a }}{{ b }}{% set a = 2 %}{{ a }}"
+            & "{% endwith %}[{% if a is defined %}!{% endif %}]"
+            & "{% set a = 9 %}{% with a = 1 %}{{ a }}{% endwith %}{{ a }}"
+            & "|{% raw %}{{ not rendered }} {% if %}{% endraw %}"
+            & "|{% set l = [] %}{% do l.append(1) %}{% do l.extend([2, 3]) %}"
+            & "{{ l }}{% set d = {'a': 1} %}{% do d.update({'b': 2}) %}{{ d }}"
+            & "{% do 1 + 1 %}|{% set ns = namespace(items=[]) %}"
+            & "{% for m in messages %}{% do ns.items.append(m.role) %}"
+            & "{% endfor %}{{ ns.items | join(',') }}",
+            "1x2[]19|{{ not rendered }} {% if %}|[1, 2, 3]{'a': 1, 'b': 2}"
+            & "|user,assistant,tool",
+            "with, raw and do");
+
       --  A loop over a name never assigned is refused as the output
       --  refuses it, and a field a turn has not got is nothing.
       Same ("{% for x in nothing %}x{% endfor %}",
@@ -1226,25 +1255,34 @@ package body Tests.Template_Cases is
       pragma Unreferenced (T);
       Defs : aliased Model_Runner.Tools.Definitions;
 
+      --  A file's bytes, every one: what a record of renderings is read
+      --  as, where a line break at the end is a byte like any other.
+      function Raw_File_Text (Path : String) return String is
+         Held : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Open
+           (Held, Ada.Streams.Stream_IO.In_File, Path);
+         declare
+            Size : constant Natural :=
+              Natural (Ada.Streams.Stream_IO.Size (Held));
+            Room : String (1 .. Size);
+         begin
+            String'Read (Ada.Streams.Stream_IO.Stream (Held), Room);
+            Ada.Streams.Stream_IO.Close (Held);
+            return Room;
+         end;
+      end Raw_File_Text;
+
       --  A template file's text, less the line break a file ends with
       --  and a template written as one line does not.
       function File_Text (Path : String) return String is
-         Held : Ada.Text_IO.File_Type;
-         Room : String (1 .. 32_768);
-         Used : Natural := 0;
+         Whole : constant String := Raw_File_Text (Path);
       begin
-         Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Path);
-         while not Ada.Text_IO.End_Of_File (Held) loop
-            declare
-               Line : constant String := Ada.Text_IO.Get_Line (Held);
-            begin
-               Room (Used + 1 .. Used + Line'Length) := Line;
-               Used := Used + Line'Length + 1;
-               Room (Used) := Character'Val (10);
-            end;
-         end loop;
-         Ada.Text_IO.Close (Held);
-         return (if Used > 0 then Room (1 .. Used - 1) else "");
+         if Whole'Length > 0 and then Whole (Whole'Last) = Character'Val (10)
+         then
+            return Whole (Whole'First .. Whole'Last - 1);
+         end if;
+         return Whole;
       end File_Text;
 
       --  The published templates with no carried format beside them.
@@ -1253,11 +1291,29 @@ package body Tests.Template_Cases is
         [new String'("fixtures/gpt-oss-own.jinja"),
          new String'("fixtures/qwen36-own.jinja")];
 
+      --  Every template with jinja2's renderings recorded beside it.
+      type Recording is record
+         Template    : File_Name;
+         Record_File : File_Name;
+      end record;
+      Recorded : constant array (1 .. 5) of Recording :=
+        [(new String'("fixtures/qwen3-coder-own.jinja"),
+          new String'("fixtures/qwen3-coder-own.render")),
+         (new String'("fixtures/minicpm-own.jinja"),
+          new String'("fixtures/minicpm-own.render")),
+         (new String'("fixtures/gemma3-own.jinja"),
+          new String'("fixtures/gemma3-own.render")),
+         (new String'("fixtures/qwen36-own.jinja"),
+          new String'("fixtures/qwen36-own.render")),
+         (new String'("fixtures/gpt-oss-own.jinja"),
+          new String'("fixtures/gpt-oss-own.render"))];
+
       --  One conversation, built the same way for both templates.
       type Shape is
         (Plain, With_System, Tools_No_System, Tools_With_System,
          Call_With_Text, Call_Without_Text, Two_Calls, Reply_No_Prompt,
-         Reasoning);
+         Reasoning, Nested_Arguments, Wrapped_User, Two_Systems, Developer,
+         Parts_Content);
 
       procedure Build (Talk : in out Conv.History; Which : Shape) is
          Asked  : Model_Runner.Tools.Calls;
@@ -1267,30 +1323,41 @@ package body Tests.Template_Cases is
          case Which is
             when Plain =>
                Conv.Append (Talk, Conv.User_Role, "hi", Status);
-            when With_System | Tools_With_System =>
+            when With_System =>
+               Conv.Set_System (Talk, "Be brief.", Status);
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+            when Tools_With_System =>
                Conv.Set_System (Talk, "Be brief.", Status);
                Conv.Append (Talk, Conv.User_Role, "add", Status);
             when Tools_No_System =>
                Conv.Append (Talk, Conv.User_Role, "add 2 and 3", Status);
             when Call_With_Text | Call_Without_Text =>
+               --  The two call turns `tests cross` hands jinja2, to the
+               --  byte: one with text before the call and two answers
+               --  and a question after it, one with neither.
                Conv.Append (Talk, Conv.User_Role, "add", Status);
                Conv.Append_Asking
                  (Talk, (if Which = Call_With_Text
                          then "  Let me compute.  " else ""), Status);
                Model_Runner.Tools.Read_Calls
                  (Asked,
-                  "<tool_call>{""name"": ""calc"", ""arguments"": "
-                  & "{""a"": 2, ""op"": ""+"", ""b"": 3, ""exact"": true}}"
-                  & "</tool_call>",
+                  (if Which = Call_With_Text
+                   then "<tool_call>{""name"": ""calc"", ""arguments"": "
+                        & "{""a"": 2, ""op"": ""+"", ""b"": 3}}</tool_call>"
+                   else "<tool_call>{""name"": ""calc"", ""arguments"": "
+                        & "{""a"": 2, ""op"": ""*"", ""b"": 3, ""exact"": true}}"
+                        & "</tool_call>"),
                   Status);
                Conv.Append_Call
                  (Talk, Model_Runner.Tools.Called (Asked, 1),
                   Model_Runner.Tools.Arguments (Asked, 1), Status);
                Model_Runner.Tools.Close (Asked);
-               Conv.Append (Talk, Conv.Tool_Role, "5", Status);
                if Which = Call_With_Text then
+                  Conv.Append (Talk, Conv.Tool_Role, "5", Status);
                   Conv.Append (Talk, Conv.Tool_Role, "5 again", Status);
                   Conv.Append (Talk, Conv.User_Role, "thanks", Status);
+               else
+                  Conv.Append (Talk, Conv.Tool_Role, "6", Status);
                end if;
             when Two_Calls =>
                Conv.Append (Talk, Conv.User_Role, "add", Status);
@@ -1327,6 +1394,43 @@ package body Tests.Template_Cases is
                   "<think>" & Character'Val (10) & "second"
                   & Character'Val (10) & "</think>" & Character'Val (10)
                   & Character'Val (10) & "A2", Status);
+            when Nested_Arguments =>
+               Conv.Append (Talk, Conv.User_Role, "go", Status);
+               Conv.Append_Asking (Talk, "", Status);
+               Model_Runner.Tools.Read_Calls
+                 (Asked,
+                  "<tool_call>{""name"": ""calc"", ""arguments"": "
+                  & "{""a"": {""x"": 1, ""y"": [true, null]}, "
+                  & """l"": [1, ""two""], ""s"": ""str"", ""n"": 2.5}}"
+                  & "</tool_call>",
+                  Status);
+               Conv.Append_Call
+                 (Talk, Model_Runner.Tools.Called (Asked, 1),
+                  Model_Runner.Tools.Arguments (Asked, 1), Status);
+               Model_Runner.Tools.Close (Asked);
+               Conv.Append (Talk, Conv.Tool_Role, "{""ok"": true}", Status);
+            when Wrapped_User =>
+               Conv.Append
+                 (Talk, Conv.User_Role,
+                  "<tool_response>" & Character'Val (10) & "from before"
+                  & Character'Val (10) & "</tool_response>", Status);
+               Conv.Append (Talk, Conv.Assistant_Role, "noted", Status);
+               Conv.Append
+                 (Talk, Conv.User_Role, "<tool_response>x</tool_response>",
+                  Status);
+            when Two_Systems =>
+               Conv.Set_System (Talk, "First.", Status);
+               Conv.Append (Talk, Conv.System_Role, "Second.", Status);
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+            when Developer =>
+               Conv.Append
+                 (Talk, Conv.Developer_Role, "Answer tersely.", Status);
+               Conv.Append (Talk, Conv.User_Role, "hi", Status);
+            when Parts_Content =>
+               Conv.Append_Parts
+                 (Talk, Conv.User_Role,
+                  "[{""type"": ""image""}, {""type"": ""text"", ""text"": "
+                  & """ what is this ""}, {""type"": ""video""}]", Status);
          end case;
          Assert (E.Is_Ok (Status), "the conversation would not build");
       end Build;
@@ -1363,14 +1467,15 @@ package body Tests.Template_Cases is
                  and then (Tooled
                            or else Which not in Tools_No_System
                                      | Tools_With_System | Call_With_Text
-                                     | Call_Without_Text | Two_Calls)
+                                     | Call_Without_Text | Two_Calls
+                                     | Nested_Arguments)
                then
                   declare
                      Talk       : Conv.History;
                      Tooled     : constant Boolean :=
                        Which in Tools_No_System | Tools_With_System
                                 | Call_With_Text | Call_Without_Text
-                                | Two_Calls;
+                                | Two_Calls | Nested_Arguments;
                      Generation : constant Boolean :=
                        Which not in Two_Calls | Reply_No_Prompt;
                      A, B       : String (1 .. 8192);
@@ -1387,6 +1492,24 @@ package body Tests.Template_Cases is
                         B, B_Last, Status_B, Thinking => Choice,
                         Tools => (if Tooled then Defs'Access else null));
                      Conv.Close (Talk);
+                     --  A conversation the model's own template refuses
+                     --  in its author's words -- Gemma's insists the
+                     --  roles alternate -- or by adding words to a list
+                     --  of parts, as Qwen3-Coder's does, is one the
+                     --  carried format refuses the same way, unless it is
+                     --  a tool turn, which the carried format takes and
+                     --  its model never saw.
+                     if E."=" (Status_B.Code, E.Template_Refused)
+                       or else E."=" (Status_B.Code,
+                                      E.Template_Unsupported_Construct)
+                     then
+                        Assert (E."=" (Status_A.Code, Status_B.Code)
+                                or else Tooled,
+                                Tmpl.Format_Name (Format) & " rendered "
+                                & Shape'Image (Which)
+                                & " where the model's own template refuses it");
+                        goto Next_Case;
+                     end if;
                      Assert (E.Is_Ok (Status_A),
                              Tmpl.Format_Name (Format) & " did not render "
                              & Shape'Image (Which) & ": "
@@ -1405,6 +1528,7 @@ package body Tests.Template_Cases is
                              & B (1 .. B_Last) & ")");
                   end;
                end if;
+               <<Next_Case>>
             end loop;
          end loop;
 
@@ -1453,7 +1577,8 @@ package body Tests.Template_Cases is
                Status : E.Error_Info;
                Tooled : constant Boolean :=
                  Which in Tools_No_System | Tools_With_System
-                          | Call_With_Text | Call_Without_Text | Two_Calls;
+                          | Call_With_Text | Call_Without_Text | Two_Calls
+                          | Nested_Arguments;
             begin
                Tmpl.Compile (Own, File_Text (File.all), Status => Status);
                Assert (E.Is_Ok (Status),
@@ -1467,19 +1592,29 @@ package body Tests.Template_Cases is
                   Tools => (if Tooled then Defs'Access else null));
                Conv.Close (Talk);
                Tmpl.Close (Own);
-               Assert (E.Is_Ok (Status),
-                       File.all & " refused " & Shape'Image (Which) & ": "
-                       & E.Error_Code'Image (Status.Code));
+               --  gpt-oss adds words to the content, so a list of parts
+               --  is refused -- as jinja2 refuses it, with a TypeError.
+               if Which = Parts_Content
+                 and then File.all = "fixtures/gpt-oss-own.jinja"
+               then
+                  Assert (E."=" (Status.Code,
+                                 E.Template_Unsupported_Construct),
+                          File.all & " took a list of parts as words");
+               else
+                  Assert (E.Is_Ok (Status),
+                          File.all & " refused " & Shape'Image (Which) & ": "
+                          & E.Error_Code'Image (Status.Code));
+               end if;
             end;
          end loop;
       end loop;
 
       --  The branches for content that is a list of parts -- an image, a
-      --  video, a text -- which no conversation here can hand a template,
-      --  because a turn's content is text: Qwen3.6's render_content macro
-      --  is called from the end of its own file with such a list, and
-      --  Gemma 3's branch is written out with one. Both are set beside
-      --  jinja2 by `tests cross --expressions`, the same lists in hand.
+      --  video, a text -- with literal lists in hand, apart from the turn
+      --  given as parts above: Qwen3.6's render_content macro is called
+      --  from the end of its own file with such a list, and Gemma 3's
+      --  branch is written out with one. Both are set beside jinja2 by
+      --  `tests cross --expressions`, the same lists in hand.
       declare
          Own    : Tmpl.Compiled;
          Talk   : Conv.History;
@@ -1533,6 +1668,200 @@ package body Tests.Template_Cases is
                    = "<start_of_image>hello",
                  "Gemma's parts branch wrote: " & Room (1 .. Last));
       end;
+
+      --  A turn given as parts reads as its words wherever text is wanted,
+      --  keeps its list for the template, survives a checkpoint, and is
+      --  refused when the list is not one.
+      declare
+         Talk   : Conv.History;
+         Again  : Conv.History;
+         Loaded : Boolean := False;
+         Status : E.Error_Info;
+         Parts  : constant String :=
+           "[{""type"": ""image""}, {""type"": ""text"", ""text"": ""what""},"
+           & " {""type"": ""text"", ""text"": "" is\nthis""}]";
+         File   : constant String := "parts-checkpoint.bin";
+      begin
+         Assert (Conv.Text_Of_Parts (Parts) = "what is" & ASCII.LF & "this",
+                 "the words of the parts read as: "
+                 & Conv.Text_Of_Parts (Parts));
+         Assert (Conv.Text_Of_Parts ("[{""type"": ""image""}]") = "",
+                 "a picture alone has words");
+
+         Conv.Open (Talk, Status => Status);
+         Conv.Append_Parts (Talk, Conv.User_Role, "what", Status);
+         Assert (E."=" (Status.Code, E.Conversation_Empty),
+                 "parts that are not a list were taken");
+         Conv.Append_Parts (Talk, Conv.User_Role, "[]", Status);
+         Assert (E."=" (Status.Code, E.Conversation_Empty),
+                 "an empty list of parts was taken");
+         Conv.Append_Parts (Talk, Conv.User_Role, Parts, Status);
+         Assert (E.Is_Ok (Status), "a list of parts was refused");
+         Assert (Conv.Length (Talk) = 1
+                 and then Conv.Content_At (Talk, 1)
+                   = "what is" & ASCII.LF & "this"
+                 and then Conv.Parts_At (Talk, 1) = Parts,
+                 "the turn given as parts does not read as both");
+         Conv.Append (Talk, Conv.Assistant_Role, "a cat", Status);
+         Assert (Conv.Parts_At (Talk, 2) = "",
+                 "a turn given as words has parts");
+
+         Model_Runner.CLI.Checkpoint.Save (File, Talk);
+         Conv.Open (Again, Status => Status);
+         Model_Runner.CLI.Checkpoint.Load (File, Again, Loaded, Status);
+         Assert (Loaded and then E.Is_Ok (Status),
+                 "the checkpoint with a turn of parts did not load");
+         Assert (Conv.Length (Again) = 2
+                 and then Conv.Parts_At (Again, 1) = Parts
+                 and then Conv.Content_At (Again, 1)
+                   = "what is" & ASCII.LF & "this"
+                 and then Conv.Content_At (Again, 2) = "a cat",
+                 "the turn of parts did not survive the checkpoint");
+         Conv.Close (Again);
+         Conv.Close (Talk);
+         Ada.Directories.Delete_File (File);
+      end;
+
+      --  And what jinja2 rendered from each of the five, recorded by
+      --  `tests cross --record` with these tokens, compared byte for byte
+      --  here, where no Python is needed: a record a case, the
+      --  conversation's number, the caller's thinking choice, the byte
+      --  count -- minus one where jinja2 refused, and then this engine
+      --  must refuse too -- and the bytes. A template writing the date
+      --  is compared with the day it was recorded read as today.
+      for File of Recorded loop
+         declare
+            Whole   : constant String := Raw_File_Text (File.Record_File.all);
+            Own     : Tmpl.Compiled;
+            Status  : E.Error_Info;
+            Cursor  : Natural := Whole'First;
+            Dated   : String (1 .. 10) := [others => ' '];
+            Cases   : Natural := 0;
+
+            function Line_End (From : Natural) return Natural is
+               At_LF : Natural := From;
+            begin
+               while At_LF <= Whole'Last
+                 and then Whole (At_LF) /= Character'Val (10)
+               loop
+                  At_LF := At_LF + 1;
+               end loop;
+               return At_LF;
+            end Line_End;
+
+            --  The recording's date replaced by today's, wherever it
+            --  stands.
+            function Redated (Text : String) return String is
+               R : Ada.Strings.Unbounded.Unbounded_String;
+               I : Natural := Text'First;
+               Now : constant String := Today ("%Y-%m-%d");
+            begin
+               while I <= Text'Last loop
+                  if I + 9 <= Text'Last and then Text (I .. I + 9) = Dated then
+                     Ada.Strings.Unbounded.Append (R, Now);
+                     I := I + 10;
+                  else
+                     Ada.Strings.Unbounded.Append (R, Text (I));
+                     I := I + 1;
+                  end if;
+               end loop;
+               return Ada.Strings.Unbounded.To_String (R);
+            end Redated;
+         begin
+            Tmpl.Compile (Own, File_Text (File.Template.all), Status => Status);
+            Assert (E.Is_Ok (Status), File.Template.all & " did not compile");
+
+            while Cursor <= Whole'Last loop
+               declare
+                  Stop : constant Natural := Line_End (Cursor);
+                  Line : constant String := Whole (Cursor .. Stop - 1);
+               begin
+                  Cursor := Stop + 1;
+                  if Line'Length > 5 and then Line (Line'First .. Line'First + 4)
+                                             = "date "
+                  then
+                     Dated := Line (Line'First + 5 .. Line'First + 14);
+                  elsif Line'Length > 5
+                    and then Line (Line'First .. Line'First + 4) = "case "
+                  then
+                     declare
+                        Scan : Natural := Line'First + 5;
+                        Number, Bytes : Integer;
+                        Choice : Tmpl.Thinking_Choice;
+                        First, Last : Natural;
+
+                        procedure Word is
+                        begin
+                           First := Scan;
+                           while Scan <= Line'Last and then Line (Scan) /= ' '
+                           loop
+                              Scan := Scan + 1;
+                           end loop;
+                           Last := Scan - 1;
+                           Scan := Scan + 1;
+                        end Word;
+                     begin
+                        Word;
+                        Number := Integer'Value (Line (First .. Last));
+                        Word;
+                        Choice :=
+                          (if Line (First .. Last) = "think"
+                           then Tmpl.Thinking_On
+                           elsif Line (First .. Last) = "no-think"
+                           then Tmpl.Thinking_Off
+                           else Tmpl.Thinking_Unstated);
+                        Word;
+                        Bytes := Integer'Value (Line (First .. Last));
+
+                        declare
+                           Which   : constant Shape := Shape'Val (Number - 1);
+                           Wanted  : constant String :=
+                             (if Bytes < 0 then ""
+                              else Whole (Cursor .. Cursor + Bytes - 1));
+                           Talk    : Conv.History;
+                           Room    : String (1 .. 16384);
+                           Filled  : Natural;
+                           Tooled  : constant Boolean :=
+                             Which in Tools_No_System | Tools_With_System
+                                      | Call_With_Text | Call_Without_Text
+                                      | Two_Calls | Nested_Arguments;
+                        begin
+                           Cursor := Cursor + Integer'Max (Bytes, 0) + 1;
+                           Cases := Cases + 1;
+                           Build (Talk, Which);
+                           Tmpl.Render
+                             (Own, Talk, "<s>", "</s>",
+                              Which not in Two_Calls | Reply_No_Prompt,
+                              Room, Filled, Status, Thinking => Choice,
+                              Tools => (if Tooled then Defs'Access else null));
+                           Conv.Close (Talk);
+                           if Bytes < 0 then
+                              Assert (E.Is_Error (Status),
+                                      File.Template.all & " rendered "
+                                      & Shape'Image (Which)
+                                      & " where jinja2 refused it");
+                           else
+                              Assert (E.Is_Ok (Status),
+                                      File.Template.all & " refused "
+                                      & Shape'Image (Which) & ": "
+                                      & E.Error_Code'Image (Status.Code));
+                              Assert (Room (1 .. Filled) = Redated (Wanted),
+                                      File.Template.all & " on "
+                                      & Shape'Image (Which) & " "
+                                      & Tmpl.Thinking_Choice'Image (Choice)
+                                      & " rendered (" & Room (1 .. Filled)
+                                      & ") where jinja2 rendered ("
+                                      & Redated (Wanted) & ")");
+                           end if;
+                        end;
+                     end;
+                  end if;
+               end;
+            end loop;
+            Tmpl.Close (Own);
+            Assert (Cases >= 14, File.Record_File.all & " holds too few cases");
+         end;
+      end loop;
 
       Model_Runner.Tools.Close (Defs);
    end Carried_Formats_Match_The_Models_Own_Templates;
@@ -1879,7 +2208,7 @@ package body Tests.Template_Cases is
       Assert (Render_Status ("{{ raise_exception('no') }}")
               = E.Template_Refused,
               "raise_exception did not refuse");
-      Assert (Render_Status ("{{ message.content | urlencode }}")
+      Assert (Render_Status ("{{ message.content | xmlattr }}")
               = E.Template_Unknown_Filter,
               "an unknown filter rendered");
       Assert (Render_Status ("{% set d = strftime_now('%d') %}{{ d }}")
@@ -1912,7 +2241,7 @@ package body Tests.Template_Cases is
       --  A filter keeps a diagnostic of its own: a reader can act on "this
       --  template uses a filter I do not have" where "unsupported
       --  expression" leaves them looking for the expression.
-      Assert (Render_Status ("{{ bos_token | urlencode }}")
+      Assert (Render_Status ("{{ bos_token | xmlattr }}")
               = E.Template_Unknown_Filter,
               "a filter was not reported as one");
       Assert (Render_Status ("{{ message.content | trim }}") = E.No_Error,
@@ -2993,8 +3322,8 @@ package body Tests.Template_Cases is
         (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
          "the carried qwen3-coder, minicpm and gemma formats render the "
          & "same bytes as the models' own templates, conversation for "
-         & "conversation, and the gpt-oss and Qwen3.6 templates render "
-         & "every shape");
+         & "conversation, the gpt-oss and Qwen3.6 templates render every "
+         & "shape, and all five render the bytes jinja2 recorded");
       Register_Routine
         (T, Templates_Are_Recognised_By_Their_Markers'Access,
          "a template's own text names the carried format it is written in, "

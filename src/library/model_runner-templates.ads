@@ -542,7 +542,21 @@ private
       Filter_First, Filter_Last,
 
       --  A value as a binary64, written as Python writes one.
-      Filter_Float);
+      Filter_Float,
+
+      --  Numbers rounded, made positive and added up; text
+      --  percent-encoded for a URL; a list cut into batches or into a
+      --  given number of slices, grouped by a member; and one member of
+      --  a value by name.
+      Filter_Round, Filter_Abs, Filter_Sum, Filter_Urlencode,
+      Filter_Batch, Filter_Slice, Filter_Groupby, Filter_Attr,
+
+      --  Text wrapped, cut short, centred, formatted printf-style and
+      --  stripped of tags; a value as Python prints it; one element at
+      --  random; a list or text reversed; and the largest of a list.
+      Filter_Wordwrap, Filter_Truncate, Filter_Center, Filter_Format,
+      Filter_Striptags, Filter_Pprint, Filter_Random, Filter_Reverse,
+      Filter_Max);
 
    --  One filter and where its arguments were kept, as operands: the
    --  stand-in for default, the two texts for replace, a separator, a
@@ -651,9 +665,10 @@ private
    --  come out whole is refused where it is read rather than rounded.
    --  Concat is the language's '~', which runs two values together as
    --  text whatever they are: a sum with one in it is text, not a number.
+   --  Power is the language's '**', binding tighter than the products.
    type Join_Kind is
      (Join_Plus, Join_Minus, Join_Times, Join_Divide, Join_Floor,
-      Join_Modulo, Join_Concat);
+      Join_Modulo, Join_Concat, Join_Power);
 
    type Term is record
       Kind   : Term_Kind := Term_Literal;
@@ -883,6 +898,19 @@ private
       --  Name the body a {% call %} block wrapped up, in Offset, for the
       --  macro call written next: what caller() in that macro runs.
       Op_Set_Caller,
+
+      --  A {% with %} block's scope: names assigned inside it are put
+      --  back at its end, as a loop's are.
+      Op_Scope_Begin,
+      Op_Scope_End,
+
+      --  {% do %}: evaluate the operand and write nothing.
+      Op_Discard,
+
+      --  {% do name.append(v) %}, .extend(l) and .update(m): the list or
+      --  mapping in Offset grown by what Value_At is worth, Length saying
+      --  which of the three.
+      Op_Grow,
 
       Op_Unsupported);  --  refuse, naming the construct, if ever reached
 

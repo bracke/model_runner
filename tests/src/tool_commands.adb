@@ -54,9 +54,9 @@ package body Tool_Commands is
    Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
-     " --model --system --prompt --assistant --calls --tool --tools"
-     & " --template --format --generation-prompt --think --no-think"
-     & " --show-template --show-tokens ";
+     " --model --system --developer --prompt --prompt-parts --assistant"
+     & " --calls --tool --tools --template --format --generation-prompt"
+     & " --think --no-think --show-template --show-tokens ";
    Opts_Likeness  : aliased constant String := " --model --names ";
    Opts_Imatrix   : aliased constant String :=
      " --model --text --chunk --chunks --threads --out ";
@@ -89,7 +89,8 @@ package body Tool_Commands is
      "--model PATH --prompt TEXT [--special]";
    Takes_Cut       : aliased constant String := "--pre NAME --texts PATH";
    Takes_Render    : aliased constant String :=
-     "--model PATH [--system TEXT] [--prompt TEXT] [--assistant TEXT]"
+     "--model PATH [--system TEXT] [--developer TEXT] [--prompt TEXT]"
+     & " [--prompt-parts JSON] [--assistant TEXT]"
      & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
      & " [--format NAME] [--generation-prompt] [--think | --no-think]"
      & " [--show-template | --show-tokens]";
@@ -197,10 +198,11 @@ package body Tool_Commands is
      & "conversation";
    Takes_Cross : aliased constant String :=
      "--model PATH [--template FILE | --format NAME | --expressions]"
-     & " [--think | --no-think] [--without-tools] [--without-reasoning]";
+     & " [--think | --no-think] [--without-tools] [--without-reasoning]"
+     & " [--record FILE] [--bos TEXT] [--eos TEXT]";
    Opts_Cross  : aliased constant String :=
      " --model --template --format --expressions --think --no-think"
-     & " --without-tools --without-reasoning ";
+     & " --without-tools --without-reasoning --record --bos --eos ";
 
    Held : constant array (1 .. 26) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

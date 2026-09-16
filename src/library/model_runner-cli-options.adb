@@ -26,12 +26,14 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 99) of Registry_Row :=
+   Registry : constant array (1 .. 101) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
+      (Text ("--prompt-parts"), [Command_Run => True, others => False],
+       Text ("prompt_parts")),
       (Text ("--interactive"), [Command_Run => True, others => False], Text ("interactive")),
       (Text ("--agent"), [Command_Run => True, others => False], Text ("agent")),
       (Text ("--max-steps"), [Command_Run => True, others => False], Text ("max_steps")),
@@ -100,6 +102,7 @@ package body Model_Runner.CLI.Options is
        Text ("no_normalize")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
       (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
+      (Text ("--developer"), [Command_Run => True, others => False], Text ("developer")),
       (Text ("--max-tokens"), [Command_Run => True, others => False], Text ("max_tokens")),
       (Text ("--context-size"),
        [Command_Run | Command_Embed => True, others => False], Text ("context_size")),
@@ -476,6 +479,14 @@ package body Model_Runner.CLI.Options is
          Item.System_Text.all := [others => ' '];
          Free_Text (Item.System_Text);
       end if;
+      if Item.Developer_Text /= null then
+         Item.Developer_Text.all := [others => ' '];
+         Free_Text (Item.Developer_Text);
+      end if;
+      if Item.Prompt_Parts_Text /= null then
+         Item.Prompt_Parts_Text.all := [others => ' '];
+         Free_Text (Item.Prompt_Parts_Text);
+      end if;
    end Release;
 
    --  Split "--name=value" into its parts. Value_Present is False for a bare
@@ -825,7 +836,8 @@ package body Model_Runner.CLI.Options is
       --  Track which options were seen so that a repeat is a usage error
       --  rather than a silent last-wins.
       type Option_Flag is
-        (Flag_Prompt_File, Flag_System, Flag_System_File,
+        (Flag_Prompt_File, Flag_Prompt_Parts, Flag_System, Flag_System_File,
+         Flag_Developer,
          Flag_Max_Tokens, Flag_Max_Steps, Flag_Context, Flag_Batch,
          Flag_Temperature,
          Flag_Rope_Scaling, Flag_Rope_Scale, Flag_Rope_Base,
@@ -1336,6 +1348,22 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Prompt_Kind := Prompt_File;
 
+                  elsif Name = "--prompt-parts" then
+                     Mark (Flag_Prompt_Parts, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Result.Prompt_Kind /= Prompt_Unset then
+                        Fail (E.CLI_Conflicting_Prompt_Sources, Name);
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Prompt_Parts_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Prompt_Kind := Prompt_Parts;
+
                   elsif Name = "--interactive" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
@@ -1592,6 +1620,17 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Has_System := True;
+
+                  elsif Name = "--developer" then
+                     Mark (Flag_Developer, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Developer_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--system-file" then
                      Bounded_Value (Flag_System_File, Result.System_Path, Good);
@@ -2599,6 +2638,14 @@ package body Model_Runner.CLI.Options is
       if Result.Raw and then Result.Has_System then
          Status := E.Make (E.CLI_Raw_Mode_Conflict);
          E.Add_Text (Status, "option", "--system", E.Param_Identifier);
+         return;
+      end if;
+
+      --  Nor a template to walk the parts of a prompt given as parts:
+      --  raw mode tokenizes text, and a picture is not text.
+      if Result.Raw and then Result.Prompt_Kind = Prompt_Parts then
+         Status := E.Make (E.CLI_Raw_Mode_Conflict);
+         E.Add_Text (Status, "option", "--prompt-parts", E.Param_Identifier);
          return;
       end if;
 

@@ -428,12 +428,22 @@ to `jinja2` with the model's template, `trim_blocks` and `lstrip_blocks`
 on and `tojson` as `transformers` defines it. The Python that asks jinja2
 is carried inside the command, as text, so a checkout runs the crossing
 rather than a script somebody once had; a machine without python3 or
-jinja2 skips it. Nine conversations, byte for byte: with and without a
+jinja2 skips it. Fourteen conversations, byte for byte: with and without a
 system turn, tools offered -- with enums, defaults, nested items, required
 lists and a return -- a call turn with text and one without, two calls
-answered by two tool turns, a reply with no generation prompt, and
-reasoning kept in the exchange in progress and dropped from an earlier
-one, with the caller's `--think` and `--no-think` each where the template
+answered by two tool turns, a reply with no generation prompt, reasoning
+kept in the exchange in progress and dropped from an earlier one, a call
+whose arguments nest mappings and lists -- which found the carried
+`qwen3-coder` format spelling those as JSON where the model spells them
+as Python -- a user turn wrapped in a tool answer's markers, two
+system turns, and a developer turn -- the role gpt-oss's and Qwen3.6's
+templates read instructions from, which `run --developer TEXT` and
+`tests render --developer TEXT` hand a template -- and a user turn whose
+content is a list of parts, a picture and words, which `run --prompt-parts
+JSON` and `tests render --prompt-parts JSON` hand a template, and which
+Gemma 3's walks, MiniCPM's writes nothing for, and Qwen3-Coder's and
+gpt-oss's refuse on both sides, a text and a list added together -- with
+the caller's `--think` and `--no-think` each where the template
 reads them; `--without-tools` and `--without-reasoning` leave out the
 shapes a carried format was never meant to match, which is how the
 `gemma` format -- whose model has no tool half -- and the `qwen3-coder`
@@ -447,9 +457,16 @@ gpt-oss's harmony template, which walks every tool's schema through a
 recursive macro into TypeScript. `--expressions` runs twelve one-line
 suites, one construct of the support matrix after another, the same way.
 The own templates of Qwen3-Coder, MiniCPM, Gemma 3, Qwen3.6 and gpt-oss
-are fixtures, and the suite renders the first three beside their carried
-formats on those conversations and the last two on every shape, so the
-crossing is made on every run. It found the carried `gemma` format
+are fixtures, and what jinja2 rendered from each -- `tests cross
+--record FILE --bos '<s>' --eos '</s>'`, the tokens the suite renders
+with, one record a conversation and thinking choice, the day it was
+recorded on the first line so a template writing the date compares on
+another day -- lies beside each as a `.render` file. The suite renders
+every case of every record and compares the bytes, so the crossing is
+made on every run of the suite, on a machine with no Python and no
+model file; the first three are rendered beside their carried formats
+as well, and a conversation jinja2 refused is one this engine must
+refuse. It found the carried `gemma` format
 writing a turn's content untrimmed where the model's template trims it. Five faults came out of it: the line break after a block
 tag, which
 the engine takes off as `trim_blocks` does, was where the model's template

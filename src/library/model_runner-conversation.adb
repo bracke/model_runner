@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+with Model_Runner.Text;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Conversation is
@@ -18,6 +20,7 @@ package body Model_Runner.Conversation is
          when User_Role      => return "user";
          when Assistant_Role => return "assistant";
          when Tool_Role      => return "tool";
+         when Developer_Role => return "developer";
       end case;
    end Role_Name;
 
@@ -155,8 +158,163 @@ package body Model_Runner.Conversation is
       Item.Used := Item.Used + 1;
       Item.Messages (Item.Used) :=
         (Sender => Sender, Offset => Offset, Length => Content'Length,
+         Parts_Offset => 0, Parts_Length => 0,
          First_Call => 0, Calls => 0);
    end Add;
+
+   -------------------
+   -- Text_Of_Parts --
+   -------------------
+
+   function Text_Of_Parts (Parts : String) return String is
+      Trimmed : constant String := Model_Runner.Text.Trim (Parts);
+      R : Ada.Strings.Unbounded.Unbounded_String;
+      I : Natural := Trimmed'First;
+
+      procedure Skip_Blanks is
+      begin
+         while I <= Trimmed'Last
+           and then Trimmed (I) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+         loop
+            I := I + 1;
+         end loop;
+      end Skip_Blanks;
+
+      --  A JSON string at I, decoded, I left past its closing quote.
+      function Read_String return String is
+         S : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         I := I + 1;
+         while I <= Trimmed'Last and then Trimmed (I) /= '"' loop
+            if Trimmed (I) = '\' and then I < Trimmed'Last then
+               I := I + 1;
+               case Trimmed (I) is
+                  when 'n' => Ada.Strings.Unbounded.Append (S, ASCII.LF);
+                  when 't' => Ada.Strings.Unbounded.Append (S, ASCII.HT);
+                  when 'r' => Ada.Strings.Unbounded.Append (S, ASCII.CR);
+                  when others =>
+                     Ada.Strings.Unbounded.Append (S, Trimmed (I));
+               end case;
+            else
+               Ada.Strings.Unbounded.Append (S, Trimmed (I));
+            end if;
+            I := I + 1;
+         end loop;
+         I := I + 1;
+         return Ada.Strings.Unbounded.To_String (S);
+      end Read_String;
+   begin
+      --  Every "text" key's string value, wherever it stands: a part has
+      --  one or none, and no part nests another.
+      while I <= Trimmed'Last loop
+         if Trimmed (I) = '"' then
+            declare
+               Key : constant String := Read_String;
+            begin
+               Skip_Blanks;
+               if I <= Trimmed'Last and then Trimmed (I) = ':' then
+                  I := I + 1;
+                  Skip_Blanks;
+                  if I <= Trimmed'Last and then Trimmed (I) = '"' then
+                     declare
+                        Value : constant String := Read_String;
+                     begin
+                        if Key = "text" then
+                           Ada.Strings.Unbounded.Append (R, Value);
+                        end if;
+                     end;
+                  end if;
+               end if;
+            end;
+         else
+            I := I + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (R);
+   end Text_Of_Parts;
+
+   ------------------
+   -- Append_Parts --
+   ------------------
+
+   procedure Append_Parts
+     (Item   : in out History;
+      Sender : Role;
+      Parts  : String;
+      Status : out E.Error_Info)
+   is
+      Trimmed : constant String := Model_Runner.Text.Trim (Parts);
+      Before  : constant Natural := Item.Filled;
+
+      Text_At, Parts_At : Natural;
+      Ok : Boolean;
+   begin
+      Status := E.Success;
+
+      --  A list, and one holding a part: an object between its brackets.
+      if Trimmed'Length < 2 or else Trimmed (Trimmed'First) /= '['
+        or else Trimmed (Trimmed'Last) /= ']'
+        or else (for all C of Trimmed => C /= '{')
+      then
+         Status := E.Make (E.Conversation_Empty);
+         E.Add_Text (Status, "role", Role_Name (Sender), E.Param_Identifier);
+         return;
+      end if;
+
+      if Item.Used >= Max_Messages
+        or else Item.Used >= Item.Bounds.Max_Messages
+      then
+         Status := E.Make (E.Conversation_Too_Long);
+         E.Add_Integer
+           (Status, "limit",
+            Long_Long_Integer
+              (Natural'Min (Max_Messages, Item.Bounds.Max_Messages)));
+         return;
+      end if;
+
+      declare
+         Text : constant String := Text_Of_Parts (Parts);
+      begin
+         Store (Item, Text, Text_At, Ok);
+         if Ok then
+            Store (Item, Trimmed, Parts_At, Ok);
+         end if;
+         if not Ok then
+            Item.Filled := Before;
+            Status := E.Make (E.Conversation_Too_Long);
+            E.Add_Integer
+              (Status, "limit",
+               Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes),
+               E.Param_Bytes);
+            return;
+         end if;
+
+         Item.Used := Item.Used + 1;
+         Item.Messages (Item.Used) :=
+           (Sender => Sender, Offset => Text_At, Length => Text'Length,
+            Parts_Offset => Parts_At, Parts_Length => Trimmed'Length,
+            First_Call => 0, Calls => 0);
+      end;
+   end Append_Parts;
+
+   --------------
+   -- Parts_At --
+   --------------
+
+   function Parts_At (Item : History; Index : Positive) return String is
+   begin
+      if Index > Item.Used or else Item.Storage = null
+        or else Item.Messages (Index).Parts_Length = 0
+      then
+         return "";
+      end if;
+      declare
+         Found : Message renames Item.Messages (Index);
+      begin
+         return Item.Storage.all
+           (Found.Parts_Offset + 1 .. Found.Parts_Offset + Found.Parts_Length);
+      end;
+   end Parts_At;
 
    ------------
    -- Append --
@@ -498,7 +656,7 @@ package body Model_Runner.Conversation is
                       (Item.Storage.all
                          (Src.Offset + 1 .. Src.Offset + Src.Length), 100)
                     & ASCII.LF);
-            when System_Role =>
+            when System_Role | Developer_Role =>
                null;
          end case;
       end Digest_Message;
@@ -638,6 +796,8 @@ package body Model_Runner.Conversation is
                        (Sender     => Src.Sender,
                         Offset     => New_Off,
                         Length     => Fill - New_Off,
+                        Parts_Offset => 0,
+                        Parts_Length => 0,
                         First_Call => 0,
                         Calls      => 0);
                      goto Next_Message;
@@ -651,9 +811,22 @@ package body Model_Runner.Conversation is
                     (Sender     => Src.Sender,
                      Offset     => New_Off,
                      Length     => Src.Length,
+                     Parts_Offset => 0,
+                     Parts_Length => 0,
                      First_Call =>
                        (if Src.Calls > 0 then Call_Fill + 1 else 0),
                      Calls      => Src.Calls);
+
+                  --  The parts go along with the words.
+                  if Src.Parts_Length > 0 then
+                     New_Storage.all (Fill + 1 .. Fill + Src.Parts_Length) :=
+                       Item.Storage.all
+                         (Src.Parts_Offset + 1
+                          .. Src.Parts_Offset + Src.Parts_Length);
+                     New_Messages (M).Parts_Offset := Fill;
+                     New_Messages (M).Parts_Length := Src.Parts_Length;
+                     Fill := Fill + Src.Parts_Length;
+                  end if;
 
                   for K in 0 .. Src.Calls - 1 loop
                      declare

@@ -172,6 +172,7 @@ package Model_Runner.CLI.Options is
      (Prompt_Unset,
       Prompt_Inline,
       Prompt_File,
+      Prompt_Parts,
       Prompt_Standard_Input,
       Prompt_Interactive);
 
@@ -257,9 +258,22 @@ package Model_Runner.CLI.Options is
       Prompt_Text  : Text_Access := null;
       Prompt_Path : Model_Runner.Text.Bounded;
 
+      --  The prompt as a list of parts, when it is one: the JSON list a
+      --  template that reads pictures beside words walks. Its text parts,
+      --  run together, are the prompt wherever the prompt is wanted as
+      --  text.
+      Prompt_Parts_Text : Text_Access := null;
+
       System_Text : Text_Access := null;
       System_Path : Model_Runner.Text.Bounded;
       Has_System  : Boolean := False;
+
+      --  A developer message, the turn the newest templates read
+      --  instructions from after the system turn: gpt-oss writes it as
+      --  a turn of its own, Qwen3.6 folds it into the system turn, and a
+      --  template that names no such role writes it as a turn under its
+      --  own name or refuses it in its author's words.
+      Developer_Text : Text_Access := null;
 
       --  The turns that follow the prompt, in the order they were written.
       --  This is how a single run closes the loop a tool call opens: the

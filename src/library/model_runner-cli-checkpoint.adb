@@ -34,11 +34,21 @@ package body Model_Runner.CLI.Checkpoint is
                  when Conv.System_Role    => "S",
                  when Conv.User_Role      => "U",
                  when Conv.Assistant_Role => "A",
-                 when Conv.Tool_Role      => "T");
+                 when Conv.Tool_Role      => "T",
+                 when Conv.Developer_Role => "D");
             Calls : constant Natural := Conv.Call_Count (Messages, I);
+            --  A message given as parts is written as its parts, the role
+            --  letter followed by P, so that the picture beside the words
+            --  survives the round trip.
+            Parts : constant String := Conv.Parts_At (Messages, I);
          begin
-            LP (Role);
-            LP (Conv.Content_At (Messages, I));
+            if Parts'Length > 0 then
+               LP (Role & "P");
+               LP (Parts);
+            else
+               LP (Role);
+               LP (Conv.Content_At (Messages, I));
+            end if;
             LP (T.Image (Long_Long_Integer (Calls)));
             for C in 1 .. Calls loop
                LP (Conv.Call_Name (Messages, I, C));
@@ -168,11 +178,21 @@ package body Model_Runner.CLI.Checkpoint is
                            end if;
                         end;
                      end loop;
+                  elsif Role'Length = 2 and then Role (Role'Last) = 'P' then
+                     Conv.Append_Parts
+                       (Messages,
+                        (if Role (Role'First) = 'U' then Conv.User_Role
+                         elsif Role (Role'First) = 'T' then Conv.Tool_Role
+                         elsif Role (Role'First) = 'D' then Conv.Developer_Role
+                         elsif Role (Role'First) = 'S' then Conv.System_Role
+                         else Conv.Assistant_Role),
+                        Content, Status);
                   elsif Content'Length > 0 then
                      Conv.Append
                        (Messages,
                         (if Role = "U" then Conv.User_Role
                          elsif Role = "T" then Conv.Tool_Role
+                         elsif Role = "D" then Conv.Developer_Role
                          else Conv.Assistant_Role),
                         Content, Status);
                   end if;

@@ -55,6 +55,71 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A turn given as parts, words and pictures, reaches the template.**
+  A message's content may be a list of parts -- `{"type": "image"}`,
+  `{"type": "text", "text": "..."}` -- rather than text: `run
+  --prompt-parts JSON` hands the user turn to the template as that
+  list, which Gemma 3's and Qwen3.6's templates walk, writing a marker
+  where a picture stands and the words where words do, and which a
+  template that adds words to the content -- Qwen3-Coder's, gpt-oss's
+  -- refuses as jinja2 refuses it, a text and a list added together.
+  MiniCPM's writes nothing for it, reading words only when they are
+  words. The carried `gemma`, `qwen3-coder` and `minicpm` formats do
+  each what their model's template does, and the crossing and the
+  records hold them to it with a fourteenth conversation. Wherever the
+  turn is wanted as text -- a digest, a checkpoint, a prefix -- it
+  reads as its text parts run together, and a checkpoint keeps the
+  list, so a resumed run shows the model the picture again. `tests
+  render --prompt-parts` takes the same list. `--prompt-parts` is a
+  prompt source like `--prompt-file`, conflicts with the others, and
+  is refused under `--raw`, which has no template to walk it.
+- **A developer turn, and the filters and statements that were left.**
+  A message may carry the role `developer`, which the newest templates
+  read instructions from: gpt-oss writes it as a turn of its own after
+  the system turn it composes, Qwen3.6 folds it into the system turn,
+  Qwen3-Coder writes it under its own name, MiniCPM writes nothing for
+  it and Gemma 3 refuses it in its author's words -- and the carried
+  formats do each what their model's template does, which the crossing
+  and the records now hold them to, with a second system turn as well.
+  `run --developer TEXT` puts one after the system message; `tests
+  render` takes `--developer` too. The filters `wordwrap`, `truncate`,
+  `center`, `format`, `striptags`, `pprint`, `random`, `reverse` and
+  `max`, and the statements `{% with %}`, `{% do %}` -- with
+  `name.append(v)`, `.extend(l)` and `.update(m)` growing a list or a
+  mapping in place, a namespace's field included -- and `{% raw %}`,
+  each crossed against jinja2.
+- **Case folding by Unicode character, three more conversations
+  crossed and recorded, and a verdict line under the suite.** `lower`,
+  `upper`, `capitalize`, `title` and the methods of the same names fold
+  character by character as Python folds them -- `É` to `é`, `ß` to
+  `SS`, a title's word beginning after a blank or one of `-({[<` --
+  where a byte outside ASCII passed through unchanged. The crossing and
+  the records take twelve conversations rather than nine: a call whose
+  arguments nest mappings and lists, which found the carried
+  `qwen3-coder` format spelling them as JSON where the model spells them
+  as Python; a user turn wrapped in a tool answer's markers; and two
+  system turns, which `tests render` takes as a second `--system`. A
+  conversation the model's own template refuses in its author's words
+  is one its carried format has nothing to match, and is left out of
+  that comparison. `tests test` and the gate end the suite with one
+  line, `suite: passed` or `suite: FAILED -- look for FAIL and ERROR
+  lines above`, because a test that raised prints ERROR where one that
+  asserted prints FAIL, and a reader looking for the one has missed the
+  other.
+- **jinja2's renderings recorded beside the fixtures, and the filters
+  the last templates used.** `tests cross --record FILE` writes what
+  jinja2 rendered, a record a conversation, and the five published
+  templates carry theirs as `.render` files, so the suite compares bytes
+  against jinja2 on every run without Python or a model file -- a
+  template writing the date is compared with the day it was recorded
+  read as today, and a conversation jinja2 refused is one this engine
+  must refuse. `**` binds tightest, as the language binds it, and a
+  negative exponent makes the sum binary64; two numbers compare as
+  numbers, so `1.0 == 1` is true. The filters `round`, `abs`, `sum`,
+  `urlencode`, `batch`, `slice`, `groupby` and `attr`, `trim(chars)`,
+  `replace` with a count and `count` for `length`, each crossed against
+  jinja2 -- `attr` answering nothing for a mapping, as it does there,
+  which is what every value here is.
 - **Numbers that are not whole, content that is a list of parts, and
   the bounds by name.** A number with a point or an exponent -- written
   in a template, read out of a schema or a call's arguments -- is

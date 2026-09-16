@@ -1,0 +1,78 @@
+date 2026-09-16
+case 1 unstated 60
+<s><start_of_turn>user
+hi<end_of_turn>
+<start_of_turn>model
+
+case 2 unstated 71
+<s><start_of_turn>user
+Be brief.
+
+hi<end_of_turn>
+<start_of_turn>model
+
+case 3 unstated 69
+<s><start_of_turn>user
+add 2 and 3<end_of_turn>
+<start_of_turn>model
+
+case 4 unstated 72
+<s><start_of_turn>user
+Be brief.
+
+add<end_of_turn>
+<start_of_turn>model
+
+case 5 unstated -1
+
+case 6 unstated -1
+
+case 7 unstated -1
+
+case 8 unstated 76
+<s><start_of_turn>user
+hi<end_of_turn>
+<start_of_turn>model
+yo<end_of_turn>
+
+case 9 unstated 219
+<s><start_of_turn>user
+q1<end_of_turn>
+<start_of_turn>model
+<think>
+first
+</think>
+
+A1<end_of_turn>
+<start_of_turn>user
+q2<end_of_turn>
+<start_of_turn>model
+<think>
+second
+</think>
+
+A2<end_of_turn>
+<start_of_turn>model
+
+case 10 unstated -1
+
+case 11 unstated 208
+<s><start_of_turn>user
+<tool_response>
+from before
+</tool_response><end_of_turn>
+<start_of_turn>model
+noted<end_of_turn>
+<start_of_turn>user
+<tool_response>x</tool_response><end_of_turn>
+<start_of_turn>model
+
+case 12 unstated -1
+
+case 13 unstated -1
+
+case 14 unstated 86
+<s><start_of_turn>user
+<start_of_image>what is this<end_of_turn>
+<start_of_turn>model
+

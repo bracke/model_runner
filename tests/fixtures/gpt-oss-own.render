@@ -1,0 +1,277 @@
+date 2026-09-16
+case 1 unstated 304
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>hi<|end|><|start|>assistant
+case 2 unstated 367
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+Be brief.
+
+<|end|><|start|>user<|message|>hi<|end|><|start|>assistant
+case 3 unstated 796
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>add 2 and 3<|end|><|start|>assistant
+case 4 unstated 815
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+
+Be brief.
+
+# Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>add<|end|><|start|>assistant
+case 5 unstated 1169
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>add<|end|><|start|>assistant<|channel|>analysis<|message|>  Let me compute.  <|end|><|start|>assistant to=functions.calc<|channel|>commentary json<|message|>{"a": 2, "op": "+", "b": 3}<|call|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"5"<|end|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"5 again"<|end|><|start|>user<|message|>thanks<|end|><|start|>assistant
+case 6 unstated 989
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>add<|end|><|start|>assistant to=functions.calc<|channel|>commentary json<|message|>{"a": 2, "op": "*", "b": 3, "exact": true}<|call|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"6"<|end|><|start|>assistant
+case 7 unstated 1096
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>add<|end|><|start|>assistant to=functions.calc<|channel|>commentary json<|message|>{"a": 1, "op": "+", "b": 1}<|call|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"2"<|end|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"rain"<|end|><|start|>assistant<|channel|>final<|message|>done<|return|>
+case 8 unstated 343
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>hi<|end|><|start|>assistant<|channel|>final<|message|>yo<|return|>
+case 9 unstated 494
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>q1<|end|><|start|>assistant<|channel|>final<|message|><think>
+first
+</think>
+
+A1<|end|><|start|>user<|message|>q2<|end|><|start|>assistant<|channel|>final<|message|><think>
+second
+</think>
+
+A2<|end|><|start|>assistant
+case 10 unstated 1032
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools
+
+## functions
+
+namespace functions {
+
+//  Evaluate a binary arithmetic operation. 
+type calc = (_: {
+// left operand
+a: number,
+// the operator
+op: "+" | "-" | "*" | "/",
+b: number,
+exact?: boolean, // default: false,
+tags?: string[],
+}) => any;
+
+// Look up the weather.
+type weather = (_: {
+// which city
+city?: "Aarhus" | "Odense",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>go<|end|><|start|>assistant to=functions.calc<|channel|>commentary json<|message|>{"a": {"x": 1, "y": [true, null]}, "l": [1, "two"], "s": "str", "n": 2.5}<|call|><|start|>functions.calc to=assistant<|channel|>commentary<|message|>"{\"ok\": true}"<|end|><|start|>assistant
+case 11 unstated 466
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|><tool_response>
+from before
+</tool_response><|end|><|start|>assistant<|channel|>final<|message|>noted<|end|><|start|>user<|message|><tool_response>x</tool_response><|end|><|start|>assistant
+case 12 unstated 364
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+First.
+
+<|end|><|start|>user<|message|>hi<|end|><|start|>assistant
+case 13 unstated 373
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-09-16
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+Answer tersely.
+
+<|end|><|start|>user<|message|>hi<|end|><|start|>assistant
+case 14 unstated -1
+

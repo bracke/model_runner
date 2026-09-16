@@ -2764,6 +2764,10 @@ package body Model_Runner.CLI.Execute is
                   when Opt.Prompt_Inline =>
                      Prompt := new String'(Item.Prompts (1).all);
 
+                  when Opt.Prompt_Parts =>
+                     Prompt := new String'
+                       (Conv.Text_Of_Parts (Item.Prompt_Parts_Text.all));
+
                   when Opt.Prompt_File =>
                      Read_File
                        (T.To_String (Item.Prompt_Path),
@@ -2787,7 +2791,13 @@ package body Model_Runner.CLI.Execute is
                      end if;
                end case;
 
-               if Prompt = null or else Prompt.all'Length = 0 then
+               --  A prompt of parts may be all picture and no words; the
+               --  parts are its content, and their list is checked where
+               --  it is appended.
+               if Prompt = null
+                 or else (Prompt.all'Length = 0
+                          and then Item.Prompt_Kind /= Opt.Prompt_Parts)
+               then
                   Fail (E.Make (E.CLI_No_Prompt_Available));
                   return;
                end if;
@@ -2829,8 +2839,14 @@ package body Model_Runner.CLI.Execute is
                      Conv.Set_System
                        (Messages, Item.System_Text.all, Condition);
                   end if;
-                  Conv.Append
-                    (Messages, Conv.User_Role, Prompt.all, Condition);
+                  if Item.Prompt_Kind = Opt.Prompt_Parts then
+                     Conv.Append_Parts
+                       (Messages, Conv.User_Role,
+                        Item.Prompt_Parts_Text.all, Condition);
+                  else
+                     Conv.Append
+                       (Messages, Conv.User_Role, Prompt.all, Condition);
+                  end if;
                   if E.Is_Error (Condition) then
                      Conv.Close (Messages);
                      Fail (Condition);
@@ -2983,6 +2999,10 @@ package body Model_Runner.CLI.Execute is
                when Opt.Prompt_Inline =>
                   Prompt := new String'(Item.Prompts (Which).all);
 
+               when Opt.Prompt_Parts =>
+                  Prompt := new String'
+                    (Conv.Text_Of_Parts (Item.Prompt_Parts_Text.all));
+
                when Opt.Prompt_File =>
                   Read_File
                     (T.To_String (Item.Prompt_Path),
@@ -3004,7 +3024,13 @@ package body Model_Runner.CLI.Execute is
                   end if;
             end case;
 
-            if Prompt = null or else Prompt.all'Length = 0 then
+            --  A prompt of parts may be all picture and no words; the parts
+            --  are its content, and their list is checked where it is
+            --  appended.
+            if Prompt = null
+              or else (Prompt.all'Length = 0
+                       and then Item.Prompt_Kind /= Opt.Prompt_Parts)
+            then
                Fail (E.Make (E.CLI_No_Prompt_Available));
                return;
             end if;
@@ -3084,7 +3110,26 @@ package body Model_Runner.CLI.Execute is
                         end;
                      end if;
 
-                     Conv.Append (Messages, Conv.User_Role, Prompt.all, Condition);
+                     if Item.Developer_Text /= null then
+                        Conv.Append
+                          (Messages, Conv.Developer_Role,
+                           Item.Developer_Text.all, Condition);
+                        if E.Is_Error (Condition) then
+                           Free_Text (Buffer);
+                           Conv.Close (Messages);
+                           Fail (Condition);
+                           return;
+                        end if;
+                     end if;
+
+                     if Item.Prompt_Kind = Opt.Prompt_Parts then
+                        Conv.Append_Parts
+                          (Messages, Conv.User_Role,
+                           Item.Prompt_Parts_Text.all, Condition);
+                     else
+                        Conv.Append
+                          (Messages, Conv.User_Role, Prompt.all, Condition);
+                     end if;
                      if E.Is_Error (Condition) then
                         Free_Text (Buffer);
                         Conv.Close (Messages);

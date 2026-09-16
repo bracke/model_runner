@@ -1,0 +1,1285 @@
+date 2026-09-16
+case 1 unstated 60
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 2 unstated 99
+<|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 3 unstated 1747
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 4 unstated 1750
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>
+
+Be brief.<|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 5 unstated 2066
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+Let me compute.
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+3
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 6 unstated 2029
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
+*
+</parameter>
+<parameter=b>
+3
+</parameter>
+<parameter=exact>
+True
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 7 unstated 2150
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+1
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+1
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=weather>
+<parameter=city>
+Odense
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+done<|im_end|>
+
+case 8 unstated 84
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+yo<|im_end|>
+
+case 9 unstated 185
+<|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 10 unstated 2070
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+{"x": 1, "y": [true, null]}
+</parameter>
+<parameter=l>
+[1, "two"]
+</parameter>
+<parameter=s>
+str
+</parameter>
+<parameter=n>
+2.5
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 11 unstated 200
+<|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 12 unstated 104
+<|im_start|>system
+First.
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 13 unstated 105
+<|im_start|>system
+Answer tersely.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 14 unstated 158
+<|im_start|>user
+<|vision_start|><|image_pad|><|vision_end|> what is this <|vision_start|><|video_pad|><|vision_end|><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 1 think 60
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 2 think 99
+<|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 3 think 1747
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 4 think 1750
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>
+
+Be brief.<|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 5 think 2066
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+Let me compute.
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+3
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 6 think 2029
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
+*
+</parameter>
+<parameter=b>
+3
+</parameter>
+<parameter=exact>
+True
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 7 think 2150
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+1
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+1
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=weather>
+<parameter=city>
+Odense
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+done<|im_end|>
+
+case 8 think 84
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+yo<|im_end|>
+
+case 9 think 185
+<|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 10 think 2070
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+{"x": 1, "y": [true, null]}
+</parameter>
+<parameter=l>
+[1, "two"]
+</parameter>
+<parameter=s>
+str
+</parameter>
+<parameter=n>
+2.5
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 11 think 200
+<|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 12 think 104
+<|im_start|>system
+First.
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 13 think 105
+<|im_start|>system
+Answer tersely.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+case 14 think 158
+<|im_start|>user
+<|vision_start|><|image_pad|><|vision_end|> what is this <|vision_start|><|video_pad|><|vision_end|><|im_end|>
+<|im_start|>assistant
+<think>
+
+case 1 no-think 71
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 2 no-think 110
+<|im_start|>system
+Be brief.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 3 no-think 1758
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add 2 and 3<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 4 no-think 1761
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>
+
+Be brief.<|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 5 no-think 2077
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+Let me compute.
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+3
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+5
+</tool_response>
+<tool_response>
+5 again
+</tool_response><|im_end|>
+<|im_start|>user
+thanks<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 6 no-think 2040
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+2
+</parameter>
+<parameter=op>
+*
+</parameter>
+<parameter=b>
+3
+</parameter>
+<parameter=exact>
+True
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+6
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 7 no-think 2150
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+add<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+1
+</parameter>
+<parameter=op>
++
+</parameter>
+<parameter=b>
+1
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=weather>
+<parameter=city>
+Odense
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+2
+</tool_response>
+<tool_response>
+rain
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+done<|im_end|>
+
+case 8 no-think 84
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+yo<|im_end|>
+
+case 9 no-think 196
+<|im_start|>user
+q1<|im_end|>
+<|im_start|>assistant
+A1<|im_end|>
+<|im_start|>user
+q2<|im_end|>
+<|im_start|>assistant
+<think>
+second
+</think>
+
+A2<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 10 no-think 2081
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "calc", "description": " Evaluate a binary arithmetic operation. ", "parameters": {"type": "object", "properties": {"a": {"type": "integer", "description": "left operand"}, "op": {"type": "string", "enum": ["+", "-", "*", "/"], "description": "the operator"}, "b": {"type": "integer"}, "exact": {"type": "boolean", "default": false, "minimum": 0}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["a", "op", "b"]}, "return": {"type": "number"}}}
+{"type": "function", "function": {"name": "weather", "description": "Look up the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "which city", "enum": ["Aarhus", "Odense"], "required": ["city"]}}}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+go<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=calc>
+<parameter=a>
+{"x": 1, "y": [true, null]}
+</parameter>
+<parameter=l>
+[1, "two"]
+</parameter>
+<parameter=s>
+str
+</parameter>
+<parameter=n>
+2.5
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"ok": true}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 11 no-think 211
+<|im_start|>user
+<tool_response>
+from before
+</tool_response><|im_end|>
+<|im_start|>assistant
+noted<|im_end|>
+<|im_start|>user
+<tool_response>x</tool_response><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 12 no-think 115
+<|im_start|>system
+First.
+Second.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 13 no-think 116
+<|im_start|>system
+Answer tersely.<|im_end|>
+<|im_start|>user
+hi<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+case 14 no-think 169
+<|im_start|>user
+<|vision_start|><|image_pad|><|vision_end|> what is this <|vision_start|><|video_pad|><|vision_end|><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+

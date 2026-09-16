@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 53) of Example :=
+   Held : constant array (1 .. 58) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -133,14 +133,14 @@ package body Template_Registry is
        new String'("{{ raise_exception('no') }}"),
        Refused_At_Render),
 
-      (new String'("`*`, `//`, `%`, `/`"),
+      (new String'("`*`, `//`, `%`, `/`, `**`"),
        new String'("{{ 2 + 3 * 4 }}{{ (2 + 3) * 4 }}{{ -7 // 2 }}"
-                   & "{{ -7 % 2 }}{{ 8 / 2 }}{{ 7.5 // 2 }}"),
+                   & "{{ -7 % 2 }}{{ 8 / 2 }}{{ 7.5 // 2 }}{{ 2 * 3 ** 2 }}"),
        Works),
 
       (new String'("`\| lower`, `\| upper`, `\| capitalize`, `\| title`, "
                    & "`\| int`, `\| string`, `\| safe`, `\| default(X)`, "
-                   & "`\| replace(A, B)`"),
+                   & "`\| replace(A, B, N)`"),
        new String'("{{ 'Ab' | lower | upper }}{{ 'ab cd' | capitalize }}"
                    & "{{ 'ab cd' | title }}{{ '12x' | int }}"
                    & "{{ 'x' | string }}{{ 'x' | safe }}"
@@ -286,6 +286,14 @@ package body Template_Registry is
                    & "{% endif %}"),
        Works),
 
+      (new String'("`message.content` given as a list of parts"),
+       new String'("{% set c = [{'type': 'image'}, {'type': 'text', "
+                   & "'text': 'hi'}] %}{% if c is string %}{{ c }}"
+                   & "{% else %}{% for p in c %}{% if p['type'] == 'image' %}"
+                   & "<img>{% else %}{{ p['text'] }}{% endif %}{% endfor %}"
+                   & "{% endif %}{{ c | tojson }}"),
+       Works),
+
       (new String'("`'field' in message`"),
        new String'("{% for message in messages %}"
                    & "{% if 'role' in message %}y{% endif %}"
@@ -300,10 +308,40 @@ package body Template_Registry is
                    & "{% endfor %}"),
        Works),
 
-      (new String'("`\| trim`, `\| length`"),
+      (new String'("`\| trim`, `\| trim(CHARS)`, `\| length`, `\| count`"),
        new String'("{% for message in messages %}"
                    & "{{ message.content | trim }}{% endfor %}"
-                   & "{% if messages | length != 0 %}n{% endif %}"),
+                   & "{% if messages | length != 0 %}n{% endif %}"
+                   & "{{ 'xxaxx' | trim('x') }}{{ messages | count }}"),
+       Works),
+
+      (new String'("`\| wordwrap`, `\| truncate`, `\| center`, `\| format`, "
+                   & "`\| striptags`, `\| pprint`, `\| random`, "
+                   & "`\| reverse`, `\| max`"),
+       new String'("{{ 'ab' | center(5) }}{{ 'hello world foo' | truncate(9) }}"
+                   & "{{ 'a b c' | wordwrap(3) }}{{ '%s-%d' | format('x', 3) }}"
+                   & "{{ '<b>hi</b>' | striptags }}{{ 'x' | pprint }}"
+                   & "{{ 'abc' | reverse }}{{ [1, 5, 3] | max }}"
+                   & "{{ [1, 2] | random is number }}"),
+       Works),
+
+      (new String'("`{% with %}`, `{% do %}`, `{% raw %}`"),
+       new String'("{% with a = 1 %}{{ a }}{% endwith %}"
+                   & "{% raw %}{{ x }}{% endraw %}{% set l = [] %}"
+                   & "{% do l.append(1) %}{% do l.extend([2]) %}{{ l }}"
+                   & "{% set d = {} %}{% do d.update({'a': 1}) %}{{ d }}"
+                   & "{% do 1 + 1 %}"),
+       Works),
+
+      (new String'("`\| round`, `\| abs`, `\| sum`, `\| urlencode`, "
+                   & "`\| batch`, `\| slice`, `\| groupby`, `\| attr`"),
+       new String'("{{ 2.567 | round(2) }}{{ 2.5 | round(0, 'ceil') }}"
+                   & "{{ -3 | abs }}{{ [1, 2] | sum }}{{ 'a b/c' | urlencode }}"
+                   & "{{ [1, 2, 3] | batch(2) | list | tojson }}"
+                   & "{{ [1, 2, 3] | slice(2) | list | tojson }}"
+                   & "{% for g, l in messages | groupby('role') %}{{ g }}"
+                   & "{{ l | length }}{% endfor %}"
+                   & "[{{ messages[0] | attr('role') }}]"),
        Works),
 
       (new String'("`loop.first`, `loop.last`, `loop.index`, `loop.index0`, "
@@ -369,13 +407,17 @@ package body Template_Registry is
        Refused_At_Compile),
 
       (new String'("Other filters"),
-       new String'("{{ bos_token | urlencode }}"),
+       new String'("{{ bos_token | xmlattr }}"),
        Refused_At_Render),
 
       (new String'("`.strftime` on anything, other function calls, a "
                    & "message or a list of them printed whole, indexing by a "
                    & "name that holds no number"),
        new String'("{{ messages[i]['role'] }}"),
+       Refused_At_Render),
+
+      (new String'("Words added to a list of parts, `'x' + message.content`"),
+       new String'("{{ 'x' + [{'type': 'image'}] }}"),
        Refused_At_Render),
 
       (new String'("Reading a name the template never assigned"),

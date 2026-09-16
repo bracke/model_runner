@@ -31,7 +31,15 @@ package Model_Runner.Conversation is
    --  handing the same text back as a user message would be a different
    --  conversation, rendered the same way for a model trained to tell them
    --  apart.
-   type Role is (System_Role, User_Role, Assistant_Role, Tool_Role);
+   --
+   --  A developer message is what the newest templates -- gpt-oss's,
+   --  Qwen3.6's -- read instructions from beside or instead of a system
+   --  message: gpt-oss writes it as its own turn after the system turn it
+   --  composes itself, Qwen3.6 folds it into the system turn. A caller
+   --  who has one names it, and a template that reads no such role
+   --  writes it as it writes any role it does not know.
+   type Role is
+     (System_Role, User_Role, Assistant_Role, Tool_Role, Developer_Role);
 
    --  Stable machine-readable role name, as a chat template spells it. Never
    --  localized: templates compare against these exact strings.
@@ -243,6 +251,39 @@ package Model_Runner.Conversation is
    --  @return True when message 1 is a system message.
    function Has_System (Item : History) return Boolean;
 
+   --  Append a message whose content is a list of parts rather than text:
+   --  what the newest templates read a picture or a video from beside
+   --  the words, as a JSON list of objects -- {"type": "text", "text":
+   --  "..."}, {"type": "image"} -- which the template walks. The text
+   --  parts, run together, are what the message reads as wherever its
+   --  content is wanted as text: a digest, a checkpoint, a prefix.
+   --
+   --  @param Item History to extend.
+   --  @param Sender Who the message is from.
+   --  @param Parts The parts, as one JSON list.
+   --  @param Status Success, Conversation_Empty when the list is not one
+   --    or holds no parts, or Conversation_Too_Long.
+   procedure Append_Parts
+     (Item   : in out History;
+      Sender : Role;
+      Parts  : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The text parts of a JSON list of parts, run together: what a
+   --  message given as parts reads as where text is wanted.
+   --
+   --  @param Parts The parts, as one JSON list.
+   --  @return Every "text" member's value, in order.
+   function Text_Of_Parts (Parts : String) return String;
+
+   --  The parts of a message, as the JSON list it was given, or the empty
+   --  string where its content is text.
+   --
+   --  @param Item History to inspect.
+   --  @param Index Message position in 1 .. Length.
+   --  @return The parts, or "".
+   function Parts_At (Item : History; Index : Positive) return String;
+
 private
 
    Max_Messages : constant := 4096;
@@ -256,6 +297,11 @@ private
       Sender : Role := User_Role;
       Offset : Natural := 0;
       Length : Natural := 0;
+
+      --  Where the message's parts lie when it has them, as the JSON list
+      --  the caller gave, and zero length where its content is text.
+      Parts_Offset : Natural := 0;
+      Parts_Length : Natural := 0;
 
       --  Where this message's calls begin in the call table, and how many
       --  it has. They lie together because a call is only ever attached to
