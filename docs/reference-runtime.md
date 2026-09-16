@@ -418,6 +418,31 @@ check as for a template that arrives in a model file -- and the format for
 Gemma, whose turns are called something else, is the one that could be wrong
 without the output showing it.
 
+And the two carried formats that stand in for a model's own template,
+`qwen3-coder` and `minicpm`, each against `jinja2` reading *the model's own
+template* rather than its own source -- which is the check that matters for
+a stand-in, since the point of one is to be the bytes the model was trained
+on. `tests render --model PATH --format NAME` renders the carried format
+with the model's own tokens, and a script hands the same conversation to
+`jinja2` with the model's template, `trim_blocks` and `lstrip_blocks` on
+and `tojson` as `transformers` defines it. Eight conversations for
+Qwen3-Coder and nine for MiniCPM, byte for byte: with and without a system
+turn, tools offered -- with enums, defaults, nested items, required lists
+and a return -- a call turn with text and one without, two calls answered
+by two tool turns, reasoning kept in the exchange in progress and dropped
+from an earlier one, and for MiniCPM the caller's `--think` and `--no-think`
+each. Five faults came out of it: the line break after a block tag, which
+the engine takes off as `trim_blocks` does, was where the model's template
+had written one as an expression, so `<tools>` and the first tool ran
+together -- `+%}` keeps it now, as the language spells that; a tool was
+offered as JSON where the Qwen3-Coder model reads a `<function>` element
+with its parameters walked out of the schema, which the `qwen_tool` filter
+writes now; a call turn's text was written untrimmed and followed by one
+line break where the model trims it and writes two; MiniCPM's run of tool
+answers had a line break after each where the model has one before; and an
+argument that is not a string was spelled as JSON spells it where both
+models' templates spell it as Python does, `True` and `None`.
+
 The template TinyLlama-1.1B-Chat ships was the file that said the whitespace
 rule was missing: forty-eight conversations, none of them agreeing, every
 divergence a line break this engine kept and `jinja2` did not. Forty-eight

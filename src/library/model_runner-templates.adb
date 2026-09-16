@@ -275,10 +275,12 @@ package body Model_Runner.Templates is
          --  in for the arguments mapping-walk. The calls are read back by
          --  Tools.Read_Calls in its Qwen_XML syntax.
          --
-         --  The tools are offered as JSON rather than the model's own nested
-         --  parameter XML: the JSON carries the same names, types and
-         --  descriptions, and the call-format instructions carry the shape a
-         --  call must take, which is what the model acts on.
+         --  The tools are offered as the model's own template offers them:
+         --  a <function> element per tool with its parameters walked as
+         --  the schema holds them, which the qwen_tool filter writes from
+         --  the definition's JSON, and the same call-format instructions,
+         --  byte for byte. Crossed against jinja2 reading the model's own
+         --  template with tools, calls and tool answers.
          --
          --  The Qwen3.5 family, whose calls take the same shape, stands on
          --  this format too, and reasons where Qwen3-Coder does not. Its
@@ -295,16 +297,25 @@ package body Model_Runner.Templates is
            & "You are Qwen, a helpful AI assistant that can interact with a "
            & "computer to solve tasks."
            & "{% endif %}"
-           & "{% if tools %}"
-           & LF & LF & "# Tools" & LF & LF
+           --  +%} where a line break follows a block tag and is meant:
+           --  the engine takes the line break after a block tag off, as
+           --  the implementation these templates are written for does,
+           --  and the model's own template writes these as expressions,
+           --  which keep theirs.
+           & "{% if tools +%}"
+           & LF & LF
            & "You have access to the following functions:" & LF & LF
            & "<tools>"
-           & "{% for tool in tools %}" & LF & "{{ tool | tojson }}"
-           & "{% endfor %}" & LF & "</tools>" & LF & LF
+           & "{% for tool in tools %}{{ tool | qwen_tool }}"
+           & "{% endfor +%}" & LF & "</tools>" & LF & LF
            & "If you choose to call a function ONLY reply in the following "
            & "format with NO suffix:" & LF & LF
            & "<tool_call>" & LF & "<function=example_function_name>" & LF
            & "<parameter=example_parameter_1>" & LF & "value_1" & LF
+           & "</parameter>" & LF
+           & "<parameter=example_parameter_2>" & LF
+           & "This is the value for the second parameter" & LF
+           & "that can span" & LF & "multiple lines" & LF
            & "</parameter>" & LF & "</function>" & LF & "</tool_call>" & LF & LF
            & "<IMPORTANT>" & LF & "Reminder:" & LF
            & "- Function calls MUST follow the specified format: an inner "
@@ -349,6 +360,21 @@ package body Model_Runner.Templates is
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<|im_end|>" & LF
            & "{% endif %}"
+           & "{% elif message.role == 'assistant' and message.tool_calls %}"
+           --  A turn that called tools, as the model's own template writes
+           --  it: the text trimmed and on a line of its own when there is
+           --  any, then each call, and no reasoning block -- that template
+           --  writes none for such a turn.
+           & "<|im_start|>assistant"
+           & "{% if message.content | trim +%}"
+           & LF & "{{ message.content | trim }}" & LF
+           & "{% endif %}"
+           & "{% for tool_call in message.tool_calls +%}"
+           & LF & "<tool_call>" & LF & "<function=" & "{{ tool_call.name }}"
+           & ">" & LF & "{{ tool_call.arguments | qwen_params }}"
+           & "</function>" & LF & "</tool_call>"
+           & "{% endfor %}"
+           & "<|im_end|>" & LF
            & "{% elif message.role == 'assistant' %}"
            & "{% if '</think>' in message.content %}"
            & "{% set reasoning = message.content.split('</think>')[0]"
@@ -364,13 +390,6 @@ package body Model_Runner.Templates is
            & "<think>" & LF & "{{ reasoning }}" & LF & "</think>" & LF & LF
            & "{% endif %}"
            & "{{ content }}"
-           & "{% if message.tool_calls %}"
-           & "{% for tool_call in message.tool_calls %}"
-           & LF & "<tool_call>" & LF & "<function=" & "{{ tool_call.name }}"
-           & ">" & LF & "{{ tool_call.arguments | qwen_params }}"
-           & "</function>" & LF & "</tool_call>"
-           & "{% endfor %}"
-           & "{% endif %}"
            & "<|im_end|>" & LF
            & "{% else %}"
            & "<|im_start|>{{ message.role }}" & LF
@@ -409,15 +428,15 @@ package body Model_Runner.Templates is
            & "<|im_start|>system" & LF
            & "{% if messages[0]['role'] == 'system' %}"
            & "{{ messages[0]['content'] }}"
-           & "{% if tools %}" & LF & LF & "{% endif %}"
+           & "{% if tools +%}" & LF & LF & "{% endif %}"
            & "{% endif %}"
            & "{% if tools %}"
            & "# Tools" & LF & LF
            & "You are provided with function signatures within "
            & "<tools></tools> XML tags:" & LF
            & "<tools>"
-           & "{% for tool in tools %}" & LF & "{{ tool | tojson }}"
-           & "{% endfor %}" & LF
+           & "{% for tool in tools +%}" & LF & "{{ tool | tojson }}"
+           & "{% endfor +%}" & LF
            & "</tools>" & LF & LF
            & "Tool usage guidelines:" & LF
            & "- You may call zero or more functions. If no function calls are "
@@ -451,13 +470,16 @@ package body Model_Runner.Templates is
            & "{% endfor %}"
            & "{% for message in turns %}"
            & "{% if message.role == 'tool' %}"
+           --  As the model's own template folds a run of answers: the user
+           --  marker before the first, each answer led by a line break,
+           --  and the end marker straight after the last.
            & "{% if not loop.first"
            & " and turns[loop.index0 - 1].role != 'tool' %}"
-           & "<|im_start|>user" & LF
-           & "{% endif %}"
-           & "<tool_response>" & LF
+           & "<|im_start|>user"
+           & "{% endif +%}"
+           & LF & "<tool_response>" & LF
            & "{{ message.content }}" & LF
-           & "</tool_response>" & LF
+           & "</tool_response>"
            & "{% if loop.last"
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<|im_end|>" & LF
@@ -479,7 +501,7 @@ package body Model_Runner.Templates is
            & "{{ content }}"
            & "{% if message.tool_calls %}"
            & "{% for tool_call in message.tool_calls %}"
-           & "{% if (loop.first and content) or not loop.first %}"
+           & "{% if (loop.first and content) or not loop.first +%}"
            & LF
            & "{% endif %}"
            & "<function name=""{{ tool_call.name }}"">"
@@ -1864,6 +1886,8 @@ package body Model_Runner.Templates is
                         Step.Kind := Filter_Params;
                      elsif Word = "qwen_params" then
                         Step.Kind := Filter_Qwen_Params;
+                     elsif Word = "qwen_tool" then
+                        Step.Kind := Filter_Qwen_Tool;
                      elsif Word = "lower" then
                         Step.Kind := Filter_Lower;
                      elsif Word = "upper" then
@@ -3490,8 +3514,11 @@ package body Model_Runner.Templates is
 
                --  A tag written {%+ keeps the line it stands on: it is how
                --  a template says that this one indentation is text it
-               --  meant to write.
+               --  meant to write. One written +%} keeps the line break
+               --  after it the same way, which is the language's own
+               --  spelling for a block tag whose line break is text.
                Kept_Left  : Boolean := False;
+               Kept_Right : Boolean := False;
             begin
                if Body_First <= Source'Last and then Source (Body_First) = '-'
                then
@@ -3522,6 +3549,12 @@ package body Model_Runner.Templates is
                     and then Source (Body_Last) = '-'
                   then
                      Trim_Next := True;
+                     Body_Last := Body_Last - 1;
+                  elsif Statement and then Body_Last >= Body_First
+                    and then Source (Body_Last) = '+'
+                  then
+                     Kept_Right := True;
+                     Trim_Next := False;
                      Body_Last := Body_Last - 1;
                   else
                      Trim_Next := False;
@@ -3587,7 +3620,9 @@ package body Model_Runner.Templates is
                end;
 
                Cursor :=
-                 Line_After (Scan + 2, Statement and then not Trim_Next);
+                 Line_After (Scan + 2,
+                             Statement and then not Trim_Next
+                             and then not Kept_Right);
                Literal_Start := Cursor;
             end;
          else
@@ -4576,12 +4611,24 @@ package body Model_Runner.Templates is
                end if;
                Skip_Blanks;
                declare
+                  Quoted_One : constant Boolean :=
+                    I <= Src'Last and then Src (I) = '"';
+                  Raw : constant String :=
+                    (if Quoted_One then Read_String else Read_Bare);
+
+                  --  A value that is not a string is written as both
+                  --  templates write it, printed by the language they are
+                  --  written in: true as True, null as None.
                   Val : constant String :=
-                    (if I <= Src'Last and then Src (I) = '"'
-                     then Read_String else Read_Bare);
+                    (if Quoted_One then Raw
+                     elsif Raw = "true" then "True"
+                     elsif Raw = "false" then "False"
+                     elsif Raw = "null" then "None"
+                     else Raw);
                   CDATA : constant Boolean :=
-                    (for some C of Val =>
-                       C = '<' or else C = '&' or else C = ASCII.LF);
+                    Quoted_One
+                    and then (for some C of Val =>
+                                C = '<' or else C = '&' or else C = ASCII.LF);
                begin
                   if Qwen then
                      --  Qwen3-Coder: <parameter=k>, the value on its own
@@ -4592,6 +4639,11 @@ package body Model_Runner.Templates is
                      Put (Val);
                      Put (ASCII.LF & "</parameter>" & ASCII.LF);
                   else
+                     --  MiniCPM: <param name="k">v</param>, a string that
+                     --  holds a '<', an '&' or a line break in a CDATA
+                     --  block; a value that is not a string is never
+                     --  wrapped, because its template asks "is string"
+                     --  before it asks what is in it.
                      Put ("<param name=""");
                      Put (Key);
                      Put (""">");
@@ -4614,6 +4666,384 @@ package body Model_Runner.Templates is
          return Buf (1 .. N);
       end Params_Of;
 
+      --  What Qwen3-Coder's own template makes of one tool: the walk its
+      --  render_item_list macro and its two mapping loops make over the
+      --  definition's JSON, written out in Ada over the same text. The JSON
+      --  is the definition as the tools package spells it -- one line, a
+      --  space after each colon and comma, escapes decoded -- which is the
+      --  spelling `| tojson` gives, so a nested mapping is copied as it
+      --  stands. Where that template writes a value with `| string` it is
+      --  Python's str of it: a number as itself, true as True, null as
+      --  None, a list as its repr with single quotes.
+      function Qwen_Tool_Of (Value : Term) return String is
+         Src : constant String := JSON_Of (Value);
+         Out_Text : Ada.Strings.Unbounded.Unbounded_String;
+
+         procedure Put (S : String) is
+         begin
+            Ada.Strings.Unbounded.Append (Out_Text, S);
+         end Put;
+
+         --  A span of Src, empty when First > Last.
+         type Span is record
+            First : Natural := 1;
+            Last  : Natural := 0;
+         end record;
+
+         function Present (S : Span) return Boolean is (S.First <= S.Last);
+
+         function Past_Blanks (From : Natural) return Natural is
+            I : Natural := From;
+         begin
+            while I <= Src'Last
+              and then Src (I) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+            loop
+               I := I + 1;
+            end loop;
+            return I;
+         end Past_Blanks;
+
+         --  The value beginning at I: a string with its quotes, an object
+         --  or array with its brackets, or a bare number or word.
+         function Value_At (From : Natural) return Span is
+            I : Natural := Past_Blanks (From);
+            Depth : Natural := 0;
+            In_String : Boolean := False;
+            Start : constant Natural := I;
+         begin
+            if I > Src'Last then
+               return (1, 0);
+            end if;
+            if Src (I) = '"' then
+               I := I + 1;
+               while I <= Src'Last and then Src (I) /= '"' loop
+                  if Src (I) = '\' then
+                     I := I + 1;
+                  end if;
+                  I := I + 1;
+               end loop;
+               return (Start, Natural'Min (I, Src'Last));
+            elsif Src (I) in '{' | '[' then
+               loop
+                  exit when I > Src'Last;
+                  if In_String then
+                     if Src (I) = '\' then
+                        I := I + 1;
+                     elsif Src (I) = '"' then
+                        In_String := False;
+                     end if;
+                  elsif Src (I) = '"' then
+                     In_String := True;
+                  elsif Src (I) in '{' | '[' then
+                     Depth := Depth + 1;
+                  elsif Src (I) in '}' | ']' then
+                     Depth := Depth - 1;
+                     exit when Depth = 0;
+                  end if;
+                  I := I + 1;
+               end loop;
+               return (Start, Natural'Min (I, Src'Last));
+            else
+               while I <= Src'Last
+                 and then Src (I) not in ',' | '}' | ']' | ' ' | ASCII.LF
+               loop
+                  I := I + 1;
+               end loop;
+               return (Start, I - 1);
+            end if;
+         end Value_At;
+
+         --  The next member of an object from Cursor, which starts just
+         --  past the opening brace; Found is False at the closing one.
+         procedure Next_Member
+           (Cursor : in out Natural;
+            Key    : out Span;
+            Held   : out Span;
+            Found  : out Boolean)
+         is
+            I : Natural := Past_Blanks (Cursor);
+         begin
+            Found := False;
+            Key := (1, 0);
+            Held := (1, 0);
+            if I <= Src'Last and then Src (I) = ',' then
+               I := Past_Blanks (I + 1);
+            end if;
+            if I > Src'Last or else Src (I) /= '"' then
+               return;
+            end if;
+            Key := Value_At (I);
+            I := Past_Blanks (Key.Last + 1);
+            if I <= Src'Last and then Src (I) = ':' then
+               I := I + 1;
+            end if;
+            Held := Value_At (I);
+            Cursor := Held.Last + 1;
+            Found := True;
+         end Next_Member;
+
+         --  The next element of an array from Cursor, just past the bracket.
+         procedure Next_Element
+           (Cursor : in out Natural; Held : out Span; Found : out Boolean)
+         is
+            I : Natural := Past_Blanks (Cursor);
+         begin
+            Found := False;
+            Held := (1, 0);
+            if I <= Src'Last and then Src (I) = ',' then
+               I := Past_Blanks (I + 1);
+            end if;
+            if I > Src'Last or else Src (I) = ']' then
+               return;
+            end if;
+            Held := Value_At (I);
+            Cursor := Held.Last + 1;
+            Found := True;
+         end Next_Element;
+
+         function Member (Obj : Span; Name : String) return Span is
+            Cursor : Natural;
+            Key, Held : Span;
+            Found : Boolean;
+         begin
+            if not Present (Obj) or else Src (Obj.First) /= '{' then
+               return (1, 0);
+            end if;
+            Cursor := Obj.First + 1;
+            loop
+               Next_Member (Cursor, Key, Held, Found);
+               exit when not Found;
+               if Src (Key.First + 1 .. Key.Last - 1) = Name then
+                  return Held;
+               end if;
+            end loop;
+            return (1, 0);
+         end Member;
+
+         function Is_String (S : Span) return Boolean
+         is (Present (S) and then Src (S.First) = '"');
+         function Is_Mapping (S : Span) return Boolean
+         is (Present (S) and then Src (S.First) = '{');
+         function Is_List (S : Span) return Boolean
+         is (Present (S) and then Src (S.First) = '[');
+
+         --  A JSON string's characters. The definition's escapes are
+         --  decoded already, so what remains are the ones JSON requires.
+         function Decoded (S : Span) return String is
+            R : String (1 .. S.Last - S.First + 1);
+            M : Natural := 0;
+            I : Natural := S.First + 1;
+         begin
+            while I < S.Last loop
+               if Src (I) = '\' and then I + 1 < S.Last then
+                  I := I + 1;
+                  M := M + 1;
+                  case Src (I) is
+                     when 'n' => R (M) := ASCII.LF;
+                     when 't' => R (M) := ASCII.HT;
+                     when 'r' => R (M) := ASCII.CR;
+                     when others => R (M) := Src (I);
+                  end case;
+               else
+                  M := M + 1;
+                  R (M) := Src (I);
+               end if;
+               I := I + 1;
+            end loop;
+            return R (1 .. M);
+         end Decoded;
+
+         --  Python's str of a value, which is what `| string` writes.
+         function Pythonic (S : Span) return String;
+
+         --  Python's repr of a value, which is how str writes a list's or a
+         --  mapping's entries: strings in single quotes.
+         function Repr (S : Span) return String is
+            R : Ada.Strings.Unbounded.Unbounded_String;
+            Cursor : Natural;
+            Key, Held : Span;
+            Found : Boolean;
+            First_One : Boolean := True;
+         begin
+            if Is_String (S) then
+               return "'" & Decoded (S) & "'";
+            elsif Is_List (S) then
+               Ada.Strings.Unbounded.Append (R, "[");
+               Cursor := S.First + 1;
+               loop
+                  Next_Element (Cursor, Held, Found);
+                  exit when not Found;
+                  if not First_One then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  First_One := False;
+                  Ada.Strings.Unbounded.Append (R, Repr (Held));
+               end loop;
+               Ada.Strings.Unbounded.Append (R, "]");
+               return Ada.Strings.Unbounded.To_String (R);
+            elsif Is_Mapping (S) then
+               Ada.Strings.Unbounded.Append (R, "{");
+               Cursor := S.First + 1;
+               loop
+                  Next_Member (Cursor, Key, Held, Found);
+                  exit when not Found;
+                  if not First_One then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  First_One := False;
+                  Ada.Strings.Unbounded.Append
+                    (R, Repr (Key) & ": " & Repr (Held));
+               end loop;
+               Ada.Strings.Unbounded.Append (R, "}");
+               return Ada.Strings.Unbounded.To_String (R);
+            end if;
+            return Pythonic (S);
+         end Repr;
+
+         function Pythonic (S : Span) return String is
+            Bare : constant String :=
+              (if Present (S) then Src (S.First .. S.Last) else "");
+         begin
+            if Is_String (S) then
+               return Decoded (S);
+            elsif Is_List (S) or else Is_Mapping (S) then
+               return Repr (S);
+            elsif Bare = "true" then
+               return "True";
+            elsif Bare = "false" then
+               return "False";
+            elsif Bare = "null" then
+               return "None";
+            end if;
+            return Bare;
+         end Pythonic;
+
+         --  render_item_list: a non-empty list inside a tag, its strings
+         --  in backticks and anything else as it prints.
+         procedure Item_List (List : Span; Tag : String) is
+            Cursor : Natural;
+            Held : Span;
+            Found : Boolean;
+            First_One : Boolean := True;
+         begin
+            if not Is_List (List) then
+               return;
+            end if;
+            Cursor := List.First + 1;
+            Next_Element (Cursor, Held, Found);
+            if not Found then
+               return;
+            end if;
+            Put (ASCII.LF & "<" & Tag & ">[");
+            loop
+               if not First_One then
+                  Put (", ");
+               end if;
+               First_One := False;
+               if Is_String (Held) then
+                  Put ("`" & Decoded (Held) & "`");
+               else
+                  Put (Pythonic (Held));
+               end if;
+               Next_Element (Cursor, Held, Found);
+               exit when not Found;
+            end loop;
+            Put ("]</" & Tag & ">");
+         end Item_List;
+
+         --  A value inside a tag named for its key: the JSON of a mapping,
+         --  Python's str of anything else.
+         procedure In_Tag (Key : String; Held : Span) is
+         begin
+            Put (ASCII.LF & "<" & Key & ">");
+            if Is_Mapping (Held) then
+               Put (Src (Held.First .. Held.Last));
+            else
+               Put (Pythonic (Held));
+            end if;
+            Put ("</" & Key & ">");
+         end In_Tag;
+
+         Whole : constant Span := Value_At (Src'First);
+         Tool  : Span := Whole;
+      begin
+         if Present (Member (Whole, "function")) then
+            Tool := Member (Whole, "function");
+         end if;
+
+         Put (ASCII.LF & "<function>" & ASCII.LF & "<name>");
+         Put (Pythonic (Member (Tool, "name")));
+         Put ("</name>");
+         Put (ASCII.LF & "<description>");
+         Put (Model_Runner.Text.Trim (Pythonic (Member (Tool, "description"))));
+         Put ("</description>");
+         Put (ASCII.LF & "<parameters>");
+
+         declare
+            Parameters : constant Span := Member (Tool, "parameters");
+            Properties : constant Span := Member (Parameters, "properties");
+            Cursor     : Natural;
+            Key, Fields : Span;
+            Found      : Boolean;
+         begin
+            if Is_Mapping (Properties) then
+               Cursor := Properties.First + 1;
+               loop
+                  Next_Member (Cursor, Key, Fields, Found);
+                  exit when not Found;
+                  Put (ASCII.LF & "<parameter>");
+                  Put (ASCII.LF & "<name>" & Decoded (Key) & "</name>");
+                  if Present (Member (Fields, "type")) then
+                     Put (ASCII.LF & "<type>"
+                          & Pythonic (Member (Fields, "type")) & "</type>");
+                  end if;
+                  if Present (Member (Fields, "description")) then
+                     Put (ASCII.LF & "<description>"
+                          & Model_Runner.Text.Trim
+                              (Pythonic (Member (Fields, "description")))
+                          & "</description>");
+                  end if;
+                  Item_List (Member (Fields, "enum"), "enum");
+
+                  declare
+                     Inner : Natural := Fields.First + 1;
+                     K, V  : Span;
+                     More  : Boolean;
+                  begin
+                     if Is_Mapping (Fields) then
+                        loop
+                           Next_Member (Inner, K, V, More);
+                           exit when not More;
+                           declare
+                              Name : constant String := Decoded (K);
+                           begin
+                              if Name /= "type" and then Name /= "description"
+                                and then Name /= "enum"
+                                and then Name /= "required"
+                              then
+                                 In_Tag (Name, V);
+                              end if;
+                           end;
+                        end loop;
+                     end if;
+                  end;
+
+                  Item_List (Member (Fields, "required"), "required");
+                  Put (ASCII.LF & "</parameter>");
+               end loop;
+            end if;
+            Item_List (Member (Parameters, "required"), "required");
+         end;
+
+         Put (ASCII.LF & "</parameters>");
+         if Present (Member (Tool, "return")) then
+            In_Tag ("return", Member (Tool, "return"));
+         end if;
+         Put (ASCII.LF & "</function>");
+
+         return Ada.Strings.Unbounded.To_String (Out_Text);
+      end Qwen_Tool_Of;
+
       --  Value of one term with its filter applied.
       --  What one filter makes of the text before it. The three that read
       --  the term rather than its text -- tojson and the two parameter
@@ -4623,7 +5053,7 @@ package body Model_Runner.Templates is
       begin
          case Step.Kind is
             when Filter_None | Filter_String | Filter_Safe | Filter_JSON
-               | Filter_Params | Filter_Qwen_Params =>
+               | Filter_Params | Filter_Qwen_Params | Filter_Qwen_Tool =>
                return Held;
 
             when Filter_Trim =>
@@ -4738,6 +5168,9 @@ package body Model_Runner.Templates is
 
             when Filter_Qwen_Params =>
                return Rest_Of (Params_Of (Value, Qwen => True), 2);
+
+            when Filter_Qwen_Tool =>
+               return Rest_Of (Qwen_Tool_Of (Value), 2);
 
             when Filter_Length =>
                if Value.Chained = 0 and then Value.Kind = Term_Variable

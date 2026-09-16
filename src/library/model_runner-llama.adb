@@ -6,6 +6,7 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.Arithmetic;
+with Model_Runner.Conversation;
 with Model_Runner.Delta_Rule;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
@@ -2294,15 +2295,48 @@ package body Model_Runner.Llama is
             Model_Runner.Templates.Compile
               (Item.Chat, Source_Text, Bounds, Item.Chat_Status);
 
+            --  A template that compiles is asked to render the plainest
+            --  conversation there is, one user turn and the generation
+            --  prompt, here rather than at the first prompt. The engine
+            --  refuses a construct it lacks where the construct is read
+            --  and not where the template is compiled, so a template can
+            --  compile and still render nothing: Qwen3-Coder's own does,
+            --  its macro compiling now and its "is iterable" refusing at
+            --  once. Such a template is as unusable as one that will not
+            --  compile, and is stood in for the same way.
+            if E.Is_Ok (Item.Chat_Status) then
+               declare
+                  Probe  : Model_Runner.Conversation.History;
+                  Room   : String (1 .. 4096);
+                  Used   : Natural;
+                  Status : E.Error_Info;
+               begin
+                  Model_Runner.Conversation.Open (Probe, Status => Status);
+                  Model_Runner.Conversation.Append
+                    (Probe, Model_Runner.Conversation.User_Role, "x",
+                     Status);
+                  Model_Runner.Templates.Render
+                    (Item.Chat, Probe, "", "", True, Room, Used, Status);
+                  Model_Runner.Conversation.Close (Probe);
+                  if Status.Code in E.Template_Unsupported_Construct
+                                  | E.Template_Unknown_Filter
+                                  | E.Template_Unknown_Variable
+                  then
+                     Item.Chat_Status := Status;
+                  end if;
+               end;
+            end if;
+
             --  A template outside the subset that is nonetheless written in
             --  a format this build carries -- its own text says which, by
             --  the turn markers and the call shape in it -- is rendered with
-            --  that format instead. Only then: a template that compiles is
-            --  what the model was trained on and nothing replaces it, and a
-            --  template no carried format is recognised in leaves the model
-            --  in raw mode as before. The stand-in is compiled the same way
-            --  and refused the same way, so a carried format that will not
-            --  compile against these bounds changes nothing.
+            --  that format instead. Only then: a template that compiles and
+            --  renders is what the model was trained on and nothing
+            --  replaces it, and a template no carried format is recognised
+            --  in leaves the model in raw mode as before. The stand-in is
+            --  compiled the same way and refused the same way, so a carried
+            --  format that will not compile against these bounds changes
+            --  nothing.
             if E.Is_Error (Item.Chat_Status) then
                declare
                   Name  : constant String :=

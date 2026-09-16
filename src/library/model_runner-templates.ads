@@ -460,6 +460,14 @@ private
       --  value plain, as that family's template writes them.
       Filter_Qwen_Params,
 
+      --  Write a tool as Qwen3-Coder's own template writes one: a
+      --  <function> element with the name, the description, a <parameter>
+      --  element per property with its type, description, enum, any other
+      --  field and its required list, then the function's required list and
+      --  its return. That template walks the schema as a mapping through a
+      --  macro; this walks the same JSON in Ada and writes the same bytes.
+      Filter_Qwen_Tool,
+
       --  The text filters the language has and templates reach for: the
       --  case of a text changed, a value taken as a whole number, a value
       --  left as it is under two names, a stand-in for an empty value, and

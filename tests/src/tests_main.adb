@@ -1024,7 +1024,15 @@ begin
          System : constant String := Option ("--system", "");
          Offer  : constant String := Option ("--tools", "");
          Instead : constant String := Option ("--template", "");
+         Carried : constant String := Option ("--format", "");
          Opened : constant Boolean := Given ("--generation-prompt");
+
+         --  What the caller said about reasoning, or nothing: the three
+         --  answers a template's enable_thinking may find.
+         Thinking : constant Model_Runner.Templates.Thinking_Choice :=
+           (if Given ("--think") then Model_Runner.Templates.Thinking_On
+            elsif Given ("--no-think") then Model_Runner.Templates.Thinking_Off
+            else Model_Runner.Templates.Thinking_Unstated);
 
          Source   : Model_Runner.Byte_Sources.Files.File_Source;
          Item     : Model_Runner.GGUF.Containers.Container;
@@ -1048,6 +1056,13 @@ begin
             Room : String (1 .. 65_536);
             Used : Natural := 0;
          begin
+            --  A carried format by name, which is how one is set beside
+            --  jinja2 reading the model's own template: the model still
+            --  lends its tokens, the format lends its text.
+            if Carried /= "" then
+               return Model_Runner.Templates.Built_In (Carried);
+            end if;
+
             if Instead = "" then
                return Model_Runner.GGUF.Containers.String_Value
                  (Item, "tokenizer.chat_template");
@@ -1183,6 +1198,7 @@ begin
                   Model_Runner.Tokenizer.Token_Text
                     (Words, Model_Runner.Tokenizer.End_Token (Words)),
                   Opened, Room, Used, Status,
+                  Thinking => Thinking,
                   Tools => Offered'Access);
             end if;
 

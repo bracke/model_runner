@@ -54,7 +54,7 @@ package body Tool_Commands is
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
      " --model --system --prompt --assistant --calls --tool --tools"
-     & " --template --generation-prompt ";
+     & " --template --format --generation-prompt --think --no-think ";
    Opts_Likeness  : aliased constant String := " --model --names ";
    Opts_Imatrix   : aliased constant String :=
      " --model --text --chunk --chunks --threads --out ";
@@ -89,7 +89,7 @@ package body Tool_Commands is
    Takes_Render    : aliased constant String :=
      "--model PATH [--system TEXT] [--prompt TEXT] [--assistant TEXT]"
      & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
-     & " [--generation-prompt]";
+     & " [--format NAME] [--generation-prompt] [--think | --no-think]";
    Takes_Docs      : aliased constant String := "[ROOT]";
    Takes_Shader    : aliased constant String :=
      "SOURCE.comp COMPILED.spv [ROOT]";

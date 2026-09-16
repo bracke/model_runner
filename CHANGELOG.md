@@ -55,6 +55,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The two carried formats are the models' own bytes, tools and all.**
+  `qwen3-coder` offered tools as JSON where the model reads a `<function>`
+  element with its parameters walked out of the schema; the `qwen_tool`
+  filter writes that walk from the definition -- name, type, description,
+  enum, every other field, the required lists and the return, spelled as
+  the model's macro spells them -- and the call turn is written as the
+  model writes it, the text trimmed on a line of its own. `minicpm` folds
+  a run of tool answers as its model does, with the line break before
+  each answer rather than after. Both spell an argument that is not a
+  string as Python does. Both are crossed against jinja2 reading the
+  model's own template -- eight and nine conversations, tools, calls,
+  answers, reasoning, `--think` and `--no-think` -- byte for byte, which
+  found the five faults the changelog entry's neighbour in
+  `docs/reference-runtime.md` names. `+%}` keeps the line break after a
+  block tag, as the language spells that; `tests render` takes `--format
+  NAME`, `--think` and `--no-think`.
+- **A template that compiles and will not render is stood in for.**
+  Qwen3-Coder's own template compiles now that macros are in the subset,
+  and refuses at its first render on `is iterable` -- which left the model
+  worse off than when the template would not compile, because only a
+  template that would not compile was replaced by the carried format. A
+  probe render at load, one user turn and the generation prompt, decides
+  it now: a template that refuses that is stood in for exactly as one
+  that will not compile.
 - **Every cutting rule set beside the other runtime's own splitter.** A
   thirty-line harness around llama.cpp's `unicode_regex_split` and a new
   `tests cut --pre NAME --texts PATH` print the same list -- a piece

@@ -674,10 +674,21 @@ package body Tests.Template_Cases is
               & E.Error_Code'Image (Status.Code));
 
       declare
-         R : constant String := Target (1 .. Last);
+         R  : constant String := Target (1 .. Last);
+         Nl : constant String := "" & Character'Val (10);
       begin
-         Assert (Has (R, "<tools>") and then Has (R, """name"": ""calc"""),
-                 "the tools were not offered: " & R);
+         --  The tool as the model's own template writes it: a <function>
+         --  element with the schema walked into <parameter> elements, not
+         --  the JSON the format used to offer. Crossed against jinja2
+         --  reading the model's own template with enums, defaults, nested
+         --  items, required lists and a return, byte for byte.
+         Assert (Has (R, "<tools>" & Nl & "<function>" & Nl
+                      & "<name>calc</name>" & Nl & "<description>d</description>"
+                      & Nl & "<parameters>" & Nl & "<parameter>" & Nl
+                      & "<name>a</name>" & Nl & "<type>number</type>" & Nl
+                      & "</parameter>" & Nl & "</parameters>" & Nl
+                      & "</function>" & Nl & "</tools>"),
+                 "the tools were not offered as the model writes them: " & R);
          Assert (Has (R, "<function=calc>"),
                  "the call was not written in the qwen3-coder form: " & R);
          Assert (Has (R, "<parameter=a>" & Character'Val (10)
