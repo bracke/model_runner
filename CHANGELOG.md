@@ -99,6 +99,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The pictures are crossed with the reference runtime.** Two scripts under
+  `tests/fixtures/vision-crossing/` set this build beside `transformers`:
+  Gemma 3's prompt rewrite -- the frame and the pan-and-scan words -- gives
+  the reference processor's tokens, token for token, on two pictures both
+  ways; Qwen3.5's prompt is the reference's, its vision tower's rows agree
+  with `tests see` to a cosine of 0.9999996 at worst on the same pixels,
+  and its `get_rope_index` places a picture's rows and the text after them
+  where `Model_Runner.Llama` marks them. Recorded under "The pictures,
+  crossed" in docs/reference-runtime.md. What the crossing found:
+  `Model_Runner.Images.Resample` was a few levels from PIL here and there --
+  floating point between the passes, single-precision weights -- and the
+  Qwen encoder turned a level into rows a third apart on a handful of
+  windows. It resamples as PIL does now, to the bit: weights in double,
+  two passes of 22-bit fixed point, each rounded to a byte and clipped,
+  checked against `Image.resize` with no pixel differing, both filters.
+- **Qwen3.5 sees pictures: its projector, Qwen3-VL's encoder, is read.** `run
+  --mmproj PATH` with a Qwen3.5 model and its mmproj file encodes a picture
+  at its own shape -- the reference's smart_resize: sides rounded to
+  multiples of thirty-two pixels, held between sixty-four and 4096 rows,
+  with PIL's cubic filter -- cut into sixteen-pixel patches walked two by
+  two so that a window's four lie together, placed by a position grid of
+  forty-eight a side interpolated to the picture's, through twelve blocks
+  whose queries and keys turn by the patch's row and column over a fused
+  projection, and a window's four patches joined and projected in two
+  steps to the text width, one row a window. The template's one
+  `<|image_pad|>` is replaced by as many, one a row. The text model gained
+  the family's multimodal rotation: a position in three parts -- time, row
+  and column -- dealt among a head's pairs as `rope.dimension_sections`
+  states, interleaved; a text token has the three equal and rotates as it
+  did, and a picture's row turns by the picture's start, its row and its
+  column, the text after it going on from the start plus the grid's longer
+  side, so the rotation's position parts company with the cache index from
+  the first picture on and the session marks each position's, through a
+  rewind and a snapshot -- a saved context carries them after everything
+  else, and one saved before they were written adopts with every
+  position at its index, which is what it held. `Model_Runner.Kernels`
+  gained `Rotary_Place`, `Rotary_Sections`
+  and `Part_Of`; `Llama.Given_Rows` places and a causal flag, and
+  `Turned_By` reads a position's place back; the picture set carries a
+  count a picture and a place a row. Checked against a plain binary64
+  computation of the same network with a projector written small, and on
+  Qwen3.5-0.8B, which names the dinosaur and reads the poster. Not done:
+  Qwen3-VL's deepstack, refused by name; video.
 - **A wide or tall picture can be shown in crops, `--pan-and-scan`.** The
   reference processor's rule: a picture whose longer side is 1.2 times its
   shorter is cut along it into as many crops as the ratio rounds to, two at

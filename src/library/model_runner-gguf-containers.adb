@@ -655,6 +655,67 @@ package body Model_Runner.GGUF.Containers is
       Status := E.Success;
    end Get_Integer_Element;
 
+   -------------------------
+   -- Get_Boolean_Element --
+   -------------------------
+
+   procedure Get_Boolean_Element
+     (Item   : Container;
+      Key    : String;
+      Index  : Positive;
+      Value  : out Boolean;
+      Status : out E.Error_Info)
+   is
+      Position : constant Natural := Find (Item, Key);
+   begin
+      Value := False;
+
+      if Position = 0 then
+         Status := Missing (Key);
+         return;
+      end if;
+
+      declare
+         Found : Metadata_Entry renames Item.Entries (Position);
+      begin
+         if Found.Kind /= Value_Array then
+            Status := Mismatch (Key, "array", Found.Kind);
+            return;
+         end if;
+
+         if Found.Element_Kind /= Value_Bool then
+            Status := Mismatch (Key, "boolean", Found.Element_Kind);
+            return;
+         end if;
+
+         if Index > Found.Length then
+            Status := Out_Of_Range (Key);
+            E.Add_Integer (Status, "index", Long_Long_Integer (Index));
+            return;
+         end if;
+
+         declare
+            Offset : constant B.Byte_Count :=
+              Found.Payload.Offset + B.Byte_Count (Index - 1);
+            Ok     : Boolean;
+            Raw    : Interfaces.Unsigned_8;
+         begin
+            if Item.Pool = null or else Offset + 1 > Item.Pool_Used then
+               Status := Out_Of_Range (Key);
+               return;
+            end if;
+            Raw := B.Get_U8 (Item.Pool.all, Offset, Ok);
+            if not Ok then
+               Status := Out_Of_Range (Key);
+               return;
+            end if;
+            Value := Interfaces."/=" (Raw, 0);
+         end;
+      end;
+
+      Status := E.Success;
+   end Get_Boolean_Element;
+
    ------------------------
    -- Get_Float_Element --
    ------------------------

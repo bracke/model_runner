@@ -333,6 +333,26 @@ package Model_Runner.Generation is
       Per_Picture : Natural := 0;
       Count       : Natural := 0;
       Rows        : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  How many rows each picture has, where the count is the picture's
+      --  own rather than Per_Picture for all -- a Qwen picture's is its
+      --  shape's; null where every picture has Per_Picture.
+      Counts      : Crop_Counts_Access := null;
+
+      --  Where each row stands in its picture, indexed as Rows are, for
+      --  a model whose positions have three parts; null for one whose
+      --  positions have one.
+      Places      : Model_Runner.Llama.Row_Places_Access := null;
+
+      --  Whether the marker stays in the prompt ahead of the soft tokens
+      --  -- Gemma's <start_of_image> does -- or is itself replaced by
+      --  them, as Qwen's <|image_pad|> is, the marker and the soft token
+      --  being one token there.
+      Keep_Marker : Boolean := True;
+
+      --  Whether a picture's rows attend to each other causally, as any
+      --  text does and as Qwen's do, or both ways, as Gemma's do.
+      Causal_Rows : Boolean := False;
       Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Frame_Before : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Frame_After : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;

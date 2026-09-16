@@ -125,6 +125,12 @@ package Fixtures is
    --  @param Value Element value.
    procedure Float_Element (Item : in out Builder; Value : N.Real);
 
+   --  Append a boolean element to the array being built.
+   --
+   --  @param Item Builder.
+   --  @param Value Element value.
+   procedure Bool_Element (Item : in out Builder; Value : Boolean);
+
    --  Close the open array.
    --
    --  @param Item Builder to extend.

@@ -69,7 +69,8 @@ package body Tiny_Model is
       Stretch      : Rope_Stretch := Plain;
       Rope_Table   : Boolean := False;
       Apart_Widths : Boolean := False;
-      Head_Factor : Positive := 1)
+      Head_Factor : Positive := 1;
+      Sections     : Boolean := False)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -427,6 +428,18 @@ package body Tiny_Model is
             (if Kind in GPT2 | Bert
              then 0
              else Interfaces.Unsigned_32 (Head_Size)));
+      end if;
+
+      --  A position in three parts, dealt one pair to time and one to
+      --  the row: the two pairs a head of four has.
+      if Sections and then Kind = Qwen35 then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".rope.dimension_sections", G.Value_Int32, 4);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.End_Array (Builder);
       end if;
 
       --  The hybrid's linear layers: every second block attends in full;

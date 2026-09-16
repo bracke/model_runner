@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 34) of Text_Access :=
+   Held : constant array (1 .. 36) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -83,6 +83,18 @@ package body Library_Surface is
       --  program showing a reader what a projector will make of a picture
       --  asks the same.
       new String'("Image_Size"),
+
+      --  Whether a projector makes every picture the same number of rows.
+      --  The command gathers a picture's rows and takes what it gets;
+      --  a program laying out room for a conversation's pictures before
+      --  encoding any asks first.
+      new String'("Fixed_Rows"),
+
+      --  What a session's position turns by, in its three parts. The
+      --  engine marks and reads them itself; the suite reads them back
+      --  to see a picture's rows placed by row and column, and a program
+      --  showing where a picture's rows stand asks the same.
+      new String'("Turned_By"),
 
       --  Which roles of weight round their activations, as the backend was
       --  last told. The command tells and never asks back; a caller with

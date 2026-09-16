@@ -12,17 +12,21 @@ package body Model_Runner.CLI.Pictures is
    package Conv renames Model_Runner.Conversation;
    package E renames Model_Runner.Errors;
    package Gen renames Model_Runner.Generation;
+   package L renames Model_Runner.Llama;
    package N renames Model_Runner.Numerics;
    package T renames Model_Runner.Tensors;
    package US renames Ada.Strings.Unbounded;
 
    procedure Free is new Ada.Unchecked_Deallocation
      (Gen.Crop_Counts, Gen.Crop_Counts_Access);
+   procedure Free is new Ada.Unchecked_Deallocation
+     (L.Row_Places, L.Row_Places_Access);
 
    use type Ada.Calendar.Time;
    use type N.Element_Count;
    use type T.Real_Array_Access;
    use type Gen.Crop_Counts_Access;
+   use type L.Row_Places_Access;
    use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Tokenizer.Token_Id;
 
@@ -124,18 +128,16 @@ package body Model_Runner.CLI.Pictures is
       Close (Item);
       Status := E.Success;
 
-      Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
-      Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
-      Item.Closer := Model_Runner.Tokenizer.Find (Words.all, "<end_of_image>");
-      if Item.Marker = Model_Runner.Tokenizer.No_Token
-        or else Item.Soft = Model_Runner.Tokenizer.No_Token
+      --  A model with neither family's tokens has no place for a picture
+      --  whatever the projector says, and is refused before the projector
+      --  is opened.
+      if Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>")
+           = Model_Runner.Tokenizer.No_Token
+        and then Model_Runner.Tokenizer.Find (Words.all, "<|image_pad|>")
+           = Model_Runner.Tokenizer.No_Token
       then
          Status := E.Make (E.Arch_Vision_Tokens_Missing);
-         E.Add_Text
-           (Status, "token",
-            (if Item.Marker = Model_Runner.Tokenizer.No_Token
-             then "<start_of_image>" else "<image_soft_token>"),
-            E.Param_Identifier);
+         E.Add_Text (Status, "token", "<start_of_image>", E.Param_Identifier);
          return;
       end if;
 
@@ -144,17 +146,56 @@ package body Model_Runner.CLI.Pictures is
          return;
       end if;
 
-      --  What the reference processor writes round a picture before it
-      --  tokenizes -- two line breaks either side of the marker -- and the
-      --  words it sets a picture with crops among, and its crops apart.
-      --  Gemma 3's, which is the one projector read here.
-      Item.Marker_Text := Model_Runner.Text.To_Bounded ("<start_of_image>");
-      Item.Before := Model_Runner.Text.To_Bounded (ASCII.LF & ASCII.LF);
-      Item.After := Item.Before;
-      Item.Lead := Model_Runner.Text.To_Bounded ("Here is the original image ");
-      Item.Bridge := Model_Runner.Text.To_Bounded
-        (" and here are some crops to help you see better ");
-      Item.Gap := Model_Runner.Text.To_Bounded (" ");
+      --  The tokens a picture stands behind, which are the projector's
+      --  family's. Gemma 3 writes a marker, the soft tokens and a closer,
+      --  and its processor sets the marker between two line breaks before
+      --  it tokenizes and, for a picture with crops, among its words.
+      --  Qwen3.5's template writes <|vision_start|><|image_pad|>
+      --  <|vision_end|> and its processor replaces the one <|image_pad|>
+      --  by as many as the picture has rows: the marker is the soft
+      --  token, nothing frames it, and there are no crops.
+      if Model_Runner.Vision.Placed_Rows (Item.Eyes) then
+         Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<|image_pad|>");
+         Item.Soft := Item.Marker;
+         Item.Closer := Model_Runner.Tokenizer.No_Token;
+         Item.Keeps_Marker := False;
+         Item.Marker_Text := Model_Runner.Text.Empty;
+         Item.Before := Model_Runner.Text.Empty;
+         Item.After := Model_Runner.Text.Empty;
+         Item.Lead := Model_Runner.Text.Empty;
+         Item.Bridge := Model_Runner.Text.Empty;
+         Item.Gap := Model_Runner.Text.Empty;
+         if Item.Marker = Model_Runner.Tokenizer.No_Token then
+            Status := E.Make (E.Arch_Vision_Tokens_Missing);
+            E.Add_Text (Status, "token", "<|image_pad|>", E.Param_Identifier);
+            Model_Runner.Vision.Close (Item.Eyes);
+            return;
+         end if;
+      else
+         Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
+         Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
+         Item.Closer := Model_Runner.Tokenizer.Find (Words.all, "<end_of_image>");
+         Item.Keeps_Marker := True;
+         if Item.Marker = Model_Runner.Tokenizer.No_Token
+           or else Item.Soft = Model_Runner.Tokenizer.No_Token
+         then
+            Status := E.Make (E.Arch_Vision_Tokens_Missing);
+            E.Add_Text
+              (Status, "token",
+               (if Item.Marker = Model_Runner.Tokenizer.No_Token
+                then "<start_of_image>" else "<image_soft_token>"),
+               E.Param_Identifier);
+            Model_Runner.Vision.Close (Item.Eyes);
+            return;
+         end if;
+         Item.Marker_Text := Model_Runner.Text.To_Bounded ("<start_of_image>");
+         Item.Before := Model_Runner.Text.To_Bounded (ASCII.LF & ASCII.LF);
+         Item.After := Item.Before;
+         Item.Lead := Model_Runner.Text.To_Bounded ("Here is the original image ");
+         Item.Bridge := Model_Runner.Text.To_Bounded
+           (" and here are some crops to help you see better ");
+         Item.Gap := Model_Runner.Text.To_Bounded (" ");
+      end if;
 
       Item.Width := Model_Runner.Llama.Config (Model).Embedding;
       if Model_Runner.Vision.Row_Width (Item.Eyes) /= Item.Width then
@@ -229,8 +270,11 @@ package body Model_Runner.CLI.Pictures is
 
       Per   : constant Natural := Model_Runner.Vision.Rows_Per_Picture (Item.Eyes);
       Width : constant N.Element_Count := N.Element_Count (Item.Width);
-      Row_Elements : constant N.Element_Count :=
-        N.Element_Count (Per) * Width;
+
+      --  Whether the model reads the rows as a grid, each with a place
+      --  of its own, which is also where a picture's rows are its own
+      --  count and there are no crops.
+      Placed : constant Boolean := Model_Runner.Vision.Placed_Rows (Item.Eyes);
    begin
       Status := E.Success;
       if not Item.Ready then
@@ -259,6 +303,8 @@ package body Model_Runner.CLI.Pictures is
       Into.Soft := Item.Soft;
       Into.Closer := Item.Closer;
       Into.Per_Picture := Per;
+      Into.Keep_Marker := Item.Keeps_Marker;
+      Into.Causal_Rows := Placed;
       Into.Marker_Text := Item.Marker_Text;
       Into.Frame_Before := Item.Before;
       Into.Frame_After := Item.After;
@@ -270,20 +316,26 @@ package body Model_Runner.CLI.Pictures is
          return;
       end if;
 
-      --  A crop count for every picture, the ones held copied over.
+      --  A crop count and a row count for every picture, the ones held
+      --  copied over.
       declare
-         Grown : constant Gen.Crop_Counts_Access :=
+         Grown_Crops : constant Gen.Crop_Counts_Access :=
            new Gen.Crop_Counts'(1 .. Total => 0);
+         Grown_Counts : constant Gen.Crop_Counts_Access :=
+           new Gen.Crop_Counts'(1 .. Total => Per);
       begin
-         if Into.Crops /= null then
-            for Index in Into.Crops.all'Range loop
-               if Index <= Total then
-                  Grown.all (Index) := Into.Crops.all (Index);
-               end if;
-            end loop;
-            Free (Into.Crops);
-         end if;
-         Into.Crops := Grown;
+         for Index in 1 .. Into.Count loop
+            if Into.Crops /= null and then Index in Into.Crops.all'Range then
+               Grown_Crops.all (Index) := Into.Crops.all (Index);
+            end if;
+            if Into.Counts /= null and then Index in Into.Counts.all'Range then
+               Grown_Counts.all (Index) := Into.Counts.all (Index);
+            end if;
+         end loop;
+         Free (Into.Crops);
+         Free (Into.Counts);
+         Into.Crops := Grown_Crops;
+         Into.Counts := Grown_Counts;
       end;
 
       for Index in Into.Count + 1 .. Total loop
@@ -294,21 +346,75 @@ package body Model_Runner.CLI.Pictures is
             Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
             Held    : constant N.Element_Count :=
               (if Into.Rows = null then 0 else Into.Rows.all'Length);
-            At_Row  : N.Element_Count := Held;
+            Held_Rows : constant N.Element_Count := Held / Width;
+            Added   : N.Element_Count := 0;
+            Grid_Rows, Grid_Columns : Natural;
 
-            --  One picture -- the whole, or a crop -- encoded to the rows
-            --  after those held so far.
+            --  One picture -- the whole, or a crop -- encoded, and its
+            --  rows put after those held so far, with their places
+            --  where the model reads them.
             procedure Encode_One (Shown : Model_Runner.Images.Raster) is
                Rows : T.Real_Array_Access;
             begin
                Model_Runner.Vision.Encode
-                 (Item.Eyes, Shown, Team, Rows, Cancel, Status);
+                 (Item.Eyes, Shown, Team, Rows, Grid_Rows, Grid_Columns,
+                  Cancel, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
-               Into.Rows (At_Row .. At_Row + Rows.all'Length - 1) := Rows.all;
-               At_Row := At_Row + Rows.all'Length;
-               T.Free (Rows);
+
+               declare
+                  Grown : T.Real_Array_Access;
+                  Was   : constant N.Element_Count := Held + Added;
+                  Count : constant N.Element_Count := Rows.all'Length / Width;
+                  Length : constant N.Element_Count := Rows.all'Length;
+               begin
+                  T.Allocate (Was + Rows.all'Length, Grown);
+                  if Grown = null then
+                     T.Free (Rows);
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                     E.Add_Text
+                       (Status, "category", "pictures", E.Param_Identifier);
+                     return;
+                  end if;
+                  if Into.Rows /= null and then Was > 0 then
+                     Grown (0 .. Was - 1) := Into.Rows (0 .. Was - 1);
+                  end if;
+                  Grown (Was .. Was + Rows.all'Length - 1) := Rows.all;
+                  T.Free (Into.Rows);
+                  Into.Rows := Grown;
+                  T.Free (Rows);
+
+                  if Placed then
+                     declare
+                        First_Row : constant N.Element_Count :=
+                          Held_Rows + Added / Width;
+                        More : constant L.Row_Places_Access :=
+                          new L.Row_Places (0 .. First_Row + Count - 1);
+                        Longer : constant Natural :=
+                          Natural'Max (Grid_Rows, Grid_Columns);
+                     begin
+                        if Into.Places /= null then
+                           for Where in Into.Places.all'Range loop
+                              exit when Where >= First_Row;
+                              More.all (Where) := Into.Places.all (Where);
+                           end loop;
+                        end if;
+                        for Where in 0 .. Count - 1 loop
+                           More.all (First_Row + Where) :=
+                             (Row     => Natural (Where) / Natural'Max (1, Grid_Columns),
+                              Column  => Natural (Where) mod Natural'Max (1, Grid_Columns),
+                              First   => Where = 0,
+                              Last    => Where = Count - 1,
+                              Advance => Longer);
+                        end loop;
+                        Free (Into.Places);
+                        Into.Places := More;
+                     end;
+                  end if;
+
+                  Added := Added + Length;
+               end;
             end Encode_One;
          begin
             Model_Runner.Images.Load
@@ -317,32 +423,13 @@ package body Model_Runner.CLI.Pictures is
                return;
             end if;
 
-            if Crops and then Picture.Width > 0 and then Picture.Height > 0
+            if Crops and then not Placed
+              and then Picture.Width > 0 and then Picture.Height > 0
             then
                Grid := Model_Runner.Images.Pan_And_Scan
                  (Picture.Width, Picture.Height);
                Tiles := 1 + Grid.Across * Grid.Down;
             end if;
-
-            --  Room for this picture's rows, whole and crops, past the
-            --  rows already held.
-            declare
-               Grown : T.Real_Array_Access;
-            begin
-               T.Allocate
-                 (Held + N.Element_Count (Tiles) * Row_Elements, Grown);
-               if Grown = null then
-                  Model_Runner.Images.Free (Picture);
-                  Status := E.Make (E.Memory_Allocation_Failed);
-                  E.Add_Text (Status, "category", "pictures", E.Param_Identifier);
-                  return;
-               end if;
-               if Into.Rows /= null and then Held > 0 then
-                  Grown (0 .. Held - 1) := Into.Rows (0 .. Held - 1);
-               end if;
-               T.Free (Into.Rows);
-               Into.Rows := Grown;
-            end;
 
             Encode_One (Picture);
 
@@ -380,10 +467,12 @@ package body Model_Runner.CLI.Pictures is
             end if;
 
             Into.Crops.all (Index) := Tiles - 1;
+            Into.Counts.all (Index) :=
+              (if Tiles > 1 then Per else Natural (Added / Width));
             Into.Count := Index;
             if Reporter /= null then
                Reporter
-                 (Index, Total, Tiles * Per,
+                 (Index, Total, Natural (Added / Width),
                   Natural (Float (Ada.Calendar.Clock - Started) * 1000.0));
             end if;
          end;
@@ -398,6 +487,8 @@ package body Model_Runner.CLI.Pictures is
    begin
       T.Free (Item.Rows);
       Free (Item.Crops);
+      Free (Item.Counts);
+      Free (Item.Places);
       Item := Gen.No_Pictures;
    end Release;
 

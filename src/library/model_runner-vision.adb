@@ -40,8 +40,12 @@ package body Model_Runner.Vision is
    procedure Free is new Ada.Unchecked_Deallocation
      (Block_Array, Block_Array_Access);
 
-   --  The one projector this build carries.
+   --  The two projectors this build carries.
    Gemma_3 : constant String := "gemma3";
+   Qwen_3  : constant String := "qwen3vl_merger";
+
+   function Is_Qwen (Item : Encoder) return Boolean
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3);
 
    ------------------
    -- Bind helpers --
@@ -154,6 +158,194 @@ package body Model_Runner.Vision is
       T.Dequantize_Row (View, 0, Result.all, Status);
    end Bind_Vector;
 
+   --  The Qwen encoder's tensors: the two temporal frames' patch weights
+   --  decoded and summed once, since a still picture is the same frame
+   --  twice; the position grid; each block's fused projection, output,
+   --  norms and feed-forward; the post norm; and the two-step merger.
+   procedure Bind_Qwen (Item : in out Encoder; Status : out E.Error_Info) is
+      Width   : constant Element_Count := Element_Count (Item.Width);
+      Feed    : constant Element_Count := Element_Count (Item.Feed);
+      Patch_Elements : constant Element_Count :=
+        3 * Element_Count (Item.Patch) ** 2;
+      Text_Width : constant Element_Count := Element_Count (Item.Text_Width);
+      Joined  : constant Element_Count :=
+        Width * Element_Count (Item.Merge) ** 2;
+   begin
+      Status := E.Success;
+
+      declare
+         First, Second : T.View;
+         Row : T.Real_Array_Access;
+      begin
+         Bind (Item, "v.patch_embd.weight", Width, Patch_Elements, First, Status);
+         if E.Is_Ok (Status) then
+            Bind (Item, "v.patch_embd.weight.1", Width, Patch_Elements, Second,
+                  Status);
+         end if;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         T.Allocate (Width * Patch_Elements, Item.Patch_Sum);
+         T.Allocate (Patch_Elements, Row);
+         if Item.Patch_Sum = null or else Row = null then
+            T.Free (Row);
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+         for Source_Row in 0 .. Width - 1 loop
+            T.Dequantize_Row
+              (First, Source_Row,
+               Item.Patch_Sum (Source_Row * Patch_Elements
+                               .. (Source_Row + 1) * Patch_Elements - 1),
+               Status);
+            exit when E.Is_Error (Status);
+            T.Dequantize_Row (Second, Source_Row, Row.all, Status);
+            exit when E.Is_Error (Status);
+            K.Add
+              (Item.Patch_Sum (Source_Row * Patch_Elements
+                               .. (Source_Row + 1) * Patch_Elements - 1),
+               Row.all);
+         end loop;
+         T.Free (Row);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         T.Make
+           (Format  => Model_Runner.GGUF.Type_F32,
+            Rows    => Width,
+            Columns => Patch_Elements,
+            Base    => Item.Patch_Sum.all'Address,
+            Span    => B.Byte_Count (Item.Patch_Sum.all'Length) * 4,
+            Offset  => 0,
+            Result  => Item.Patch_Both,
+            Status  => Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end;
+
+      Bind_Vector (Item, "v.patch_embd.bias", Width, Item.Patch_Bias, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The position grid: as many rows as the grid has cells, and a
+      --  side that is their square root.
+      declare
+         Index : constant Natural :=
+           Containers.Find_Tensor (Item.Container, "v.position_embd.weight");
+         Cells : Element_Count := 0;
+      begin
+         if Index > 0
+           and then Containers.Tensor_Rank (Item.Container, Index) = 2
+         then
+            Cells := Element_Count
+              (Containers.Tensor_Dimension (Item.Container, Index, 2));
+         end if;
+         Item.Grid := 1;
+         while Element_Count (Item.Grid + 1) ** 2 <= Cells loop
+            Item.Grid := Item.Grid + 1;
+         end loop;
+         if Cells = 0 or else Element_Count (Item.Grid) ** 2 /= Cells then
+            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+            E.Add_Text
+              (Status, "tensor", "v.position_embd.weight", E.Param_Identifier);
+            E.Add_Integer (Status, "rows", Long_Long_Integer (Cells));
+            return;
+         end if;
+         Bind (Item, "v.position_embd.weight", Cells, Width, Item.Positions,
+               Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end;
+
+      Bind_Vector (Item, "v.post_ln.weight", Width, Item.Post_Weight, Status);
+      if E.Is_Ok (Status) then
+         Bind_Vector (Item, "v.post_ln.bias", Width, Item.Post_Bias, Status);
+      end if;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Item.Layers := new Block_Array (0 .. Item.Blocks - 1);
+      for Index in Item.Layers'Range loop
+         declare
+            Prefix : constant String :=
+              "v.blk." & Model_Runner.Text.Image (Long_Long_Integer (Index))
+              & ".";
+            Current : Block renames Item.Layers (Index);
+
+            procedure Take
+              (Suffix : String; Rows, Columns : Element_Count;
+               Into : out T.View) is
+            begin
+               if E.Is_Ok (Status) then
+                  Bind (Item, Prefix & Suffix, Rows, Columns, Into, Status);
+               end if;
+            end Take;
+
+            procedure Take
+              (Suffix : String; Length : Element_Count;
+               Into : out T.Real_Array_Access) is
+            begin
+               if E.Is_Ok (Status) then
+                  Bind_Vector (Item, Prefix & Suffix, Length, Into, Status);
+               end if;
+            end Take;
+         begin
+            Take ("ln1.weight", Width, Current.Norm_1_Weight);
+            Take ("ln1.bias", Width, Current.Norm_1_Bias);
+            Take ("ln2.weight", Width, Current.Norm_2_Weight);
+            Take ("ln2.bias", Width, Current.Norm_2_Bias);
+            Take ("attn_qkv.weight", 3 * Width, Width, Current.Fused);
+            Take ("attn_qkv.bias", 3 * Width, Current.Fused_Bias);
+            Take ("attn_out.weight", Width, Width, Current.Output);
+            Take ("attn_out.bias", Width, Current.Output_Bias);
+
+            --  The feed-forward's halves told apart by shape, as Gemma's
+            --  are.
+            if E.Is_Ok (Status) then
+               declare
+                  Down_Index : constant Natural :=
+                    Containers.Find_Tensor
+                      (Item.Container, Prefix & "ffn_down.weight");
+                  Down_Widens : constant Boolean :=
+                    Down_Index > 0
+                    and then Element_Count
+                      (Containers.Tensor_Dimension
+                         (Item.Container, Down_Index, 1)) = Width;
+                  In_Name  : constant String :=
+                    (if Down_Widens then "ffn_down" else "ffn_up");
+                  Out_Name : constant String :=
+                    (if Down_Widens then "ffn_up" else "ffn_down");
+               begin
+                  Take (In_Name & ".weight", Feed, Width, Current.Feed_In);
+                  Take (In_Name & ".bias", Feed, Current.Feed_In_Bias);
+                  Take (Out_Name & ".weight", Width, Feed, Current.Feed_Out);
+                  Take (Out_Name & ".bias", Width, Current.Feed_Out_Bias);
+               end;
+            end if;
+         end;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end loop;
+
+      --  The merger: a window's joined rows through one square step and
+      --  the Gaussian unit, then to the text width.
+      Bind (Item, "mm.0.weight", Joined, Joined, Item.Merge_In, Status);
+      if E.Is_Ok (Status) then
+         Bind_Vector (Item, "mm.0.bias", Joined, Item.Merge_In_Bias, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Bind (Item, "mm.2.weight", Text_Width, Joined, Item.Merge_Out, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Bind_Vector (Item, "mm.2.bias", Text_Width, Item.Merge_Out_Bias, Status);
+      end if;
+   end Bind_Qwen;
+
    ----------
    -- Open --
    ----------
@@ -192,12 +384,13 @@ package body Model_Runner.Vision is
          Kind : constant String :=
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
-         if Kind /= Gemma_3 then
+         if Kind /= Gemma_3 and then Kind /= Qwen_3 then
             Status := E.Make (E.Arch_Unsupported_Projector);
             E.Add_Text
               (Status, "format", (if Kind = "" then "none" else Kind),
                E.Param_Identifier);
-            E.Add_Text (Status, "supported", Gemma_3, E.Param_Identifier);
+            E.Add_Text
+              (Status, "supported", Gemma_3 & " " & Qwen_3, E.Param_Identifier);
             Fail (Status);
             return;
          end if;
@@ -289,9 +482,49 @@ package body Model_Runner.Vision is
          end if;
       end loop;
 
+      --  What the Qwen encoder states of its own: the window a side, and
+      --  whether any block's state is stacked beside the projection --
+      --  Qwen3-VL's deepstack, which Qwen3.5's files do not carry and
+      --  this build does not read.
+      if Is_Qwen (Item) then
+         Containers.Get_Integer
+           (Item.Container, "clip.vision.spatial_merge_size", 1, 8, Number,
+            Local);
+         Item.Merge := (if E.Is_Ok (Local) then Positive (Number) else 2);
+
+         declare
+            Length  : Natural := 0;
+            Stacked : Boolean := False;
+            Flag    : Boolean;
+         begin
+            Containers.Get_Array_Length
+              (Item.Container, "clip.vision.is_deepstack_layers",
+               Model_Runner.GGUF.Value_Bool, Length, Local);
+            if E.Is_Ok (Local) then
+               for Index in 1 .. Length loop
+                  Containers.Get_Boolean_Element
+                    (Item.Container, "clip.vision.is_deepstack_layers", Index,
+                     Flag, Local);
+                  Stacked := Stacked or else (E.Is_Ok (Local) and then Flag);
+               end loop;
+            end if;
+            if Stacked then
+               Status := E.Make (E.Arch_Unsupported_Projector);
+               E.Add_Text
+                 (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
+               E.Add_Text
+                 (Status, "supported", Gemma_3 & " " & Qwen_3, E.Param_Identifier);
+               Fail (Status);
+               return;
+            end if;
+         end;
+      end if;
+
       if Item.Size mod Item.Patch /= 0
         or else Item.Width mod Item.Heads /= 0
-        or else (Item.Size / Item.Patch) mod Item.Pool_Side /= 0
+        or else (not Is_Qwen (Item)
+                 and then (Item.Size / Item.Patch) mod Item.Pool_Side /= 0)
+        or else (Is_Qwen (Item) and then (Item.Width / Item.Heads) mod 4 /= 0)
       then
          Status := E.Make (E.Arch_Invalid_Dimensions);
          E.Add_Integer (Status, "embedding", Long_Long_Integer (Item.Width));
@@ -334,6 +567,16 @@ package body Model_Runner.Vision is
       end;
 
       --  And the tensors.
+      if Is_Qwen (Item) then
+         Bind_Qwen (Item, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+         Item.Ready := True;
+         return;
+      end if;
+
       declare
          Width   : constant Element_Count := Element_Count (Item.Width);
          Feed    : constant Element_Count := Element_Count (Item.Feed);
@@ -520,6 +763,7 @@ package body Model_Runner.Vision is
             T.Free (Current.Key_Bias);
             T.Free (Current.Value_Bias);
             T.Free (Current.Output_Bias);
+            T.Free (Current.Fused_Bias);
             T.Free (Current.Feed_In_Bias);
             T.Free (Current.Feed_Out_Bias);
          end loop;
@@ -530,7 +774,13 @@ package body Model_Runner.Vision is
       T.Free (Item.Post_Bias);
       T.Free (Item.Soft_Norm);
       T.Free (Item.Projection_Rows);
+      T.Free (Item.Patch_Sum);
+      T.Free (Item.Merge_In_Bias);
+      T.Free (Item.Merge_Out_Bias);
       Item.Patch_Weights := T.Empty_View;
+      Item.Patch_Both := T.Empty_View;
+      Item.Merge_In := T.Empty_View;
+      Item.Merge_Out := T.Empty_View;
       Item.Positions := T.Empty_View;
       B.Free (Item.Arena);
       Item.Base := System.Null_Address;
@@ -547,8 +797,13 @@ package body Model_Runner.Vision is
 
    function Image_Size (Item : Encoder) return Positive is (Item.Size);
 
+   function Fixed_Rows (Item : Encoder) return Boolean is (not Is_Qwen (Item));
+
+   function Placed_Rows (Item : Encoder) return Boolean is (Is_Qwen (Item));
+
    function Rows_Per_Picture (Item : Encoder) return Positive
-   is (((Item.Size / Item.Patch) / Item.Pool_Side) ** 2);
+   is (if Is_Qwen (Item) then Item.Most_Rows
+       else ((Item.Size / Item.Patch) / Item.Pool_Side) ** 2);
 
    function Row_Width (Item : Encoder) return Positive is (Item.Text_Width);
 
@@ -698,7 +953,233 @@ package body Model_Runner.Vision is
       end loop;
    end Run;
 
-   procedure Encode
+   --  Rows one product on the device takes at once: where the device's
+   --  own batch is fastest, and the working set its shader was measured
+   --  with.
+   Device_Chunk : constant Element_Count := 512;
+
+   --  What every product and row task of an encode shares: the pool, the
+   --  stop request, the two work records, the scratch a matrix is decoded
+   --  into and a device product's chunk of rows in and out, and the
+   --  status every step reads before it starts and writes when it fails.
+   type Workspace is limited record
+      Team      : CPU.Pool_Reference := null;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Epsilon   : Real := 0.0;
+      Product   : aliased Product_Work;
+      Over_Rows : aliased Row_Work;
+      Decoded, In_Chunk, Out_Chunk : T.Real_Array_Access := null;
+      Status    : E.Error_Info := E.Success;
+   end record;
+
+   --  Every row of Target through one of the row tasks.
+   procedure Rows_Through
+     (Work   : in out Workspace;
+      What   : Row_Task;
+      Target : T.Real_Array_Access;
+      Total  : Element_Count;
+      Row_Width : Element_Count;
+      Source : T.Real_Array_Access := null;
+      Bias   : T.Real_Array_Access := null;
+      Weight : T.Real_Array_Access := null) is
+   begin
+      if E.Is_Error (Work.Status) then
+         return;
+      end if;
+      Work.Over_Rows.Task_Kind := What;
+      Work.Over_Rows.Source := Source;
+      Work.Over_Rows.Target := Target;
+      Work.Over_Rows.Width := Row_Width;
+      Work.Over_Rows.Bias := Bias;
+      Work.Over_Rows.Weight := Weight;
+      Work.Over_Rows.Epsilon := Work.Epsilon;
+      Work.Over_Rows.Failed := False;
+      CPU.Dispatch_Shares
+        (Work.Team, Total, Work.Over_Rows'Unchecked_Access, Work.Status,
+         Cost => Total * Row_Width);
+      if E.Is_Ok (Work.Status) and then Work.Over_Rows.Failed then
+         Work.Status := E.Make (E.Sampling_Non_Finite_Logit);
+      end if;
+   end Rows_Through;
+
+   --  Target := Source * W, W held as Wanted rows of Row_Width in
+   --  binary32, with Bias added where one is given.
+   procedure Multiply
+     (Work   : in out Workspace;
+      Source : T.Real_Array_Access;
+      Source_At : Element_Count;
+      Total  : Element_Count;
+      W      : T.Real_Array_Access;
+      Wanted : Element_Count;
+      Row_Width : Element_Count;
+      Target : T.Real_Array_Access;
+      Bias   : T.Real_Array_Access := null) is
+   begin
+      if E.Is_Error (Work.Status) then
+         return;
+      end if;
+      Work.Product.A := Source;
+      Work.Product.A_At := Source_At;
+      Work.Product.Rows := Total;
+      Work.Product.W := W;
+      Work.Product.Wanted := Wanted;
+      Work.Product.Width := Row_Width;
+      Work.Product.C := Target;
+      CPU.Dispatch_Shares
+        (Work.Team, (Wanted + Wide.Tile - 1) / Wide.Tile,
+         Work.Product'Unchecked_Access, Work.Status,
+         Cost => Total * Wanted * Row_Width);
+      if Bias /= null then
+         Rows_Through (Work, Add_Bias, Target, Total, Wanted, Bias => Bias);
+      end if;
+   end Multiply;
+
+   --  Target := Source * Weight: on the device where one is open, the
+   --  weights as the file holds them, uploaded once and kept; else on
+   --  the pool, the weight decoded from the file's format to binary32
+   --  first.
+   procedure Multiply
+     (Work   : in out Workspace;
+      Source : T.Real_Array_Access;
+      Total  : Element_Count;
+      Weight : T.View;
+      Target : T.Real_Array_Access;
+      Bias   : T.Real_Array_Access := null) is
+   begin
+      if E.Is_Error (Work.Status) then
+         return;
+      end if;
+
+      if Model_Runner.Backend.Device.Is_Ready then
+         declare
+            Columns : constant Element_Count := Weight.Columns;
+            Rows_Out : constant Element_Count := Weight.Rows;
+            From : Element_Count := 0;
+         begin
+            while E.Is_Ok (Work.Status) and then From < Total loop
+               declare
+                  Take : constant Element_Count :=
+                    Element_Count'Min (Device_Chunk, Total - From);
+               begin
+                  Work.In_Chunk (0 .. Take * Columns - 1) :=
+                    Source (From * Columns .. (From + Take) * Columns - 1);
+                  Model_Runner.Backend.Device.Dispatch_Batch
+                    (Weight, Work.In_Chunk, Take, Work.Out_Chunk, Work.Status,
+                     Work.Cancel);
+                  exit when E.Is_Error (Work.Status);
+                  Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
+                    Work.Out_Chunk (0 .. Take * Rows_Out - 1);
+                  From := From + Take;
+               end;
+            end loop;
+         end;
+         if Bias /= null then
+            Rows_Through
+              (Work, Add_Bias, Target, Total, Weight.Rows, Bias => Bias);
+         end if;
+         return;
+      end if;
+
+      for Row in 0 .. Weight.Rows - 1 loop
+         T.Dequantize_Row
+           (Weight, Row,
+            Work.Decoded (Row * Weight.Columns .. (Row + 1) * Weight.Columns - 1),
+            Work.Status);
+         exit when E.Is_Error (Work.Status);
+      end loop;
+      Multiply (Work, Source, 0, Total, Work.Decoded, Weight.Rows,
+                Weight.Columns, Target, Bias);
+   end Multiply;
+
+   --  The scratch a workspace holds, for products of Total rows at most
+   --  through weights of Columns_Max columns and Rows_Max rows.
+   procedure Furnish
+     (Work    : in out Workspace;
+      Decoded : Element_Count;
+      In_Width, Out_Width : Element_Count) is
+   begin
+      T.Allocate (Decoded, Work.Decoded);
+      if Work.Decoded = null then
+         Work.Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+         return;
+      end if;
+      if Model_Runner.Backend.Device.Is_Ready then
+         T.Allocate (Device_Chunk * In_Width, Work.In_Chunk);
+         T.Allocate (Device_Chunk * Out_Width, Work.Out_Chunk);
+         if Work.In_Chunk = null or else Work.Out_Chunk = null then
+            Work.Status := E.Make (E.Memory_Allocation_Failed);
+            E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+         end if;
+      end if;
+   end Furnish;
+
+   procedure Clear (Work : in out Workspace) is
+   begin
+      T.Free (Work.Decoded);
+      T.Free (Work.In_Chunk);
+      T.Free (Work.Out_Chunk);
+   end Clear;
+
+   --  One block's attention: every head over every position, both
+   --  ways, which is what a picture is -- no position comes before
+   --  another. The head's keys are gathered as a matrix of Patches
+   --  rows so that the scores are a product, and its values
+   --  transposed so that the blend is one too. Queries, keys and
+   --  values are read from three arrays -- or one, at three offsets --
+   --  each Stride wide a patch; the blend is written to Attended, Width
+   --  a patch.
+   procedure Attend
+     (Work     : in out Workspace;
+      Q, Kv, V : T.Real_Array_Access;
+      Q_At, K_At, V_At : Element_Count;
+      Stride   : Element_Count;
+      Attended : T.Real_Array_Access;
+      Width, Patches, Heads, Head : Element_Count;
+      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access)
+   is
+      Scale : constant Real :=
+        Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
+      Heads_Work : aliased Attention_Work;
+   begin
+      for H in 0 .. Heads - 1 loop
+         exit when E.Is_Error (Work.Status);
+         for P in 0 .. Patches - 1 loop
+            K_Head (P * Head .. (P + 1) * Head - 1) :=
+              Kv (K_At + P * Stride + H * Head
+                  .. K_At + P * Stride + (H + 1) * Head - 1);
+            for D in 0 .. Head - 1 loop
+               Q_Head (P * Head + D) :=
+                 Q (Q_At + P * Stride + H * Head + D) * Scale;
+               V_Head_T (D * Patches + P) := V (V_At + P * Stride + H * Head + D);
+            end loop;
+         end loop;
+
+         --  Scores, softmax and blend, a block of queries at a time.
+         Heads_Work.Queries := Q_Head;
+         Heads_Work.Keys := K_Head;
+         Heads_Work.Values_T := V_Head_T;
+         Heads_Work.Scores := Scores;
+         Heads_Work.Blended := Blended;
+         Heads_Work.Patches := Patches;
+         Heads_Work.Head := Head;
+         Heads_Work.Failed := False;
+         CPU.Dispatch_Shares
+           (Work.Team, (Patches + Query_Block - 1) / Query_Block,
+            Heads_Work'Unchecked_Access, Work.Status,
+            Cost => Patches * Patches * Head);
+         if E.Is_Ok (Work.Status) and then Heads_Work.Failed then
+            Work.Status := E.Make (E.Sampling_Non_Finite_Logit);
+         end if;
+         exit when E.Is_Error (Work.Status);
+         for P in 0 .. Patches - 1 loop
+            Attended (P * Width + H * Head .. P * Width + (H + 1) * Head - 1)
+              := Blended (P * Head .. (P + 1) * Head - 1);
+         end loop;
+      end loop;
+   end Attend;
+
+   procedure Encode_Gemma
      (Item    : in out Encoder;
       Picture : Model_Runner.Images.Raster;
       Team    : CPU.Pool_Reference;
@@ -723,19 +1204,13 @@ package body Model_Runner.Vision is
       --  The activations: every buffer is Patches rows of something.
       X, Normed, Q, Kv, V, Attended, Hidden : T.Real_Array_Access := null;
 
-      --  A matrix decoded to binary32, a head's keys, queries and values
-      --  gathered contiguous, a head's scores, and a device product's
-      --  chunk of rows in and out.
-      Decoded : T.Real_Array_Access := null;
-      In_Chunk, Out_Chunk : T.Real_Array_Access := null;
-      K_Head, Q_Head, V_Head_T, Scores : T.Real_Array_Access := null;
+      --  A head's keys, queries and values gathered contiguous, a head's
+      --  scores, and its blend.
+      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access := null;
 
       Resampled : Model_Runner.Images.Raster;
 
-      Product : aliased Product_Work;
-      Over_Rows : aliased Row_Work;
-      Heads_Work : aliased Attention_Work;
-      Blended : T.Real_Array_Access := null;
+      Work : Workspace;
 
       procedure Release is
       begin
@@ -746,18 +1221,16 @@ package body Model_Runner.Vision is
          T.Free (V);
          T.Free (Attended);
          T.Free (Hidden);
-         T.Free (Decoded);
-         T.Free (In_Chunk);
-         T.Free (Out_Chunk);
          T.Free (K_Head);
          T.Free (Q_Head);
          T.Free (V_Head_T);
          T.Free (Scores);
          T.Free (Blended);
+         Clear (Work);
          Model_Runner.Images.Free (Resampled);
       end Release;
 
-      --  Every row of Target through one of the row tasks.
+      --  The shared helpers, each under this encode's status.
       procedure Rows_Through
         (What : Row_Task;
          Target : T.Real_Array_Access;
@@ -767,27 +1240,11 @@ package body Model_Runner.Vision is
          Bias   : T.Real_Array_Access := null;
          Weight : T.Real_Array_Access := null) is
       begin
-         if E.Is_Error (Status) then
-            return;
-         end if;
-         Over_Rows.Task_Kind := What;
-         Over_Rows.Source := Source;
-         Over_Rows.Target := Target;
-         Over_Rows.Width := Row_Width;
-         Over_Rows.Bias := Bias;
-         Over_Rows.Weight := Weight;
-         Over_Rows.Epsilon := Item.Epsilon;
-         Over_Rows.Failed := False;
-         CPU.Dispatch_Shares
-           (Team, Total, Over_Rows'Unchecked_Access, Status,
-            Cost => Total * Row_Width);
-         if E.Is_Ok (Status) and then Over_Rows.Failed then
-            Status := E.Make (E.Sampling_Non_Finite_Logit);
-         end if;
+         Work.Status := Status;
+         Rows_Through (Work, What, Target, Total, Row_Width, Source, Bias, Weight);
+         Status := Work.Status;
       end Rows_Through;
 
-      --  Target := Source * W, W held as Wanted rows of Row_Width in
-      --  binary32, with Bias added where one is given.
       procedure Multiply
         (Source : T.Real_Array_Access;
          Source_At : Element_Count;
@@ -798,34 +1255,11 @@ package body Model_Runner.Vision is
          Target : T.Real_Array_Access;
          Bias   : T.Real_Array_Access := null) is
       begin
-         if E.Is_Error (Status) then
-            return;
-         end if;
-         Product.A := Source;
-         Product.A_At := Source_At;
-         Product.Rows := Total;
-         Product.W := W;
-         Product.Wanted := Wanted;
-         Product.Width := Row_Width;
-         Product.C := Target;
-         CPU.Dispatch_Shares
-           (Team, (Wanted + Wide.Tile - 1) / Wide.Tile,
-            Product'Unchecked_Access, Status,
-            Cost => Total * Wanted * Row_Width);
-         if Bias /= null then
-            Rows_Through (Add_Bias, Target, Total, Wanted, Bias => Bias);
-         end if;
+         Work.Status := Status;
+         Multiply (Work, Source, Source_At, Total, W, Wanted, Row_Width, Target, Bias);
+         Status := Work.Status;
       end Multiply;
 
-      --  Rows one product on the device takes at once: where the device's
-      --  own batch is fastest, and the working set its shader was measured
-      --  with.
-      Device_Chunk : constant Element_Count := 512;
-
-      --  Target := Source * Weight: on the device where one is open, the
-      --  weights as the file holds them, uploaded once and kept; else on
-      --  the pool, the weight decoded from the file's format to binary32
-      --  first.
       procedure Multiply
         (Source : T.Real_Array_Access;
          Total  : Element_Count;
@@ -833,91 +1267,17 @@ package body Model_Runner.Vision is
          Target : T.Real_Array_Access;
          Bias   : T.Real_Array_Access := null) is
       begin
-         if E.Is_Error (Status) then
-            return;
-         end if;
-
-         if Model_Runner.Backend.Device.Is_Ready then
-            declare
-               Columns : constant Element_Count := Weight.Columns;
-               Rows_Out : constant Element_Count := Weight.Rows;
-               From : Element_Count := 0;
-            begin
-               while E.Is_Ok (Status) and then From < Total loop
-                  declare
-                     Take : constant Element_Count :=
-                       Element_Count'Min (Device_Chunk, Total - From);
-                  begin
-                     In_Chunk (0 .. Take * Columns - 1) :=
-                       Source (From * Columns .. (From + Take) * Columns - 1);
-                     Model_Runner.Backend.Device.Dispatch_Batch
-                       (Weight, In_Chunk, Take, Out_Chunk, Status, Cancel);
-                     exit when E.Is_Error (Status);
-                     Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
-                       Out_Chunk (0 .. Take * Rows_Out - 1);
-                     From := From + Take;
-                  end;
-               end loop;
-            end;
-            if Bias /= null then
-               Rows_Through (Add_Bias, Target, Total, Weight.Rows, Bias => Bias);
-            end if;
-            return;
-         end if;
-
-         for Row in 0 .. Weight.Rows - 1 loop
-            T.Dequantize_Row
-              (Weight, Row,
-               Decoded (Row * Weight.Columns .. (Row + 1) * Weight.Columns - 1),
-               Status);
-            exit when E.Is_Error (Status);
-         end loop;
-         Multiply (Source, 0, Total, Decoded, Weight.Rows, Weight.Columns,
-                   Target, Bias);
+         Work.Status := Status;
+         Multiply (Work, Source, Total, Weight, Target, Bias);
+         Status := Work.Status;
       end Multiply;
 
-      --  One block's attention: every head over every position, both
-      --  ways, which is what a picture is -- no position comes before
-      --  another. The head's keys are gathered as a matrix of Patches
-      --  rows so that the scores are a product, and its values
-      --  transposed so that the blend is one too.
       procedure Attend is
-         Scale : constant Real :=
-           Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
       begin
-         for H in 0 .. Heads - 1 loop
-            exit when E.Is_Error (Status);
-            for P in 0 .. Patches - 1 loop
-               K_Head (P * Head .. (P + 1) * Head - 1) :=
-                 Kv (P * Width + H * Head .. P * Width + (H + 1) * Head - 1);
-               for D in 0 .. Head - 1 loop
-                  Q_Head (P * Head + D) := Q (P * Width + H * Head + D) * Scale;
-                  V_Head_T (D * Patches + P) := V (P * Width + H * Head + D);
-               end loop;
-            end loop;
-
-            --  Scores, softmax and blend, a block of queries at a time.
-            Heads_Work.Queries := Q_Head;
-            Heads_Work.Keys := K_Head;
-            Heads_Work.Values_T := V_Head_T;
-            Heads_Work.Scores := Scores;
-            Heads_Work.Blended := Blended;
-            Heads_Work.Patches := Patches;
-            Heads_Work.Head := Head;
-            Heads_Work.Failed := False;
-            CPU.Dispatch_Shares
-              (Team, (Patches + Query_Block - 1) / Query_Block,
-               Heads_Work'Unchecked_Access, Status,
-               Cost => Patches * Patches * Head);
-            if E.Is_Ok (Status) and then Heads_Work.Failed then
-               Status := E.Make (E.Sampling_Non_Finite_Logit);
-            end if;
-            exit when E.Is_Error (Status);
-            for P in 0 .. Patches - 1 loop
-               Attended (P * Width + H * Head .. P * Width + (H + 1) * Head - 1)
-                 := Blended (P * Head .. (P + 1) * Head - 1);
-            end loop;
-         end loop;
+         Work.Status := Status;
+         Attend (Work, Q, Kv, V, 0, 0, 0, Width, Attended, Width, Patches,
+                 Heads, Head, K_Head, Q_Head, V_Head_T, Scores, Blended);
+         Status := Work.Status;
       end Attend;
 
    begin
@@ -941,20 +1301,20 @@ package body Model_Runner.Vision is
       T.Allocate (Patches * Width, V);
       T.Allocate (Patches * Width, Attended);
       T.Allocate (Patches * Element_Count'Max (Feed, Patch_Elements), Hidden);
-      T.Allocate (Element_Count'Max (Feed * Width,
-                    Element_Count'Max (Patches * Width,
-                                       Width * Patch_Elements)), Decoded);
-      if Model_Runner.Backend.Device.Is_Ready then
-         T.Allocate (Device_Chunk * Element_Count'Max (Feed, Patch_Elements),
-                     In_Chunk);
-         T.Allocate (Device_Chunk * Element_Count'Max (Feed, Text_Width),
-                     Out_Chunk);
-         if In_Chunk = null or else Out_Chunk = null then
-            Release;
-            Status := E.Make (E.Memory_Allocation_Failed);
-            E.Add_Text (Status, "category", "vision", E.Param_Identifier);
-            return;
-         end if;
+      Work.Team := Team;
+      Work.Cancel := Cancel;
+      Work.Epsilon := Item.Epsilon;
+      Furnish
+        (Work,
+         Element_Count'Max (Feed * Width,
+                            Element_Count'Max (Patches * Width,
+                                               Width * Patch_Elements)),
+         Element_Count'Max (Feed, Patch_Elements),
+         Element_Count'Max (Feed, Text_Width));
+      if E.Is_Error (Work.Status) then
+         Status := Work.Status;
+         Release;
+         return;
       end if;
       T.Allocate (Patches * Head, K_Head);
       T.Allocate (Patches * Head, Q_Head);
@@ -964,7 +1324,6 @@ package body Model_Runner.Vision is
 
       if X = null or else Normed = null or else Q = null or else Kv = null
         or else V = null or else Attended = null or else Hidden = null
-        or else Decoded = null
         or else K_Head = null or else Q_Head = null or else V_Head_T = null
         or else Scores = null or else Blended = null
       then
@@ -1127,6 +1486,462 @@ package body Model_Runner.Vision is
 
       if E.Is_Error (Status) then
          T.Free (Rows);
+      end if;
+   end Encode_Gemma;
+
+   -----------------
+   -- Encode_Qwen --
+   -----------------
+
+   --  The shape a picture is resized to for the Qwen encoder: the
+   --  reference's smart_resize. Each side is rounded to the nearest
+   --  multiple of the window in pixels, then the pair is scaled down to
+   --  hold within the most rows allowed or up to reach the least, by the
+   --  square root of the ratio, and rounded down or up to the multiple
+   --  again. Never below one window a side.
+   procedure Fitted
+     (Item   : Encoder;
+      Width, Height : Positive;
+      Fit_Width, Fit_Height : out Positive)
+   is
+      Factor : constant Positive := Item.Patch * Item.Merge;
+      Least  : constant Long_Long_Integer :=
+        Long_Long_Integer (Item.Least_Rows) * Long_Long_Integer (Factor) ** 2;
+      Most   : constant Long_Long_Integer :=
+        Long_Long_Integer (Item.Most_Rows) * Long_Long_Integer (Factor) ** 2;
+
+      function Rounded (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (N.Wide_Real'Rounding (X / N.Wide_Real (Factor)))
+            * Factor));
+      function Floored (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (N.Wide_Real'Floor (X / N.Wide_Real (Factor)))
+            * Factor));
+      function Ceiled (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor)))
+            * Factor));
+
+      W : Positive := Rounded (N.Wide_Real (Width));
+      H : Positive := Rounded (N.Wide_Real (Height));
+   begin
+      if Long_Long_Integer (W) * Long_Long_Integer (H) > Most then
+         declare
+            Beta : constant N.Wide_Real :=
+              Elementary.Sqrt
+                (N.Wide_Real (Long_Long_Integer (Width) * Long_Long_Integer (Height))
+                 / N.Wide_Real (Most));
+         begin
+            W := Floored (N.Wide_Real (Width) / Beta);
+            H := Floored (N.Wide_Real (Height) / Beta);
+         end;
+      elsif Long_Long_Integer (W) * Long_Long_Integer (H) < Least then
+         declare
+            Beta : constant N.Wide_Real :=
+              Elementary.Sqrt
+                (N.Wide_Real (Least)
+                 / N.Wide_Real (Long_Long_Integer (Width) * Long_Long_Integer (Height)));
+         begin
+            W := Ceiled (N.Wide_Real (Width) * Beta);
+            H := Ceiled (N.Wide_Real (Height) * Beta);
+         end;
+      end if;
+      Fit_Width := W;
+      Fit_Height := H;
+   end Fitted;
+
+   procedure Encode_Qwen
+     (Item    : in out Encoder;
+      Picture : Model_Runner.Images.Raster;
+      Team    : CPU.Pool_Reference;
+      Rows    : out T.Real_Array_Access;
+      Grid_Rows    : out Natural;
+      Grid_Columns : out Natural;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out E.Error_Info)
+   is
+      Width    : constant Element_Count := Element_Count (Item.Width);
+      Feed     : constant Element_Count := Element_Count (Item.Feed);
+      Heads    : constant Element_Count := Element_Count (Item.Heads);
+      Head     : constant Element_Count := Width / Heads;
+      Merge    : constant Element_Count := Element_Count (Item.Merge);
+      Patch    : constant Element_Count := Element_Count (Item.Patch);
+      Patch_Elements : constant Element_Count := 3 * Patch ** 2;
+      Joined   : constant Element_Count := Width * Merge ** 2;
+      Text_Width : constant Element_Count := Element_Count (Item.Text_Width);
+      Grid     : constant Element_Count := Element_Count (Item.Grid);
+
+      Fit_Width, Fit_Height : Positive;
+      Side_X, Side_Y, Patches, Windows_X, Windows_Y, Windows : Element_Count;
+
+      --  The activations: every buffer is Patches rows of something,
+      --  Fused three widths a patch.
+      X, Normed, Fused, Attended, Hidden : T.Real_Array_Access := null;
+      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access := null;
+      Merged : T.Real_Array_Access := null;
+
+      --  Where each patch stands, in the walk's order: its row and column.
+      type Patch_Place is record
+         Row, Column : Element_Count := 0;
+      end record;
+      type Patch_Place_Array is array (Element_Count range <>) of Patch_Place;
+      type Patch_Place_Access is access Patch_Place_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Patch_Place_Array, Patch_Place_Access);
+      Places : Patch_Place_Access := null;
+
+      Resampled : Model_Runner.Images.Raster;
+      Work : Workspace;
+
+      procedure Release is
+      begin
+         T.Free (X);
+         T.Free (Normed);
+         T.Free (Fused);
+         T.Free (Attended);
+         T.Free (Hidden);
+         T.Free (K_Head);
+         T.Free (Q_Head);
+         T.Free (V_Head_T);
+         T.Free (Scores);
+         T.Free (Blended);
+         T.Free (Merged);
+         Free (Places);
+         Clear (Work);
+         Model_Runner.Images.Free (Resampled);
+      end Release;
+
+      --  The two-part rotation of the queries and keys in Fused, in
+      --  place: pair p of a head turns by the patch's row for the first
+      --  half of the pairs and by its column for the second, each half
+      --  counting its frequencies from the first, and a pair is an
+      --  element against the one half a head away.
+      procedure Turn is
+         Pairs : constant Element_Count := Head / 2;
+         Half  : constant Element_Count := Pairs / 2;
+         Base  : constant N.Wide_Real := 10_000.0;
+         Cosines, Sines : N.Wide_Real_Array (0 .. Pairs - 1);
+      begin
+         for P in 0 .. Patches - 1 loop
+            for Pair in 0 .. Pairs - 1 loop
+               declare
+                  Position : constant Element_Count :=
+                    (if Pair < Half then Places (P).Row else Places (P).Column);
+                  Index : constant Element_Count :=
+                    (if Pair < Half then Pair else Pair - Half);
+                  Theta : constant N.Wide_Real :=
+                    N.Wide_Real (Position)
+                    * N.Power (Base, -2.0 * N.Wide_Real (Index) / N.Wide_Real (Pairs));
+               begin
+                  Cosines (Pair) := N.Cos (Theta);
+                  Sines (Pair) := N.Sin (Theta);
+               end;
+            end loop;
+            for Which in 0 .. 1 loop
+               for H in 0 .. Heads - 1 loop
+                  declare
+                     Start : constant Element_Count :=
+                       P * 3 * Width + Element_Count (Which) * Width + H * Head;
+                  begin
+                     for Pair in 0 .. Pairs - 1 loop
+                        declare
+                           A : constant Real := Fused (Start + Pair);
+                           C : constant Real := Fused (Start + Pair + Pairs);
+                        begin
+                           Fused (Start + Pair) :=
+                             Real (N.Wide_Real (A) * Cosines (Pair)
+                                   - N.Wide_Real (C) * Sines (Pair));
+                           Fused (Start + Pair + Pairs) :=
+                             Real (N.Wide_Real (A) * Sines (Pair)
+                                   + N.Wide_Real (C) * Cosines (Pair));
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+         end loop;
+      end Turn;
+
+      --  The position grid, interpolated to the picture's patches with
+      --  the corners aligned, one row into Normed's for the patch at P.
+      procedure Position_Row (P : Element_Count) is
+         Row    : constant Element_Count := Places (P).Row;
+         Column : constant Element_Count := Places (P).Column;
+         SY : constant N.Wide_Real :=
+           (if Side_Y > 1
+            then N.Wide_Real (Row) * N.Wide_Real (Grid - 1) / N.Wide_Real (Side_Y - 1)
+            else 0.0);
+         SX : constant N.Wide_Real :=
+           (if Side_X > 1
+            then N.Wide_Real (Column) * N.Wide_Real (Grid - 1) / N.Wide_Real (Side_X - 1)
+            else 0.0);
+         Y0 : constant Element_Count := Element_Count (N.Wide_Real'Floor (SY));
+         X0 : constant Element_Count := Element_Count (N.Wide_Real'Floor (SX));
+         Y1 : constant Element_Count := Element_Count'Min (Grid - 1, Y0 + 1);
+         X1 : constant Element_Count := Element_Count'Min (Grid - 1, X0 + 1);
+         FY : constant Real := Real (SY - N.Wide_Real (Y0));
+         FX : constant Real := Real (SX - N.Wide_Real (X0));
+         Target : constant Element_Count := P * Width;
+
+         procedure Blend (Cell : Element_Count; Share : Real) is
+         begin
+            if Share = 0.0 or else E.Is_Error (Status) then
+               return;
+            end if;
+            T.Dequantize_Row (Item.Positions, Cell, Hidden (0 .. Width - 1), Status);
+            for D in 0 .. Width - 1 loop
+               Normed (Target + D) := Normed (Target + D) + Share * Hidden (D);
+            end loop;
+         end Blend;
+      begin
+         Normed (Target .. Target + Width - 1) := [others => 0.0];
+         Blend (Y0 * Grid + X0, (1.0 - FY) * (1.0 - FX));
+         Blend (Y0 * Grid + X1, (1.0 - FY) * FX);
+         Blend (Y1 * Grid + X0, FY * (1.0 - FX));
+         Blend (Y1 * Grid + X1, FY * FX);
+      end Position_Row;
+   begin
+      Rows := null;
+      Grid_Rows := 0;
+      Grid_Columns := 0;
+      Status := E.Success;
+
+      if not Item.Ready then
+         Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+
+      if Picture.Pixels = null then
+         Status := E.Make (E.Generation_Empty_Prompt);
+         return;
+      end if;
+
+      Fitted (Item, Picture.Width, Picture.Height, Fit_Width, Fit_Height);
+      Side_X := Element_Count (Fit_Width) / Patch;
+      Side_Y := Element_Count (Fit_Height) / Patch;
+      Patches := Side_X * Side_Y;
+      Windows_X := Side_X / Merge;
+      Windows_Y := Side_Y / Merge;
+      Windows := Windows_X * Windows_Y;
+
+      Work.Team := Team;
+      Work.Cancel := Cancel;
+      Work.Epsilon := Item.Epsilon;
+
+      T.Allocate (Patches * Width, X);
+      T.Allocate (Patches * Width, Normed);
+      T.Allocate (Patches * 3 * Width, Fused);
+      T.Allocate (Patches * Width, Attended);
+      T.Allocate (Patches * Element_Count'Max (Feed, Patch_Elements), Hidden);
+      T.Allocate (Patches * Head, K_Head);
+      T.Allocate (Patches * Head, Q_Head);
+      T.Allocate (Patches * Head, V_Head_T);
+      T.Allocate (Patches * Patches, Scores);
+      T.Allocate (Patches * Head, Blended);
+      T.Allocate (Windows * Joined, Merged);
+      Furnish
+        (Work,
+         Element_Count'Max (Joined * Joined,
+                            Element_Count'Max (Feed * Width,
+                                               Width * Patch_Elements)),
+         Element_Count'Max (Joined, Element_Count'Max (Feed, Patch_Elements)),
+         Element_Count'Max (Joined, Element_Count'Max (3 * Width, Feed)));
+      Places := new Patch_Place_Array (0 .. Patches - 1);
+
+      if X = null or else Normed = null or else Fused = null
+        or else Attended = null or else Hidden = null or else K_Head = null
+        or else Q_Head = null or else V_Head_T = null or else Scores = null
+        or else Blended = null or else Merged = null
+        or else E.Is_Error (Work.Status)
+      then
+         Status :=
+           (if E.Is_Error (Work.Status) then Work.Status
+            else E.Make (E.Memory_Allocation_Failed));
+         if not E.Is_Error (Work.Status) then
+            E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+         end if;
+         Release;
+         return;
+      end if;
+
+      --  The patches, walked window by window so that a window's four
+      --  lie together, each a vector of channel, row and column within
+      --  the patch, scaled as the encoder was trained on.
+      Model_Runner.Images.Resample
+        (Picture, Fit_Width, Fit_Height, Resampled, Model_Runner.Images.Cubic);
+      if Resampled.Pixels = null then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+         return;
+      end if;
+
+      declare
+         P : Element_Count := 0;
+         Row_Bytes : constant B.Byte_Count := B.Byte_Count (Fit_Width);
+      begin
+         for WY in 0 .. Windows_Y - 1 loop
+            for WX in 0 .. Windows_X - 1 loop
+               for DY in 0 .. Merge - 1 loop
+                  for DX in 0 .. Merge - 1 loop
+                     declare
+                        PY : constant Element_Count := WY * Merge + DY;
+                        PX : constant Element_Count := WX * Merge + DX;
+                        At_Patch : constant Element_Count := P * Patch_Elements;
+                     begin
+                        Places (P) := (Row => PY, Column => PX);
+                        for C in Element_Count range 0 .. 2 loop
+                           for KY in 0 .. Patch - 1 loop
+                              for KX in 0 .. Patch - 1 loop
+                                 declare
+                                    Y : constant B.Byte_Count :=
+                                      B.Byte_Count (PY * Patch + KY);
+                                    Xp : constant B.Byte_Count :=
+                                      B.Byte_Count (PX * Patch + KX);
+                                    Value : constant Real :=
+                                      Real (Resampled.Pixels
+                                              (3 * (Y * Row_Bytes + Xp)
+                                               + B.Byte_Count (C)))
+                                      / 255.0;
+                                 begin
+                                    Hidden (At_Patch + C * Patch * Patch
+                                            + KY * Patch + KX) :=
+                                      (Value - Item.Mean (Positive (C + 1)))
+                                      / Item.Deviation (Positive (C + 1));
+                                 end;
+                              end loop;
+                           end loop;
+                        end loop;
+                        P := P + 1;
+                     end;
+                  end loop;
+               end loop;
+            end loop;
+         end loop;
+      end;
+      Model_Runner.Images.Free (Resampled);
+
+      --  Patch embedding -- both temporal frames' weights, summed once --
+      --  then where each patch is, from the grid interpolated to the
+      --  picture's patches.
+      Multiply (Work, Hidden, Patches, Item.Patch_Both, X, Item.Patch_Bias);
+      Status := Work.Status;
+      if E.Is_Ok (Status) then
+         for P in 0 .. Patches - 1 loop
+            Position_Row (P);
+            exit when E.Is_Error (Status);
+         end loop;
+         if E.Is_Ok (Status) then
+            K.Add (X.all, Normed.all);
+         end if;
+      end if;
+      Work.Status := Status;
+
+      --  The blocks: a norm, the fused projection, the rotation, the
+      --  attention over every patch, the output and the feed-forward,
+      --  each added to the stream.
+      for Index in 0 .. Item.Blocks - 1 loop
+         exit when E.Is_Error (Work.Status);
+         if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+            Work.Status := E.Make (E.Generation_Cancelled);
+            exit;
+         end if;
+
+         declare
+            Current : Block renames Item.Layers (Index);
+         begin
+            Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+                          Bias => Current.Norm_1_Bias,
+                          Weight => Current.Norm_1_Weight);
+            Multiply (Work, Normed, Patches, Current.Fused, Fused,
+                      Current.Fused_Bias);
+            exit when E.Is_Error (Work.Status);
+            Turn;
+            Attend (Work, Fused, Fused, Fused, 0, Width, 2 * Width, 3 * Width,
+                    Attended, Width, Patches, Heads, Head,
+                    K_Head, Q_Head, V_Head_T, Scores, Blended);
+            Multiply (Work, Attended, Patches, Current.Output, Normed,
+                      Current.Output_Bias);
+            exit when E.Is_Error (Work.Status);
+            K.Add (X.all, Normed.all);
+
+            Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+                          Bias => Current.Norm_2_Bias,
+                          Weight => Current.Norm_2_Weight);
+            Multiply (Work, Normed, Patches, Current.Feed_In, Hidden,
+                      Current.Feed_In_Bias);
+            Rows_Through (Work, Gaussian, Hidden, Patches, Feed);
+            Multiply (Work, Hidden, Patches, Current.Feed_Out, Normed,
+                      Current.Feed_Out_Bias);
+            exit when E.Is_Error (Work.Status);
+            K.Add (X.all, Normed.all);
+         end;
+      end loop;
+
+      --  The last norm, then the merger: a window's patches, which the
+      --  walk laid together, joined into one row of Joined, through the
+      --  square step and the Gaussian unit, then to the text width.
+      if E.Is_Ok (Work.Status) then
+         Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+                       Bias => Item.Post_Bias, Weight => Item.Post_Weight);
+      end if;
+
+      if E.Is_Ok (Work.Status) then
+         T.Allocate (Windows * Text_Width, Rows);
+         if Rows = null then
+            Work.Status := E.Make (E.Memory_Allocation_Failed);
+            E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+         else
+            --  Normed's rows are already the joined rows: Merge ** 2
+            --  consecutive patches of Width make one row of Joined.
+            Multiply (Work, Normed, Windows, Item.Merge_In, Merged,
+                      Item.Merge_In_Bias);
+            Rows_Through (Work, Gaussian, Merged, Windows, Joined);
+            Multiply (Work, Merged, Windows, Item.Merge_Out, Rows,
+                      Item.Merge_Out_Bias);
+         end if;
+      end if;
+
+      Status := Work.Status;
+      Grid_Rows := Natural (Windows_Y);
+      Grid_Columns := Natural (Windows_X);
+      Release;
+
+      if E.Is_Error (Status) then
+         T.Free (Rows);
+         Grid_Rows := 0;
+         Grid_Columns := 0;
+      end if;
+   end Encode_Qwen;
+
+   ------------
+   -- Encode --
+   ------------
+
+   procedure Encode
+     (Item    : in out Encoder;
+      Picture : Model_Runner.Images.Raster;
+      Team    : CPU.Pool_Reference;
+      Rows    : out T.Real_Array_Access;
+      Grid_Rows    : out Natural;
+      Grid_Columns : out Natural;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out E.Error_Info) is
+   begin
+      if Is_Qwen (Item) then
+         Encode_Qwen
+           (Item, Picture, Team, Rows, Grid_Rows, Grid_Columns, Cancel, Status);
+      else
+         Encode_Gemma (Item, Picture, Team, Rows, Cancel, Status);
+         declare
+            Side : constant Natural :=
+              (if Item.Ready then (Item.Size / Item.Patch) / Item.Pool_Side
+               else 0);
+         begin
+            Grid_Rows := (if Rows = null then 0 else Side);
+            Grid_Columns := Grid_Rows;
+         end;
       end if;
    end Encode;
 

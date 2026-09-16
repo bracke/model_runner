@@ -415,6 +415,7 @@ begin
          Eyes      : Model_Runner.Vision.Encoder;
          Picture   : Model_Runner.Images.Raster;
          Rows      : Model_Runner.Tensors.Real_Array_Access;
+         Grid_Rows, Grid_Columns : Natural;
          Status    : Model_Runner.Errors.Error_Info;
          Started   : Ada.Calendar.Time;
          use type Ada.Calendar.Time;
@@ -476,11 +477,14 @@ begin
          begin
             Model_Runner.Backend.CPU.Open (Pool);
             Model_Runner.Vision.Encode
-              (Eyes, Picture, Pool'Unchecked_Access, Rows, Status => Status);
+              (Eyes, Picture, Pool'Unchecked_Access, Rows, Grid_Rows,
+               Grid_Columns, Status => Status);
             Model_Runner.Backend.CPU.Close (Pool);
          end;
          Ada.Text_IO.Put_Line
-           ("encoded in" & Duration'Image (Ada.Calendar.Clock - Started) & " s");
+           ("encoded in" & Duration'Image (Ada.Calendar.Clock - Started) & " s"
+            & " as a grid of" & Natural'Image (Grid_Rows) & " by"
+            & Natural'Image (Grid_Columns));
          if Model_Runner.Errors.Is_Error (Status) then
             Ada.Text_IO.Put_Line
               ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code));

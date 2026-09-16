@@ -444,10 +444,13 @@ JSON` and `tests render --prompt-parts JSON` hand a template, and which
 Gemma 3's walks, MiniCPM's writes nothing for, and Qwen3-Coder's and
 gpt-oss's refuse on both sides, a text and a list added together -- and
 which, given a `"path"` and `run --mmproj PATH`, is a picture the model
-sees: decoded, resampled and encoded by `Model_Runner.Vision`, its rows
-read where the template's marker stands -- the marker set between the
-reference processor's two line breaks before the prompt is tokenized,
-and with `--pan-and-scan` among its words too, whole and then in crops -- a reply given as parts and a
+sees: decoded, resampled and encoded by `Model_Runner.Vision` -- Gemma
+3's projector or Qwen3.5's -- crossed with the reference runtime by the
+two scripts under `tests/fixtures/vision-crossing/` (see "The pictures,
+crossed" below) -- its rows read where the template's marker stands: for Gemma 3 the marker set between the reference processor's two
+line breaks before the prompt is tokenized, and with `--pan-and-scan`
+among its words too, whole and then in crops; for Qwen3.5 the one
+`<|image_pad|>` replaced by one a row, each turned by its row and column -- a reply given as parts and a
 tool's answer given as parts, which Gemma 3's template walks, MiniCPM's
 writes as nothing and as JSON, and Qwen3-Coder's refuses -- with
 the caller's `--think` and `--no-think` each where the template
@@ -645,3 +648,46 @@ would be reported as a model disagreement when it is not one.
 `tests external-model --model PATH` still runs every self-consistency check and
 says `no reference comparison` in its output. It never implies a comparison it
 did not make.
+
+## The pictures, crossed
+
+What a picture becomes in the prompt and in the model was set beside
+`transformers` 5.17 on 2026-09-16, by the two scripts under
+`tests/fixtures/vision-crossing/`, which a checkout with `transformers`,
+`torch` and `Pillow` reruns. None of it is a mandatory test: the reference
+is two gigabytes of download and a Python runtime this repository does not
+carry.
+
+`gemma3.py` loads the Gemma 3 processor and compares its prompt tokens for a
+picture and a question, whole and with pan-and-scan, against the template's
+text rewritten as this build rewrites it. On a 1920 by 1080 poster and a
+1000 by 1333 photograph, both ways, the tokens are the reference's, token
+for token: 278 whole, 817 with three tiles.
+
+`qwen35.py` loads Qwen3.5-0.8B and compares three things. The prompt: the
+reference's tokens are the template's with the one `<|image_pad|>`
+replicated, one a row -- 1327 for the photograph, as this build counts. The
+encoder: on the same pixels, the reference vision tower's rows and the rows
+`tests see --dump` wrote agree to a cosine of 0.9999996 at worst over the
+photograph's 1302 rows and 0.9999997 over the poster's 2040, the worst row
+apart by a thousandth of the median norm, which is the projector's f16
+weights. The positions: the reference's `get_rope_index` places every row
+of the picture at (start, start + row, start + column) and the text after
+it at start plus the grid's longer side, which is the rule
+`Model_Runner.Llama` marks by; its rope delta for the photograph's prompt is
+-1260, which is 46 - 1306. And the first token's distribution after the
+photograph's prompt: the reference's five likeliest are ` A` -0.56, ` a`
+-1.54, `A` -2.81, ` An` -3.73, ` It` -3.73; this build's, on the Q8_0 text
+weights, ` A` -0.61, ` a` -1.36, `A` -3.11, ` It` -3.67, ` An` -3.88.
+
+The pixels are the one place the two references part. The processor the
+model was trained through, and llama.cpp, resize with PIL: bicubic with
+a = -0.5, in two passes of 22-bit fixed point, each rounded to a byte.
+`transformers` 5's default processor is a torchvision backend, which
+resizes with a = -0.75 in floating point, up to two levels a pixel apart.
+This build resamples as PIL does, to the bit -- `Model_Runner.Images.Resample`
+was checked against `Image.resize` on both pictures, both filters, no pixel
+differing -- because a handful of windows of the Qwen encoder turn a level
+into rows a third apart, and the two references agree on everything but
+this.
+

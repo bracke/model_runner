@@ -12,6 +12,7 @@ with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Images;
+with Model_Runner.Kernels;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Sampling;
@@ -849,6 +850,7 @@ package body Tests.Vision_Cases is
       Status  : E.Error_Info;
       Wanted  : N.Wide_Real_Array (0 .. Text_P - 1);
       Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
       Eyes    : Vision.Encoder;
    begin
       --  A picture with some structure: a gradient with a bright square.
@@ -886,7 +888,8 @@ package body Tests.Vision_Cases is
                  and then Vision.Projector (Eyes) = "gemma3",
                  "the small projector's shape was misread");
 
-         Vision.Encode (Eyes, Picture, null, Rows, Status => Status);
+         Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                        Status => Status);
          Assert (E.Is_Ok (Status), "the small projector did not encode: "
                  & E.Error_Code'Image (Status.Code));
          Assert (Rows /= null and then Rows.all'Length = Text_P,
@@ -918,7 +921,8 @@ package body Tests.Vision_Cases is
       Vision.Open (Eyes, "obj/no-such-projector.gguf", Status);
       Assert (E.Is_Error (Status), "a missing projector opened");
 
-      Vision.Encode (Eyes, Picture, null, Rows, Status => Status);
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
       Assert (Status.Code = E.Lifecycle_Model_Not_Ready and then Rows = null,
               "a closed encoder encoded");
 
@@ -1189,6 +1193,776 @@ package body Tests.Vision_Cases is
       B.Free (Image);
    end Pictures_Stand_Behind_Their_Markers;
 
+   ------------------------------------------------
+   -- The_Qwen_Projector_Encodes_As_The_Reference --
+   ------------------------------------------------
+
+   --  The Qwen encoder's shape, written small: four-pixel patches walked
+   --  in windows of two, a position grid of four a side, two heads of
+   --  four -- one pair turned by the row and one by the column -- and a
+   --  merger over a window's four rows.
+   Patch_Q  : constant := 4;
+   Merge_Q  : constant := 2;
+   Grid_Q   : constant := 4;
+   Width_Q  : constant := 8;
+   Heads_Q  : constant := 2;
+   Head_Q   : constant := Width_Q / Heads_Q;
+   Feed_Q   : constant := 16;
+   Blocks_Q : constant := 2;
+   Text_Q   : constant := 12;
+   Joined_Q : constant := Width_Q * Merge_Q * Merge_Q;
+   Elements_Q : constant := 3 * Patch_Q * Patch_Q;
+   Cells_Q  : constant := Grid_Q * Grid_Q;
+   Triple_Q : constant := 3 * Width_Q;
+
+   --  The picture: sixty-four by eighty, which is what sixty-four rows at
+   --  least ask of a picture, so that the encoder resamples nothing and
+   --  the reference reads the pixels as they are.
+   Wide_Q   : constant := 64;
+   Tall_Q   : constant := 80;
+   Side_X_Q : constant := Wide_Q / Patch_Q;
+   Side_Y_Q : constant := Tall_Q / Patch_Q;
+   Patches_Q : constant := Side_X_Q * Side_Y_Q;
+   Windows_X_Q : constant := Side_X_Q / Merge_Q;
+   Windows_Y_Q : constant := Side_Y_Q / Merge_Q;
+   Windows_Q : constant := Windows_X_Q * Windows_Y_Q;
+
+   type Qwen_Block_Weights is record
+      Ln1_W, Ln1_B, Ln2_W, Ln2_B : N.Real_Array (0 .. Width_Q - 1);
+      QKV   : N.Real_Array (0 .. 3 * Width_Q * Width_Q - 1);  --  3 Width rows
+      QKV_B : N.Real_Array (0 .. 3 * Width_Q - 1);
+      O     : N.Real_Array (0 .. Width_Q * Width_Q - 1);
+      O_B   : N.Real_Array (0 .. Width_Q - 1);
+      Up    : N.Real_Array (0 .. Feed_Q * Width_Q - 1);
+      Up_B  : N.Real_Array (0 .. Feed_Q - 1);
+      Down  : N.Real_Array (0 .. Width_Q * Feed_Q - 1);
+      Down_B : N.Real_Array (0 .. Width_Q - 1);
+   end record;
+
+   type Qwen_Block_List is array (0 .. Blocks_Q - 1) of Qwen_Block_Weights;
+
+   type Qwen_Weights is record
+      Patch_0, Patch_1 : N.Real_Array (0 .. Width_Q * Elements_Q - 1);
+      Patch_B : N.Real_Array (0 .. Width_Q - 1);
+      Pos     : N.Real_Array (0 .. Grid_Q * Grid_Q * Width_Q - 1);
+      Blocks  : Qwen_Block_List;
+      Post_W, Post_B : N.Real_Array (0 .. Width_Q - 1);
+      MM0     : N.Real_Array (0 .. Joined_Q * Joined_Q - 1);
+      MM0_B   : N.Real_Array (0 .. Joined_Q - 1);
+      MM2     : N.Real_Array (0 .. Text_Q * Joined_Q - 1);  --  Text rows of Joined
+      MM2_B   : N.Real_Array (0 .. Text_Q - 1);
+   end record;
+
+   type Qwen_Weights_Access is access Qwen_Weights;
+
+   function Fresh_Qwen_Weights return Qwen_Weights_Access is
+      W : constant Qwen_Weights_Access := new Qwen_Weights;
+   begin
+      Seed := 54321;
+      W.Patch_0 := Random_Row (Width_Q * Elements_Q, 0.05);
+      W.Patch_1 := Random_Row (Width_Q * Elements_Q, 0.05);
+      W.Patch_B := Random_Row (Width_Q, 0.1);
+      W.Pos := Random_Row (Grid_Q * Grid_Q * Width_Q, 0.3);
+      for Index in W.Blocks'Range loop
+         W.Blocks (Index).Ln1_W := Random_Row (Width_Q, 0.3);
+         for Value of W.Blocks (Index).Ln1_W loop
+            Value := Value + 1.0;
+         end loop;
+         W.Blocks (Index).Ln1_B := Random_Row (Width_Q, 0.1);
+         W.Blocks (Index).Ln2_W := Random_Row (Width_Q, 0.3);
+         for Value of W.Blocks (Index).Ln2_W loop
+            Value := Value + 1.0;
+         end loop;
+         W.Blocks (Index).Ln2_B := Random_Row (Width_Q, 0.1);
+         W.Blocks (Index).QKV := Random_Row (3 * Width_Q * Width_Q, 0.3);
+         W.Blocks (Index).QKV_B := Random_Row (3 * Width_Q, 0.1);
+         W.Blocks (Index).O := Random_Row (Width_Q * Width_Q, 0.3);
+         W.Blocks (Index).O_B := Random_Row (Width_Q, 0.1);
+         W.Blocks (Index).Up := Random_Row (Feed_Q * Width_Q, 0.3);
+         W.Blocks (Index).Up_B := Random_Row (Feed_Q, 0.1);
+         W.Blocks (Index).Down := Random_Row (Width_Q * Feed_Q, 0.2);
+         W.Blocks (Index).Down_B := Random_Row (Width_Q, 0.1);
+      end loop;
+      W.Post_W := Random_Row (Width_Q, 0.3);
+      for Value of W.Post_W loop
+         Value := Value + 1.0;
+      end loop;
+      W.Post_B := Random_Row (Width_Q, 0.1);
+      W.MM0 := Random_Row (Joined_Q * Joined_Q, 0.2);
+      W.MM0_B := Random_Row (Joined_Q, 0.1);
+      W.MM2 := Random_Row (Text_Q * Joined_Q, 0.2);
+      W.MM2_B := Random_Row (Text_Q, 0.1);
+      return W;
+   end Fresh_Qwen_Weights;
+
+   procedure Write_Qwen_Projector (Path : String; W : Qwen_Weights) is
+      Builder : Fixtures.Builder;
+      File    : B.Byte_Array_Access;
+      use Ada.Streams.Stream_IO;
+      Handle  : File_Type;
+
+      procedure Tensor
+        (Name : String; Dims : Fixtures.Dimension_List; Values : N.Real_Array) is
+      begin
+         Fixtures.Add_Tensor
+           (Builder, Name, Dims, G.Type_F32, Fixtures.Encode_F32 (Values));
+      end Tensor;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "clip");
+      Fixtures.Add_String (Builder, "clip.projector_type", "qwen3vl_merger");
+      Fixtures.Add_U32 (Builder, "clip.vision.image_size", 768);
+      Fixtures.Add_U32 (Builder, "clip.vision.patch_size", Patch_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.embedding_length", Width_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.feed_forward_length", Feed_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.projection_dim", Text_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.block_count", Blocks_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.attention.head_count", Heads_Q);
+      Fixtures.Add_U32 (Builder, "clip.vision.spatial_merge_size", Merge_Q);
+      Fixtures.Add_F32
+        (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_mean", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_std", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.is_deepstack_layers", G.Value_Bool, Blocks_Q);
+      for Index in 1 .. Blocks_Q loop
+         Fixtures.Bool_Element (Builder, False);
+      end loop;
+      Fixtures.End_Array (Builder);
+
+      Tensor ("v.patch_embd.weight", [Patch_Q, Patch_Q, 3, Width_Q], W.Patch_0);
+      Tensor ("v.patch_embd.weight.1", [Patch_Q, Patch_Q, 3, Width_Q], W.Patch_1);
+      Tensor ("v.patch_embd.bias", [Width_Q], W.Patch_B);
+      Tensor ("v.position_embd.weight", [Width_Q, Cells_Q], W.Pos);
+      for Index in W.Blocks'Range loop
+         declare
+            Prefix : constant String :=
+              "v.blk." & Model_Runner.Text.Image (Long_Long_Integer (Index)) & ".";
+            Current : Qwen_Block_Weights renames W.Blocks (Index);
+         begin
+            Tensor (Prefix & "ln1.weight", [Width_Q], Current.Ln1_W);
+            Tensor (Prefix & "ln1.bias", [Width_Q], Current.Ln1_B);
+            Tensor (Prefix & "ln2.weight", [Width_Q], Current.Ln2_W);
+            Tensor (Prefix & "ln2.bias", [Width_Q], Current.Ln2_B);
+            Tensor (Prefix & "attn_qkv.weight", [Width_Q, Triple_Q], Current.QKV);
+            Tensor (Prefix & "attn_qkv.bias", [Triple_Q], Current.QKV_B);
+            Tensor (Prefix & "attn_out.weight", [Width_Q, Width_Q], Current.O);
+            Tensor (Prefix & "attn_out.bias", [Width_Q], Current.O_B);
+            Tensor (Prefix & "ffn_up.weight", [Width_Q, Feed_Q], Current.Up);
+            Tensor (Prefix & "ffn_up.bias", [Feed_Q], Current.Up_B);
+            Tensor (Prefix & "ffn_down.weight", [Feed_Q, Width_Q], Current.Down);
+            Tensor (Prefix & "ffn_down.bias", [Width_Q], Current.Down_B);
+         end;
+      end loop;
+      Tensor ("v.post_ln.weight", [Width_Q], W.Post_W);
+      Tensor ("v.post_ln.bias", [Width_Q], W.Post_B);
+      Tensor ("mm.0.weight", [Joined_Q, Joined_Q], W.MM0);
+      Tensor ("mm.0.bias", [Joined_Q], W.MM0_B);
+      Tensor ("mm.2.weight", [Joined_Q, Text_Q], W.MM2);
+      Tensor ("mm.2.bias", [Text_Q], W.MM2_B);
+
+      Fixtures.Build (Builder, File);
+      Create (Handle, Out_File, Path);
+      declare
+         Block : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (File.all'Length))
+           with Import, Address => File.all'Address;
+      begin
+         Write (Handle, Block);
+      end;
+      Close (Handle);
+      B.Free (File);
+   end Write_Qwen_Projector;
+
+   --  The rows the small Qwen projector should make of the picture, in
+   --  binary64: the patches in window order, embedded by both frames'
+   --  weights and placed by the grid interpolated with its corners
+   --  aligned; the blocks, with the queries and keys turned by row and
+   --  column; the post norm; and a window's four rows joined, through
+   --  the merger's two steps.
+   procedure Qwen_Reference_Rows
+     (W : Qwen_Weights; Picture : Images.Raster; Rows : out N.Wide_Real_Array)
+   is
+      subtype WR is N.Wide_Real;
+      type Matrix is array (0 .. Patches_Q - 1, 0 .. Width_Q - 1) of WR;
+      type Wide_Matrix is array (0 .. Patches_Q - 1, 0 .. 3 * Width_Q - 1) of WR;
+      X, H, A : Matrix;
+      QKV : Wide_Matrix;
+      F : array (0 .. Patches_Q - 1, 0 .. Feed_Q - 1) of WR;
+      Row_Of, Column_Of : array (0 .. Patches_Q - 1) of Natural;
+
+      function GELU (Value : WR) return WR
+      is (0.5 * Value
+          * (1.0 + Wide_Math.Tanh
+                     (0.797_884_560_802_865_4
+                      * (Value + 0.044_715 * Value * Value * Value))));
+
+      procedure Layer_Norm
+        (Source : Matrix; Gain, Bias : N.Real_Array; Target : out Matrix) is
+      begin
+         for P in 0 .. Patches_Q - 1 loop
+            declare
+               Mean, Variance : WR := 0.0;
+            begin
+               for D in 0 .. Width_Q - 1 loop
+                  Mean := Mean + Source (P, D);
+               end loop;
+               Mean := Mean / WR (Width_Q);
+               for D in 0 .. Width_Q - 1 loop
+                  Variance := Variance + (Source (P, D) - Mean) ** 2;
+               end loop;
+               Variance := Variance / WR (Width_Q);
+               for D in 0 .. Width_Q - 1 loop
+                  Target (P, D) :=
+                    (Source (P, D) - Mean) / Wide_Math.Sqrt (Variance + 1.0e-6)
+                    * WR (Gain (N.Element_Count (D))) + WR (Bias (N.Element_Count (D)));
+               end loop;
+            end;
+         end loop;
+      end Layer_Norm;
+
+      --  The position grid at a patch's row and column, interpolated
+      --  with the corners aligned.
+      function Position (P, D : Natural) return WR is
+         SY : constant WR :=
+           WR (Row_Of (P)) * WR (Grid_Q - 1) / WR (Side_Y_Q - 1);
+         SX : constant WR :=
+           WR (Column_Of (P)) * WR (Grid_Q - 1) / WR (Side_X_Q - 1);
+         Y0 : constant Natural := Natural (WR'Floor (SY));
+         X0 : constant Natural := Natural (WR'Floor (SX));
+         Y1 : constant Natural := Natural'Min (Grid_Q - 1, Y0 + 1);
+         X1 : constant Natural := Natural'Min (Grid_Q - 1, X0 + 1);
+         FY : constant WR := SY - WR (Y0);
+         FX : constant WR := SX - WR (X0);
+         function Cell (Y, X : Natural) return WR
+         is (WR (W.Pos (N.Element_Count ((Y * Grid_Q + X) * Width_Q + D))));
+      begin
+         return (1.0 - FY) * (1.0 - FX) * Cell (Y0, X0)
+           + (1.0 - FY) * FX * Cell (Y0, X1)
+           + FY * (1.0 - FX) * Cell (Y1, X0)
+           + FY * FX * Cell (Y1, X1);
+      end Position;
+   begin
+      --  The walk: window by window, the four patches of each together.
+      declare
+         P : Natural := 0;
+      begin
+         for WY in 0 .. Windows_Y_Q - 1 loop
+            for WX in 0 .. Windows_X_Q - 1 loop
+               for DY in 0 .. Merge_Q - 1 loop
+                  for DX in 0 .. Merge_Q - 1 loop
+                     Row_Of (P) := WY * Merge_Q + DY;
+                     Column_Of (P) := WX * Merge_Q + DX;
+                     P := P + 1;
+                  end loop;
+               end loop;
+            end loop;
+         end loop;
+      end;
+
+      for P in 0 .. Patches_Q - 1 loop
+         for R in 0 .. Width_Q - 1 loop
+            declare
+               Sum : WR := WR (W.Patch_B (N.Element_Count (R))) + Position (P, R);
+            begin
+               for C in 0 .. 2 loop
+                  for KY in 0 .. Patch_Q - 1 loop
+                     for KX in 0 .. Patch_Q - 1 loop
+                        declare
+                           Value : constant WR :=
+                             (WR (Pixel (Picture, Column_Of (P) * Patch_Q + KX,
+                                         Row_Of (P) * Patch_Q + KY, C)) / 255.0
+                              - 0.5) / 0.5;
+                           Index : constant N.Element_Count :=
+                             N.Element_Count
+                               (R * Elements_Q + C * Patch_Q * Patch_Q
+                                + KY * Patch_Q + KX);
+                        begin
+                           Sum := Sum + Value
+                             * (WR (W.Patch_0 (Index)) + WR (W.Patch_1 (Index)));
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+               X (P, R) := Sum;
+            end;
+         end loop;
+      end loop;
+
+      for Index in W.Blocks'Range loop
+         declare
+            Current : Qwen_Block_Weights renames W.Blocks (Index);
+            Pairs : constant Natural := Head_Q / 2;
+            Half  : constant Natural := Pairs / 2;
+         begin
+            Layer_Norm (X, Current.Ln1_W, Current.Ln1_B, H);
+            for P in 0 .. Patches_Q - 1 loop
+               for R in 0 .. 3 * Width_Q - 1 loop
+                  declare
+                     Sum : WR := WR (Current.QKV_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Width_Q - 1 loop
+                        Sum := Sum + H (P, C)
+                          * WR (Current.QKV (N.Element_Count (R * Width_Q + C)));
+                     end loop;
+                     QKV (P, R) := Sum;
+                  end;
+               end loop;
+
+               --  The rotation: the first half of a head's pairs by the
+               --  row, the second by the column, each half counting its
+               --  frequencies from the first; a pair is an element and
+               --  the one half a head on.
+               for Which in 0 .. 1 loop
+                  for Hd in 0 .. Heads_Q - 1 loop
+                     for Pair in 0 .. Pairs - 1 loop
+                        declare
+                           Start : constant Natural := Which * Width_Q + Hd * Head_Q;
+                           Pos : constant Natural :=
+                             (if Pair < Half then Row_Of (P) else Column_Of (P));
+                           Freq : constant Natural :=
+                             (if Pair < Half then Pair else Pair - Half);
+                           Theta : constant WR :=
+                             WR (Pos) * Wide_Math."**" (10_000.0, -2.0 * WR (Freq) / WR (Pairs));
+                           C1 : constant WR := QKV (P, Start + Pair);
+                           C2 : constant WR := QKV (P, Start + Pair + Pairs);
+                        begin
+                           QKV (P, Start + Pair) :=
+                             C1 * Wide_Math.Cos (Theta) - C2 * Wide_Math.Sin (Theta);
+                           QKV (P, Start + Pair + Pairs) :=
+                             C1 * Wide_Math.Sin (Theta) + C2 * Wide_Math.Cos (Theta);
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+            end loop;
+
+            for Hd in 0 .. Heads_Q - 1 loop
+               for P in 0 .. Patches_Q - 1 loop
+                  declare
+                     Scores : array (0 .. Patches_Q - 1) of WR;
+                     Largest, Total : WR;
+                  begin
+                     for O in 0 .. Patches_Q - 1 loop
+                        Scores (O) := 0.0;
+                        for D in 0 .. Head_Q - 1 loop
+                           Scores (O) := Scores (O)
+                             + QKV (P, Hd * Head_Q + D)
+                               * QKV (O, Width_Q + Hd * Head_Q + D);
+                        end loop;
+                        Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (Head_Q));
+                     end loop;
+                     Largest := Scores (0);
+                     for O in 1 .. Patches_Q - 1 loop
+                        Largest := WR'Max (Largest, Scores (O));
+                     end loop;
+                     Total := 0.0;
+                     for O in 0 .. Patches_Q - 1 loop
+                        Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
+                        Total := Total + Scores (O);
+                     end loop;
+                     for D in 0 .. Head_Q - 1 loop
+                        declare
+                           Sum : WR := 0.0;
+                        begin
+                           for O in 0 .. Patches_Q - 1 loop
+                              Sum := Sum + Scores (O) / Total
+                                * QKV (O, 2 * Width_Q + Hd * Head_Q + D);
+                           end loop;
+                           A (P, Hd * Head_Q + D) := Sum;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+
+            for P in 0 .. Patches_Q - 1 loop
+               for R in 0 .. Width_Q - 1 loop
+                  declare
+                     Sum : WR := WR (Current.O_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Width_Q - 1 loop
+                        Sum := Sum + A (P, C)
+                          * WR (Current.O (N.Element_Count (R * Width_Q + C)));
+                     end loop;
+                     X (P, R) := X (P, R) + Sum;
+                  end;
+               end loop;
+            end loop;
+
+            Layer_Norm (X, Current.Ln2_W, Current.Ln2_B, H);
+            for P in 0 .. Patches_Q - 1 loop
+               for R in 0 .. Feed_Q - 1 loop
+                  declare
+                     Sum : WR := WR (Current.Up_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Width_Q - 1 loop
+                        Sum := Sum + H (P, C)
+                          * WR (Current.Up (N.Element_Count (R * Width_Q + C)));
+                     end loop;
+                     F (P, R) := GELU (Sum);
+                  end;
+               end loop;
+               for R in 0 .. Width_Q - 1 loop
+                  declare
+                     Sum : WR := WR (Current.Down_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Feed_Q - 1 loop
+                        Sum := Sum + F (P, C)
+                          * WR (Current.Down (N.Element_Count (R * Feed_Q + C)));
+                     end loop;
+                     X (P, R) := X (P, R) + Sum;
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      Layer_Norm (X, W.Post_W, W.Post_B, H);
+
+      --  The merger: a window's four rows, in the walk's order, as one.
+      for Window in 0 .. Windows_Q - 1 loop
+         declare
+            Joined, Middle : array (0 .. Joined_Q - 1) of WR;
+         begin
+            for K in 0 .. Merge_Q * Merge_Q - 1 loop
+               for D in 0 .. Width_Q - 1 loop
+                  Joined (K * Width_Q + D) := H (Window * Merge_Q * Merge_Q + K, D);
+               end loop;
+            end loop;
+            for R in 0 .. Joined_Q - 1 loop
+               declare
+                  Sum : WR := WR (W.MM0_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Joined_Q - 1 loop
+                     Sum := Sum + Joined (C) * WR (W.MM0 (N.Element_Count (R * Joined_Q + C)));
+                  end loop;
+                  Middle (R) := GELU (Sum);
+               end;
+            end loop;
+            for J in 0 .. Text_Q - 1 loop
+               declare
+                  Sum : WR := WR (W.MM2_B (N.Element_Count (J)));
+               begin
+                  for C in 0 .. Joined_Q - 1 loop
+                     Sum := Sum + Middle (C) * WR (W.MM2 (N.Element_Count (J * Joined_Q + C)));
+                  end loop;
+                  Rows (N.Element_Count (Window * Text_Q + J)) := Sum;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Qwen_Reference_Rows;
+
+   --  The small Qwen projector, written and opened, encodes a picture to
+   --  the rows the plain computation gives, as a grid of the picture's
+   --  windows; and the cubic filter resamples as PIL does.
+   procedure The_Qwen_Projector_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for Y in 0 .. Tall_Q - 1 loop
+            for X in 0 .. Wide_Q - 1 loop
+               declare
+                  At_Pixel : constant B.Byte_Count :=
+                    B.Byte_Count (3 * (Y * Wide_Q + X)) + 1;
+               begin
+                  Data (At_Pixel) := B.Byte (X * 3);
+                  Data (At_Pixel + 1) := B.Byte (Y * 3);
+                  Data (At_Pixel + 2) :=
+                    (if X in 20 .. 44 and then Y in 24 .. 56 then 240 else 30);
+               end;
+            end loop;
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6 64 80 255 ") & Data, "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+
+      Qwen_Reference_Rows (W.all, Picture, Wanted);
+
+      Write_Qwen_Projector ("obj/vision-qwen.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen projector did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Is_Ready (Eyes)
+              and then not Vision.Fixed_Rows (Eyes)
+              and then Vision.Placed_Rows (Eyes)
+              and then Vision.Row_Width (Eyes) = Text_Q
+              and then Vision.Projector (Eyes) = "qwen3vl_merger",
+              "the small Qwen projector's shape was misread");
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the small Qwen projector did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Grid_Rows = Windows_Y_Q and then Grid_Columns = Windows_X_Q,
+              "the grid is" & Natural'Image (Grid_Rows) & " by"
+              & Natural'Image (Grid_Columns) & ", not"
+              & Natural'Image (Windows_Y_Q) & " by" & Natural'Image (Windows_X_Q));
+      Assert (Rows /= null and then Rows.all'Length = Windows_Q * Text_Q,
+              "the encoder made the wrong number of rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+
+      --  A picture too small for the least rows is scaled up to them,
+      --  by the reference's rule: twenty by thirty, at sixty-four rows
+      --  of eight pixels a side, is fifty-six by eighty.
+      declare
+         Small : Images.Raster;
+      begin
+         Images.Resample (Picture, 20, 30, Small);
+         Vision.Encode (Eyes, Small, null, Rows, Grid_Rows, Grid_Columns,
+                        Status => Status);
+         Assert (E.Is_Ok (Status), "the small picture did not encode");
+         Assert (Grid_Rows = 10 and then Grid_Columns = 7,
+                 "a small picture's grid is" & Natural'Image (Grid_Rows)
+                 & " by" & Natural'Image (Grid_Columns) & ", not 10 by 7");
+         T.Free (Rows);
+         Images.Free (Small);
+      end;
+      Vision.Close (Eyes);
+
+      --  The cubic filter: a two-pixel row 0 and 200 stretched to four
+      --  is 0, 41, 159, 218, what PIL's BICUBIC gives -- the last pixel
+      --  past 200 is the cubic's overshoot at a step, and the triangle
+      --  would never leave the range.
+      declare
+         Source, Result : Images.Raster;
+      begin
+         Images.Decode
+           (Bytes_Of ("P5 2 1 255 ") & [0, 200], "test", Source, Status);
+         Images.Resample (Source, 4, 1, Result, Images.Cubic);
+         Assert (Result.Width = 4
+                 and then Pixel (Result, 0, 0, 0) = 0
+                 and then Pixel (Result, 1, 0, 0) in 40 .. 42
+                 and then Pixel (Result, 2, 0, 0) in 158 .. 160
+                 and then Pixel (Result, 3, 0, 0) in 217 .. 219,
+                 "the cubic stretch is not PIL's:"
+                 & Natural'Image (Pixel (Result, 0, 0, 0))
+                 & Natural'Image (Pixel (Result, 1, 0, 0))
+                 & Natural'Image (Pixel (Result, 2, 0, 0))
+                 & Natural'Image (Pixel (Result, 3, 0, 0)));
+         Images.Free (Result);
+         Images.Free (Source);
+      end;
+
+      Images.Free (Picture);
+   end The_Qwen_Projector_Encodes_As_The_Reference;
+
+   ---------------------------------------
+   -- Placed_Rows_Turn_By_Row_And_Column --
+   ---------------------------------------
+
+   --  A model whose positions have three parts turns a picture's rows by
+   --  where they stand: the picture's start for time, its own row and
+   --  column for the rest, and the text after the picture goes on from
+   --  the start plus the grid's longer side. A Qwen35 fixture stating
+   --  its sections is given a picture of two rows by two, and what each
+   --  position turned by is read back -- and the logits at the end differ
+   --  from those of the same batch with no places, which take the index.
+   --  A rewind keeps the marks, and a snapshot carries them. (A shift
+   --  would move them, but the one family with three-part positions is a
+   --  hybrid, which cannot shift.)
+   procedure Placed_Rows_Turn_By_Row_And_Column
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => 32,
+                        Sections => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Model_Runner.GGUF.Containers.Container;
+         Ready  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Words  : access constant Vocab.Vocabulary;
+         Width  : constant N.Element_Count := Tiny_Model.Embedding;
+         Soft   : Vocab.Token_Id;
+         Rows   : T.Real_Array_Access;
+         Places : constant L.Row_Places_Access :=
+           new L.Row_Places'
+             (0 => (Row => 0, Column => 0, First => True, Last => False, Advance => 2),
+              1 => (Row => 0, Column => 1, First => False, Last => False, Advance => 2),
+              2 => (Row => 1, Column => 0, First => False, Last => False, Advance => 2),
+              3 => (Row => 1, Column => 1, First => False, Last => True, Advance => 2));
+         Placed, Unplaced : N.Real_Array
+           (0 .. N.Element_Count (Tiny_Model.Vocabulary) - 1);
+         use type Model_Runner.Kernels.Rotary_Place;
+
+         procedure Expect
+           (Index : Natural; T, H, W : Natural; What : String) is
+            Got : constant Model_Runner.Kernels.Rotary_Place :=
+              L.Turned_By (Live, Index);
+         begin
+            Assert (Got = (T => T, H => H, W => W),
+                    What & ": position" & Natural'Image (Index) & " turns by"
+                    & Natural'Image (Got.T) & Natural'Image (Got.H)
+                    & Natural'Image (Got.W) & ", not"
+                    & Natural'Image (T) & Natural'Image (H) & Natural'Image (W));
+         end Expect;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not prepare: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Config (Ready).Sections.T = 1
+                 and then L.Config (Ready).Sections.H = 1
+                 and then L.Config (Ready).Sections.Interleaved,
+                 "the sections were not read");
+         Words := L.Vocabulary (Ready);
+         Soft := Vocab.Find (Words.all, "<0x64>");
+
+         T.Allocate (4 * Width, Rows);
+         Seed := 2424;
+         for Value of Rows.all loop
+            Value := Next;
+         end loop;
+
+         declare
+            Tokens : constant Vocab.Token_Array :=
+              [Vocab.Beginning_Token (Words.all), Soft, Soft, Soft, Soft,
+               Vocab.Find (Words.all, "a"), Vocab.Find (Words.all, "b")];
+         begin
+            L.Open (Live, Ready, 32, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            --  A hybrid rewinds only as far as it kept its states.
+            L.Keep_States (Live, 4, Status);
+            Assert (E.Is_Ok (Status), "the states were not kept");
+
+            L.Evaluate_Batch
+              (Live, Ready, Tokens, Placed,
+               Given => (Token => Soft, Rows => Rows, First => 0,
+                         Places => Places, Causal => True),
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the placed batch failed: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  The beginning at 0; the picture from 1: its rows at
+            --  (1, 1 + row, 1 + column); the text after at 1 + 2 = 3, 4.
+            Expect (0, 0, 0, 0, "placed");
+            Expect (1, 1, 1, 1, "placed");
+            Expect (2, 1, 1, 2, "placed");
+            Expect (3, 1, 2, 1, "placed");
+            Expect (4, 1, 2, 2, "placed");
+            Expect (5, 3, 3, 3, "placed");
+            Expect (6, 4, 4, 4, "placed");
+
+            --  A token more, one at a time: five.
+            L.Evaluate (Live, Ready, Vocab.Find (Words.all, "c"), Unplaced,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "the token after the batch failed");
+            Expect (7, 5, 5, 5, "placed, one more");
+
+            --  Snapshotted and adopted into another session, the places
+            --  come back with the context, and the next token goes on
+            --  from them; a snapshot without them -- cut short of the
+            --  marks -- adopts with every position at its index, which is
+            --  what one from before they were written held.
+            declare
+               Bytes : B.Byte_Array_Access;
+               Twin  : L.Session;
+            begin
+               L.Snapshot (Live, Ready, Bytes, Status);
+               Assert (E.Is_Ok (Status) and then Bytes /= null,
+                       "the snapshot failed");
+               L.Open (Twin, Ready, 32, Status => Status);
+               Assert (E.Is_Ok (Status), "the twin did not open");
+               L.Adopt (Twin, Ready, Bytes.all, Status);
+               Assert (E.Is_Ok (Status), "the twin did not adopt: "
+                       & E.Error_Code'Image (Status.Code));
+               Assert (L.Turned_By (Twin, 4) = (T => 1, H => 2, W => 2)
+                       and then L.Turned_By (Twin, 7) = (T => 5, H => 5, W => 5),
+                       "the adopted places are not the snapshotted ones");
+               L.Evaluate (Twin, Ready, Vocab.Find (Words.all, "b"), Unplaced,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the twin did not evaluate");
+               Assert (L.Turned_By (Twin, 8) = (T => 6, H => 6, W => 6),
+                       "the twin did not go on from the adopted places");
+
+               L.Reset (Twin);
+               L.Adopt (Twin, Ready, Bytes (Bytes'First .. Bytes'Last - 8 * 4 * 8),
+                        Status);
+               Assert (E.Is_Ok (Status), "the cut snapshot did not adopt");
+               Assert (L.Turned_By (Twin, 4) = (T => 4, H => 4, W => 4),
+                       "a snapshot without marks did not turn by the index");
+               L.Close (Twin);
+               B.Free (Bytes);
+            end;
+
+            --  Rewound to the text after the picture and given it again:
+            --  the same places.
+            L.Rewind (Live, 5, Status);
+            Assert (E.Is_Ok (Status), "the rewind failed");
+            L.Evaluate (Live, Ready, Vocab.Find (Words.all, "a"), Unplaced,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "the token after the rewind failed");
+            Expect (5, 3, 3, 3, "rewound");
+
+            --  The same batch with no places: every position its index,
+            --  and the logits at the end another answer.
+            L.Reset (Live);
+            L.Evaluate_Batch
+              (Live, Ready, Tokens, Unplaced,
+               Given => (Token => Soft, Rows => Rows, First => 0,
+                         Places => null, Causal => True),
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the unplaced batch failed");
+            Expect (4, 4, 4, 4, "unplaced");
+            Expect (6, 6, 6, 6, "unplaced");
+            declare
+               Same : Boolean := True;
+            begin
+               for Index in Placed'Range loop
+                  Same := Same and then Placed (Index) = Unplaced (Index);
+               end loop;
+               Assert (not Same, "the places changed no logit");
+            end;
+
+            L.Close (Live);
+         end;
+
+         T.Free (Rows);
+         L.Close (Ready, Status);
+         Model_Runner.GGUF.Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Placed_Rows_Turn_By_Row_And_Column;
+
    ----------------------------------------
    -- A_Pictures_Rows_See_Each_Other --
    ----------------------------------------
@@ -1265,14 +2039,14 @@ package body Tests.Vision_Cases is
             Assert (E.Is_Ok (Status), "the session did not open");
             L.Evaluate_Batch
               (Live, Ready, Tokens, Logits, States => States_A,
-               Given => (Token => Soft, Rows => Rows_A, First => 0),
+               Given => (Token => Soft, Rows => Rows_A, First => 0, others => <>),
                Status => Status);
             Assert (E.Is_Ok (Status), "the first batch failed: "
                     & E.Error_Code'Image (Status.Code));
             L.Reset (Live);
             L.Evaluate_Batch
               (Live, Ready, Tokens, Logits, States => States_B,
-               Given => (Token => Soft, Rows => Rows_B, First => 0),
+               Given => (Token => Soft, Rows => Rows_B, First => 0, others => <>),
                Status => Status);
             Assert (E.Is_Ok (Status), "the second batch failed: "
                     & E.Error_Code'Image (Status.Code));
@@ -1291,7 +2065,7 @@ package body Tests.Vision_Cases is
             L.Reset (Live);
             L.Evaluate_Batch
               (Live, Ready, Tokens (1 .. 2), Logits, States => States_C,
-               Given => (Token => Soft, Rows => Rows_B, First => 0),
+               Given => (Token => Soft, Rows => Rows_B, First => 0, others => <>),
                Status => Status);
             Assert (E.Is_Ok (Status), "the split batch failed");
             Assert (Differ (States_B, States_C, 1),
@@ -1338,6 +2112,18 @@ package body Tests.Vision_Cases is
          "a projector written small encodes a picture to the rows a plain "
          & "computation of the same network gives, however its halves are "
          & "named, and a projector of another kind is refused");
+      Register_Routine
+        (T, The_Qwen_Projector_Encodes_As_The_Reference'Access,
+         "a Qwen projector written small encodes a picture to the rows a "
+         & "plain computation of the same network gives, as a grid of its "
+         & "windows, scales a small picture up to the least rows, and the "
+         & "cubic filter resamples as PIL does");
+      Register_Routine
+        (T, Placed_Rows_Turn_By_Row_And_Column'Access,
+         "a model whose positions have three parts turns a picture's rows "
+         & "by its start, their row and their column, goes on after it from "
+         & "the grid's longer side, and keeps the places through a rewind "
+         & "and a snapshot");
       Register_Routine
         (T, A_Pictures_Rows_See_Each_Other'Access,
          "a picture's rows attend to each other both ways, and a text "

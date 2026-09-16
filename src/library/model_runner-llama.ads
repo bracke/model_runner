@@ -284,6 +284,14 @@ package Model_Runner.Llama is
       Scaling         : Model_Runner.Kernels.Rotary_Scaling :=
         Model_Runner.Kernels.No_Scaling;
 
+      --  How the rotation deals a head's pairs among a position's three
+      --  parts -- time, row and column -- where the model has three: the
+      --  Qwen3.5 family states the count for each under
+      --  rope.dimension_sections and deals them interleaved. None for
+      --  every other model, whose positions have one part.
+      Sections        : Model_Runner.Kernels.Rotary_Sections :=
+        Model_Runner.Kernels.No_Sections;
+
       --  Whether that stretch was asked for rather than read.
       --
       --  It decides one thing: a model stretched by request may be opened
@@ -1212,6 +1220,18 @@ package Model_Runner.Llama is
    --  @return Committed token, or No_Token when out of range.
    function Committed_Token (Item : Session; Index : Natural) return Token_Id;
 
+   --  What the position at an index turns by: the index itself in every
+   --  part for a model whose positions have one, and for one whose
+   --  positions have three -- Qwen3.5's -- what its mark says: a text
+   --  token's three parts equal, and a picture's row its picture's start
+   --  for time and its own row and column for the rest.
+   --
+   --  @param Item Session to inspect.
+   --  @param Index Zero-based position.
+   --  @return The place, or the index in every part where none is marked.
+   function Turned_By
+     (Item : Session; Index : Natural) return Model_Runner.Kernels.Rotary_Place;
+
    --  Evaluate one token and produce the next-token logits.
    --
    --  The cache position is reserved, every layer is evaluated, and the
@@ -1236,12 +1256,36 @@ package Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Where a given row stands in its picture, for a model whose
+   --  positions have three parts: its row and column in the picture's
+   --  grid, whether it is the picture's first or last row, and -- on the
+   --  last -- how far past the picture's start a text token after it
+   --  stands, which the Qwen-VL family sets at the longer side of the
+   --  grid rather than at the number of rows. A model with one-part
+   --  positions reads none of this.
+   type Row_Place is record
+      Row, Column : Natural := 0;
+      First, Last : Boolean := False;
+      Advance     : Natural := 0;
+   end record;
+
+   type Row_Places is
+     array (Model_Runner.Numerics.Element_Count range <>) of Row_Place;
+   type Row_Places_Access is access Row_Places;
+
    --  Rows given in place of embeddings, for the positions of a batch that
-   --  hold one token: a picture's rows behind its marker.
+   --  hold one token: a picture's rows behind its marker. Places, where
+   --  given, says where each row stands in its picture, indexed as Rows
+   --  are; null leaves every row at its own position in the sequence.
    type Given_Rows is record
-      Token : Model_Runner.Tokenizer.Token_Id := Model_Runner.Tokenizer.No_Token;
-      Rows  : Model_Runner.Tensors.Real_Array_Access := null;
-      First : Model_Runner.Numerics.Element_Count := 0;
+      Token  : Model_Runner.Tokenizer.Token_Id := Model_Runner.Tokenizer.No_Token;
+      Rows   : Model_Runner.Tensors.Real_Array_Access := null;
+      First  : Model_Runner.Numerics.Element_Count := 0;
+      Places : Row_Places_Access := null;
+
+      --  Whether the rows of a run attend causally, as text does, or
+      --  both ways within the run, as Gemma 3's picture does.
+      Causal : Boolean := False;
    end record;
 
    No_Given_Rows : constant Given_Rows := (others => <>);
@@ -1907,6 +1951,23 @@ private
    type Token_History is array (Natural range <>) of Token_Id;
    type Token_History_Access is access Token_History;
 
+   --  What a committed position turns by, for a model whose positions have
+   --  three parts: its place, and the position a text token after it
+   --  takes. A text token's place is the three parts equal and its next
+   --  one more; a picture's row has the picture's start for time and its
+   --  own row and column for the rest, and the text after the picture
+   --  goes on from the start plus the grid's longer side, which is fewer
+   --  positions than the picture has rows. So the rotation's position
+   --  parts company with the index in the cache from the first picture
+   --  on, and this is what keeps them apart.
+   type Rope_Mark is record
+      Place : Model_Runner.Kernels.Rotary_Place := (others => 0);
+      Next  : Natural := 0;
+   end record;
+
+   type Rope_Marks is array (Natural range <>) of Rope_Mark;
+   type Rope_Marks_Access is access Rope_Marks;
+
    --  Which expert a position chose, and which positions chose an expert.
    --
    --  A plain count either way: the arrays are indexed by position times
@@ -1995,6 +2056,12 @@ private
       Key_Scales   : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Scales : Model_Runner.Tensors.Real_Array_Access := null;
       History    : Token_History_Access := null;
+
+      --  One mark a position, for a model whose positions have three
+      --  parts; null for every other model, whose rotation reads the
+      --  index. Marked counts how many are written, from zero.
+      Marks      : Rope_Marks_Access := null;
+      Marked     : Natural := 0;
       Activation : Model_Runner.Tensors.Real_Array_Access := null;
       Normalized : Model_Runner.Tensors.Real_Array_Access := null;
       Query      : Model_Runner.Tensors.Real_Array_Access := null;

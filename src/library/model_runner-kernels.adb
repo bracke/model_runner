@@ -1730,6 +1730,40 @@ package body Model_Runner.Kernels is
    -- Rotary_Table --
    ------------------
 
+   function Part_Of
+     (Pair : Element_Count; Sections : Rotary_Sections; Place : Rotary_Place)
+      return Natural
+   is
+      Dealt : constant Natural :=
+        Sections.T + Sections.H + Sections.W + Sections.E;
+   begin
+      if Dealt = 0 then
+         return Place.T;
+      end if;
+
+      declare
+         Sector : constant Natural := Natural (Pair) mod Dealt;
+      begin
+         if Sections.Interleaved then
+            if Sector mod 3 = 1 and then Sector < 3 * Sections.H then
+               return Place.H;
+            elsif Sector mod 3 = 2 and then Sector < 3 * Sections.W then
+               return Place.W;
+            else
+               return Place.T;
+            end if;
+         elsif Sector < Sections.T then
+            return Place.T;
+         elsif Sector < Sections.T + Sections.H then
+            return Place.H;
+         elsif Sector < Sections.T + Sections.H + Sections.W then
+            return Place.W;
+         else
+            return Place.T;
+         end if;
+      end;
+   end Part_Of;
+
    procedure Rotary_Table
      (Rotary     : Element_Count;
       Position   : Natural;
@@ -1739,9 +1773,16 @@ package body Model_Runner.Kernels is
       Backwards  : Boolean := False;
       First_Pair : Element_Count := 0;
       Cosines    : out Wide_Real_Array;
-      Sines      : out Wide_Real_Array)
+      Sines      : out Wide_Real_Array;
+      Sections   : Rotary_Sections := No_Sections;
+      Place      : Rotary_Place := (others => 0))
    is
       Divided : constant Boolean := Factors'Length = Rotary / 2;
+
+      --  Whether a pair's position is one of Place's parts rather than
+      --  Position: only where sections deal the pairs.
+      Dealt : constant Boolean :=
+        Sections.T + Sections.H + Sections.W + Sections.E > 0;
 
       function Edge (Turns : Wide_Real) return Wide_Real is
         (Wide_Real (Rotary)
@@ -1791,11 +1832,14 @@ package body Model_Runner.Kernels is
             Exponent : constant Wide_Real :=
               -2.0 * Wide_Real (Pair) / Wide_Real (Rotary);
 
+            Where : constant Natural :=
+              (if Dealt then Part_Of (Pair, Sections, Place) else Position);
+
             Extended : constant Wide_Real :=
               (if Divided
-               then Wide_Real (Position) * N.Power (Base, Exponent)
+               then Wide_Real (Where) * N.Power (Base, Exponent)
                     / Wide_Real (Factors (Factors'First + Pair))
-               else Wide_Real (Position) * N.Power (Base, Exponent));
+               else Wide_Real (Where) * N.Power (Base, Exponent));
             Between  : constant Wide_Real := Scaling.Frequency * Extended;
 
             Mix : constant Wide_Real :=
@@ -1833,7 +1877,9 @@ package body Model_Runner.Kernels is
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved;
-      Backwards       : Boolean := False)
+      Backwards       : Boolean := False;
+      Sections        : Rotary_Sections := No_Sections;
+      Place           : Rotary_Place := (others => 0))
    is
       --  How many pairs there are, how many of them are tabulated at once,
       --  and where the run being tabulated begins. What goes into the table
@@ -1893,7 +1939,8 @@ package body Model_Runner.Kernels is
          begin
             Rotary_Table
               (Rotary, Position, Base, Scaling, Factors, Backwards,
-               First_Pair => At_Pair, Cosines => Cosines, Sines => Sines);
+               First_Pair => At_Pair, Cosines => Cosines, Sines => Sines,
+               Sections => Sections, Place => Place);
 
             for Head in 0 .. Heads - 1 loop
                declare
@@ -1992,13 +2039,15 @@ package body Model_Runner.Kernels is
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved;
-      Backwards       : Boolean := False)
+      Backwards       : Boolean := False;
+      Sections        : Rotary_Sections := No_Sections;
+      Place           : Rotary_Place := (others => 0))
    is
       Nothing : Real_Array (1 .. 0);
    begin
       Apply_Rotary_Pair
         (Vector, Heads, Nothing, 0, Head_Size, Rotary, Position, Base,
-         Scaling, Factors, Pairing, Backwards);
+         Scaling, Factors, Pairing, Backwards, Sections, Place);
    end Apply_Rotary;
 
    -----------------

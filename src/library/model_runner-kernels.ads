@@ -525,6 +525,47 @@ package Model_Runner.Kernels is
    --  carries them. A model that does not is every element one.
    No_Factors : constant Real_Array (1 .. 0) := [others => 0.0];
 
+   --  A position in three parts, for a rotation that turns some pairs by
+   --  where a token stands in time, some by its row and some by its
+   --  column: the multimodal rotation of the Qwen-VL family, whose text
+   --  tokens have the three equal and whose picture rows do not. A pair
+   --  turns by one of the three; which one, the sections say.
+   type Rotary_Place is record
+      T, H, W : Natural := 0;
+   end record;
+
+   --  The same position in every part, which is every text token.
+   --
+   --  @param Position The position.
+   --  @return The place with the three parts equal to it.
+   function Everywhere (Position : Natural) return Rotary_Place
+   is ((T => Position, H => Position, W => Position));
+
+   --  How the pairs of a head are dealt among the three parts: T pairs to
+   --  time, H to the row, W to the column, E to a fourth part that turns
+   --  by time here, dealt round in that order until the pairs run out.
+   --  Interleaved deals them one at a time -- time, row, column, time,
+   --  row, column ... -- for as many rounds as each part has, which is the
+   --  Qwen3-VL and Qwen3.5 arrangement; not interleaved deals them in
+   --  runs, the Qwen2-VL one. All zero is no dealing at all: every pair
+   --  turns by time, which is the ordinary rotation.
+   type Rotary_Sections is record
+      T, H, W, E  : Natural := 0;
+      Interleaved : Boolean := False;
+   end record;
+
+   No_Sections : constant Rotary_Sections := (others => <>);
+
+   --  Which part a pair turns by, under the sections.
+   --
+   --  @param Pair The pair, from zero.
+   --  @param Sections How the pairs are dealt.
+   --  @param Place The position in its three parts.
+   --  @return The part's position.
+   function Part_Of
+     (Pair : Element_Count; Sections : Rotary_Sections; Place : Rotary_Place)
+      return Natural;
+
    --  The cosines and the sines a position turns by, tabulated.
    --
    --  What Apply_Rotary_Pair computes before it touches a vector, exposed
@@ -550,6 +591,10 @@ package Model_Runner.Kernels is
    --    a time. Zero for the whole of it.
    --  @param Cosines Receives one cosine a pair, as many as it holds.
    --  @param Sines Receives one sine a pair, the same count.
+   --  @param Sections How the pairs are dealt among the parts of Place;
+   --    none for a rotation by Position alone.
+   --  @param Place The position in three parts, read where Sections deal
+   --    the pairs; Position otherwise.
    procedure Rotary_Table
      (Rotary     : Element_Count;
       Position   : Natural;
@@ -559,7 +604,9 @@ package Model_Runner.Kernels is
       Backwards  : Boolean := False;
       First_Pair : Element_Count := 0;
       Cosines    : out Wide_Real_Array;
-      Sines      : out Wide_Real_Array);
+      Sines      : out Wide_Real_Array;
+      Sections   : Rotary_Sections := No_Sections;
+      Place      : Rotary_Place := (others => 0));
 
    --  Two vectors rotated at one position, by one table of angles.
    --
@@ -586,6 +633,10 @@ package Model_Runner.Kernels is
    --  @param Factors A frequency divisor a pair, where the file carries one.
    --  @param Pairing Whether a pair is adjacent or half a head apart.
    --  @param Backwards Whether to turn the other way.
+   --  @param Sections How the pairs are dealt among the parts of Place;
+   --    none for a rotation by Position alone.
+   --  @param Place The position in three parts, read where Sections deal
+   --    the pairs.
    procedure Apply_Rotary_Pair
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -598,7 +649,9 @@ package Model_Runner.Kernels is
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved;
-      Backwards       : Boolean := False);
+      Backwards       : Boolean := False;
+      Sections        : Rotary_Sections := No_Sections;
+      Place           : Rotary_Place := (others => 0));
 
    --  Rotary positional encoding, in place.
    --
@@ -625,6 +678,10 @@ package Model_Runner.Kernels is
    --    round. A context that drops its oldest tokens and slides the rest
    --    down needs exactly that, and without it the keys would describe
    --    positions the text no longer has.
+   --  @param Sections How the pairs are dealt among the parts of Place;
+   --    none for a rotation by Position alone.
+   --  @param Place The position in three parts, read where Sections deal
+   --    the pairs.
    procedure Apply_Rotary
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -635,7 +692,9 @@ package Model_Runner.Kernels is
       Scaling         : Rotary_Scaling := No_Scaling;
       Factors         : Real_Array := No_Factors;
       Pairing         : Rotary_Pairing := Interleaved;
-      Backwards       : Boolean := False);
+      Backwards       : Boolean := False;
+      Sections        : Rotary_Sections := No_Sections;
+      Place           : Rotary_Place := (others => 0));
 
    --  Report whether every element is finite.
    --

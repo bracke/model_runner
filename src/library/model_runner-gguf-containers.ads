@@ -276,6 +276,20 @@ package Model_Runner.GGUF.Containers is
       Value  : out Long_Long_Integer;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Read one element of a boolean array.
+   --
+   --  @param Item Container to inspect.
+   --  @param Key Key to read.
+   --  @param Index Element position.
+   --  @param Value Element value; False on failure.
+   --  @param Status Success or a GGUF metadata diagnostic.
+   procedure Get_Boolean_Element
+     (Item   : Container;
+      Key    : String;
+      Index  : Positive;
+      Value  : out Boolean;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Read one element of a floating-point array.
    --
    --  @param Item Container to inspect.

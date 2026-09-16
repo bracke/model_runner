@@ -3,13 +3,22 @@
 --  What a multimodal model ships beside its text weights is a second file,
 --  the projector -- `mmproj` in llama.cpp's naming -- holding an image
 --  encoder and the small network that maps its output into the text
---  model's embedding width. The one this build carries is Gemma 3's:
---  SigLIP, a vision transformer of twenty-seven pre-normalized blocks over
---  the fourteen-pixel patches of an 896-pixel square, its 4096 patch
---  states pooled four by four to 256, each normalized and projected to the
---  text width. Those 256 rows stand in the prompt where the template wrote
---  the picture, one behind each <image_soft_token>, and the text model
---  reads them as it reads any embedding row.
+--  model's embedding width. This build carries two. Gemma 3's: SigLIP, a
+--  vision transformer of twenty-seven pre-normalized blocks over the
+--  fourteen-pixel patches of an 896-pixel square, its 4096 patch states
+--  pooled four by four to 256, each normalized and projected to the text
+--  width. Those 256 rows stand in the prompt where the template wrote the
+--  picture, one behind each <image_soft_token>, and the text model reads
+--  them as it reads any embedding row. And Qwen3.5's, the Qwen3-VL
+--  encoder: a picture kept at its own shape, its sides rounded to
+--  multiples of thirty-two pixels, cut into sixteen-pixel patches walked
+--  two by two so that a window's four patches lie together; a learned
+--  position grid of forty-eight a side interpolated to the picture's;
+--  twelve blocks whose queries and keys turn by the patch's row and
+--  column -- half the pairs by each -- and attend over the whole; the
+--  four patches of a window then joined into one row and projected in
+--  two steps to the text width. A picture becomes as many rows as it has
+--  windows, which the text model places by row and column too.
 --
 --  Every product is the text model's own kernels over the projector's
 --  tensors as they lie in the mapped file, in chunks of tokens sized for
@@ -59,16 +68,33 @@ package Model_Runner.Vision is
    function Is_Ready (Item : Encoder) return Boolean;
 
    --  The side of the square a picture is resampled to: 896 for Gemma 3.
+   --  For an encoder that keeps a picture's shape, the longest side a
+   --  picture is held to.
    --
    --  @param Item Open encoder.
    --  @return Pixels a side.
    function Image_Size (Item : Encoder) return Positive;
 
-   --  Rows one picture becomes: 256 for Gemma 3.
+   --  Whether every picture becomes the same number of rows -- Gemma 3's
+   --  256 -- or a number its own shape decides, as a Qwen picture's is.
+   --
+   --  @param Item Open encoder.
+   --  @return True when Rows_Per_Picture is every picture's count.
+   function Fixed_Rows (Item : Encoder) return Boolean;
+
+   --  Rows one picture becomes: 256 for Gemma 3. For an encoder whose
+   --  count a picture's shape decides, the most a picture may become.
    --
    --  @param Item Open encoder.
    --  @return Rows a picture.
    function Rows_Per_Picture (Item : Encoder) return Positive;
+
+   --  Whether the text model reads a picture's rows as a grid, each row
+   --  turned by its own row and column: Qwen3.5 does, Gemma 3 does not.
+   --
+   --  @param Item Open encoder.
+   --  @return True when the rows carry a place each.
+   function Placed_Rows (Item : Encoder) return Boolean;
 
    --  Width of each row, which is the text model's embedding width.
    --
@@ -76,7 +102,8 @@ package Model_Runner.Vision is
    --  @return Elements a row.
    function Row_Width (Item : Encoder) return Positive;
 
-   --  The projector's kind, as the file names it: "gemma3".
+   --  The projector's kind, as the file names it: "gemma3" or
+   --  "qwen3vl_merger".
    --
    --  @param Item Open encoder.
    --  @return The projector type.
@@ -84,13 +111,19 @@ package Model_Runner.Vision is
 
    --  Encode a picture.
    --
-   --  The picture is resampled to Image_Size square, normalized as the
-   --  file says, cut into patches, run through the encoder and the
-   --  projector, and comes back as Rows_Per_Picture rows of Row_Width,
-   --  laid end to end and indexed from 0, which the caller frees.
+   --  The picture is resampled to Image_Size square -- or, for an encoder
+   --  that keeps its shape, to that shape rounded as the encoder needs and
+   --  held within its bounds -- normalized as the file says, cut into
+   --  patches, run through the encoder and the projector, and comes back
+   --  as rows of Row_Width, laid end to end and indexed from 0, which the
+   --  caller frees: Rows_Per_Picture of them where the count is fixed,
+   --  and Grid_Rows by Grid_Columns of them otherwise, in row-major
+   --  order.
    --
    --  @param Item Open encoder.
    --  @param Picture The picture, any size.
+   --  @param Grid_Rows Receives how many rows of rows the picture became.
+   --  @param Grid_Columns Receives how many rows each has.
    --  @param Team The pool the products run on -- the run's own, so that
    --    its workers do this rather than sit beside a second pool doing it
    --    -- or null to run on the calling task alone. Where the device
@@ -106,6 +139,8 @@ package Model_Runner.Vision is
       Picture : Model_Runner.Images.Raster;
       Team    : Model_Runner.Backend.CPU.Pool_Reference;
       Rows    : out Model_Runner.Tensors.Real_Array_Access;
+      Grid_Rows    : out Natural;
+      Grid_Columns : out Natural;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Status  : out Model_Runner.Errors.Error_Info);
 
@@ -121,6 +156,11 @@ private
       Norm_2_Weight, Norm_2_Bias : T.Real_Array_Access := null;
       Query, Key, Value, Output  : T.View := T.Empty_View;
       Query_Bias, Key_Bias, Value_Bias, Output_Bias : T.Real_Array_Access := null;
+
+      --  The three projections as one, where the file fuses them: rows of
+      --  three times the width, queries first.
+      Fused      : T.View := T.Empty_View;
+      Fused_Bias : T.Real_Array_Access := null;
       Feed_In, Feed_Out : T.View := T.Empty_View;
       Feed_In_Bias, Feed_Out_Bias : T.Real_Array_Access := null;
    end record;
@@ -165,6 +205,21 @@ private
       --  rows for a device to read.
       Projection_Rows : T.Real_Array_Access := null;
       Projection      : T.View := T.Empty_View;
+
+      --  What the Qwen encoder has that Gemma's has not: the patches
+      --  walked in windows of Merge a side, whose rows are joined and
+      --  projected in two steps; a position grid of Grid a side; the
+      --  patch weights of the two temporal frames summed once, and a view
+      --  over the sum for a device to read; and the bounds on how many
+      --  rows a picture may become.
+      Merge         : Positive := 2;
+      Grid          : Positive := 48;
+      Patch_Sum     : T.Real_Array_Access := null;
+      Patch_Both    : T.View := T.Empty_View;
+      Merge_In, Merge_Out : T.View := T.Empty_View;
+      Merge_In_Bias, Merge_Out_Bias : T.Real_Array_Access := null;
+      Least_Rows    : Positive := 64;
+      Most_Rows     : Positive := 4096;
    end record;
 
 end Model_Runner.Vision;

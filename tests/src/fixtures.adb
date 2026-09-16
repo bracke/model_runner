@@ -234,6 +234,15 @@ package body Fixtures is
       Put (Item.Metadata, B.Put_F32 (Value));
    end Float_Element;
 
+   ------------------
+   -- Bool_Element --
+   ------------------
+
+   procedure Bool_Element (Item : in out Builder; Value : Boolean) is
+   begin
+      Put (Item.Metadata, [1 => (if Value then 1 else 0)]);
+   end Bool_Element;
+
    ----------------
    -- End_Array --
    ----------------

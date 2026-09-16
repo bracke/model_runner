@@ -899,10 +899,18 @@ package body Model_Runner.Images is
      (Source : Raster;
       Width  : Positive;
       Height : Positive;
-      Result : out Raster)
+      Result : out Raster;
+      Filter : Resample_Filter := Triangle)
    is
-      type Weight is digits 6;
+      --  How far either side of its centre a filter reaches, in source
+      --  pixels of a picture not being shrunk: one for the triangle, two
+      --  for the cubic.
+      Span : constant Positive := (if Filter = Cubic then 2 else 1);
+      type Weight is digits 15;
       type Weight_Array is array (Natural range <>) of Weight;
+
+      --  The cubic's shape parameter, PIL's.
+      A : constant Weight := -0.5;
 
       --  The filter's weights for one output position along an axis of
       --  Source_Size mapped to Target_Size: a triangle one pixel wide,
@@ -920,7 +928,7 @@ package body Model_Runner.Images is
          Scale   : constant Weight :=
            Weight (Source_Size) / Weight (Target_Size);
          Stretch : constant Weight := Weight'Max (1.0, Scale);
-         Support : constant Weight := Stretch;
+         Support : constant Weight := Stretch * Weight (Span);
          Centre  : constant Weight := (Weight (Position) + 0.5) * Scale;
          Low  : constant Integer :=
            Integer'Max (0, Integer (Weight'Floor (Centre - Support + 0.5)));
@@ -936,7 +944,18 @@ package body Model_Runner.Images is
                Distance : constant Weight :=
                  abs ((Weight (Tap) - Centre + 0.5) / Stretch);
                W : constant Weight :=
-                 (if Distance < 1.0 then 1.0 - Distance else 0.0);
+                 (case Filter is
+                     when Triangle =>
+                       (if Distance < 1.0 then 1.0 - Distance else 0.0),
+                     when Cubic =>
+                       --  PIL's cubic, a = -0.5.
+                       (if Distance < 1.0
+                        then ((A + 2.0) * Distance - (A + 3.0))
+                             * Distance * Distance + 1.0
+                        elsif Distance < 2.0
+                        then (((Distance - 5.0) * Distance + 8.0) * Distance
+                              - 4.0) * A
+                        else 0.0));
             begin
                exit when Count >= Taps'Length;
                Taps (Taps'First + Count) := W;
@@ -951,9 +970,43 @@ package body Model_Runner.Images is
          end if;
       end Weights_For;
 
+      --  PIL's arithmetic, to the bit: each weight becomes a whole number
+      --  of 2 ** 22nds, rounded away from zero, a pixel is the sum of
+      --  those times the bytes plus half a unit, shifted down and clipped
+      --  to a byte -- after each pass. In floating point a pixel came out
+      --  a level from the reference's here and there, and the encoder
+      --  behind it turned a level into rows a third apart.
+      Precision : constant := 2 ** 22;
+
+      type Fixed_Array is array (Natural range <>) of Long_Long_Integer;
+
+      procedure Fix (Taps : Weight_Array; Count : Natural; Into : out Fixed_Array)
+      is
+      begin
+         for Index in 0 .. Count - 1 loop
+            declare
+               Scaled : constant Weight :=
+                 Taps (Taps'First + Index) * Weight (Precision);
+            begin
+               Into (Into'First + Index) :=
+                 Long_Long_Integer
+                   (if Scaled < 0.0 then Weight'Ceiling (Scaled - 0.5)
+                    else Weight'Floor (Scaled + 0.5));
+            end;
+         end loop;
+      end Fix;
+
+      function Clipped (Sum : Long_Long_Integer) return Natural
+      is (Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (255,
+            (Sum + Precision / 2) / Precision
+            - (if Sum + Precision / 2 < 0
+                 and then (Sum + Precision / 2) mod Precision /= 0
+               then 1 else 0)))));
+
       Max_Taps : constant Natural :=
-        2 * (Natural'Max (1, Natural'Max (Source.Width / Width,
-                                          Source.Height / Height)) + 2);
+        2 * Span
+        * (Natural'Max (1, Natural'Max (Source.Width / Width,
+                                        Source.Height / Height)) + 2);
    begin
       Result := (others => <>);
       if Source.Pixels = null or else Source.Width = 0
@@ -968,8 +1021,8 @@ package body Model_Runner.Images is
       end if;
 
       declare
-         --  The horizontal pass, kept in floating point: Source.Height
-         --  rows of Width pixels.
+         --  The horizontal pass: Source.Height rows of Width pixels,
+         --  each a byte's worth, as PIL keeps them between its passes.
          type Row_Values is array (Natural range <>) of Weight;
          type Row_Values_Access is access Row_Values;
          procedure Free is new Ada.Unchecked_Deallocation
@@ -978,24 +1031,27 @@ package body Model_Runner.Images is
          Across : Row_Values_Access :=
            new Row_Values (0 .. 3 * Width * Source.Height - 1);
          Taps   : Weight_Array (0 .. Max_Taps - 1);
+         Fixed  : Fixed_Array (0 .. Max_Taps - 1);
          First, Count : Natural;
       begin
          for X in 0 .. Width - 1 loop
             Weights_For (X, Source.Width, Width, First, Taps, Count);
+            Fix (Taps, Count, Fixed);
             for Y in 0 .. Source.Height - 1 loop
                for C in 0 .. 2 loop
                   declare
-                     Sum : Weight := 0.0;
+                     Sum : Long_Long_Integer := 0;
                   begin
                      for Tap in 0 .. Count - 1 loop
-                        Sum := Sum + Taps (Tap)
-                          * Weight (Source.Pixels
-                                      (3 * (B.Byte_Count (Y)
-                                            * B.Byte_Count (Source.Width)
-                                            + B.Byte_Count (First + Tap))
-                                       + B.Byte_Count (C)));
+                        Sum := Sum + Fixed (Tap)
+                          * Long_Long_Integer
+                              (Source.Pixels
+                                 (3 * (B.Byte_Count (Y)
+                                       * B.Byte_Count (Source.Width)
+                                       + B.Byte_Count (First + Tap))
+                                  + B.Byte_Count (C)));
                      end loop;
-                     Across (3 * (Y * Width + X) + C) := Sum;
+                     Across (3 * (Y * Width + X) + C) := Weight (Clipped (Sum));
                   end;
                end loop;
             end loop;
@@ -1003,20 +1059,21 @@ package body Model_Runner.Images is
 
          for Y in 0 .. Height - 1 loop
             Weights_For (Y, Source.Height, Height, First, Taps, Count);
+            Fix (Taps, Count, Fixed);
             for X in 0 .. Width - 1 loop
                for C in 0 .. 2 loop
                   declare
-                     Sum : Weight := 0.0;
+                     Sum : Long_Long_Integer := 0;
                   begin
                      for Tap in 0 .. Count - 1 loop
-                        Sum := Sum + Taps (Tap)
-                          * Across (3 * ((First + Tap) * Width + X) + C);
+                        Sum := Sum + Fixed (Tap)
+                          * Long_Long_Integer
+                              (Across (3 * ((First + Tap) * Width + X) + C));
                      end loop;
                      Result.Pixels
                        (3 * (B.Byte_Count (Y) * B.Byte_Count (Width)
                              + B.Byte_Count (X)) + B.Byte_Count (C)) :=
-                       B.Byte (Integer'Max (0, Integer'Min (255,
-                                 Integer (Weight'Rounding (Sum)))));
+                       B.Byte (Clipped (Sum));
                   end;
                end loop;
             end loop;

@@ -678,21 +678,41 @@ package body Model_Runner.Generation is
 
             if Marked > 0 then
                declare
-                  Extra  : constant Natural :=
-                    Marked * (Pictures.Per_Picture
-                              + (if Pictures.Closer /= Vocab.No_Token
-                                 then 1 else 0));
-                  Opened : constant Token_Buffer :=
+                  --  The rows the k-th marker's picture has: its own
+                  --  count where the set gives one a picture, else the
+                  --  set's for all. A crop's markers count with their
+                  --  picture's, every tile Per_Picture.
+                  function Rows_Of (Which : Positive) return Natural
+                  is (if Pictures.Counts /= null
+                        and then Which in Pictures.Counts.all'Range
+                      then Pictures.Counts.all (Which)
+                      else Pictures.Per_Picture);
+
+                  Extra  : Natural := 0;
+                  Opened : Token_Buffer;
+                  Filled : Natural := 0;
+                  Which  : Natural := 0;
+               begin
+                  for Index in 1 .. Marked loop
+                     Extra := Extra + Rows_Of (Index)
+                       + (if Pictures.Closer /= Vocab.No_Token then 1 else 0);
+                  end loop;
+                  Opened :=
                     new Vocab.Token_Array
                       (1 .. Natural'Max (Tokens.all'Length,
                                          Prompt_Count + Extra));
-                  Filled : Natural := 0;
-               begin
+
                   for Index in 1 .. Prompt_Count loop
-                     Filled := Filled + 1;
-                     Opened.all (Filled) := Tokens.all (Index);
-                     if Tokens.all (Index) = Pictures.Marker then
-                        for Row in 1 .. Pictures.Per_Picture loop
+                     if Tokens.all (Index) /= Pictures.Marker then
+                        Filled := Filled + 1;
+                        Opened.all (Filled) := Tokens.all (Index);
+                     else
+                        Which := Which + 1;
+                        if Pictures.Keep_Marker then
+                           Filled := Filled + 1;
+                           Opened.all (Filled) := Tokens.all (Index);
+                        end if;
+                        for Row in 1 .. Rows_Of (Which) loop
                            Filled := Filled + 1;
                            Opened.all (Filled) := Pictures.Soft;
                         end loop;
@@ -840,7 +860,8 @@ package body Model_Runner.Generation is
                end if;
             end loop;
             return (Token => Pictures.Soft, Rows => Pictures.Rows,
-                    First => Before);
+                    First => Before, Places => Pictures.Places,
+                    Causal => Pictures.Causal_Rows);
          end Given_Before;
       begin
          Prefill_Loop :

@@ -265,6 +265,11 @@ package body Tests.GGUF_Cases is
       Fixtures.Float_Element (Builder, 2.25);
       Fixtures.End_Array (Builder);
 
+      Fixtures.Begin_Array (Builder, "fixture.flags", G.Value_Bool, 2);
+      Fixtures.Bool_Element (Builder, False);
+      Fixtures.Bool_Element (Builder, True);
+      Fixtures.End_Array (Builder);
+
       Fixtures.Add_Tensor
         (Builder, "token_embd.weight", [4], G.Type_F32,
          Fixtures.Encode_F32 (Fixtures.Sequence (4, 1)));
@@ -426,6 +431,26 @@ package body Tests.GGUF_Cases is
       Refuses ("an unsigned element too wide to represent",
                E.GGUF_Metadata_Out_Of_Range);
       Assert (Number = 0, "a refused wide element did not read zero");
+
+      --  A boolean element.
+      declare
+         Flag : Boolean;
+      begin
+         Containers.Get_Boolean_Element (Item, "fixture.flags", 2, Flag, Status);
+         Assert (E.Is_Ok (Status) and then Flag,
+                 "the boolean element that is there was not read");
+         Containers.Get_Boolean_Element (Item, "fixture.flags", 1, Flag, Status);
+         Assert (E.Is_Ok (Status) and then not Flag,
+                 "a false boolean element read true");
+         Containers.Get_Boolean_Element (Item, "fixture.flags", 3, Flag, Status);
+         Refuses ("boolean element past the end", E.GGUF_Metadata_Out_Of_Range);
+         Assert (not Flag, "a refused boolean element did not read false");
+         Containers.Get_Boolean_Element (Item, "fixture.ints", 1, Flag, Status);
+         Refuses ("boolean element of an integer array",
+                  E.GGUF_Metadata_Type_Mismatch);
+         Containers.Get_Boolean_Element (Item, "fixture.absent", 1, Flag, Status);
+         Refuses ("absent boolean array", E.GGUF_Missing_Metadata_Key);
+      end;
 
       --  A float element.
       Containers.Get_Float_Element (Item, "fixture.absent", 1, Real, Status);

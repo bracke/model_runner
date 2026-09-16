@@ -319,6 +319,12 @@ package Tiny_Model is
    --    which the device's attention kernel keeps no room -- and which no
    --    fixture had until the device answered every Gemma in nonsense
    --    while every fixture agreed with the processor to the bit.
+   --  @param Sections State, for a Qwen35 fixture, that a position has
+   --    three parts and how the head's pairs are dealt among them:
+   --    qwen35.rope.dimension_sections of [1, 1, 0, 0], one pair by time
+   --    and one by the row. A text token has the three equal and reads
+   --    the same; a picture's rows do not, and only such a fixture can say
+   --    whether the engine turns them by their own row and column.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -342,6 +348,7 @@ package Tiny_Model is
       Stretch        : Rope_Stretch := Plain;
       Rope_Table     : Boolean := False;
       Apart_Widths   : Boolean := False;
-      Head_Factor   : Positive := 1);
+      Head_Factor   : Positive := 1;
+      Sections       : Boolean := False);
 
 end Tiny_Model;

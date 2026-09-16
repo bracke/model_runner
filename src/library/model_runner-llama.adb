@@ -72,6 +72,7 @@ package body Model_Runner.Llama is
    pragma Suppress (Validity_Check);
 
    use type Model_Runner.Errors.Error_Code;
+   use type Model_Runner.Kernels.Rotary_Sections;
 
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Arithmetic.Checked;
@@ -208,6 +209,66 @@ package body Model_Runner.Llama is
 
    procedure Deallocate_History is
      new Ada.Unchecked_Deallocation (Token_History, Token_History_Access);
+   procedure Deallocate_Marks is
+     new Ada.Unchecked_Deallocation (Rope_Marks, Rope_Marks_Access);
+
+   --  The position a text token at Index turns by: what the mark before
+   --  it says comes next, or the index itself where the model marks
+   --  nothing. Past the last mark written, one more a position.
+   function Rope_Next (Item : Session; Index : Natural) return Natural
+   is (if Item.Marks = null or else Index = 0 then Index
+       elsif Index <= Item.Marked then Item.Marks.all (Index - 1).Next
+       elsif Item.Marked = 0 then Index
+       else Item.Marks.all (Item.Marked - 1).Next + (Index - Item.Marked));
+
+   --  What the position at Index turns by.
+   function Place_At (Item : Session; Index : Natural) return K.Rotary_Place;
+
+   function Turned_By
+     (Item : Session; Index : Natural) return Model_Runner.Kernels.Rotary_Place
+   is (Place_At (Item, Index));
+
+   function Place_At (Item : Session; Index : Natural) return K.Rotary_Place
+   is (if Item.Marks = null or else Index >= Item.Marked
+         or else Index > Item.Marks.all'Last
+       then K.Everywhere (Rope_Next (Item, Index))
+       else Item.Marks.all (Index).Place);
+
+   --  Write the mark for the position at Index: a text token's, or a
+   --  given row's from where it stands in its picture. Nothing for a
+   --  model that marks nothing.
+   procedure Set_Mark
+     (Item   : in out Session;
+      Index  : Natural;
+      Row    : Row_Place := (others => <>);
+      Is_Row : Boolean := False)
+   is
+   begin
+      if Item.Marks = null or else Index > Item.Marks.all'Last then
+         return;
+      end if;
+
+      declare
+         Text_At : constant Natural := Rope_Next (Item, Index);
+         Start   : constant Natural :=
+           (if not Is_Row or else Row.First or else Index = 0
+            then Text_At
+            else Item.Marks.all (Index - 1).Place.T);
+      begin
+         if Is_Row then
+            Item.Marks.all (Index) :=
+              (Place => (T => Start, H => Start + Row.Row, W => Start + Row.Column),
+               Next  => Start + Row.Advance);
+         else
+            Item.Marks.all (Index) :=
+              (Place => K.Everywhere (Text_At), Next => Text_At + 1);
+         end if;
+      end;
+
+      if Index >= Item.Marked then
+         Item.Marked := Index + 1;
+      end if;
+   end Set_Mark;
 
    ---------------------------------------------------------------------------
    --  Configuration
@@ -1140,6 +1201,40 @@ package body Model_Runner.Llama is
         (if Settings.Kind in Bert | Jina_Bert_V2 then 0
          elsif E.Is_Ok (Local) then Natural (Number)
          else Settings.Head_Size);
+
+      --  The three parts a Qwen3.5 position has, and how many pairs each
+      --  turns: stated as four counts, the fourth unused, and dealt
+      --  interleaved. A text token has the three parts equal, so a model
+      --  read without them rotates the same; they matter to a picture's
+      --  rows, which have a row and a column of their own.
+      if Settings.Kind in Qwen35 | Qwen35_MoE then
+         declare
+            Key    : constant String :=
+              Model_Key (Settings.Kind, "rope.dimension_sections");
+            Length : Natural := 0;
+            Count  : Long_Long_Integer;
+            Found  : E.Error_Info;
+         begin
+            Containers.Get_Array_Length
+              (Source, Key, Model_Runner.GGUF.Value_Int32, Length, Found);
+            if E.Is_Ok (Found) and then Length >= 3 then
+               for Part in 1 .. Natural'Min (4, Length) loop
+                  Containers.Get_Integer_Element (Source, Key, Part, Count, Found);
+                  exit when E.Is_Error (Found) or else Count < 0 or else Count > 4096;
+                  case Part is
+                     when 1 => Settings.Sections.T := Natural (Count);
+                     when 2 => Settings.Sections.H := Natural (Count);
+                     when 3 => Settings.Sections.W := Natural (Count);
+                     when others => Settings.Sections.E := Natural (Count);
+                  end case;
+               end loop;
+               Settings.Sections.Interleaved := True;
+               if E.Is_Error (Found) then
+                  Settings.Sections := K.No_Sections;
+               end if;
+            end if;
+         end;
+      end if;
 
       if Settings.Rotary > Settings.Head_Size
         or else Settings.Rotary mod 2 /= 0
@@ -8018,6 +8113,14 @@ package body Model_Runner.Llama is
 
       Spans : constant B.Byte_Count := Runs;
 
+      --  And after everything, for a model whose positions have three
+      --  parts, what each committed position turns by: four numbers of
+      --  eight bytes a position. A reader that finds them missing --
+      --  a snapshot from before they were written -- turns every
+      --  position by its index, which is what a snapshot from then held.
+      Marks : constant B.Byte_Count :=
+        (if Item.Marks = null then 0 else Held * 4 * 8);
+
       --  Ten numbers of eight bytes, then a token each, then two numbers a
       --  layer saying where its run begins and how many positions the layer
       --  holds room for, then the two caches at four bytes an element
@@ -8026,7 +8129,8 @@ package body Model_Runner.Llama is
         10 * 8 + Held * 8 + 2 * Layers * 8
         + Spans * KV_Width * 4
         + Spans * V_Width * 4
-        + States * 4;
+        + States * 4
+        + Marks;
 
       At_Byte : B.Byte_Count := 0;
 
@@ -8175,6 +8279,19 @@ package body Model_Runner.Llama is
                Put_Bits (N.Bits (Value));
             end loop;
          end;
+      end if;
+
+      if Item.Marks /= null then
+         for Index in 0 .. Item.Committed - 1 loop
+            declare
+               Mark : constant Rope_Mark := Item.Marks.all (Index);
+            begin
+               Put_Count (Mark.Place.T);
+               Put_Count (Mark.Place.H);
+               Put_Count (Mark.Place.W);
+               Put_Count (Mark.Next);
+            end;
+         end loop;
       end if;
    end Snapshot;
 
@@ -8526,6 +8643,40 @@ package body Model_Runner.Llama is
          end;
       end if;
       Item.Kept_Newest := Natural (Held);
+
+      --  What each position turns by, where the model has three parts
+      --  and the snapshot carries them; a snapshot from before they were
+      --  written leaves every position at its index, which is what it
+      --  held. A mark past the context is a corrupt one.
+      if not Trouble and then Item.Marks /= null then
+         Item.Marked := 0;
+         if From'Length >= At_Byte + B.Byte_Count (Held) * 4 * 8 then
+            for Index in 0 .. Natural (Held) - 1 loop
+               declare
+                  T : constant Interfaces.Unsigned_64 := Get;
+                  H : constant Interfaces.Unsigned_64 := Get;
+                  W : constant Interfaces.Unsigned_64 := Get;
+                  Next : constant Interfaces.Unsigned_64 := Get;
+                  Bound : constant Interfaces.Unsigned_64 :=
+                    Interfaces.Unsigned_64 (Item.Context) * 4;
+               begin
+                  exit when Trouble;
+                  if T > Bound or else H > Bound or else W > Bound
+                    or else Next > Bound
+                  then
+                     Refuse (E.Lifecycle_Cache_Unreadable, "a mark past the context");
+                     exit;
+                  end if;
+                  Item.Marks.all (Index) :=
+                    (Place => (T => Natural (T), H => Natural (H), W => Natural (W)),
+                     Next => Natural (Next));
+               end;
+            end loop;
+            if not Trouble then
+               Item.Marked := Natural (Held);
+            end if;
+         end if;
+      end if;
 
       if Trouble then
          --  Nothing half read is left where a conversation would be.
@@ -8955,6 +9106,10 @@ package body Model_Runner.Llama is
          end if;
          T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
          Item.History := new Token_History (0 .. Capacity - 1);
+         if Settings.Sections /= K.No_Sections then
+            Item.Marks := new Rope_Marks (0 .. Capacity - 1);
+            Item.Marked := 0;
+         end if;
 
          --  What a hybrid's layers keep and pass through: the gate beside
          --  the heads, a linear layer's rows on the way through, its
@@ -9195,6 +9350,10 @@ package body Model_Runner.Llama is
       end;
       T.Free (Item.Logit_Row);
 
+      if Item.Marks /= null then
+         Deallocate_Marks (Item.Marks);
+         Item.Marked := 0;
+      end if;
       if Item.History /= null then
          Deallocate_History (Item.History);
       end if;
@@ -9593,6 +9752,23 @@ package body Model_Runner.Llama is
            Item.History.all (Keep + Drop + Step);
       end loop;
 
+      --  And the marks, moved with the tokens and turned back by Drop
+      --  in every part, as the keys were.
+      if Item.Marks /= null then
+         for Step in 0 .. Moved - 1 loop
+            declare
+               Was : constant Rope_Mark := Item.Marks.all (Keep + Drop + Step);
+            begin
+               Item.Marks.all (Keep + Step) :=
+                 (Place => (T => Integer'Max (0, Was.Place.T - Drop),
+                            H => Integer'Max (0, Was.Place.H - Drop),
+                            W => Integer'Max (0, Was.Place.W - Drop)),
+                  Next  => Integer'Max (0, Was.Next - Drop));
+            end;
+         end loop;
+         Item.Marked := Natural'Min (Item.Marked, Keep + Moved);
+      end if;
+
       Item.Committed := Keep + Moved;
    end Shift;
 
@@ -9668,6 +9844,7 @@ package body Model_Runner.Llama is
       --  attention reads the committed length and every write past it is a
       --  write to a slot that will be written again before it is read.
       Item.Committed := Position;
+      Item.Marked := Natural'Min (Item.Marked, Position);
    end Rewind;
 
    procedure Keep_States
@@ -9744,6 +9921,7 @@ package body Model_Runner.Llama is
       --  something happened to write over them. Bytes.Wipe was written for
       --  this and its documentation said it was used on session reset; it
       --  was called by nothing.
+      Item.Marked := 0;
       if Item.History /= null then
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
       end if;
@@ -10505,7 +10683,9 @@ package body Model_Runner.Llama is
            (Item.Query.all, Heads, Item.Key_Row.all, KV_Heads, Head_Size,
             Element_Count (Settings.Rotary), Position,
             Turn_Base (Settings, Layer_Index), Turn_Scaling (Settings, Layer_Index),
-            Turns (Source), Settings.Pairing);
+            Turns (Source), Settings.Pairing,
+            Sections => Settings.Sections,
+            Place => K.Everywhere (Rope_Next (Item, Position)));
 
          for Offset in 0 .. KV_Width - 1 loop
             Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
@@ -10979,6 +11159,10 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
+      --  A text token, where the rotation's position has three parts:
+      --  what it turns by is one past the token before it.
+      Set_Mark (Item, Item.Committed);
+
       --  Where the token is, added to what the token is. GPT2 learns this
       --  instead of rotating, so a model with a position table has no
       --  rotation and a model with rotation has no table; the two are never
@@ -11098,7 +11282,9 @@ package body Model_Runner.Llama is
                        (Element_Count (Settings.Rotary), Item.Committed,
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                        Cosines => Cosines, Sines => Sines);
+                        Cosines => Cosines, Sines => Sines,
+                        Sections => Settings.Sections,
+                        Place => Place_At (Item, Item.Committed));
 
                      for Pair in 0 .. Pairs - 1 loop
                         Angles (Pair * 2) := Cosines (Pair);
@@ -11264,13 +11450,17 @@ package body Model_Runner.Llama is
                   Element_Count (Settings.Rotary), Item.Committed,
                   Turn_Base (Settings, Natural (Index)),
                   Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                  Settings.Pairing);
+                  Settings.Pairing,
+                  Sections => Settings.Sections,
+                  Place => Place_At (Item, Item.Committed));
                K.Apply_Rotary
                  (Item.Key_Row.all, KV_Heads, Head_Size,
                   Element_Count (Settings.Rotary), Item.Committed,
                   Turn_Base (Settings, Natural (Index)),
                   Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                  Settings.Pairing);
+                  Settings.Pairing,
+                  Sections => Settings.Sections,
+                  Place => Place_At (Item, Item.Committed));
 
                --  Write into the reserved slot. The slot is only readable as
                --  context once Committed is advanced, at the end of this call.
@@ -12190,6 +12380,7 @@ package body Model_Runner.Llama is
          Sees_To (Which) := Which;
       end loop;
       if Given.Rows /= null
+        and then not Given.Causal
         and then Given.Token /= Model_Runner.Tokenizer.No_Token
       then
          declare
@@ -12240,10 +12431,25 @@ package body Model_Runner.Llama is
                   else
                      Acts.all (Origin .. Origin + Width - 1) :=
                        Given.Rows.all (Row_At .. Row_At + Width - 1);
+
+                     --  Where the row stands in its picture, for a
+                     --  rotation whose positions have three parts; a row
+                     --  with no place given stands where a text token
+                     --  would.
+                     if Given.Places /= null
+                       and then Given.First + Taken in Given.Places.all'Range
+                     then
+                        Set_Mark
+                          (Held_By (Which).all, Natural (Sits_At (Which)),
+                           Given.Places.all (Given.First + Taken), True);
+                     else
+                        Set_Mark (Held_By (Which).all, Natural (Sits_At (Which)));
+                     end if;
                      Taken := Taken + 1;
                   end if;
                end;
             else
+               Set_Mark (Held_By (Which).all, Natural (Sits_At (Which)));
                T.Dequantize_Row
                  (Source.Embeddings, Element_Count (Token),
                   Acts.all (Origin .. Origin + Width - 1), Status);
@@ -12721,7 +12927,11 @@ package body Model_Runner.Llama is
                                  Natural (Sits_At (Which)),
                                  Turn_Base (Settings, Natural (Index)),
                                  Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                                 Cosines => Cosines, Sines => Sines);
+                                 Cosines => Cosines, Sines => Sines,
+                                 Sections => Settings.Sections,
+                                 Place =>
+                                   Place_At (Held_By (Which).all,
+                                             Natural (Sits_At (Which))));
 
                               for Pair in 0 .. Pairs - 1 loop
                                  Angles.all (Which * Pairs * 2 + Pair * 2) :=
@@ -13081,7 +13291,11 @@ package body Model_Runner.Llama is
                            Natural (Sits_At (Which)),
                            Turn_Base (Settings, Natural (Index)),
                            Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                           Settings.Pairing);
+                           Settings.Pairing,
+                           Sections => Settings.Sections,
+                           Place =>
+                             Place_At (Held_By (Which).all,
+                                       Natural (Sits_At (Which))));
                      end if;
 
                      if Item.Held = Eighth then

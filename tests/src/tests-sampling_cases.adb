@@ -1,3 +1,4 @@
+with Ada.Numerics.Generic_Elementary_Functions;
 with Fixtures;
 with AUnit.Assertions;
 
@@ -937,6 +938,64 @@ package body Tests.Sampling_Cases is
 
    --  The two rotary pairings rotate different elements.
    --
+   --  A position in three parts turns each pair by the part its section
+   --  names: with the two pairs of a head of four dealt one to time and
+   --  one to the row, interleaved, the first pair turns by the time and
+   --  the second by the row, at the frequency the pair's index gives
+   --  either way. A place with the three parts equal is the plain
+   --  rotation to the bit, which is every text token.
+   procedure Sections_Deal_The_Pairs
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package K renames Model_Runner.Kernels;
+      package Math is new Ada.Numerics.Generic_Elementary_Functions (N.Wide_Real);
+      Rotary : constant N.Element_Count := 4;
+      Dealt  : constant K.Rotary_Sections :=
+        (T => 1, H => 1, W => 0, E => 0, Interleaved => True);
+      Cosines, Sines, Plain_C, Plain_S : N.Wide_Real_Array (0 .. 1);
+      Base : constant N.Wide_Real := 10_000.0;
+      use type N.Wide_Real_Array;
+   begin
+      K.Rotary_Table
+        (Rotary, 0, Base, Cosines => Cosines, Sines => Sines,
+         Sections => Dealt, Place => (T => 2, H => 5, W => 9));
+      Assert (abs (Cosines (0) - Math.Cos (2.0)) < 1.0e-12
+              and then abs (Sines (0) - Math.Sin (2.0)) < 1.0e-12,
+              "the first pair did not turn by the time");
+      Assert (abs (Cosines (1) - Math.Cos (5.0 * Math."**" (Base, -0.5))) < 1.0e-12
+              and then abs (Sines (1) - Math.Sin (5.0 * Math."**" (Base, -0.5))) < 1.0e-12,
+              "the second pair did not turn by the row at its own frequency");
+
+      K.Rotary_Table (Rotary, 7, Base, Cosines => Plain_C, Sines => Plain_S);
+      K.Rotary_Table
+        (Rotary, 0, Base, Cosines => Cosines, Sines => Sines,
+         Sections => Dealt, Place => K.Everywhere (7));
+      Assert (Cosines = Plain_C and then Sines = Plain_S,
+              "a place with equal parts is not the plain rotation");
+
+      --  Every pair to time where nothing is dealt, whatever the place.
+      K.Rotary_Table
+        (Rotary, 7, Base, Cosines => Cosines, Sines => Sines,
+         Place => (T => 1, H => 2, W => 3));
+      Assert (Cosines = Plain_C and then Sines = Plain_S,
+              "an undealt place moved a pair");
+
+      --  The interleaved deal, at the sections Qwen3.5 states: pair 30
+      --  is time and 31 the row, being sector 30 and 31 of thirty-two.
+      declare
+         Q : constant K.Rotary_Sections :=
+           (T => 11, H => 11, W => 10, E => 0, Interleaved => True);
+         P : constant K.Rotary_Place := (T => 1, H => 2, W => 3);
+      begin
+         Assert (K.Part_Of (0, Q, P) = 1 and then K.Part_Of (1, Q, P) = 2
+                 and then K.Part_Of (2, Q, P) = 3 and then K.Part_Of (3, Q, P) = 1
+                 and then K.Part_Of (30, Q, P) = 1 and then K.Part_Of (31, Q, P) = 2
+                 and then K.Part_Of (32, Q, P) = 1,
+                 "the interleaved deal is not time, row, column, round");
+      end;
+   end Sections_Deal_The_Pairs;
+
    --  A head is rotated in pairs. Llama's weights are laid out for the pairs
    --  next to each other; Qwen2's are laid out for an element and the one
    --  half a head later. Both are the same rotation by the same angle, and
@@ -2845,6 +2904,10 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Rotary_Pairings_Differ'Access,
          "the two rotary pairings rotate different elements");
+      Register_Routine
+        (T, Sections_Deal_The_Pairs'Access,
+         "a position in three parts turns each pair by the part its section "
+         & "names, and equal parts are the plain rotation to the bit");
       Register_Routine
         (T, A_Team_Does_Not_Change_The_Token'Access,
          "a team does not change the token, at every worker count and "

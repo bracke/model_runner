@@ -66,9 +66,14 @@ package Model_Runner.Images is
       Result : out Raster;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The filter a picture is resampled with, the reference pipeline's:
+   --  the triangle -- bilinear, PIL's default -- or the cubic, PIL's
+   --  BICUBIC with a = -0.5, which the Qwen-VL processors resize with.
+   type Resample_Filter is (Triangle, Cubic);
+
    --  Resample a picture to a size, the way the reference pipeline does:
-   --  separably, with a triangle filter whose support is the shrink
-   --  factor where the picture is made smaller and one pixel where it is
+   --  separably, with a filter whose support is the shrink factor where
+   --  the picture is made smaller and the filter's own reach where it is
    --  made larger.
    --
    --  @param Source The picture.
@@ -76,11 +81,13 @@ package Model_Runner.Images is
    --  @param Height Wanted height.
    --  @param Result The resampled picture, or an empty raster when
    --    Source is empty or the allocation failed.
+   --  @param Filter The triangle or the cubic.
    procedure Resample
      (Source : Raster;
       Width  : Positive;
       Height : Positive;
-      Result : out Raster);
+      Result : out Raster;
+      Filter : Resample_Filter := Triangle);
 
    --  A rectangle of a picture, copied out.
    --
