@@ -832,7 +832,8 @@ package body Tests.Template_Cases is
       Same ("{{ 2 * (3 + 4) * 2 }}", "28", "a group in the middle");
       Same ("{{ (messages | length) * 10 + 1 }}", "21",
             "a length in a product");
-      Same ("{{ 'a' ~ 1 + 2 ~ 'b' }}", "a12b", "a tilde makes text of it all");
+      Same ("{{ 'a' ~ 1 + 2 ~ 'b' }}", "a12b",
+            "a tilde binds before a plus and makes text of it all");
       Same ("{{ (1 + 2) ~ 'b' }}", "3b", "a bracketed sum beside a tilde");
       Same ("{{ 7 / 2 }}", "render: TEMPLATE_UNSUPPORTED_CONSTRUCT /",
             "a division that does not come out whole");
@@ -1108,13 +1109,89 @@ package body Tests.Template_Cases is
             & "{{ 'a|b'.split('|')[1].upper() }}"
             & "{% for t in tools %}{{ t.function.parameters.properties"
             & ".op.enum[1] }}{{ t['function'].name }}{% endfor %}",
-            "cdu<b-calc", "an index after an index, a path or a cut");
+            "cdu<B-calc", "an index after an index, a path or a cut");
 
       --  A macro's body reads the names outside it and keeps its own
       --  assignments to itself, as the language scopes it.
       Same ("{% set x = 'o' %}{% macro m() %}{{ x }}{% set x = 'i' %}"
             & "{{ x }}{% endmacro %}{{ m() }}{{ x }}", "oio",
             "a macro reads outer names and its sets stay inside");
+
+      --  A number is a number: written, counted, measured, read out of a
+      --  schema or assigned, it adds where text runs together, and it is
+      --  not the text of itself.
+      Same ("{% set i = 1 %}{{ i + 1 }}{% set j = i %}{{ j + i }}"
+            & "{% set t = '1' %}{{ t + '1' }}{{ t ~ i }}"
+            & "{% if i == '1' %}!{% endif %}{% if i == 1 %}y{% endif %}"
+            & "{% if t == '1' %}z{% endif %}"
+            & "{% if i is number and t is not number %}n{% endif %}"
+            & "{% if i is string %}!{% endif %}{% if (i | string) is string %}s"
+            & "{% endif %}{{ messages | length + 1 }}{{ '7' | int + 1 }}",
+            "221111yzns48", "numbers kept apart from text");
+      Same ("{% for t in tools %}{{ t.function.parameters.properties.a"
+            & ".minimum + 1 }}{% endfor %}{% set l = [1, 2] %}{{ l[0] + l[1] }}"
+            & "{% for i in range(2) %}{{ i + 10 }}{% endfor %}"
+            & "{% for m in messages %}{{ loop.index + 100 }}{% endfor %}",
+            "131011101102103", "numbers read out, counted and looped");
+      Same ("{% set i = 1 %}{% set i = 'a' %}{{ i + '1' }}", "a1",
+            "a name reassigned text runs together");
+
+      --  The list filters, on lists written out and on the conversation,
+      --  a mapping written out with its methods, break and continue,
+      --  loop.length and loop.revindex, a filter block, and a call block
+      --  with caller(). Every one of these is crossed against jinja2.
+      Same ("{% set l = ['b', 'a', 'c', 'a'] %}{{ l | join(', ') }}|"
+            & "{{ l | sort | join }}|{{ l | sort(reverse=True) | join }}|"
+            & "{{ l | unique | join }}|{{ [3, 1, 2] | sort | join('-') }}|"
+            & "{{ l | select('equalto', 'a') | list | length }}|"
+            & "{{ l | reject('equalto', 'a') | join }}|"
+            & "{{ 'abc' | list | join('.') }}|"
+            & "{{ ['B', 'a', 'C'] | sort | join }}"
+            & "{{ ['B', 'a', 'C'] | sort(case_sensitive=True) | join }}",
+            "b, a, c, a|aabc|cbaa|bac|1-2-3|2|bc|a.b.c|aBCBCa",
+            "the list filters on a list written out");
+      Same ("{{ messages | map(attribute='role') | join(',') }}|"
+            & "{{ messages | selectattr('role', 'equalto', 'user')"
+            & " | map(attribute='content') | join('+') }}|"
+            & "{{ messages | rejectattr('role', 'equalto', 'user') | list"
+            & " | length }}|{{ (messages | first).role }}|"
+            & "{{ (messages | last)['role'] }}|"
+            & "{{ messages | selectattr('role', 'in', ['user', 'tool'])"
+            & " | list | length }}|{{ messages | last | tojson }}",
+            "user,assistant,tool|<tool_response>x|2|user|tool|2|"
+            & "{""role"": ""tool"", ""content"": ""5""}",
+            "the list filters on the conversation");
+      Same ("{% set d = {'a': 1, 'b': 'x', 'c': [1, 2], 'd': {'e': true}} %}"
+            & "{{ d }}|{{ d | tojson }}|{{ d.a + 1 }}|{{ d.keys() | join(',') }}"
+            & "|{{ d.values() | length }}|{{ d.get('b') }}{{ d.get('z', 'n') }}"
+            & "|{% for k, v in d | dictsort %}{{ k }};{% endfor %}"
+            & "|{% for k, v in {'z': 1, 'a': 2} | dictsort(by='value',"
+            & " reverse=True) %}{{ k }}{% endfor %}"
+            & "|{% for a, b in [[1, 2], [3, 4]] %}{{ a + b }}{% endfor %}",
+            "{'a': 1, 'b': 'x', 'c': [1, 2], 'd': {'e': True}}|"
+            & "{""a"": 1, ""b"": ""x"", ""c"": [1, 2], ""d"": {""e"": true}}"
+            & "|2|a,b,c,d|4|xn|a;b;c;d;|az|37",
+            "a mapping written out, its methods and pairs unpacked");
+      Same ("{% for i in range(5) %}{% if i == 1 %}{% continue %}{% endif %}"
+            & "{% if i == 3 %}{% break %}{% endif %}{{ i }}{% endfor %}|"
+            & "{% for m in messages %}{{ loop.length }}{{ loop.revindex }}"
+            & "{{ loop.revindex0 }}{% endfor %}|"
+            & "{% for i in range(2, 9, 3) %}{{ loop.revindex }}{% endfor %}|"
+            & "{% filter upper %}ab{{ 'c' }}{% endfilter %}",
+            "02|332321310|321|ABC",
+            "break, continue, loop.length, loop.revindex and a filter block");
+      Same ("{% macro box(t) %}<{{ t }}>{{ caller() }}</{{ t }}>{% endmacro %}"
+            & "{% call box('b') %}in {{ 1 + 1 }}{% endcall %}"
+            & "{% call box('x') %}{% call box('n') %}deep{% endcall %}"
+            & "{% endcall %}", "<b>in 2</b><x><n>deep</n></x>",
+            "a call block and caller(), nested");
+      Same ("{{ 'a\nb\n\nc' | indent(2) }}|{{ 'ab' | indent(1, first=True) }}"
+            & "|{{ 'a|b'.split('|')[1].upper() }}{{ 'Ab'.lower() }}"
+            & "|{% set l = ['a', none, true] %}{{ l | reject('none')"
+            & " | join(',') }}|{{ True }}{{ None }}",
+            "a" & Character'Val (10) & "  b" & Character'Val (10)
+            & Character'Val (10) & "  c| ab|Bab|a,True|TrueNone",
+            "indent, the case methods, null read out, capitalised words");
 
       --  A loop over a name never assigned is refused as the output
       --  refuses it, and a field a turn has not got is nothing.
@@ -2159,14 +2236,16 @@ package body Tests.Template_Cases is
       Inside_Answer : aliased constant String := "[n!][y!]";
 
       --  Order, and the two words a template writes to tell a flag set to
-      --  false from one never set at all.
+      --  false from one never set at all. A length is a number and not
+      --  text, as the language has it.
       Order_Source : aliased constant String :=
         "{%- set n = messages|length %}"
         & "[{% if n > 1 %}a{% endif %}{% if n >= 2 %}b{% endif %}"
         & "{% if n < 2 %}c{% endif %}{% if n <= 2 %}d{% endif %}"
         & "{% if missing is defined %}e{% endif %}"
-        & "{% if n is string %}f{% endif %}]";
-      Order_Answer : aliased constant String := "[abdf]";
+        & "{% if n is string %}f{% endif %}{% if n | string is string %}g"
+        & "{% endif %}]";
+      Order_Answer : aliased constant String := "[abdg]";
 
       --  A reply that carries its reasoning in a marked block, taken apart
       --  the way the template that writes such replies takes it apart: four

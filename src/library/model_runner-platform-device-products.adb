@@ -28,7 +28,6 @@ with Model_Runner.Shaders;
 --  is what that convention is for.
 package body Model_Runner.Platform.Device.Products is
 
-
    use type Interfaces.C.int;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;

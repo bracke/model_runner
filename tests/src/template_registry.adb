@@ -34,7 +34,7 @@ package body Template_Registry is
       return Room (1 .. Used);
    end Too_Many_Names;
 
-   Held : constant array (1 .. 47) of Example :=
+   Held : constant array (1 .. 53) of Example :=
      [(new String'("Literal text"),
        new String'("hello"),
        Works),
@@ -99,12 +99,12 @@ package body Template_Registry is
 
       (new String'("`\| first`, `\| last`, `\| min`"),
        new String'("{{ 'a-b'.split('-')|first }}{{ 'a-b'.split('-')|last }}"
-                   & "{{ [3, 1, 2] | min }}"),
+                   & "{{ [3, 1, 2] | min }}{{ (messages | first).role }}"
+                   & "{{ messages | last | tojson }}"),
        Works),
 
       (new String'("`.strip(S)`, `.lstrip(S)`, `.rstrip(S)`, `.split(S)`, "
-                   & "`.startswith(S)`, `.endswith(S)`, `.replace(A, B)`, "
-                   & "`.items()`"),
+                   & "`.startswith(S)`, `.endswith(S)`, `.replace(A, B)`"),
        new String'("{% set t = 'a|b|c' %}{% set m = 'a' %}"
                    & "{{ t.split('|')[0] }}{{ t.split('|')[-1] }}"
                    & "{{ t.split('|') | length }}"
@@ -256,11 +256,14 @@ package body Template_Registry is
 
       (new String'("`true`, `false`, `none`, decimal numbers"),
        new String'("{% if true and not false %}{{ 12 }}{% endif %}"
-                   & "{% set n = none %}"),
+                   & "{% set n = none %}{{ True }}{{ False }}{{ None }}"
+                   & "{% set i = 1 %}{{ i + 1 }}{% if i is number %}n{% endif %}"
+                   & "{% if i == '1' %}!{% endif %}"),
        Works),
 
       (new String'("`is defined`, `is none`, `is true`, `is false`, "
-                   & "`is string`, `is mapping`, `is iterable`, `is not ...`"),
+                   & "`is string`, `is number`, `is mapping`, `is iterable`, "
+                   & "`is not ...`"),
        new String'("{% if not tools is defined %}{% set tools = none %}"
                    & "{% endif %}{% if tools is none %}a{% endif %}"
                    & "{% if bos_token is not none %}b{% endif %}"
@@ -291,11 +294,57 @@ package body Template_Registry is
                    & "{% if messages | length != 0 %}n{% endif %}"),
        Works),
 
-      (new String'("`loop.first`, `loop.last`, `loop.index`, `loop.index0`"),
+      (new String'("`loop.first`, `loop.last`, `loop.index`, `loop.index0`, "
+                   & "`loop.length`, `loop.revindex`, `loop.revindex0`"),
        new String'("{% for message in messages %}"
                    & "{% if loop.first %}f{% endif %}"
                    & "{% if loop.last %}l{% endif %}"
-                   & "{{ loop.index }}{{ loop.index0 }}{% endfor %}"),
+                   & "{{ loop.index }}{{ loop.index0 }}{{ loop.length }}"
+                   & "{{ loop.revindex }}{{ loop.revindex0 }}{% endfor %}"),
+       Works),
+
+      (new String'("`{% break %}`, `{% continue %}`"),
+       new String'("{% for i in range(5) %}{% if i == 1 %}{% continue %}"
+                   & "{% endif %}{% if i == 3 %}{% break %}{% endif %}"
+                   & "{{ i }}{% endfor %}"),
+       Works),
+
+      (new String'("`{% filter NAME %} ... {% endfilter %}`"),
+       new String'("{% filter upper %}ab{{ 'c' }}{% endfilter %}"),
+       Works),
+
+      (new String'("`{% call name(a) %} ... {% endcall %}` and `caller()`"),
+       new String'("{% macro box(t) %}<{{ t }}>{{ caller() }}</{{ t }}>"
+                   & "{% endmacro %}{% call box('b') %}in{% endcall %}"),
+       Works),
+
+      (new String'("Mapping literals `{'a': 1}`, `.keys()`, `.values()`, "
+                   & "`.get(k, d)`"),
+       new String'("{% set d = {'a': 1, 'b': [1, 2]} %}{{ d }}{{ d | tojson }}"
+                   & "{{ d.a + 1 }}{{ d.keys() | join }}{{ d.values() | length }}"
+                   & "{{ d.get('b') }}{{ d.get('z', 'n') }}"),
+       Works),
+
+      (new String'("`\| join`, `\| map`, `\| select`, `\| reject`, "
+                   & "`\| selectattr`, `\| rejectattr`, `\| sort`, "
+                   & "`\| dictsort`, `\| indent`, `\| unique`, `\| list`"),
+       new String'("{% set l = ['b', 'a', 'a'] %}{{ l | join(', ') }}"
+                   & "{{ l | sort | join }}{{ l | sort(reverse=True) | join }}"
+                   & "{{ l | unique | join }}{{ l | select('equalto', 'a')"
+                   & " | list | length }}{{ l | reject('equalto', 'a') | join }}"
+                   & "{{ messages | map(attribute='role') | join(',') }}"
+                   & "{{ messages | selectattr('role', 'equalto', 'user')"
+                   & " | map(attribute='content') | join }}"
+                   & "{{ messages | rejectattr('role', 'equalto', 'user')"
+                   & " | list | length }}"
+                   & "{% for k, v in {'z': 1, 'a': 2} | dictsort %}{{ k }}"
+                   & "{% endfor %}{{ 'a\nb' | indent(2) }}"
+                   & "{{ 'abc' | list | join('.') }}"),
+       Works),
+
+      (new String'("`.upper()`, `.lower()`, `.title()`, `.capitalize()`"),
+       new String'("{{ 'ab'.upper() }}{{ 'AB'.lower() }}{{ 'ab cd'.title() }}"
+                   & "{{ 'ab'.capitalize() }}"),
        Works),
 
       (new String'("`{%- -%}` and `{{- -}}` whitespace control"),

@@ -151,8 +151,9 @@ with Model_Runner.Tools;
 --
 --  Tools. A caller may offer the model tools, and a template that reads
 --  them writes their definitions into the prompt itself. What this engine
---  gives such a template is the name tools -- false when nothing was
---  offered, which is exactly what "if tools" asks -- a loop over it, each
+--  gives such a template is the name tools -- none when nothing was
+--  offered, as the reference implementation passes it, so that "if tools"
+--  and "tools is defined" answer as they answer there -- a loop over it, each
 --  tool's members along a dotted path, its schema walked as a mapping, and
 --  the tojson filter that writes any of it out.
 --
@@ -166,13 +167,14 @@ with Model_Runner.Tools;
 --  bytes. A template's own branch is the only thing that knows which they
 --  should be.
 --
---  Values. A name holds what it was assigned: text, a number, a list the
---  template wrote out or cut, a mapping read out of a schema, one message,
---  one call, the tools. Each is walked, indexed, asked about -- is string,
---  is mapping, is iterable, in -- and written as the language does it, and
---  a name assigned inside a loop's body is the body's own, put back when
---  the loop ends, as the language scopes it. A name whose every assignment
---  is a number is a number wherever it is read.
+--  Values. A name holds what it was assigned: text, a number, a truth, a
+--  list or mapping the template wrote out, a cut, a mapping read out of a
+--  schema, one message, one call, the tools. Each is walked, indexed,
+--  asked about -- is string, is number, is mapping, is iterable, in --
+--  filtered as a list, and written as the language does it; a number is
+--  a number and not the text of one, so it adds where text runs together;
+--  and a name assigned inside a loop's body or a macro's is that body's
+--  own, put back when it ends, as the language scopes it.
 --
 --  Expressions outside the subset -- functions this engine does not carry,
 --  a message printed whole -- compile to an instruction that refuses when
@@ -435,6 +437,9 @@ private
 
       --  loop.previtem and loop.nextitem: the message before and after the
       --  one a list loop has bound, or nothing at either end.
+      Term_Loop_Length,
+      Term_Loop_Rev_Index_Zero,
+      Term_Loop_Rev_Index_One,
       Term_Loop_Previous,
       Term_Loop_Next,
 
@@ -447,6 +452,11 @@ private
       --  A comparison or test written as a value -- "x is defined" in the
       --  output, "(a == b) != (c == d)" in a condition: Offset names the
       --  kept condition, and the term is worth true or false.
+      --  A mapping written out, "{'a': 1, 'b': x}": Index_At names the
+      --  first kept operand, keys and values alternating, and Length how
+      --  many pairs there are.
+      Term_Dict,
+
       Term_Condition,
 
       --  A choice written inside an expression, "(A if C else B)": Offset
@@ -509,14 +519,30 @@ private
 
       --  The smallest number in a list, which a template writes to take
       --  the shorter of two counts.
-      Filter_Min);
+      Filter_Min,
+
+      --  The list filters: a list run together with a separator, one
+      --  member of each element, the elements that pass a test -- or
+      --  fail it -- by themselves or by a member, a list sorted, a
+      --  mapping sorted into pairs, text indented, repeats dropped, and a
+      --  value as a list.
+      Filter_Join, Filter_Map, Filter_Select, Filter_Reject,
+      Filter_Select_Attr, Filter_Reject_Attr, Filter_Sort, Filter_Dict_Sort,
+      Filter_Indent, Filter_Unique, Filter_List,
+
+      --  One end of a list that is not a cut just made: a list filtered,
+      --  a list of messages.
+      Filter_First, Filter_Last);
 
    --  One filter and where its arguments were kept, as operands: the
-   --  stand-in for default, the two texts for replace.
+   --  stand-in for default, the two texts for replace, a separator, a
+   --  member's name, a test's name and what it compares with. A keyword
+   --  argument goes to the slot the language's own order gives it.
    type Filter_Step is record
       Kind : Filter_Kind := Filter_None;
       Arg1 : Natural := 0;
       Arg2 : Natural := 0;
+      Arg3 : Natural := 0;
    end record;
 
    --  How many filters may follow one another on a term.
@@ -574,7 +600,21 @@ private
       --  "content[0]['text']", "messages[0].role[0]", "x.split(s)[i]".
       --  Written after a term as its methods are, and read in that order.
       Method_Index,
-      Method_Member);
+      Method_Member,
+
+      --  A mapping's keys and values as lists, and one member with a
+      --  stand-in where it is not there: .keys(), .values(), .get(k, d).
+      Method_Keys,
+      Method_Values,
+      Method_Get,
+
+      --  The case methods, which are the filters of the same names
+      --  spelled as Python spells them: .upper(), .lower(), .title(),
+      --  .capitalize().
+      Method_Upper,
+      Method_Lower,
+      Method_Title,
+      Method_Capitalize);
 
    --  One method and where its one argument was kept: the characters to
    --  take off, or the marker to cut at.
@@ -719,7 +759,12 @@ private
       Compare_Is_Mapping,
       Compare_Is_Not_Mapping,
       Compare_Is_Iterable,
-      Compare_Is_Not_Iterable);
+      Compare_Is_Not_Iterable,
+
+      --  'is number': a number written, counted, measured or read out of
+      --  JSON, and not the text of one.
+      Compare_Is_Number,
+      Compare_Is_Not_Number);
 
    type Clause is record
       Negated : Boolean := False;
@@ -809,6 +854,17 @@ private
       --  the call that ran it. A macro is defined by a jump over its body
       --  and called by running the body from its entry to this.
       Op_Return,
+
+      --  Leave the innermost loop, or go straight to its next turn:
+      --  {% break %} and {% continue %}. Both jump to the loop's Next
+      --  instruction, the first with the flag set that makes that
+      --  instruction leave rather than go round.
+      Op_Break,
+      Op_Continue,
+
+      --  Name the body a {% call %} block wrapped up, in Offset, for the
+      --  macro call written next: what caller() in that macro runs.
+      Op_Set_Caller,
 
       Op_Unsupported);  --  refuse, naming the construct, if ever reached
 

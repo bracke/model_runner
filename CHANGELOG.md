@@ -55,6 +55,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Numbers, the list filters, mapping literals, break and continue,
+  filter and call blocks.** A number is a value of its own kind now --
+  written, counted, measured, read out of a schema or assigned -- so `i +
+  1` adds where `i` was set to `1`, `'1' + '1'` runs together, `1 == '1'`
+  is false and `is number` says which, as the language has it; before,
+  every value was text and a name's arithmetic was guessed from its
+  assignments at compile time. The list filters -- `join`, `map`,
+  `select`/`reject`, `selectattr`/`rejectattr`, `sort`, `dictsort`,
+  `indent`, `unique`, `list`, `first`/`last` on any list -- take the
+  language's keyword arguments and walk lists written out, a schema's
+  members and the conversation itself, as objects with a role, a content
+  and the calls a turn asked for, so `messages | selectattr('role',
+  'equalto', 'user') | map(attribute='content') | join` is a question with
+  an answer. Mapping literals `{'a': 1}` with `.keys()`, `.values()` and
+  `.get(k, d)`; `.upper()` and its three siblings; two names over a list
+  of pairs taking each pair apart; `True`, `False` and `None` spelled as
+  Python spells them; `{% break %}` and `{% continue %}`; `loop.length`,
+  `loop.revindex` and `loop.revindex0`; `{% filter %}` blocks; `{% call %}`
+  blocks with `caller()`, nesting. Twelve expression suites, every
+  construct above in them, agree with jinja2 byte for byte, and a list or
+  mapping written out with another inside it keeps its elements in order,
+  which it did not. `tools` is `none` rather than undefined where none
+  were offered, as the reference passes it, so `tools is defined` answers
+  what it answers there.
 - **Gemma 3's own template renders, and a comparison is a value.** The
   template Gemma 3 ships compares two bracketed conditions -- `(message
   ['role'] == 'user') != (loop.index0 % 2 == 0)` -- and writes a choice
