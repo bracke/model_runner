@@ -48,6 +48,9 @@ with Model_Runner.Llama;
 with Model_Runner.Generation;
 with Model_Runner.Schema;
 with Model_Runner.Tools;
+with Model_Runner.Images;
+with Model_Runner.Vision;
+with Model_Runner.Tensors;
 with Model_Runner.Platform;
 with Project_Tools.Files;
 with Project_Tools.Text;
@@ -280,6 +283,128 @@ begin
       if Crossing.Run /= 0 then
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
       end if;
+   elsif Command = "see" then
+      --  A picture through a vision projector: how long it takes and what
+      --  comes out, for a reader checking the encoder against a reference
+      --  or timing it.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Projector : constant String := Option ("--mmproj", "");
+         Image     : constant String := Option ("--image", "");
+         Threads   : constant Natural :=
+           Natural'Value (Option ("--threads", "0"));
+         Dump      : constant String := Option ("--dump", "");
+         Eyes      : Model_Runner.Vision.Encoder;
+         Picture   : Model_Runner.Images.Raster;
+         Rows      : Model_Runner.Tensors.Real_Array_Access;
+         Status    : Model_Runner.Errors.Error_Info;
+         Started   : Ada.Calendar.Time;
+         use type Ada.Calendar.Time;
+         use type Model_Runner.Numerics.Real;
+      begin
+         if Projector = "" or else Image = "" then
+            Ada.Text_IO.Put_Line ("see: --mmproj PATH and --image FILE are required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+         Model_Runner.Images.Load (Image, Picture, Status);
+         if Model_Runner.Errors.Is_Error (Status) then
+            declare
+               Found : Boolean;
+               Held  : Model_Runner.Errors.Parameter;
+            begin
+               Model_Runner.Errors.Find_Parameter (Status, "detail", Found, Held);
+               Ada.Text_IO.Put_Line
+                 ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code)
+                  & (if Found
+                     then " " & Model_Runner.Text.To_String (Held.Text_Value)
+                     else ""));
+            end;
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+         Ada.Text_IO.Put_Line
+           ("picture:" & Picture.Width'Image & " x" & Picture.Height'Image);
+         Model_Runner.Vision.Open (Eyes, Projector, Status);
+         if Model_Runner.Errors.Is_Error (Status) then
+            Ada.Text_IO.Put_Line
+              ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code));
+            Model_Runner.Images.Free (Picture);
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+         Ada.Text_IO.Put_Line
+           ("projector: " & Model_Runner.Vision.Projector (Eyes)
+            & "," & Model_Runner.Vision.Image_Size (Eyes)'Image & " a side,"
+            & Model_Runner.Vision.Rows_Per_Picture (Eyes)'Image & " rows of"
+            & Model_Runner.Vision.Row_Width (Eyes)'Image);
+         Started := Ada.Calendar.Clock;
+         declare
+            Count : constant Natural :=
+              (if Threads > 0 then Threads
+               else Model_Runner.Backend.CPU.Default_Workers
+                      (Model_Runner.Platform.Core_Count));
+            Pool : aliased Model_Runner.Backend.CPU.Pool
+              (Model_Runner.Backend.CPU.Worker_Count
+                 (Natural'Min (Natural'Max (1, Count),
+                               Model_Runner.Backend.CPU.Max_Workers)));
+         begin
+            Model_Runner.Backend.CPU.Open (Pool);
+            Model_Runner.Vision.Encode
+              (Eyes, Picture, Pool'Unchecked_Access, Rows, Status => Status);
+            Model_Runner.Backend.CPU.Close (Pool);
+         end;
+         Ada.Text_IO.Put_Line
+           ("encoded in" & Duration'Image (Ada.Calendar.Clock - Started) & " s");
+         if Model_Runner.Errors.Is_Error (Status) then
+            Ada.Text_IO.Put_Line
+              ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code));
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            declare
+               Width : constant Model_Runner.Numerics.Element_Count :=
+                 Model_Runner.Numerics.Element_Count
+                   (Model_Runner.Vision.Row_Width (Eyes));
+               Sum : Model_Runner.Numerics.Wide_Real := 0.0;
+               use type Model_Runner.Numerics.Wide_Real;
+               use type Model_Runner.Numerics.Element_Count;
+            begin
+               for Value of Rows.all loop
+                  Sum := Sum + Model_Runner.Numerics.Wide_Real (Value * Value);
+               end loop;
+               Ada.Text_IO.Put_Line
+                 ("row 0:" & Rows (0)'Image & Rows (1)'Image & Rows (2)'Image
+                  & Rows (3)'Image);
+               Ada.Text_IO.Put_Line
+                 ("row 1:" & Rows (Width)'Image & Rows (Width + 1)'Image
+                  & Rows (Width + 2)'Image);
+               Ada.Text_IO.Put_Line ("sum of squares:" & Sum'Image);
+               if Dump /= "" then
+                  declare
+                     File : Ada.Text_IO.File_Type;
+                  begin
+                     Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Dump);
+                     for Value of Rows.all loop
+                        Ada.Text_IO.Put_Line (File, Value'Image);
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                  end;
+               end if;
+            end;
+            Model_Runner.Tensors.Free (Rows);
+         end if;
+         Model_Runner.Vision.Close (Eyes);
+         Model_Runner.Images.Free (Picture);
+      end;
    elsif Command = "fuzz" then
       --  Mutation fuzzing over the GGUF parser. Every case is derived from the
       --  seed and the case number, so a failure replays exactly.

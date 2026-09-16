@@ -8,6 +8,7 @@ with Tests.Accounting_Cases;
 with Tests.Sampling_Cases;
 with Tests.Template_Cases;
 with Tests.Tools_Cases;
+with Tests.Vision_Cases;
 
 package body Tests.Suite is
 
@@ -23,6 +24,7 @@ package body Tests.Suite is
    Template_Case  : aliased Tests.Template_Cases.Case_Type;
    Grammar_Case   : aliased Tests.Grammar_Cases.Case_Type;
    Tools_Case     : aliased Tests.Tools_Cases.Case_Type;
+   Vision_Case    : aliased Tests.Vision_Cases.Case_Type;
 
    -----------
    -- Suite --
@@ -40,6 +42,7 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, Template_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Grammar_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Tools_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Vision_Case'Access);
       return Result'Access;
    end Suite;
 

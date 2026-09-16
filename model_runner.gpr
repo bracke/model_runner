@@ -89,6 +89,10 @@ project Model_Runner is
       --  is nothing but rows scaled into running rows. -ffp-contract=off
       --  for the reason the others give: the two compilations answer bit
       --  for bit.
+      for Switches ("model_runner-vision-wide.ads") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-march=x86-64-v3", "-ffp-contract=off");
       for Switches ("model_runner-delta_rule-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
         & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",

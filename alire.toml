@@ -38,6 +38,11 @@ httpclient = "*"
 [[depends-on]]
 zlib = "*"
 
+# A picture given to a model that reads one is decoded here when it is a
+# JPEG, by this native Ada codec; a PNG is inflated by the zlib above.
+[[depends-on]]
+jpeglib = "*"
+
 [[pins]]
 terminal_styles = { path = "../terminal_styles" }
 
@@ -66,6 +71,9 @@ hostkit = { path = "../hostkit" }
 
 [[pins]]
 zlib = { path = "../zlib" }
+
+[[pins]]
+jpeglib = { path = "../jpeglib" }
 
 # i18n's CLDR tooling parses upstream data through an in-process AWK
 # interpreter, so awklib and its regexp dependency are in this graph too.

@@ -245,6 +245,8 @@ package Model_Runner.Agent is
    --    offered; a tool that forces the looser call grammar leaves the answer
    --    free. Left as the empty string, the answer is prose as before.
    --  @param Bounds Session limits applied to rendering and generation.
+   --  @param Pictures The pictures the task shows, or none: the same rows
+   --    stand behind the prompt's markers at every step.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
@@ -272,6 +274,8 @@ package Model_Runner.Agent is
       Compact     : Boolean := False;
       Keep_Recent : Positive := 6;
       Answer_Schema : String := "";
+      Pictures    : Model_Runner.Generation.Picture_Set :=
+        Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome);

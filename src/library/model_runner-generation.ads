@@ -12,6 +12,7 @@ with Model_Runner.Output;
 with Model_Runner.Progress;
 with Model_Runner.Numerics;
 with Model_Runner.Sampling;
+with Model_Runner.Tensors;
 with Model_Runner.Tokenizer;
 with Model_Runner.Grammar;
 with Model_Runner.Stops;
@@ -294,6 +295,25 @@ package Model_Runner.Generation is
    --  constrains.
    type Grammar_Reference is access constant Model_Runner.Grammar.Compiled;
 
+   --  The pictures a prompt shows: the rows an encoder made of each, laid
+   --  end to end in the order their markers stand in the prompt, and the
+   --  tokens that frame them in the model's vocabulary -- the marker the
+   --  template writes where a picture is, the soft token each row stands
+   --  behind, and the closer.
+   type Picture_Set is record
+      Marker      : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Soft        : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Closer      : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Per_Picture : Natural := 0;
+      Count       : Natural := 0;
+      Rows        : Model_Runner.Tensors.Real_Array_Access := null;
+   end record;
+
+   No_Pictures : constant Picture_Set := (others => <>);
+
    --  Run one generation request to completion.
    --
    --  The prompt is text that has already been rendered: raw mode passes the
@@ -326,6 +346,11 @@ package Model_Runner.Generation is
    --    Reached only when Logprobs is above zero, so a caller that wants
    --    them has to say both what it wants and where to put it.
    --  @param Bounds Session limits applied to retention and batching.
+   --  @param Pictures The pictures the prompt shows, or none. Each marker
+   --    token the template wrote is opened out into the marker, Per_Picture
+   --    soft tokens and the closer, and the soft tokens read the picture's
+   --    rows in place of their embedding; the prompt must mark as many
+   --    pictures as are given, in their order.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
    procedure Generate
      (Source   : Model_Runner.Llama.Model'Class;
@@ -344,6 +369,7 @@ package Model_Runner.Generation is
       Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Pictures : Picture_Set := No_Pictures;
       Outcome  : out Result);
 
 end Model_Runner.Generation;

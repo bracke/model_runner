@@ -14,6 +14,7 @@ package body Tool_Commands is
    Name_Tokenize       : aliased constant String := "tokenize";
    Name_Render         : aliased constant String := "render";
    Name_Cross          : aliased constant String := "cross";
+   Name_See            : aliased constant String := "see";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
@@ -204,7 +205,13 @@ package body Tool_Commands is
      " --model --template --format --expressions --think --no-think"
      & " --without-tools --without-reasoning --record --bos --eos ";
 
-   Held : constant array (1 .. 26) of Command :=
+   Says_See  : aliased constant String :=
+     "run a picture through a vision projector and report its rows";
+   Takes_See : aliased constant String :=
+     "--mmproj PATH --image FILE [--threads N] [--dump FILE]";
+   Opts_See  : aliased constant String := " --mmproj --image --threads --dump ";
+
+   Held : constant array (1 .. 27) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -234,6 +241,8 @@ package body Tool_Commands is
       (Name_Cut'Access, Takes_Cut'Access, Says_Cut'Access, Opts_Cut'Access),
       (Name_Cross'Access, Takes_Cross'Access, Says_Cross'Access,
        Opts_Cross'Access),
+      (Name_See'Access, Takes_See'Access, Says_See'Access,
+       Opts_See'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
        Opts_Render'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,

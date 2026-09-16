@@ -4,7 +4,6 @@ with Ada.Unchecked_Deallocation;
 with Model_Runner.Lookup;
 with Model_Runner.Shares;
 with Model_Runner.Backend.CPU;
-with Model_Runner.Tensors;
 with Model_Runner.Text;
 
 package body Model_Runner.Generation is
@@ -117,6 +116,7 @@ package body Model_Runner.Generation is
       Reporter : Explainer_Reference := null;
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Pictures : Picture_Set := No_Pictures;
       Outcome  : out Result)
    is
       Settings : constant L.Configuration := L.Config (Source);
@@ -567,6 +567,69 @@ package body Model_Runner.Generation is
          return;
       end if;
 
+      --  The pictures, opened out: each marker the template wrote becomes
+      --  the marker, the soft tokens the picture's rows stand behind, and
+      --  the closer, so that the positions the rows take are ordinary
+      --  positions of the prompt from here on. A prompt marking more or
+      --  fewer pictures than were given is refused before anything is
+      --  evaluated, since the model would read it wrongly either way.
+      if Pictures.Marker /= Vocab.No_Token then
+         declare
+            Marked : Natural := 0;
+         begin
+            for Index in 1 .. Prompt_Count loop
+               if Tokens.all (Index) = Pictures.Marker then
+                  Marked := Marked + 1;
+               end if;
+            end loop;
+
+            if Marked /= Pictures.Count
+              or else (Marked > 0
+                       and then (Pictures.Rows = null
+                                 or else Pictures.Soft = Vocab.No_Token))
+            then
+               Status := E.Make (E.Generation_Picture_Count_Mismatch);
+               E.Add_Integer (Status, "expected", Long_Long_Integer (Marked));
+               E.Add_Integer (Status, "count", Long_Long_Integer (Pictures.Count));
+               Conclude (Runtime_Error, Status);
+               Cleanup;
+               return;
+            end if;
+
+            if Marked > 0 then
+               declare
+                  Extra  : constant Natural :=
+                    Marked * (Pictures.Per_Picture
+                              + (if Pictures.Closer /= Vocab.No_Token
+                                 then 1 else 0));
+                  Opened : constant Token_Buffer :=
+                    new Vocab.Token_Array
+                      (1 .. Natural'Max (Tokens.all'Length,
+                                         Prompt_Count + Extra));
+                  Filled : Natural := 0;
+               begin
+                  for Index in 1 .. Prompt_Count loop
+                     Filled := Filled + 1;
+                     Opened.all (Filled) := Tokens.all (Index);
+                     if Tokens.all (Index) = Pictures.Marker then
+                        for Row in 1 .. Pictures.Per_Picture loop
+                           Filled := Filled + 1;
+                           Opened.all (Filled) := Pictures.Soft;
+                        end loop;
+                        if Pictures.Closer /= Vocab.No_Token then
+                           Filled := Filled + 1;
+                           Opened.all (Filled) := Pictures.Closer;
+                        end if;
+                     end if;
+                  end loop;
+                  Free_Tokens (Tokens);
+                  Tokens := Opened;
+                  Prompt_Count := Filled;
+               end;
+            end if;
+         end;
+      end if;
+
       Outcome.Prompt_Tokens := Prompt_Count;
       P.Publish
         (Observer,
@@ -682,6 +745,23 @@ package body Model_Runner.Generation is
          Span : constant Natural :=
            Natural'Max (1, Natural'Min (Item.Batch_Size, L.Max_Batch));
          Index : Natural := First_Token;
+
+         --  The picture rows a batch starting at From reads: the soft
+         --  tokens before it have taken that many rows already.
+         function Given_Before (From : Positive) return L.Given_Rows is
+            Before : N.Element_Count := 0;
+         begin
+            if Pictures.Rows = null or else Pictures.Soft = Vocab.No_Token then
+               return L.No_Given_Rows;
+            end if;
+            for Step in 1 .. From - 1 loop
+               if Tokens.all (Step) = Pictures.Soft then
+                  Before := Before + 1;
+               end if;
+            end loop;
+            return (Token => Pictures.Soft, Rows => Pictures.Rows,
+                    First => Before);
+         end Given_Before;
       begin
          Prefill_Loop :
          while Index <= Prompt_Count loop
@@ -714,7 +794,7 @@ package body Model_Runner.Generation is
                      L.Evaluate_Batch
                        (Session, Source, Tokens.all (Index .. Last),
                         Logits.all, States => Rows, Cancel => Cancel,
-                        Status => Status);
+                        Given => Given_Before (Index), Status => Status);
 
                      --  The block sees every position of the prompt but
                      --  the last: at position p it takes the token at
@@ -744,7 +824,8 @@ package body Model_Runner.Generation is
                else
                   L.Evaluate_Batch
                     (Session, Source, Tokens.all (Index .. Last), Logits.all,
-                     Cancel => Cancel, Status => Status);
+                     Cancel => Cancel, Given => Given_Before (Index),
+                     Status => Status);
                end if;
 
                if E.Is_Error (Status) then

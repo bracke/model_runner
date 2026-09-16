@@ -39,6 +39,7 @@ ordinal is never reused, not because they might appear.
 | `MR-CLI-0019` | `error.cli.invalid_environment_value` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0020` | `error.cli.option_not_for_command` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0021` | `error.cli.option_combination` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0022` | `error.cli.picture_needs_projector` | recovery_user_correctable | 2 | raised |
 
 ## IO
 
@@ -53,6 +54,7 @@ ordinal is never reused, not because they might appear.
 | `MR-IO-0007` | `error.io.output_closed` | recovery_user_correctable | 6 | reserved |
 | `MR-IO-0008` | `error.io.seek_failed` | recovery_user_correctable | 6 | reserved |
 | `MR-IO-0009` | `error.io.input_too_large` | recovery_user_correctable | 6 | raised |
+| `MR-IO-0010` | `error.io.image_unreadable` | recovery_user_correctable | 6 | raised |
 
 ## GGUF
 
@@ -179,6 +181,8 @@ ordinal is never reused, not because they might appear.
 | `MR-ARCH-0016` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | reserved |
 | `MR-ARCH-0017` | `error.architecture.no_output_head` | recovery_unsupported | 4 | raised |
 | `MR-ARCH-0018` | `error.architecture.text_not_whole` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0019` | `error.architecture.unsupported_projector` | recovery_unsupported | 4 | raised |
+| `MR-ARCH-0020` | `error.architecture.vision_tokens_missing` | recovery_unsupported | 4 | raised |
 
 ## TENSOR
 
@@ -246,6 +250,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GEN-0006` | `error.generation.no_logits` | recovery_none | 8 | reserved |
 | `MR-GEN-0007` | `error.generation.batch_too_large` | recovery_none | 2 | raised |
 | `MR-GEN-0008` | `error.generation.empty_prompt` | recovery_none | 2 | raised |
+| `MR-GEN-0009` | `error.generation.picture_count_mismatch` | recovery_user_correctable | 8 | raised |
 
 ## SAMPLE
 

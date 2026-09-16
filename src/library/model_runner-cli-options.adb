@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 101) of Registry_Row :=
+   Registry : constant array (1 .. 102) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -170,6 +170,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("logprobs")),
       (Text ("--draft-model"),
        [Command_Run => True, others => False], Text ("draft_model")),
+      (Text ("--mmproj"),
+       [Command_Run => True, others => False], Text ("mmproj")),
       (Text ("--embed-model"),
        [Command_Run => True, others => False], Text ("embed_model")),
       (Text ("--memory-file"),
@@ -853,7 +855,7 @@ package body Model_Runner.CLI.Options is
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
          Flag_Device_Index,
          Flag_Logprobs,
-         Flag_Draft_Model, Flag_Draft_Tokens, Flag_Embed_Model,
+         Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
@@ -2019,6 +2021,19 @@ package body Model_Runner.CLI.Options is
                      Result.Draft_Path := T.To_Bounded (Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--mmproj" then
+                     Mark (Flag_Projector, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Projector_Path := T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
                   elsif Name = "--embed-model" then
                      Mark (Flag_Embed_Model, Name, Good);
                      if not Good then
@@ -2646,6 +2661,13 @@ package body Model_Runner.CLI.Options is
       if Result.Raw and then Result.Prompt_Kind = Prompt_Parts then
          Status := E.Make (E.CLI_Raw_Mode_Conflict);
          E.Add_Text (Status, "option", "--prompt-parts", E.Param_Identifier);
+         return;
+      end if;
+
+      --  Nor a template to write a picture's marker where it stands.
+      if Result.Raw and then not T.Is_Empty (Result.Projector_Path) then
+         Status := E.Make (E.CLI_Raw_Mode_Conflict);
+         E.Add_Text (Status, "option", "--mmproj", E.Param_Identifier);
          return;
       end if;
 

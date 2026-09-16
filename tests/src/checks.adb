@@ -3050,6 +3050,10 @@ package body Checks is
             begin
                Consider_Place (Place & "/obj/development");
                Consider_Place (Place & "/obj/release");
+               --  And a crate whose project names its object directory
+               --  after itself rather than after the profile, as jpeglib
+               --  does.
+               Consider_Place (Place & "/obj/" & Name);
                return Best;
             end Evidence_Time;
 

@@ -450,6 +450,11 @@ package Model_Runner.CLI.Options is
       --  A smaller model to propose tokens for the real one to check, and
       --  how many it may propose at a time.
       Draft_Path   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
+      --  The vision projector a picture in --prompt-parts is read with:
+      --  the model's second file, holding the image encoder and the map
+      --  into the text model's width.
+      Projector_Path : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Draft_Tokens : Natural := 4;
 
       --  Or propose them out of the context, with no model at all: what

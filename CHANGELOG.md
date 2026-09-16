@@ -55,6 +55,39 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A picture reaches the model.** `run --mmproj PATH --prompt-parts
+  '[{"type": "image", "path": "FILE"}, {"type": "text", "text": "..."}]'`
+  reads the picture and shows it to Gemma 3. The file is decoded here --
+  a PNG inflated by the pure-Ada zlib and unfiltered in every colour
+  type, depth and interlace, a JPEG by jpeglib, the native Ada codec, a
+  PPM as it stands -- resampled to the encoder's 896-pixel square as the
+  reference pipeline resamples, and run through the projector file's
+  SigLIP encoder and Gemma 3 projector, `Model_Runner.Vision`: twenty-
+  seven pre-normalized blocks over 4096 patches, pooled four by four to
+  256 rows, each normalized and projected to the text width. The
+  template writes `<start_of_image>` where the picture stands; the
+  prompt opens the marker out into the marker, 256 `<image_soft_token>`s
+  and `<end_of_image>`, and the model reads the projector's rows at the
+  soft positions in place of their embedding, unscaled, as the reference
+  does -- `Evaluate_Batch` takes them as `Given` rows, `Generate` as a
+  `Picture_Set`, the agent loop the same, so the picture stands at every
+  step. The encoder's products are binary32 through a kernel of this
+  crate's own, `Model_Runner.Vision.Kernel` -- two rows against four,
+  eight lanes of partial sums apiece, compiled once for the wide vector
+  unit and once without -- on the run's own pool: 5.5 TFLOP a picture,
+  about 28 s on eight cores. Gemma 3 4B names the dinosaur in a
+  photograph. The encoder is set beside a plain binary64 computation of
+  the same network in the suite, with a projector written small and its
+  feed-forward halves named either way the converter names them; `tests
+  see --mmproj PATH --image FILE` times it and prints its rows. Five
+  diagnostics name what can be wanted: a projector of another kind, a
+  model without the picture tokens, a picture with no `--mmproj`, a file
+  that is not a picture this build reads, and a prompt marking more or
+  fewer pictures than were given. A JPEG is decoded on a task of its
+  own, its stack sized for the picture, because the codec keeps every
+  coefficient on the stack. `jpeglib` joins the pinned crates. Not yet:
+  the picture's tokens attend causally where the reference lets them see
+  each other both ways, and the device backend does none of this.
 - **A turn given as parts, words and pictures, reaches the template.**
   A message's content may be a list of parts -- `{"type": "image"}`,
   `{"type": "text", "text": "..."}` -- rather than text: `run
@@ -14970,7 +15003,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 181 diagnostic
+- Localization through `messages`, with a catalog entry for all 186 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

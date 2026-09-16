@@ -15,6 +15,7 @@ with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
 
+   use type Model_Runner.Tokenizer.Token_Id;
    use type Model_Runner.Numerics.Element_Count;
    use type System.Address;
    use type System.Storage_Elements.Integer_Address;
@@ -11693,10 +11694,14 @@ package body Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Beside : Session_Group := Alone;
       Shares : Row_Counts := Even_Shares;
+      Given  : Given_Rows := No_Given_Rows;
       Status : out E.Error_Info)
    is
       Settings  : constant Configuration := Source.Settings;
       Width     : constant Element_Count := Element_Count (Settings.Embedding);
+
+      --  How many of the given rows this batch has taken so far.
+      Taken     : Element_Count := 0;
       --  Zero for a mixture of experts: the batch never holds a
       --  feed-forward activation there, because that block runs a position
       --  at a time through the session's own buffers.
@@ -12152,20 +12157,40 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  Embedding lookup for every token of the batch.
+      --  Embedding lookup for every token of the batch -- or the row given
+      --  for it, which stands as it is: the scale a model applies to its
+      --  own embedding is not applied to a row that was never one.
       for Which in 0 .. Count - 1 loop
          declare
             Origin : constant Element_Count := Slot (Which, Width);
+            Token  : constant Token_Id :=
+              Tokens (Tokens'First + Natural (Which));
          begin
-            T.Dequantize_Row
-              (Source.Embeddings,
-               Element_Count (Tokens (Tokens'First + Natural (Which))),
-               Acts.all (Origin .. Origin + Width - 1), Status);
+            if Given.Rows /= null and then Token = Given.Token then
+               declare
+                  Row_At : constant Element_Count :=
+                    (Given.First + Taken) * Width;
+               begin
+                  if Row_At + Width > Given.Rows.all'Length then
+                     Status := E.Make (E.Tensor_Out_Of_Bounds);
+                     E.Add_Integer
+                       (Status, "index", Long_Long_Integer (Given.First + Taken));
+                  else
+                     Acts.all (Origin .. Origin + Width - 1) :=
+                       Given.Rows.all (Row_At .. Row_At + Width - 1);
+                     Taken := Taken + 1;
+                  end if;
+               end;
+            else
+               T.Dequantize_Row
+                 (Source.Embeddings, Element_Count (Token),
+                  Acts.all (Origin .. Origin + Width - 1), Status);
 
-            if Embedding_Scale (Source) /= 1.0 then
-               for Value of Acts.all (Origin .. Origin + Width - 1) loop
-                  Value := Value * Embedding_Scale (Source);
-               end loop;
+               if Embedding_Scale (Source) /= 1.0 then
+                  for Value of Acts.all (Origin .. Origin + Width - 1) loop
+                     Value := Value * Embedding_Scale (Source);
+                  end loop;
+               end if;
             end if;
 
             --  As in the single-token path: where the token is, added to

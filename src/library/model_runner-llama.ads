@@ -1236,6 +1236,16 @@ package Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Rows given in place of embeddings, for the positions of a batch that
+   --  hold one token: a picture's rows behind its marker.
+   type Given_Rows is record
+      Token : Model_Runner.Tokenizer.Token_Id := Model_Runner.Tokenizer.No_Token;
+      Rows  : Model_Runner.Tensors.Real_Array_Access := null;
+      First : Model_Runner.Numerics.Element_Count := 0;
+   end record;
+
+   No_Given_Rows : constant Given_Rows := (others => <>);
+
    --  Largest number of tokens one batched call will evaluate. A batch holds
    --  activations for every token in it, so this bounds that working set
    --  rather than letting a long prompt decide it.
@@ -1303,6 +1313,13 @@ package Model_Runner.Llama is
    --    one, and the two travel in the same pass: a row is a member and a
    --    position and nothing in an evaluation cares which kind it is.
    --    Ignored for a batch, whose rows are all one session's.
+   --  @param Given Rows standing in for embeddings: at every position of
+   --    the batch whose token is Given.Token, the next of Given.Rows --
+   --    Embedding elements apiece, counting from row Given.First -- is
+   --    the position's input, as it is, unscaled. This is how a picture
+   --    reaches the model: the template writes a marker token wherever
+   --    one stands, the encoder's rows are handed here, and the model
+   --    reads them where it would have read the marker's embedding.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
@@ -1313,6 +1330,7 @@ package Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Beside : Session_Group := Alone;
       Shares : Row_Counts := Even_Shares;
+      Given  : Given_Rows := No_Given_Rows;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  One token from each of several sessions, in one pass over the weights.

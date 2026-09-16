@@ -216,6 +216,8 @@ package body Model_Runner.Errors is
             | Arch_Unsupported_Feature
             | Arch_No_Output_Head
             | Arch_Text_Not_Whole
+            | Arch_Unsupported_Projector
+            | Arch_Vision_Tokens_Missing
             | Tensor_Format_Unsupported
             | Backend_Unsupported_Format
             | Backend_Capability_Missing
@@ -228,6 +230,10 @@ package body Model_Runner.Errors is
          when Template_Refused =>
             --  The template's author said no to this conversation, and
             --  the message says what to change about it.
+            return Recovery_User_Correctable;
+
+         --  As many pictures as the prompt marks, which the caller gives.
+         when Generation_Picture_Count_Mismatch =>
             return Recovery_User_Correctable;
 
          when Memory_Limit_Exceeded

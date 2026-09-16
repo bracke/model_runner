@@ -32,6 +32,7 @@ cryptolib 19
 truststores 0
 hostkit 2
 zlib 0
+jpeglib 0
 awklib 0
 regexp 1
 project_tools 1

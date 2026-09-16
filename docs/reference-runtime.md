@@ -442,7 +442,10 @@ templates read instructions from, which `run --developer TEXT` and
 content is a list of parts, a picture and words, which `run --prompt-parts
 JSON` and `tests render --prompt-parts JSON` hand a template, and which
 Gemma 3's walks, MiniCPM's writes nothing for, and Qwen3-Coder's and
-gpt-oss's refuse on both sides, a text and a list added together -- with
+gpt-oss's refuse on both sides, a text and a list added together -- and
+which, given a `"path"` and `run --mmproj PATH`, is a picture the model
+sees: decoded, resampled and encoded by `Model_Runner.Vision`, its rows
+read where the template's marker stands -- with
 the caller's `--think` and `--no-think` each where the template
 reads them; `--without-tools` and `--without-reasoning` leave out the
 shapes a carried format was never meant to match, which is how the

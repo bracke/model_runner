@@ -3063,6 +3063,10 @@ package body Tests.CLI_Cases is
               "run m.gguf --prompt-file b --prompt-parts []");
       Expect (E.CLI_Raw_Mode_Conflict,
               "run m.gguf --raw --prompt-parts []");
+      Expect (E.CLI_Raw_Mode_Conflict,
+              "run m.gguf --raw --prompt hi --mmproj eyes.gguf");
+      Expect (E.CLI_Repeated_Option,
+              "run m.gguf --prompt hi --mmproj a.gguf --mmproj b.gguf");
       Expect (E.CLI_Conflicting_System_Sources,
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
@@ -5578,6 +5582,9 @@ package body Tests.CLI_Cases is
                    = "[{""type"": ""image""}]",
                  "--prompt-parts did not reach the parts");
       end;
+      Assert (Model_Runner.Text.To_String
+                (Read ("--mmproj", "eyes.gguf").Projector_Path) = "eyes.gguf",
+              "--mmproj did not reach the projector path");
 
       --  Stopping.
       Assert (Read ("--stop-token", "11").Stop_Token_Count = 1,
@@ -8549,6 +8556,90 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Errors);
    end Prompt_File_Failures_Report_Themselves;
 
+   --  A picture in the prompt needs a projector to read it with, and a
+   --  model with the tokens to stand it behind; each want is reported by
+   --  the code that names it, before anything is rendered or evaluated.
+   procedure Pictures_Need_A_Projector_And_Its_Tokens
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Text_IO;
+
+      Model  : constant String := "obj/pictures-model.gguf";
+      Errors : constant String := "obj/pictures-errors.txt";
+      Parts  : constant String :=
+        "[{""type"": ""image"", ""path"": ""fixtures/picture-rgb-8x8.jpg""},"
+        & " {""type"": ""text"", ""text"": ""what is this""}]";
+
+      --  Run with the parts and the projector given, and return what
+      --  reached standard error.
+      function Diagnostics (Projector : String) return String is
+         Source : Fixed_Arguments;
+         Handle : File_Type;
+         Status : Natural;
+         Room   : String (1 .. 2_048);
+         Used   : Natural := 0;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--prompt-parts");
+         Add (Source, Parts);
+         if Projector /= "" then
+            Add (Source, "--mmproj");
+            Add (Source, Projector);
+         end if;
+         Add (Source, "--max-tokens");
+         Add (Source, "1");
+
+         Create (Handle, Out_File, Errors);
+         Set_Error (Handle);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               null;
+         end;
+         Set_Error (Standard_Error);
+         Close (Handle);
+
+         Open (Handle, In_File, Errors);
+         while not End_Of_File (Handle) and then Used < Room'Length - 300 loop
+            declare
+               Line : String (1 .. 300);
+               Last : Natural;
+            begin
+               Get_Line (Handle, Line, Last);
+               Room (Used + 1 .. Used + Last) := Line (1 .. Last);
+               Used := Used + Last + 1;
+               Room (Used) := ' ';
+            end;
+         end loop;
+         Close (Handle);
+         return Room (1 .. Used);
+      end Diagnostics;
+   begin
+      Tiny_Model.Write (Model);
+
+      declare
+         Text : constant String := Diagnostics ("");
+      begin
+         Assert (Contains (Text, E.Diagnostic_Code (E.CLI_Picture_Needs_Projector)),
+                 "a picture without a projector was not reported as needing "
+                 & "one: " & Text);
+      end;
+
+      --  The tiny model's vocabulary has no <start_of_image>, which is
+      --  found out before the projector is opened -- so the projector
+      --  named need not exist.
+      declare
+         Text : constant String := Diagnostics ("obj/no-such-projector.gguf");
+      begin
+         Assert (Contains (Text, E.Diagnostic_Code (E.Arch_Vision_Tokens_Missing)),
+                 "a model without the picture tokens was not reported: "
+                 & Text);
+      end;
+   end Pictures_Need_A_Projector_And_Its_Tokens;
+
    --  Interactive mode needs a terminal at both ends.
    --
    --  Chosen implicitly, when no prompt source is given, it was already
@@ -11429,6 +11520,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Prompt_File_Failures_Report_Themselves'Access,
          "each way a prompt file can be wrong reports the code that names it");
+      Register_Routine
+        (T, Pictures_Need_A_Projector_And_Its_Tokens'Access,
+         "a picture in the prompt needs a projector and a model with the "
+         & "tokens to stand it behind, each wanted by name");
       Register_Routine
         (T, Interaction_Needs_Both_Terminals'Access,
          "interactive mode needs a terminal at both ends");

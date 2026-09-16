@@ -58,6 +58,8 @@ package body Model_Runner.Agent is
       Compact     : Boolean := False;
       Keep_Recent : Positive := 6;
       Answer_Schema : String := "";
+      Pictures    : Model_Runner.Generation.Picture_Set :=
+        Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Result     : out Outcome)
@@ -265,6 +267,7 @@ package body Model_Runner.Agent is
                Seeds    => Seeds,
                Cancel   => Cancel,
                Bounds   => Bounds,
+               Pictures => Pictures,
                Outcome  => Last_Result);
             Free (Rendered);
          end;

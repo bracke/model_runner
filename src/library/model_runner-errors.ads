@@ -91,6 +91,11 @@ package Model_Runner.Errors is
       CLI_Option_Not_For_Command,
       CLI_Option_Combination,
 
+      --  A picture was given to a run with nothing to read it: a part of
+      --  type image in --prompt-parts, and no --mmproj naming the model's
+      --  vision projector.
+      CLI_Picture_Needs_Projector,
+
       --  Host input and output.
       IO_Open_Failed,
       IO_Read_Failed,
@@ -101,6 +106,11 @@ package Model_Runner.Errors is
       IO_Output_Closed,
       IO_Seek_Failed,
       IO_Input_Too_Large,
+
+      --  A file given as a picture is not one this build decodes: not a
+      --  PNG, a JPEG or a PPM, or one of those written in a way the decoder
+      --  here does not read.
+      IO_Image_Unreadable,
 
       --  GGUF container.
       GGUF_Truncated,
@@ -231,6 +241,16 @@ package Model_Runner.Errors is
       --  back.
       Arch_Text_Not_Whole,
 
+      --  A vision projector file names an encoder this build does not
+      --  carry. The one it carries is Gemma 3's: SigLIP, pooled and
+      --  projected into the text model's width.
+      Arch_Unsupported_Projector,
+
+      --  The text model's vocabulary has no token for a picture to stand
+      --  behind -- no <start_of_image>, no <image_soft_token> -- so the
+      --  projector's rows have no place in its prompt.
+      Arch_Vision_Tokens_Missing,
+
       --  Tensor layer.
       Tensor_Invalid_Shape,
       Tensor_Rank_Too_High,
@@ -299,6 +319,12 @@ package Model_Runner.Errors is
       Generation_No_Logits,
       Generation_Batch_Too_Large,
       Generation_Empty_Prompt,
+
+      --  The prompt marks more or fewer pictures than were given: each
+      --  <start_of_image> the template wrote takes one picture's rows, in
+      --  order, and a marker without a picture or a picture without a
+      --  marker is a prompt the model would read wrongly.
+      Generation_Picture_Count_Mismatch,
 
       --  Sampling.
       Sampling_Invalid_Configuration,
