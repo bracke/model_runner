@@ -939,10 +939,22 @@ package body External_Model is
             --  The greedy continuation as text, where the reference recorded
             --  it that way. A runtime reports text most directly; the
             --  identifier comparison above is stricter where identifiers are
-            --  available.
+            --  available. The recording is the first tokens and this run
+            --  generates as many as it was told to, so the recording is held
+            --  to be what the run begins with, as the identifiers are above
+            --  -- the two recordings in the tree hold two tokens each, and
+            --  this compared them against sixteen and called every run a
+            --  failure, which the reference-runtime document had not
+            --  noticed because its runs were made with --max-tokens 2.
             if Expected.Has_Text then
-               Result.Text_Match :=
-                 Greedy (1 .. Greedy_Last) = Expectations.Greedy_Text (Expected);
+               declare
+                  Wanted : constant String :=
+                    Expectations.Greedy_Text (Expected);
+               begin
+                  Result.Text_Match :=
+                    Greedy_Last >= Wanted'Length
+                    and then Greedy (1 .. Wanted'Length) = Wanted;
+               end;
 
                if not Result.Text_Match then
                   Give_Up

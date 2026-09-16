@@ -55,6 +55,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The processor and the device are compared on a prompt long enough to
+  fill the tile.** The sweep's sequences are eight tokens at most and the
+  device's matrix kernel is not entered below nine, so the path a real
+  prompt takes on a device was compared with nothing; lengthening the
+  sweep costs forty minutes of the reference implementation. The suite
+  asks the cheaper question now: the processor, serial, against the
+  device on a hundred and sixty tokens of the Q4_K and Q8_0 fixtures, in
+  one batch and in chunks of forty-one so the seam falls inside a tile,
+  held to 0.02 on logits up to 9.3 where the wide tile's half-precision
+  operands come to 0.0126. The version of this test that did not run
+  failed for opening no device: the backend is a singleton the suite
+  leaves closed, and a model prepares on it either way.
+- **`tests benchmark` runs to its end again.** It stopped after its
+  expert-shapes stage on every sitting that reached it, the pool that
+  stage makes having been left to its finalization, where it waits on
+  workers that wait on it. Closed by hand, and the tokenizer figure taken
+  again rather than restamped: 0.0071 s and 0.0123 s for sixty thousand
+  ordinary characters and brackets, recorded with the conditions they
+  were taken under and a note that the first halved for no reason this
+  change gives.
+- **`tests external-model` holds a recorded continuation to what a run
+  begins with.** The two recordings in the tree hold two tokens and the
+  tool generates sixteen by default, and it compared the whole of the
+  sixteen against the two and called every run a failure -- which the
+  reference-runtime document had not met, its runs having been made with
+  `--max-tokens 2`. The text is a prefix now, as the token identifiers
+  beside it already were; TinyLlama Q8_0 and Gemma 3 1B pass on
+  tokenization, greedy identifiers, text and the three logits.
 - **Arithmetic, the text filters, the date, the template's own refusal,
   block sets and macros in the chat-template engine.** Each of these was a
   construct the engine carried through compilation and refused where the

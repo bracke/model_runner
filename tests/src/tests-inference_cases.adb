@@ -2076,6 +2076,180 @@ package body Tests.Inference_Cases is
    -- Device_Reads_A_Model_In_Any_Format --
    ----------------------------------------
 
+   --  The two backends agree on a prompt long enough to fill the tile.
+   --
+   --  The sweep compares every backend against the independent
+   --  implementation on sequences of at most eight tokens, and the device's
+   --  matrix kernel is not entered below nine and is built for a hundred
+   --  and twenty-eight: the path a real prompt takes on a device was
+   --  compared with nothing. Lengthening the sweep was tried and costs
+   --  forty minutes, because the reference computes every sequence for
+   --  every fixture in binary64 whether a comparison asks or not. What this
+   --  wants to know is only whether two backends agree, and two backends
+   --  can be asked that for the price of running them: the processor,
+   --  serial, against the device, on the same fixture and the same tokens,
+   --  a hundred and sixty of them in one batch and again in chunks of
+   --  forty-one so the seam between calls is crossed at a tile boundary.
+   --  Two formats, because the two tile compilations differ: Q4_K takes the
+   --  wide tile at a hundred and twenty-eight columns a step, Q8_0 the
+   --  narrow one at thirty-two.
+   --
+   --  The tile's operand is half precision and the processor's is not, so
+   --  the two are held to a tolerance rather than a digest; a wrong tile
+   --  answers by whole logits, not by a thousandth. Measured on the part
+   --  this was written on: the Q4_K fixture through the wide tile differs
+   --  by 0.0126 at worst on logits up to 9.3, which is a seventh of a per
+   --  cent and what two layers of half-precision operands come to; the
+   --  Q8_0 fixture, too narrow for the wide tile and served by the row
+   --  kernels, by a millionth in one batch and by 0.002 in chunks, the
+   --  engine picking a different kernel for each count. The tolerance is
+   --  set above the first and well below a wrong answer.
+   procedure Two_Backends_Agree_On_A_Long_Prompt
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Model_Runner.Backend.Backend_Kind;
+
+      Length    : constant := 160;
+      Room      : constant := 256;
+      Tolerance : constant N.Real := 0.02;
+
+      --  The tokens, pseudo-random over the fixture's sixteen-word
+      --  vocabulary and the same on every run.
+      Tokens : Model_Runner.Tokenizer.Token_Array (1 .. Length);
+
+      --  The last position's logits from one backend, in one batch or in
+      --  chunks. Zero means the backend refused, and says why.
+      procedure Logits_On
+        (Image   : B.Byte_Array_Access;
+         Backend : Model_Runner.Backend.Backend_Kind;
+         Chunk   : Positive;
+         Answer  : out N.Real_Array;
+         Refusal : out E.Error_Code)
+      is
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item    : Containers.Container;
+         Model   : L.Model;
+         Session : L.Session;
+         Status  : E.Error_Info;
+         From    : Positive := 1;
+      begin
+         Answer := [others => 0.0];
+         Refusal := E.No_Error;
+
+         Containers.Reader.Parse (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+         L.Prepare (Model, Item, Source, Backend => Backend, Status => Status);
+         if E.Is_Error (Status) then
+            Refusal := Status.Code;
+            Containers.Close (Item);
+            return;
+         end if;
+
+         L.Open (Session, Model, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a session did not open on "
+                 & Model_Runner.Backend.Backend_Name (Backend) & ": "
+                 & E.Error_Code'Image (Status.Code));
+
+         while From <= Length loop
+            declare
+               Upto : constant Positive := Positive'Min (From + Chunk - 1, Length);
+            begin
+               L.Evaluate_Batch
+                 (Session, Model, Tokens (From .. Upto), Answer,
+                  Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the batch did not evaluate on "
+                       & Model_Runner.Backend.Backend_Name (Backend) & ": "
+                       & E.Error_Code'Image (Status.Code));
+               From := Upto + 1;
+            end;
+         end loop;
+
+         L.Close (Session);
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end Logits_On;
+
+      Seed : Interfaces.Unsigned_32 := 1_234_567;
+      use type Interfaces.Unsigned_32;
+
+      Chunks : constant array (1 .. 2) of Positive := [Length, 41];
+      Awake  : Boolean;
+   begin
+      for Index in Tokens'Range loop
+         Seed := Seed * 1_103_515_245 + 12_345;
+         Tokens (Index) := Model_Runner.Tokenizer.Token_Id
+           (Interfaces.Shift_Right (Seed, 16) mod Tiny_Model.Vocabulary);
+      end loop;
+
+      --  The backend is a singleton the suite leaves closed, and a model
+      --  prepares on it either way: it is the first product that answers
+      --  BACKEND_CLOSED when nobody opened it, which is the fixture
+      --  question that stopped the first version of this test.
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device compared a long prompt here");
+         return;
+      end if;
+
+      declare
+         Formats : constant array (1 .. 2) of Tiny_Model.Weight_Format :=
+           [Tiny_Model.Q4_K, Tiny_Model.Q8_0];
+      begin
+         for Format of Formats loop
+            declare
+               Image  : B.Byte_Array_Access;
+               Host   : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Device : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Why    : E.Error_Code;
+               Worst  : N.Real := 0.0;
+               Name   : constant String := Tiny_Model.Weight_Format'Image (Format);
+            begin
+               Tiny_Model.Build (Image, Format, Room => Room);
+
+               Logits_On
+                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
+               Assert (Why = E.No_Error,
+                       "the processor refused the " & Name & " fixture: "
+                       & E.Error_Code'Image (Why));
+
+               for Chunk of Chunks loop
+                  Logits_On
+                    (Image, Model_Runner.Backend.Backend_Device, Chunk,
+                     Device, Why);
+
+                  Assert (Why = E.No_Error,
+                          "the device refused the " & Name & " fixture: "
+                          & E.Error_Code'Image (Why));
+
+                  Worst := 0.0;
+                  for Index in Host'Range loop
+                     Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
+                  end loop;
+                  Assert (Worst <= Tolerance,
+                          "on the " & Name & " fixture in chunks of"
+                          & Positive'Image (Chunk)
+                          & " the device's logits differ from the processor's"
+                          & " by " & N.Real'Image (Worst)
+                          & " at worst, where " & N.Real'Image (Tolerance)
+                          & " is allowed");
+               end loop;
+
+               B.Free (Image);
+            end;
+         end loop;
+      end;
+
+      Model_Runner.Backend.Device.Close;
+   end Two_Backends_Agree_On_A_Long_Prompt;
+
    --  A model in any format the program reads loads on the device.
    --
    --  This test used to say the opposite, and the opposite was true: the
@@ -9634,6 +9808,10 @@ package body Tests.Inference_Cases is
         (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
          "a model whose matrices are larger than the device will hold is "
          & "refused while it loads, with both numbers");
+      Register_Routine
+        (T, Two_Backends_Agree_On_A_Long_Prompt'Access,
+         "the processor and the device agree on a prompt long enough to "
+         & "fill the tile, in one batch and across a seam");
       Register_Routine
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "

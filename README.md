@@ -904,10 +904,17 @@ which for the fixture is four bytes and for a real vocabulary about
 seventeen; a position whose byte begins no piece costs one array read and no
 lookup at all.
 
-`tests benchmark` times both cases now, at a load of 1.11: **0.0139 s** for
-sixty thousand ordinary characters and **0.0156 s** for sixty thousand
-brackets, so the hostile text costs about an eighth more rather than six
-hundred times more. Those are lower than the 0.039 and 0.045 this used to
+`tests benchmark` times both cases now, at the end of a run that had taken
+the load from 0.69 to 3.91 and the part to 91 degrees: **0.0071 s** for
+sixty thousand ordinary characters and **0.0123 s** for sixty thousand
+brackets, so the hostile text costs about three quarters more rather than
+six hundred times more. The pair before this one read 0.0139 and 0.0156 at
+a load of 1.11, on a byte-pair cutter that has since been rewritten as
+passes over code points and a marker scan that has not changed; the
+ordinary text is the SentencePiece road and half the time it was, which
+a hot part and a second-of-three-rounds median do not explain, so the
+figure is taken again at the next sitting before anything is concluded
+from it. Those are lower than the 0.039 and 0.045 this used to
 quote, and the reason is what they measure: the older pair came from timing
 a whole `model_runner run` in the shell -- parsing the model, loading the
 vocabulary, encoding, and refusing the prompt for length -- while these are
@@ -6681,15 +6688,20 @@ fifteen formats over, is the forty minutes.
 the hour. What the missing test wants to ask is whether two backends agree,
 not whether one of them agrees with an independent implementation -- and two
 backends can be asked that for the price of running them. A test doing
-exactly that was written and does not yet run: the processor side comes back
-`BACKEND_CLOSED` where the same calls in the harness beside it do not, which
-is a fixture question and not an engine one. It is not committed, because a
-test that does not run is worse than a gap that is written down.
+exactly that was written and did not run at first: the device side came
+back `BACKEND_CLOSED`, because the backend is a singleton the suite leaves
+closed, a model prepares on it either way, and it is the first product that
+says nobody opened it. Opened, it runs, and it is in the suite now: the
+processor, serial, against the device on a hundred and sixty tokens of the
+Q4_K and Q8_0 fixtures, in one batch and in chunks of forty-one so the seam
+between calls falls inside a tile. The wide tile differs from the processor
+by 0.0126 at worst on logits up to 9.3 -- a seventh of a per cent, which is
+two layers of half-precision operands -- and the row kernels the narrower
+fixture is served by differ by a millionth in one batch and by 0.002 in
+chunks. Held to 0.02, which is above the first and far below a wrong tile.
 
-**What is committed is the check that catches the case that happened** --
-the shader's tile against the engine's dispatch, which fails on the old
-numbers -- and this paragraph, which says what the remaining hole is and what
-it would cost to close it the obvious way.
+**Also committed is the check that catches the case that happened** -- the
+shader's tile against the engine's dispatch, which fails on the old numbers.
 
 ### A slower day, measured on both sides
 

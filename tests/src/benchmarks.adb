@@ -915,6 +915,13 @@ package body Benchmarks is
          end loop;
 
          Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+
+         --  Closed by hand, as every other pool here is. This one was left
+         --  to its finalization, and the benchmark stopped at the end of
+         --  this stage on every sitting that reached it: the workers wait
+         --  on a pool that nothing has told to stop, and the finalizer
+         --  waits on the workers.
+         Model_Runner.Backend.CPU.Close (Team);
       end Measure_Expert_Shapes;
 
       procedure Measure_Token_Budget
