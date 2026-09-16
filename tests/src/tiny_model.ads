@@ -313,6 +313,12 @@ package Tiny_Model is
    --    by the head count. Three assumptions at once: that a head is as wide
    --    as the embedding implies, that keys and values are the same width,
    --    and that the attention output is as wide as the embedding.
+   --  @param Head_Factor How many times the width the embedding implies
+   --    a key head and a value head are: two makes them two hundred and
+   --    fifty-six on the deep fixture, which is Gemma's -- the width past
+   --    which the device's attention kernel keeps no room -- and which no
+   --    fixture had until the device answered every Gemma in nonsense
+   --    while every fixture agreed with the processor to the bit.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -335,6 +341,7 @@ package Tiny_Model is
       Merged         : Boolean := False;
       Stretch        : Rope_Stretch := Plain;
       Rope_Table     : Boolean := False;
-      Apart_Widths   : Boolean := False);
+      Apart_Widths   : Boolean := False;
+      Head_Factor   : Positive := 1);
 
 end Tiny_Model;

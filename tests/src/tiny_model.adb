@@ -68,7 +68,8 @@ package body Tiny_Model is
       Merged       : Boolean := False;
       Stretch      : Rope_Stretch := Plain;
       Rope_Table   : Boolean := False;
-      Apart_Widths : Boolean := False)
+      Apart_Widths : Boolean := False;
+      Head_Factor : Positive := 1)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -106,9 +107,9 @@ package body Tiny_Model is
       --  the head count -- which is three separate assumptions this fixture
       --  breaks at once.
       Key_Size : constant Natural :=
-        (if Apart_Widths then 2 * Head_Size else Head_Size);
+        (if Apart_Widths then 2 * Head_Size else Head_Factor * Head_Size);
       Value_Size : constant Natural :=
-        (if Apart_Widths then 3 * Head_Size else Head_Size);
+        (if Apart_Widths then 3 * Head_Size else Head_Factor * Head_Size);
 
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
@@ -467,7 +468,7 @@ package body Tiny_Model is
       end if;
 
       --  The head widths, when the file states them apart.
-      if Apart_Widths then
+      if Apart_Widths or else Head_Factor > 1 then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.key_length",
             Interfaces.Unsigned_32 (Key_Size));

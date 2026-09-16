@@ -4763,7 +4763,7 @@ package body Model_Runner.Llama is
 
    --  Where a session's cache begins in the device's buffer.
    function Block_Base (Item : Session) return Element_Count
-   is (if Item.Seat <= 0 or else Item.Keys = null or else Item.Values = null
+   is (if Item.Seat < 0 or else Item.Keys = null or else Item.Values = null
        then 0
        else Element_Count (Item.Seat)
             * (Item.Keys.all'Length + Item.Values.all'Length));
@@ -4817,8 +4817,15 @@ package body Model_Runner.Llama is
                Layer_Vals : constant Element_Count :=
                  Values_At (Item, Natural (Index));
 
-               Base : constant Element_Count := Layer_Keys + First * KV_Width;
-               V_At : constant Element_Count := Layer_Vals + First * V_Width;
+               --  Where the positions sit in this layer: at their cells,
+               --  which on a layer that has slid are not their numbers.
+               --  Every owed position was written since the layer last
+               --  slid -- a slide settles first -- so each is still held.
+               Cell : constant Element_Count :=
+                 Cell_Of (Item, Natural (Index), First);
+
+               Base : constant Element_Count := Layer_Keys + Cell * KV_Width;
+               V_At : constant Element_Count := Layer_Vals + Cell * V_Width;
             begin
                Model_Runner.Backend.Device.Get_Cache
                  (Block_Base (Item) + Base,
@@ -7934,7 +7941,7 @@ package body Model_Runner.Llama is
                   --  exact storage ever reaches a device, which is what
                   --  Take_Block asks of a session before it deals it one.
                   if Moved > 0
-                    and then Item.Seat > 0
+                    and then Item.Seat >= 0
                     and then Item.Held = Exact
                   then
                      declare
@@ -9100,6 +9107,19 @@ package body Model_Runner.Llama is
         and then Block_Holder (Item.Seat) = Item'Unchecked_Access
       then
          Block_Holder (Item.Seat) := null;
+
+         --  And the width every block has, forgotten with the last block:
+         --  a session of another shape may then take the device's cache
+         --  where it was refused it before. Kept while any block is held,
+         --  because the width is the buffer's and not a session's. A
+         --  program runs one model and never noticed; the suite runs
+         --  dozens, and every one after the first of another width
+         --  attended on the host, which is how a kernel that wrote half a
+         --  head passed every comparison.
+         if (for all Holder of Block_Holder => Holder = null) then
+            Block_Span := 0;
+            Block_Taken := 0;
+         end if;
       end if;
 
       Item.Seat := -1;
@@ -9551,7 +9571,7 @@ package body Model_Runner.Llama is
       --  device attended to the conversation it had before the roll, with
       --  no error and no sign. A shift happens once a context, so the whole
       --  cache goes over rather than the rows that moved.
-      if Item.Seat > 0 and then Item.Held = Exact then
+      if Item.Seat >= 0 and then Item.Held = Exact then
          declare
             Sent : Boolean;
          begin
@@ -13700,11 +13720,15 @@ package body Model_Runner.Llama is
                      end loop;
                   else
                      declare
+                        Cell : constant Element_Count :=
+                          Cell_Of (Item, Natural (Index),
+                                   Element_Count (Item.Committed));
+
                         Base : constant Element_Count :=
-                          Layer_Keys + Element_Count (Item.Committed) * KV_Width;
+                          Layer_Keys + Cell * KV_Width;
 
                         V_At : constant Element_Count :=
-                          Layer_Vals + Element_Count (Item.Committed) * V_Width;
+                          Layer_Vals + Cell * V_Width;
                      begin
                         Model_Runner.Backend.Device.Get_Cache
                           (Block_Base (Item) + Base,

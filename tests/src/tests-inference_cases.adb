@@ -2199,6 +2199,77 @@ package body Tests.Inference_Cases is
          return;
       end if;
 
+      --  Every architecture the device reads, windowed where it can be,
+      --  and then heads as wide as Gemma's -- two hundred and fifty-six,
+      --  past the room the device's attention kernel keeps --
+      --  which the device must decline and the processor take: for a
+      --  hundred days it did not decline it, and every Gemma answered in
+      --  nonsense while every fixture, four wide, agreed to the bit.
+      declare
+         type Case_Row is record
+            Kind   : Tiny_Model.Fixture_Architecture;
+            Format : Tiny_Model.Weight_Format;
+            Window : Natural;
+            Heads  : Positive;
+         end record;
+         Rows : constant array (1 .. 11) of Case_Row :=
+           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1),
+            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1),
+            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2)];
+      begin
+         for Row of Rows loop
+            declare
+               Image  : B.Byte_Array_Access;
+               Host   : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Device : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Why    : E.Error_Code;
+               Worst  : N.Real := 0.0;
+               Name   : constant String :=
+                 Tiny_Model.Fixture_Architecture'Image (Row.Kind) & " "
+                 & Tiny_Model.Weight_Format'Image (Row.Format)
+                 & (if Row.Heads > 1 then " with heads as wide as Gemma's" else "");
+            begin
+               Tiny_Model.Build
+                 (Image, Row.Format, Room => Room, Kind => Row.Kind,
+                  Window => Row.Window, Head_Factor => Row.Heads);
+               Logits_On
+                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
+               Assert (Why = E.No_Error,
+                       "the processor refused " & Name & ": "
+                       & E.Error_Code'Image (Why));
+               --  In one batch, and a position at a time, which is the
+               --  path a generated token takes.
+               for Chunk in reverse 1 .. 2 loop
+                  Logits_On
+                    (Image, Model_Runner.Backend.Backend_Device,
+                     (if Chunk = 2 then Length else 1), Device, Why);
+                  Assert (Why = E.No_Error,
+                          "the device refused " & Name & ": "
+                          & E.Error_Code'Image (Why));
+                  Worst := 0.0;
+                  for Index in Host'Range loop
+                     Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
+                  end loop;
+                  Assert (Worst <= Tolerance,
+                          "on " & Name
+                          & (if Chunk = 2 then " in one batch"
+                             else " a position at a time")
+                          & " the device's logits differ from the "
+                          & "processor's by " & N.Real'Image (Worst));
+               end loop;
+               B.Free (Image);
+            end;
+         end loop;
+      end;
+
       declare
          Formats : constant array (1 .. 2) of Tiny_Model.Weight_Format :=
            [Tiny_Model.Q4_K, Tiny_Model.Q8_0];

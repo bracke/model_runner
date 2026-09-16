@@ -53,6 +53,32 @@ Keep a Changelog and the project uses semantic versioning.
   and never saw it) and an enormous file costs no more memory than a fitting
   one.
 
+### Fixed
+
+- **The device backend answered nonsense on Gemma, Gemma 2 and Gemma 3.**
+  The attention shader has room for a head 128 wide, halved from 256 when
+  it took eight queries a block, and the guard that sends a wider head to
+  the host stayed at 256 -- so Gemma's 256-wide heads went to a kernel that
+  wrote half of each blend and read the rest from nothing. The guard says
+  128 now: those heads attend on the host, as they did before the shader
+  narrowed, and every Gemma answers the same text as `cpu`. Three faults of
+  the device's cache beside it, each found once the suite could reach it:
+  the first session to take a block of the device's cache -- seat zero,
+  the only seat a run has -- was excluded by an off-by-one from having its
+  slid rows and its shifted cache sent over, so a rolling context on the
+  device attended to what it held before the roll; and the host's copy of
+  what the device wrote was read back at a position's number rather than
+  its cell, which on a layer that has slid is past the layer's end, so a
+  shift on a slid cache raised. What hid all four: the width every block
+  of the device's cache has was set by the first session ever to take one
+  and never forgotten, so in the suite every device session after the
+  first of another shape was quietly refused the cache and attended on the
+  host, where every comparison passed. The width is forgotten with the
+  last block now, and the processor-against-device comparison runs a
+  prompt through every architecture the program reads, including a Gemma
+  3 fixture with heads as wide as Gemma's, which reads 3.37 apart with the
+  old guard and a thousandth with the new.
+
 ### Added
 
 - **A picture's rows see each other, and the device takes the encoder's

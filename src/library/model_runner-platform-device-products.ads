@@ -1385,7 +1385,18 @@ package Model_Runner.Platform.Device.Products is
    --  The widest value head this kernel will take. One wider is refused, and
    --  the caller does it on the processor: a kernel that wrote past what it
    --  kept would be worse than one that says no.
-   Attention_Room : constant := 256;
+   --
+   --  It is the kernel's own `room`, which went from two hundred and
+   --  fifty-six to a hundred and twenty-eight when eight queries a block
+   --  landed -- the two multiply into a lane's registers -- and this number
+   --  stayed behind. For a hundred days a Gemma, whose value heads are two
+   --  hundred and fifty-six wide, passed this guard and had the kernel
+   --  write past what it kept: the device answered every Gemma in nonsense
+   --  while every fixture, four wide, agreed with the processor to the bit.
+   --  The shader check proves the words came from the source; nothing
+   --  proved this constant did, which is why it now says where it comes
+   --  from.
+   Attention_Room : constant := 128;
 
    --  Bytes one row of a matrix takes.
    --
