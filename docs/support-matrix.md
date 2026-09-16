@@ -195,12 +195,18 @@ names ask for the same one. The grouping is the other runtime's own.
 What the byte-pair cut carries is each expression written out by hand rather
 than a general engine for them, and the suite holds each to a general engine
 that interprets the expression text. What that settles is that the engine
-cuts as the expressions say. What it cannot settle is the transcription of a
-model's own tokenizer into those expressions -- that needs a second runtime
-and a real vocabulary, which is what `docs/reference-runtime.md` is about,
-and which is what corrected `starcoder`, the absent key, falcon's space
-before a long run of digits, the contractions on the two rules that cut
-punctuation out first, and the space prefix on gemma2 and gemma3.
+cuts as the expressions say. Every name has also been set beside the other
+runtime's own splitter over three thousand generated texts, through a
+harness around its `unicode_regex_split`: sixty-three names agree on every
+text, and the rest differ only where this build carries the model's own
+expression -- a word cut at its case by the Unicode categories, marks in the
+word, a run of digits not glued to what precedes it -- and the other runtime
+an approximation of it; `docs/reference-runtime.md` names each. What
+neither settles is the transcription of a model's own tokenizer into those
+expressions, which needs a real vocabulary, and which is what corrected
+`starcoder`, the absent key, falcon's space before a long run of digits, the
+contractions on the two rules that cut punctuation out first, and the space
+prefix on gemma2 and gemma3.
 
 ## Chat-template constructs
 

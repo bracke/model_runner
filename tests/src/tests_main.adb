@@ -29,6 +29,9 @@ with Benchmarks;
 with GNAT.OS_Lib;
 
 with Model_Runner.Byte_Sources.Files;
+with Model_Runner.Byte_Sources.Memory;
+with Model_Runner.Bytes;
+with BPE_Vocabulary;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Tokenizer;
 with Model_Runner.Templates;
@@ -891,6 +894,102 @@ begin
                end loop;
             end if;
          end;
+      end;
+
+   elsif Command = "cut" then
+      --  Cut text by a named pre-tokenizer rule and print each piece's
+      --  length in bytes, which is what makes the cutter comparable with
+      --  the other runtime's: a harness around llama.cpp's own
+      --  unicode_regex_split prints the same list for the same rule. The
+      --  texts come one a line, hex-encoded, so that a line end inside one
+      --  is a byte and not a line.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Pre   : constant String := Option ("--pre", "gpt-2");
+         Path  : constant String := Option ("--texts", "");
+
+         Image  : Model_Runner.Bytes.Byte_Array_Access;
+         Words  : Model_Runner.Tokenizer.Vocabulary;
+         Status : E.Error_Info;
+         File   : Ada.Text_IO.File_Type;
+
+         function Unhex (Line : String) return String is
+            Result : String (1 .. Line'Length / 2);
+            function Digit (C : Character) return Natural
+            is (if C in '0' .. '9' then Character'Pos (C) - 48
+                elsif C in 'a' .. 'f' then Character'Pos (C) - 87
+                else Character'Pos (C) - 55);
+         begin
+            for Index in Result'Range loop
+               Result (Index) := Character'Val
+                 (Digit (Line (Line'First + 2 * Index - 2)) * 16
+                  + Digit (Line (Line'First + 2 * Index - 1)));
+            end loop;
+            return Result;
+         end Unhex;
+      begin
+         if Path = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "cut: --texts is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
+            BPE_Vocabulary.Build (Pre, Image);
+            declare
+               Held   : aliased constant Model_Runner.Bytes.Byte_Array :=
+                 Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Item   : Model_Runner.GGUF.Containers.Container;
+            begin
+               Model_Runner.GGUF.Containers.Reader.Parse
+                 (Item, Source, Status => Status);
+               Model_Runner.Tokenizer.Load (Words, Item, Status => Status);
+               if E.Is_Error (Status) then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "cut: " & E.Diagnostic_Code (Status.Code));
+                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               else
+                  Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                  while not Ada.Text_IO.End_Of_File (File) loop
+                     declare
+                        Text  : constant String :=
+                          Unhex (Ada.Text_IO.Get_Line (File));
+                        Ends  : Model_Runner.Tokenizer.Piece_Ends
+                          (1 .. Text'Length + 1);
+                        Count : Natural;
+                        From  : Natural := Text'First;
+                     begin
+                        Model_Runner.Tokenizer.Cut
+                          (Words, Text, Ends, Count, Status);
+                        for Piece in 1 .. Count loop
+                           if Piece > 1 then
+                              Ada.Text_IO.Put (" ");
+                           end if;
+                           Ada.Text_IO.Put
+                             (Model_Runner.Text.Trim
+                                (Natural'Image (Ends (Piece) - From + 1)));
+                           From := Ends (Piece) + 1;
+                        end loop;
+                        Ada.Text_IO.New_Line;
+                     end;
+                  end loop;
+                  Ada.Text_IO.Close (File);
+                  Model_Runner.Tokenizer.Close (Words);
+               end if;
+               Model_Runner.GGUF.Containers.Close (Item);
+            end;
+            Model_Runner.Bytes.Free (Image);
+         end if;
       end;
 
    elsif Command = "render" then

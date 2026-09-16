@@ -55,6 +55,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every cutting rule set beside the other runtime's own splitter.** A
+  thirty-line harness around llama.cpp's `unicode_regex_split` and a new
+  `tests cut --pre NAME --texts PATH` print the same list -- a piece
+  length each, the texts hex-encoded a line -- and a script drives both
+  over three thousand generated texts a name with the expression lists
+  read out of `llama-vocab.cpp`. Sixty-three of the hundred names agree
+  on every text; the rest differ only where this build carries a model's
+  own expression and the other runtime an approximation of it -- the case
+  cut, the marks, a run of digits glued to what precedes it -- and
+  `docs/reference-runtime.md` names each.
 - **The processor and the device are compared on a prompt long enough to
   fill the tile.** The sweep's sequences are eight tokens at most and the
   device's matrix kernel is not entered below nine, so the path a real

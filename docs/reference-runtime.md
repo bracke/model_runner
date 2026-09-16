@@ -271,6 +271,84 @@ well.
 Those files are not committed here and are not needed unless the comparison is
 being run again.
 
+### The cutting rules, against the splitter itself
+
+What was compared the third time was not vocabularies but the cut. Twenty
+rules arrived at once, each a transcription of the other runtime's list of
+expressions, and no published vocabulary for most of them was to hand. What
+was to hand was the other runtime's source, and the cut is a function in it:
+`unicode_regex_split` in `src/unicode.cpp` takes a text and a list of
+expressions and answers the pieces, with its hand-written cutters for the
+rules it has them for. A harness of thirty lines links that file and prints
+each piece's length in bytes; `tests cut --pre NAME --texts PATH` prints the
+same list from this engine, the texts one a line and hex-encoded so a line
+end inside one is a byte; and the expression list for each name is read out
+of `llama-vocab.cpp` by the script that drives both.
+
+    // split.cpp, built with
+    //   g++ -std=c++17 -I llama.cpp/src split.cpp llama.cpp/src/unicode.cpp \
+    //       llama.cpp/src/unicode-data.cpp -o split
+    #include "unicode.h"
+    #include <iostream>
+    #include <string>
+    #include <vector>
+    static std::string unhex(const std::string& h) {
+        std::string s;
+        for (size_t i = 0; i + 1 < h.size(); i += 2)
+            s.push_back((char) std::stoi(h.substr(i, 2), nullptr, 16));
+        return s;
+    }
+    int main(int argc, char** argv) {
+        std::vector<std::string> exprs(argv + 1, argv + argc);
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            auto pieces = unicode_regex_split(unhex(line), exprs, false);
+            bool first = true;
+            for (auto& p : pieces) {
+                if (p.empty()) continue;   // a zero-width match, a boundary
+                std::cout << (first ? "" : " ") << p.size();
+                first = false;
+            }
+            std::cout << "\n";
+        }
+    }
+
+Three thousand texts a name, made of the things the rules disagree about --
+letters of both cases and of several scripts, marks, digits of two kinds,
+runs of spaces and line ends, punctuation and symbols, contractions,
+ideographs, Hangul, the literal tokens two rules look for. **Sixty-three of
+the hundred names agree with the other runtime's splitter on every one of
+their three thousand texts**, the fifty-odd that map onto the original six
+rules included, and so do minicpm5, jais-2, bailingmoe, seed-coder, laguna,
+exaone-moe, deepseek-llm, deepseek-coder, deepseek-v3, hunyuan-dense,
+joyai-llm, bloom, poro-chat, gpt3-finnish, viking, superbpe, chameleon and
+granite-embed-multi-97m.
+
+The rest differ, and each difference is one this build chose:
+
+- `tekken`, `gpt-4o`, `llama4`, `kanana2`, `talkie`, `minimax-m2`, `youtu`,
+  `kimi-k2`, `tiny_aya`, `cohere2moe`: the models' own expressions cut a
+  word where its case changes, by the Unicode case categories, with the
+  combining marks in the word. The other runtime approximates the case
+  classes with ASCII where it can and loses them entirely where it runs
+  the expression over a text with every letter collapsed to one byte, and
+  it leaves the marks out; its hand-written cutter for kimi-k2 does not cut
+  at case at all. On texts of ASCII letters without marks, all of these
+  agree; the differences are a capital or a small letter outside ASCII
+  beside one inside, or a mark, or a change of case where the other
+  runtime cannot see one. What is carried here is the model's own
+  expression, because the model was trained on it.
+- `afmoe`, `tiny_aya`, `cohere2moe`: the other runtime's hand-written
+  digit pass glues whatever precedes a run of digits onto the run's first
+  group -- a chunk of `€     1` where the expression it stands for makes
+  `€     ` and `1` -- and the expression is what is carried.
+
+The difference the harness found before it found any of those: it printed
+the pieces as the other runtime hands them to its merge loop, in the
+stand-in alphabet where every byte above ASCII is two, and disagreed on
+every text with a non-ASCII character in it. `unicode_regex_split` takes a
+flag for that.
+
 One trap is worth naming, since it cost an hour here. Recent `llama.cpp`
 wraps the prompt in the model's chat template unless told not to: pass
 `--no-conversation` to `llama-completion`, or it will feed fourteen tokens

@@ -13,6 +13,7 @@ package body Tool_Commands is
    Name_Outside        : aliased constant String := "outside";
    Name_Tokenize       : aliased constant String := "tokenize";
    Name_Render         : aliased constant String := "render";
+   Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
    Name_Fixtures       : aliased constant String := "fixtures";
@@ -50,6 +51,7 @@ package body Tool_Commands is
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens ";
    Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
+   Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
      " --model --system --prompt --assistant --calls --tool --tools"
      & " --template --generation-prompt ";
@@ -83,6 +85,7 @@ package body Tool_Commands is
      & " [--draft-model PATH] [--draft-tokens N]";
    Takes_Tokenize  : aliased constant String :=
      "--model PATH --prompt TEXT [--special]";
+   Takes_Cut       : aliased constant String := "--pre NAME --texts PATH";
    Takes_Render    : aliased constant String :=
      "--model PATH [--system TEXT] [--prompt TEXT] [--assistant TEXT]"
      & " [--calls JSON] [--tool TEXT] [--tools JSON] [--template PATH]"
@@ -132,6 +135,9 @@ package body Tool_Commands is
      "validate a model you already have, and say what it produced";
    Says_Tokenize : aliased constant String :=
      "tokenize text with a model's own vocabulary";
+   Says_Cut : aliased constant String :=
+     "cut hex-encoded lines by a named pre-tokenizer rule, a piece length "
+     & "each";
    Says_Render : aliased constant String :=
      "render a conversation through a model's own chat template";
    Says_Docs : aliased constant String :=
@@ -180,7 +186,7 @@ package body Tool_Commands is
      " --model --threads --backend --anyway --wait --trace --report "
      & "--chat-template --context-size --arith ";
 
-   Held : constant array (1 .. 24) of Command :=
+   Held : constant array (1 .. 25) of Command :=
      [(Name_Test'Access, Nothing'Access, Says_Test'Access,
        Opts_None'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -207,6 +213,7 @@ package body Tool_Commands is
        Opts_Outside'Access),
       (Name_Tokenize'Access, Takes_Tokenize'Access, Says_Tokenize'Access,
        Opts_Tokenize'Access),
+      (Name_Cut'Access, Takes_Cut'Access, Says_Cut'Access, Opts_Cut'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,
        Opts_Render'Access),
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,
