@@ -93,7 +93,10 @@ package Model_Runner.Vision is
    --  @param Picture The picture, any size.
    --  @param Team The pool the products run on -- the run's own, so that
    --    its workers do this rather than sit beside a second pool doing it
-   --    -- or null to run on the calling task alone.
+   --    -- or null to run on the calling task alone. Where the device
+   --    backend is open, the encoder's linear products run there instead,
+   --    the projector's tensors uploaded once and kept; the attention
+   --    among the patches stays on the pool.
    --  @param Rows Receives the rows, or null on failure.
    --  @param Cancel Stop request, observed between blocks, or null.
    --  @param Status Success, Generation_Cancelled, Memory_Allocation_Failed
@@ -158,8 +161,10 @@ private
 
       --  The projection, decoded and transposed from the file's rows --
       --  Width of them, Text_Width long -- into Text_Width rows of Width,
-      --  so that it is a product like every other.
+      --  so that it is a product like every other, and a view over those
+      --  rows for a device to read.
       Projection_Rows : T.Real_Array_Access := null;
+      Projection      : T.View := T.Empty_View;
    end record;
 
 end Model_Runner.Vision;

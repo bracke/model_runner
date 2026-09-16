@@ -771,8 +771,45 @@ package body Model_Runner.Generation is
             end if;
 
             declare
-               Last : constant Natural :=
-                 Natural'Min (Index + Span - 1, Prompt_Count);
+               --  The batch's last position -- moved so that a picture's
+               --  rows, which attend to each other, travel in one batch:
+               --  a batch that would end inside a run of them ends before
+               --  the run instead, or, where the run began the batch and
+               --  fits within what the engine takes at once, after it.
+               function Batch_End return Natural is
+                  Last : constant Natural := Natural'Min (Index + Span - 1, Prompt_Count);
+               begin
+                  if Pictures.Soft = Vocab.No_Token or else Last >= Prompt_Count
+                    or else Tokens.all (Last) /= Pictures.Soft
+                    or else Tokens.all (Last + 1) /= Pictures.Soft
+                  then
+                     return Last;
+                  end if;
+                  declare
+                     Run_Start : Natural := Last;
+                     Run_End   : Natural := Last;
+                  begin
+                     while Run_Start > Index
+                       and then Tokens.all (Run_Start - 1) = Pictures.Soft
+                     loop
+                        Run_Start := Run_Start - 1;
+                     end loop;
+                     while Run_End < Prompt_Count
+                       and then Tokens.all (Run_End + 1) = Pictures.Soft
+                     loop
+                        Run_End := Run_End + 1;
+                     end loop;
+                     if Run_Start > Index then
+                        return Run_Start - 1;
+                     elsif Run_End - Index + 1 <= L.Max_Batch then
+                        return Run_End;
+                     else
+                        return Last;
+                     end if;
+                  end;
+               end Batch_End;
+
+               Last : constant Natural := Batch_End;
             begin
                --  With every position's state where the next block will
                --  be run over the prompt behind it.

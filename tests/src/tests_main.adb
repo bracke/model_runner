@@ -44,6 +44,7 @@ with Model_Runner.Text;
 with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Generation;
@@ -410,6 +411,7 @@ begin
          Threads   : constant Natural :=
            Natural'Value (Option ("--threads", "0"));
          Dump      : constant String := Option ("--dump", "");
+         On_Device : Boolean := False;
          Eyes      : Model_Runner.Vision.Encoder;
          Picture   : Model_Runner.Images.Raster;
          Rows      : Model_Runner.Tensors.Real_Array_Access;
@@ -454,6 +456,13 @@ begin
             & "," & Model_Runner.Vision.Image_Size (Eyes)'Image & " a side,"
             & Model_Runner.Vision.Rows_Per_Picture (Eyes)'Image & " rows of"
             & Model_Runner.Vision.Row_Width (Eyes)'Image);
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--device" then
+               Model_Runner.Backend.Device.Open (On_Device);
+               Ada.Text_IO.Put_Line
+                 ("device: " & (if On_Device then "open" else "none"));
+            end if;
+         end loop;
          Started := Ada.Calendar.Clock;
          declare
             Count : constant Natural :=
@@ -511,6 +520,9 @@ begin
          end if;
          Model_Runner.Vision.Close (Eyes);
          Model_Runner.Images.Free (Picture);
+         if On_Device then
+            Model_Runner.Backend.Device.Close;
+         end if;
       end;
    elsif Command = "fuzz" then
       --  Mutation fuzzing over the GGUF parser. Every case is derived from the

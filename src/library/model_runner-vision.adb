@@ -3,6 +3,7 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 with System.Storage_Elements;
 
+with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Model_Runner.Platform;
@@ -483,6 +484,19 @@ package body Model_Runner.Vision is
                Fail (Status);
                return;
             end if;
+            T.Make
+              (Format  => Model_Runner.GGUF.Type_F32,
+               Rows    => Text_Width,
+               Columns => Width,
+               Base    => Item.Projection_Rows.all'Address,
+               Span    => B.Byte_Count (Item.Projection_Rows.all'Length) * 4,
+               Offset  => 0,
+               Result  => Item.Projection,
+               Status  => Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
          end;
       end;
 
@@ -710,8 +724,10 @@ package body Model_Runner.Vision is
       X, Normed, Q, Kv, V, Attended, Hidden : T.Real_Array_Access := null;
 
       --  A matrix decoded to binary32, a head's keys, queries and values
-      --  gathered contiguous, and a head's scores.
+      --  gathered contiguous, a head's scores, and a device product's
+      --  chunk of rows in and out.
       Decoded : T.Real_Array_Access := null;
+      In_Chunk, Out_Chunk : T.Real_Array_Access := null;
       K_Head, Q_Head, V_Head_T, Scores : T.Real_Array_Access := null;
 
       Resampled : Model_Runner.Images.Raster;
@@ -731,6 +747,8 @@ package body Model_Runner.Vision is
          T.Free (Attended);
          T.Free (Hidden);
          T.Free (Decoded);
+         T.Free (In_Chunk);
+         T.Free (Out_Chunk);
          T.Free (K_Head);
          T.Free (Q_Head);
          T.Free (V_Head_T);
@@ -799,8 +817,15 @@ package body Model_Runner.Vision is
          end if;
       end Multiply;
 
-      --  Target := Source * Weight, the weight decoded from the file's
-      --  format to binary32 first.
+      --  Rows one product on the device takes at once: where the device's
+      --  own batch is fastest, and the working set its shader was measured
+      --  with.
+      Device_Chunk : constant Element_Count := 512;
+
+      --  Target := Source * Weight: on the device where one is open, the
+      --  weights as the file holds them, uploaded once and kept; else on
+      --  the pool, the weight decoded from the file's format to binary32
+      --  first.
       procedure Multiply
         (Source : T.Real_Array_Access;
          Total  : Element_Count;
@@ -811,6 +836,35 @@ package body Model_Runner.Vision is
          if E.Is_Error (Status) then
             return;
          end if;
+
+         if Model_Runner.Backend.Device.Is_Ready then
+            declare
+               Columns : constant Element_Count := Weight.Columns;
+               Rows_Out : constant Element_Count := Weight.Rows;
+               From : Element_Count := 0;
+            begin
+               while E.Is_Ok (Status) and then From < Total loop
+                  declare
+                     Take : constant Element_Count :=
+                       Element_Count'Min (Device_Chunk, Total - From);
+                  begin
+                     In_Chunk (0 .. Take * Columns - 1) :=
+                       Source (From * Columns .. (From + Take) * Columns - 1);
+                     Model_Runner.Backend.Device.Dispatch_Batch
+                       (Weight, In_Chunk, Take, Out_Chunk, Status, Cancel);
+                     exit when E.Is_Error (Status);
+                     Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
+                       Out_Chunk (0 .. Take * Rows_Out - 1);
+                     From := From + Take;
+                  end;
+               end loop;
+            end;
+            if Bias /= null then
+               Rows_Through (Add_Bias, Target, Total, Weight.Rows, Bias => Bias);
+            end if;
+            return;
+         end if;
+
          for Row in 0 .. Weight.Rows - 1 loop
             T.Dequantize_Row
               (Weight, Row,
@@ -890,6 +944,18 @@ package body Model_Runner.Vision is
       T.Allocate (Element_Count'Max (Feed * Width,
                     Element_Count'Max (Patches * Width,
                                        Width * Patch_Elements)), Decoded);
+      if Model_Runner.Backend.Device.Is_Ready then
+         T.Allocate (Device_Chunk * Element_Count'Max (Feed, Patch_Elements),
+                     In_Chunk);
+         T.Allocate (Device_Chunk * Element_Count'Max (Feed, Text_Width),
+                     Out_Chunk);
+         if In_Chunk = null or else Out_Chunk = null then
+            Release;
+            Status := E.Make (E.Memory_Allocation_Failed);
+            E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+            return;
+         end if;
+      end if;
       T.Allocate (Patches * Head, K_Head);
       T.Allocate (Patches * Head, Q_Head);
       T.Allocate (Patches * Head, V_Head_T);
@@ -1049,6 +1115,8 @@ package body Model_Runner.Vision is
          if Rows = null then
             Status := E.Make (E.Memory_Allocation_Failed);
             E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+         elsif Model_Runner.Backend.Device.Is_Ready then
+            Multiply (Kv, Pooled, Item.Projection, Rows);
          else
             Multiply (Kv, 0, Pooled, Item.Projection_Rows, Text_Width, Width,
                       Rows);

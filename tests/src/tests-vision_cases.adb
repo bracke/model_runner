@@ -1008,6 +1008,129 @@ package body Tests.Vision_Cases is
       B.Free (Image);
    end Pictures_Stand_Behind_Their_Markers;
 
+   ----------------------------------------
+   -- A_Pictures_Rows_See_Each_Other --
+   ----------------------------------------
+
+   --  The rows a picture stands behind attend to each other both ways:
+   --  the state at the first of them depends on the second, which a
+   --  causal position's would not, and a text position after the run
+   --  is causal still. Two batches differing only in the second row are
+   --  evaluated with every position's state written out.
+   procedure A_Pictures_Rows_See_Each_Other
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Model_Runner.GGUF.Containers.Container;
+         Ready  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Words  : access constant Vocab.Vocabulary;
+         Width  : constant N.Element_Count := Tiny_Model.Embedding;
+         Soft   : Vocab.Token_Id;
+         Rows_A, Rows_B : T.Real_Array_Access;
+         States_A, States_B, States_C : T.Real_Array_Access;
+         Logits : N.Real_Array (0 .. N.Element_Count (Tiny_Model.Vocabulary) - 1);
+
+         --  Whether two states at a position differ.
+         function Differ
+           (X, Y : T.Real_Array_Access; At_Position : N.Element_Count)
+            return Boolean is
+         begin
+            for D in 0 .. Width - 1 loop
+               if X (At_Position * Width + D) /= Y (At_Position * Width + D) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Differ;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not parse");
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         Words := L.Vocabulary (Ready);
+         Soft := Vocab.Find (Words.all, "<0x64>");
+
+         --  Two rows of given values, the second of them different
+         --  between the two sets.
+         T.Allocate (2 * Width, Rows_A);
+         T.Allocate (2 * Width, Rows_B);
+         Seed := 4242;
+         for Value of Rows_A.all loop
+            Value := Next;
+         end loop;
+         Rows_B.all := Rows_A.all;
+         for D in Width .. 2 * Width - 1 loop
+            Rows_B (D) := Rows_B (D) + 0.5;
+         end loop;
+         T.Allocate (4 * Width, States_A);
+         T.Allocate (4 * Width, States_B);
+         T.Allocate (4 * Width, States_C);
+
+         declare
+            Tokens : constant Vocab.Token_Array :=
+              [Vocab.Beginning_Token (Words.all), Soft, Soft,
+               Vocab.Find (Words.all, "a")];
+         begin
+            L.Open (Live, Ready, 16, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch
+              (Live, Ready, Tokens, Logits, States => States_A,
+               Given => (Token => Soft, Rows => Rows_A, First => 0),
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the first batch failed: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Reset (Live);
+            L.Evaluate_Batch
+              (Live, Ready, Tokens, Logits, States => States_B,
+               Given => (Token => Soft, Rows => Rows_B, First => 0),
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the second batch failed: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Assert (not Differ (States_A, States_B, 0),
+                    "the beginning's state changed with a row after it");
+            Assert (Differ (States_A, States_B, 1),
+                    "the first row's state did not see the second row");
+            Assert (Differ (States_A, States_B, 2),
+                    "the second row's state did not change with the row");
+
+            --  And a batch that ends inside the run, then the rest: the
+            --  first row cannot see a second that has not arrived, so its
+            --  state is the causal one -- which is what the generator's
+            --  batch boundaries are moved to avoid.
+            L.Reset (Live);
+            L.Evaluate_Batch
+              (Live, Ready, Tokens (1 .. 2), Logits, States => States_C,
+               Given => (Token => Soft, Rows => Rows_B, First => 0),
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the split batch failed");
+            Assert (Differ (States_B, States_C, 1),
+                    "a row cut off from the run's end saw a row not yet "
+                    & "evaluated");
+            L.Close (Live);
+         end;
+
+         T.Free (Rows_A);
+         T.Free (Rows_B);
+         T.Free (States_A);
+         T.Free (States_B);
+         T.Free (States_C);
+         L.Close (Ready, Status);
+         Model_Runner.GGUF.Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end A_Pictures_Rows_See_Each_Other;
+
    ----------
    -- Name --
    ----------
@@ -1034,6 +1157,10 @@ package body Tests.Vision_Cases is
          "a projector written small encodes a picture to the rows a plain "
          & "computation of the same network gives, however its halves are "
          & "named, and a projector of another kind is refused");
+      Register_Routine
+        (T, A_Pictures_Rows_See_Each_Other'Access,
+         "a picture's rows attend to each other both ways, and a text "
+         & "position after them is causal still");
       Register_Routine
         (T, Pictures_Stand_Behind_Their_Markers'Access,
          "a picture's rows take the positions its marker opens in the "

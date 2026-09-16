@@ -11702,6 +11702,14 @@ package body Model_Runner.Llama is
 
       --  How many of the given rows this batch has taken so far.
       Taken     : Element_Count := 0;
+
+      --  Where each position's run of given rows ends: a picture's rows
+      --  attend to each other both ways, as the reference lets them, so a
+      --  position inside one looks as far as the run's last position rather
+      --  than to itself. A position outside any run looks to itself.
+      Sees_To   : array (0 .. Element_Count (Tokens'Length) - 1)
+                    of Element_Count;
+      Has_Runs  : Boolean := False;
       --  Zero for a mixture of experts: the batch never holds a
       --  feed-forward activation there, because that block runs a position
       --  at a time through the session's own buffers.
@@ -12155,6 +12163,40 @@ package body Model_Runner.Llama is
          Status := E.Make (E.Memory_Allocation_Failed);
          E.Add_Text (Status, "category", "batch_activations", E.Param_Identifier);
          return;
+      end if;
+
+      --  The runs of given rows, each looking to its own end.
+      for Which in 0 .. Count - 1 loop
+         Sees_To (Which) := Which;
+      end loop;
+      if Given.Rows /= null
+        and then Given.Token /= Model_Runner.Tokenizer.No_Token
+      then
+         declare
+            Which : Element_Count := 0;
+         begin
+            while Which < Count loop
+               if Tokens (Tokens'First + Natural (Which)) = Given.Token then
+                  declare
+                     Ends : Element_Count := Which;
+                  begin
+                     while Ends + 1 < Count
+                       and then Tokens (Tokens'First + Natural (Ends + 1))
+                                = Given.Token
+                     loop
+                        Ends := Ends + 1;
+                     end loop;
+                     for Inside in Which .. Ends loop
+                        Sees_To (Inside) := Ends;
+                     end loop;
+                     Has_Runs := Has_Runs or else Ends > Which;
+                     Which := Ends + 1;
+                  end;
+               else
+                  Which := Which + 1;
+               end if;
+            end loop;
+         end;
       end if;
 
       --  Embedding lookup for every token of the batch -- or the row given
@@ -12704,12 +12746,17 @@ package body Model_Runner.Llama is
                   --  constant declared before it holds the seat the
                   --  session had before it had one, which is a batch
                   --  writing its cache over somebody else's.
+                  --  And not for a batch with a picture's rows in it: the
+                  --  whole layer attends every position to itself and
+                  --  before, and those rows attend to each other, which
+                  --  the host's attention knows and the device's does not.
                   if Turnable
                     and then Resident
                     and then Item.Held = Exact
                     and then (Settings.Experts = 0
                               or else Mixture_Whole (Current))
                     and then Whole_Layer_Fits (Current)
+                    and then not Has_Runs
                   then
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
@@ -13105,8 +13152,13 @@ package body Model_Runner.Llama is
                --  A hybrid's heads are gated after they attend, which the
                --  device's second half does not do: its full attention
                --  layers attend on the host.
+               --  And not where a picture's rows look forward: the device's
+               --  attention moves every position's end along by one, and
+               --  a batch with a run in it is attended on the host, which
+               --  knows where each run ends.
                if Item.Held = Exact and then Resident and then not Fused
                  and then not Hybrid (Settings.Kind)
+                 and then not Has_Runs
                then
                   declare
                      --  What Earliest would return for the batch's first
@@ -13229,6 +13281,7 @@ package body Model_Runner.Llama is
                --  would have needed a row per share per head.
                if not Fused
                  and then (Hybrid (Settings.Kind)
+                           or else Has_Runs
                            or else not (Item.Held = Exact and then Resident))
                then
                   declare
@@ -13253,12 +13306,17 @@ package body Model_Runner.Llama is
 
                         for Which in 0 .. Count - 1 loop
                            declare
+                              --  A causal position looks to itself -- or to
+                              --  the end of the run of given rows it is in.
+                              --  The window is measured from the position
+                              --  itself either way.
                               Last_Step : constant Element_Count :=
                                 (if Rounding or else Settings.Causal
-                                 then Sits_At (Which)
+                                 then Sits_At (Sees_To (Which))
                                  else Reserved + Count - 1);
                               First_Step : constant Element_Count :=
-                                Earliest (Settings, Last_Step, Natural (Index));
+                                Earliest (Settings, Sits_At (Which),
+                                          Natural (Index));
 
                               --  Said as cells of the row's own session,
                               --  because a round's rows are different sessions

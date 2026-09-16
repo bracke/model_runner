@@ -55,6 +55,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A picture's rows see each other, and the device takes the encoder's
+  products.** In the text model the 256 rows a picture stands behind
+  attended causally, each to itself and before; the reference lets them
+  attend to each other both ways, and so does `Evaluate_Batch` now: it
+  finds the runs of given rows in a batch and lets each position in a run
+  look to the run's end, the generator moves a batch boundary so that a
+  run travels whole, and a batch with a run in it is attended on the host,
+  whose attention knows where a run ends, rather than by the device's,
+  which does not. The suite evaluates two batches differing only in a
+  run's second row and requires the first row's state to differ and the
+  position before the run to stand. Where the device backend is open the
+  vision encoder's linear products run there, the projector's tensors
+  uploaded once and kept, with the attention among the patches on the
+  pool as before; `tests see --device` times it. The note a verbose run
+  writes for a picture says how many rows it became.
 - **A picture in the conversation, wherever the turn came from.** The
   rows a picture becomes are gathered from the conversation's parts, in
   their order, by `Model_Runner.CLI.Pictures`, rather than from the
