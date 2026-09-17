@@ -6926,6 +6926,142 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Mixture_Under_Its_Own_Keys;
 
+   --  Gemma 3 at sixty-two layers scales its scores by the width the
+   --  embedding implies, and at six by the head's.
+   --
+   --  The 27B is the one Gemma 3 whose heads are narrower than the
+   --  embedding over the head count, and it scales its scores by the
+   --  latter; the file carries no key for it, and the reference runtime
+   --  knows the size by its depth. A fixture with heads twice the width
+   --  the embedding implies makes the two scales different numbers -- a
+   --  half against a third and a bit -- and at sixty-two blocks the engine
+   --  has to pick the former and agree with the independent
+   --  implementation, which picks it on its own. The six-block fixture
+   --  beside it says the depth is what decides, and not the head factor.
+   procedure Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      --  Run the engine and the reference over one fixture; the engine's
+      --  factor, and how far the two are apart.
+      procedure Cross
+        (Depth : Natural; Scale : out L.Real; Worst : out Long_Float)
+      is
+         Image  : B.Byte_Array_Access;
+         Result : Logit_Vector;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Gemma3, Head_Factor => 2,
+            Depth => Depth);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            declare
+               Read : constant L.Configuration := L.Config (Under.Ready);
+            begin
+               Assert (L."=" (Read.Kind, L.Gemma3),
+                       "the architecture was not read from the file");
+               Assert (Read.Layers = Depth,
+                       "the depth was not read from the file:"
+                       & Natural'Image (Read.Layers));
+               Assert (Read.Head_Size = 2 * Tiny_Model.Head_Size,
+                       "the head width was not read from the file:"
+                       & Natural'Image (Read.Head_Size));
+               Scale := L.Score_Scale (Read);
+            end;
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+
+            Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+            Expected : Reference_Transformer.Real_Vector
+              (0 .. Tiny_Model.Vocabulary - 1);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run (Second, Tokens, Expected, Made);
+            Assert (Made, "the reference produced no logits");
+
+            Worst := 0.0;
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Result
+                         (Model_Runner.Numerics.Element_Count (Index)))
+                       - Expected (Index)));
+            end loop;
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Cross;
+
+      --  One over the square root, as a scale is.
+      function Root (Of_Width : Natural) return L.Real
+      is (L.Real (1.0 / Model_Runner.Numerics.Sqrt
+                          (Model_Runner.Numerics.Wide_Real (Of_Width))));
+
+      By_Head, By_Embedding : L.Real;
+      Worst : Long_Float;
+   begin
+      Cross (6, By_Head, Worst);
+      Assert (abs (By_Head - Root (2 * Tiny_Model.Head_Size)) < 1.0E-6,
+              "a Gemma 3 of six layers does not scale by its head's width:"
+              & L.Real'Image (By_Head));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about a gemma3 model of six layers by"
+              & Long_Float'Image (Worst));
+
+      Cross (62, By_Embedding, Worst);
+      Assert (abs (By_Embedding
+                   - Root (Tiny_Model.Embedding / Tiny_Model.Heads)) < 1.0E-6,
+              "a Gemma 3 of sixty-two layers does not scale by the width "
+              & "its embedding implies:" & L.Real'Image (By_Embedding));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about a gemma3 model of sixty-two layers by"
+              & Long_Float'Image (Worst));
+   end Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding;
+
    --  The architecture that attends to nothing, and clamps its gate.
    --
    --  GPT_OSS is the model MXFP4 exists for and the first architecture here
@@ -9969,6 +10105,11 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");
+      Register_Routine
+        (T, Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding'Access,
+         "a gemma3 of sixty-two layers scales its scores by the width the "
+         & "embedding implies, as the 27B does, and one of six by the "
+         & "head's, each agreeing with the independent implementation");
       Register_Routine
         (T, Sinks_And_A_Clamped_Gate'Access,
          "an attention sink and a clamped gate agree with the independent "

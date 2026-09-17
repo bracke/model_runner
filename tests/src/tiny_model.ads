@@ -325,6 +325,12 @@ package Tiny_Model is
    --    and one by the row. A text token has the three equal and reads
    --    the same; a picture's rows do not, and only such a fixture can say
    --    whether the engine turns them by their own row and column.
+   --  @param Depth How many blocks to write, or nought for the count the
+   --    architecture's fixture has -- two, six for Gemma 3, one past the
+   --    stack for the hybrid. Gemma 3's largest size is told from the
+   --    others by nothing but its depth, sixty-two, and scales its scores
+   --    differently for it: a fixture of that depth is the one file that
+   --    can say whether the engine knows so.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -349,6 +355,7 @@ package Tiny_Model is
       Rope_Table     : Boolean := False;
       Apart_Widths   : Boolean := False;
       Head_Factor   : Positive := 1;
-      Sections       : Boolean := False);
+      Sections       : Boolean := False;
+      Depth          : Natural := 0);
 
 end Tiny_Model;

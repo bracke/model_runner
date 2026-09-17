@@ -55,6 +55,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Gemma 3 27B scales its attention scores by the width its embedding
+  implies.** The 27B's heads are 128 wide and its embedding over its head
+  count is 168, and the reference scales scores by the root of the latter,
+  `query_pre_attn_scalar`; every other Gemma 3 has the two equal, so the
+  engine's root of the head width was right on the 1B, 4B and 12B and a
+  seventh too large on the 27B, at every layer. The file carries no key for
+  it and the reference runtime knows the size by its depth, so
+  `Score_Scale` does the same: a `gemma3` of sixty-two layers takes the
+  embedding over the head count. The tiny fixture can now be written any
+  number of blocks deep -- its layer names were a hex digit, sixteen at
+  most -- and a sixty-two-block Gemma 3 with heads twice the implied width
+  is crossed with the independent implementation, which picks the rule on
+  its own.
 - **A model with a next-token block generated nothing unless it was
   drafting.** Since the block past the stack learned to draft, the
   prefill ran every position of the prompt through it wherever the file

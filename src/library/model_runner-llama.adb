@@ -88,6 +88,17 @@ package body Model_Runner.Llama is
    use type Model_Runner.Tensors.Real_Array_Access;
    use type Model_Runner.Tensors.Half_Array_Access;
 
+   function Score_Scale (Settings : Configuration) return Real
+   is (Real
+         (1.0
+          / Model_Runner.Numerics.Sqrt
+              (Model_Runner.Numerics.Wide_Real
+                 (if Settings.Kind = Gemma3
+                     and then Settings.Layers = 62
+                     and then Settings.Heads > 0
+                  then Settings.Embedding / Settings.Heads
+                  else Settings.Head_Size))));
+
    package A renames Model_Runner.Arithmetic;
    package B renames Model_Runner.Bytes;
    package C renames Model_Runner.Cancellation;
@@ -10589,8 +10600,7 @@ package body Model_Runner.Llama is
       KV_Width : constant Element_Count := KV_Heads * Head_Size;
       V_Width  : constant Element_Count := KV_Heads * Value_Size;
       Layer_Index : constant Natural := Settings.Layers;
-      Scale : constant Real :=
-        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+      Scale : constant Real := Score_Scale (Settings);
    begin
       Status := E.Success;
       Logits := [others => 0.0];
@@ -10801,8 +10811,7 @@ package body Model_Runner.Llama is
       --  two were one number until a model stated them apart.
       V_Width   : constant Element_Count := KV_Heads * Value_Size;
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
-      Scale     : constant Real :=
-        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+      Scale     : constant Real := Score_Scale (Settings);
 
       --  Whether the layer before this one left its answer on the device,
       --  and which layers left their keys and values in the device's own
@@ -12016,8 +12025,7 @@ package body Model_Runner.Llama is
 
          return 0;
       end Last_Row;
-      Scale     : constant Real :=
-        Real (1.0 / N.Sqrt (N.Wide_Real (Settings.Head_Size)));
+      Scale     : constant Real := Score_Scale (Settings);
 
       --  Where the last phase boundary was, for a caller that asked for a
       --  budget. Read once at each boundary and moved there; see Charge.

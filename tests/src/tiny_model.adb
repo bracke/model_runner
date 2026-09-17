@@ -18,8 +18,6 @@ package body Tiny_Model is
    use type N.Real;
    use type N.Wide_Real;
 
-   Hex : constant String := "0123456789ABCDEF";
-
    -----------
    -- Build --
    -----------
@@ -70,7 +68,8 @@ package body Tiny_Model is
       Rope_Table   : Boolean := False;
       Apart_Widths : Boolean := False;
       Head_Factor : Positive := 1;
-      Sections     : Boolean := False)
+      Sections     : Boolean := False;
+      Depth        : Natural := 0)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -152,8 +151,10 @@ package body Tiny_Model is
       --  And the hybrid needs three: two of the stack, and past it the
       --  block that drafts the next token, which the file counts among
       --  its blocks and names apart with nextn_predict_layers.
+      --  Or as many as the caller asked for.
       Blocks : constant Natural :=
-        (if Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
+        (if Depth > 0 then Depth
+         elsif Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
          else Layers);
 
       Score_Amplitude : constant N.Real :=
@@ -382,9 +383,10 @@ package body Tiny_Model is
           and then (Index + 1) mod 2 /= 0);
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
-         Digit : constant String := [1 => Hex (Index + 1)];
+         Number : constant String := Natural'Image (Index);
       begin
-         return "blk." & Digit & "." & Suffix;
+         return "blk." & Number (Number'First + 1 .. Number'Last) & "."
+           & Suffix;
       end Layer_Name;
 
    begin

@@ -445,6 +445,20 @@ package Model_Runner.Llama is
       Next_Layers     : Natural := 0;
    end record;
 
+   --  What the attention scores are scaled by before the softmax: one over
+   --  the square root of the head's width, for every model but one.
+   --
+   --  Gemma 3's largest size scales by the width the embedding implies
+   --  instead -- the embedding over the head count, 168 where its heads are
+   --  128 wide -- which the reference states as query_pre_attn_scalar, and
+   --  the file does not carry: nothing under gemma3. names it, so it is
+   --  known the way the reference runtime knows it, by the model's depth.
+   --  Sixty-two layers is that size and no other Gemma 3 has them.
+   --
+   --  @param Settings The model's configuration.
+   --  @return The factor a score is multiplied by.
+   function Score_Scale (Settings : Configuration) return Real;
+
    --  Whether a layer of a hybrid architecture is a linear one. The
    --  full attention layers are every Linear_Every-th, counting from one,
    --  as the file counts them; an architecture with no interval has none.

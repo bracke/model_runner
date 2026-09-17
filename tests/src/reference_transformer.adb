@@ -3377,10 +3377,18 @@ package body Reference_Transformer is
                   --  Attention. The key and value heads are expanded to one per
                   --  query head rather than mapped, so a grouping mistake in the
                   --  engine cannot be reproduced here.
+                  --  The scores are scaled by the root of the head's width,
+                  --  except in Gemma 3's 27B, which scales by the root of
+                  --  the width its embedding implies -- 168 to its heads'
+                  --  128, the reference's query_pre_attn_scalar. No key in
+                  --  the file says which; the depth does, sixty-two layers.
                   declare
                      Group : constant Natural := Item.Heads / Item.KV_Heads;
                      Scale : constant Long_Float :=
-                       1.0 / Functions.Sqrt (Long_Float (Item.Head_Size));
+                       (if Item.Kind = Gemma3 and then Item.Layers = 62
+                        then 1.0 / Functions.Sqrt
+                                     (Long_Float (Item.Embedding / Item.Heads))
+                        else 1.0 / Functions.Sqrt (Long_Float (Item.Head_Size)));
                   begin
                      for Head in 0 .. Item.Heads - 1 loop
                         declare
