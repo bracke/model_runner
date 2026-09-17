@@ -55,6 +55,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The nibble cache on the device wrote past a short row.** `pack.comp`
+  wrote every block's four words whole, and a block cut short by the
+  row's end -- a row of sixteen, or of eighty -- has spare words that are
+  the next row's first, written over with nothing: every nibble-cached
+  fixture on the device answered nonsense past its first row, which the
+  suite's packed comparisons, all eight rows or fewer of a width the
+  block divides, never reached. The words are bounded to the block's
+  span, and the device-packs-as-the-host-packs comparison runs at widths
+  of 256, 48 and 16.
 - **Phi-3 mini at its own context answered nonsense on the device.**
   Its exact cache at 4,096 positions, with the half-precision copy the
   matrix attention reads, is 4.8 GB in one buffer, and the part here
@@ -188,6 +197,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A packed batch on a shallow model attends through the matrix
+  instruction.** A batch of a packed session unpacks the layer's rows
+  into the block's own half-precision copy and attends through the
+  matrix kernel, and the copy is as many halves as the block is words:
+  a layer's rows in halves fit where the model has four layers or more
+  in bytes and eight in nibbles, and a shallower model's batch took the
+  packed kernel at three times the time. The block is padded out to the
+  deepest layer's rows now -- a fraction of a layer the model has not
+  got, on a model small enough not to mind -- and the two-backend
+  comparison runs its long prompt with both packed caches, in chunks of
+  forty-one and in one batch, on a fixture of two layers.
 - **Every arrangement of a layer goes over whole.** Falcon's and Phi-2's
   block -- attention and the feed-forward side by side, both reading the
   one normalization -- GPT-2's and Bert's centred normalizations with a

@@ -2139,7 +2139,8 @@ package body Tests.Inference_Cases is
          Backend : Model_Runner.Backend.Backend_Kind;
          Chunk   : Positive;
          Answer  : out N.Real_Array;
-         Refusal : out E.Error_Code)
+         Refusal : out E.Error_Code;
+         Cache   : L.Cache_Precision := L.Exact)
       is
          Held    : aliased constant B.Byte_Array := Image.all;
          Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -2163,7 +2164,8 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
-         L.Open (Session, Model, Context => Room, Status => Status);
+         L.Open (Session, Model, Context => Room, Cache => Cache,
+                 Status => Status);
          Assert (E.Is_Ok (Status),
                  "a session did not open on "
                  & Model_Runner.Backend.Backend_Name (Backend) & ": "
@@ -2335,6 +2337,61 @@ package body Tests.Inference_Cases is
                B.Free (Image);
             end;
          end loop;
+      end;
+
+      --  And a packed cache over the tile, on a model too shallow for a
+      --  layer's rows in halves to fit in its block unpadded: the
+      --  fixture's two layers in bytes are half a layer's halves, and in
+      --  nibbles a quarter. The block is padded to one layer's rows now,
+      --  the batch unpacks the layer into the block's own copy and
+      --  attends through the matrix instruction, and the processor packs
+      --  the same bytes -- so the two are held to the tolerance above.
+      --  In chunks of forty-one, which is the narrow tile, and in one
+      --  batch of the whole prompt, which the fixture's width keeps off
+      --  the wide tile and on the packed kernel.
+      declare
+         Image  : B.Byte_Array_Access;
+         Host   : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+         Device : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+         Why    : E.Error_Code;
+         Worst  : N.Real := 0.0;
+      begin
+         Tiny_Model.Build (Image, Tiny_Model.Q8_0, Room => Room);
+
+         for Cache in L.Eighth .. L.Fourth loop
+            declare
+               Name : constant String := L.Cache_Precision'Image (Cache);
+            begin
+               Logits_On
+                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why,
+                  Cache => Cache);
+               Assert (Why = E.No_Error,
+                       "the processor refused the packed cache " & Name
+                       & ": " & E.Error_Code'Image (Why));
+
+               for Chunk of Chunks loop
+                  Logits_On
+                    (Image, Model_Runner.Backend.Backend_Device, Chunk,
+                     Device, Why, Cache => Cache);
+                  Assert (Why = E.No_Error,
+                          "the device refused the packed cache " & Name
+                          & ": " & E.Error_Code'Image (Why));
+
+                  Worst := 0.0;
+                  for Index in Host'Range loop
+                     Worst := N.Real'Max
+                       (Worst, abs (Host (Index) - Device (Index)));
+                  end loop;
+                  Assert (Worst <= Tolerance,
+                          "with the cache " & Name & " in chunks of"
+                          & Positive'Image (Chunk)
+                          & " the device's logits differ from the "
+                          & "processor's by " & N.Real'Image (Worst));
+               end loop;
+            end;
+         end loop;
+
+         B.Free (Image);
       end;
 
       --  And the one that answers with states rather than logits: Bert,

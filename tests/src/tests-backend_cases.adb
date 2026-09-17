@@ -6168,7 +6168,6 @@ package body Tests.Backend_Cases is
    is
       pragma Unreferenced (T_Case);
 
-      Width : constant := 256;
       Rows  : constant := 5;
       Block : constant := 32;
 
@@ -6177,160 +6176,212 @@ package body Tests.Backend_Cases is
       Engine : Products.Engine;
       Found, Ready, Ok : Boolean;
 
-      Source : N.Real_Array (0 .. Rows * Width - 1);
+      --  At a row width: eight blocks of thirty-two, which is what a
+      --  model's rows are, and then a row and a half of a block -- the
+      --  fixture's sixteen, and a real eighty -- whose last block is
+      --  cut short by the row's end. The nibble packing wrote every
+      --  block's four words whole, and a short block's spare words were
+      --  the next row's first, written over with nothing: every
+      --  nibble-cached fixture on the device answered nonsense past its
+      --  first row, and the suite's packed comparisons were all eight
+      --  rows or fewer of a width the block divides.
+      procedure Over (Width : N.Element_Count) is
+         Suffix : constant String :=
+           " at a width of" & N.Element_Count'Image (Width);
+         Source : N.Real_Array (0 .. Rows * Width - 1);
 
-      procedure Compare (Bits : Positive; What : String) is
-         use type Interfaces.Unsigned_64;
-         use type Model_Runner.Bytes.Byte;
+         procedure Compare (Bits : Positive; What : String) is
+            use type Interfaces.Unsigned_64;
+            use type Model_Runner.Bytes.Byte;
 
-         Row_Bytes : constant N.Element_Count :=
-           (if Bits = 8 then Width else Width / 2);
-         Blocks    : constant N.Element_Count :=
-           (if Bits = 8 then 1 else Width / Block);
+            Row_Bytes : constant N.Element_Count :=
+              (if Bits = 8 then Width else Width / 2);
+            Blocks    : constant N.Element_Count :=
+              (if Bits = 8 then 1 else (Width + Block - 1) / Block);
 
-         --  Past a little the test leaves empty, in words: the rows, then
-         --  the scales.
-         Base     : constant N.Element_Count := 16;
-         Scale_At : constant N.Element_Count :=
-           Base + (Rows * Row_Bytes + 3) / 4;
-         Whole    : constant N.Element_Count := Scale_At + Rows * Blocks;
+            --  Past a little the test leaves empty, in words: the rows, then
+            --  the scales.
+            Base     : constant N.Element_Count := 16;
+            Scale_At : constant N.Element_Count :=
+              Base + (Rows * Row_Bytes + 3) / 4;
+            Whole    : constant N.Element_Count := Scale_At + Rows * Blocks;
 
-         Wanted_Bytes  : Model_Runner.Bytes.Byte_Array
-           (0 .. Model_Runner.Bytes.Byte_Count (Rows * Row_Bytes) - 1) :=
-             [others => 0];
-         Wanted_Scales : N.Real_Array (0 .. Rows * Blocks - 1);
-         Got_Bytes     : Model_Runner.Bytes.Byte_Array (Wanted_Bytes'Range) :=
-           [others => 0];
-         Got_Scales    : N.Real_Array (Wanted_Scales'Range) := [others => 0.0];
+            Wanted_Bytes  : Model_Runner.Bytes.Byte_Array
+              (0 .. Model_Runner.Bytes.Byte_Count (Rows * Row_Bytes) - 1) :=
+                [others => 0];
+            Wanted_Scales : N.Real_Array (0 .. Rows * Blocks - 1);
+            Got_Bytes     : Model_Runner.Bytes.Byte_Array (Wanted_Bytes'Range) :=
+              [others => 0];
+            Got_Scales    : N.Real_Array (Wanted_Scales'Range) := [others => 0.0];
 
-         Identity : Model_Runner.Bytes.Byte_Array_Access;
-         Steps    : Products.Sequence;
-         Added, Halted : Boolean;
-         Through  : N.Real_Array (0 .. 2 * Rows * Width - 1) := [others => 0.0];
-      begin
-         --  As the engine packs a row.
-         for Row in 0 .. N.Element_Count (Rows) - 1 loop
-            declare
-               From : constant N.Element_Count := Row * Width;
-               At_Byte : constant Model_Runner.Bytes.Byte_Count :=
-                 Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
-            begin
-               if Bits = 8 then
-                  declare
-                     Largest : N.Real := 0.0;
-                     Scale   : N.Real;
-                  begin
-                     for Index in N.Element_Count range 0 .. Width - 1 loop
-                        Largest := N.Real'Max (Largest, abs Source (From + Index));
-                     end loop;
-                     Scale := (if Largest > 0.0 then Largest / 127.0 else 1.0);
-                     Wanted_Scales (Row) := Scale;
-                     for Index in N.Element_Count range 0 .. Width - 1 loop
-                        declare
-                           Step : constant N.Real :=
-                             N.Real'Rounding (Source (From + Index) / Scale);
-                           Q : constant N.Real :=
-                             N.Real'Max (-127.0, N.Real'Min (127.0, Step));
-                        begin
-                           Wanted_Bytes (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
-                             Model_Runner.Bytes.Byte (Integer (Q) + 128);
-                        end;
-                     end loop;
-                  end;
-               else
-                  for B in 0 .. Blocks - 1 loop
+            Identity : Model_Runner.Bytes.Byte_Array_Access;
+            Steps    : Products.Sequence;
+            Added, Halted : Boolean;
+            Through  : N.Real_Array (0 .. 2 * Rows * Width - 1) := [others => 0.0];
+         begin
+            --  As the engine packs a row.
+            for Row in 0 .. N.Element_Count (Rows) - 1 loop
+               declare
+                  From : constant N.Element_Count := Row * Width;
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
+               begin
+                  if Bits = 8 then
                      declare
-                        Largest, Signed : N.Real := 0.0;
-                        Scale, Inverse : N.Real;
+                        Largest : N.Real := 0.0;
+                        Scale   : N.Real;
                      begin
-                        for Index in B * Block .. (B + 1) * Block - 1 loop
-                           if abs Source (From + Index) > Largest then
-                              Largest := abs Source (From + Index);
-                              Signed := Source (From + Index);
-                           end if;
+                        for Index in N.Element_Count range 0 .. Width - 1 loop
+                           Largest := N.Real'Max (Largest, abs Source (From + Index));
                         end loop;
-                        Scale := Signed / (-8.0);
-                        Inverse := (if Scale /= 0.0 then 1.0 / Scale else 0.0);
-                        Wanted_Scales (Row * Blocks + B) := Scale;
-                        for Index in B * Block .. (B + 1) * Block - 1 loop
+                        Scale := (if Largest > 0.0 then Largest / 127.0 else 1.0);
+                        Wanted_Scales (Row) := Scale;
+                        for Index in N.Element_Count range 0 .. Width - 1 loop
                            declare
-                              Level : constant N.Real :=
-                                N.Real'Floor (Source (From + Index) * Inverse + 8.5);
-                              Q : constant Integer :=
-                                Integer (N.Real'Max (0.0, N.Real'Min (15.0, Level)));
-                              Where : constant Model_Runner.Bytes.Byte_Count :=
-                                At_Byte + Model_Runner.Bytes.Byte_Count (Index / 2);
+                              Step : constant N.Real :=
+                                N.Real'Rounding (Source (From + Index) / Scale);
+                              Q : constant N.Real :=
+                                N.Real'Max (-127.0, N.Real'Min (127.0, Step));
                            begin
-                              if Index mod 2 = 0 then
-                                 Wanted_Bytes (Where) := Model_Runner.Bytes.Byte (Q);
-                              else
-                                 Wanted_Bytes (Where) :=
-                                   Wanted_Bytes (Where) or Model_Runner.Bytes.Byte (Q * 16);
-                              end if;
+                              Wanted_Bytes (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                                Model_Runner.Bytes.Byte (Integer (Q) + 128);
                            end;
                         end loop;
                      end;
-                  end loop;
-               end if;
-            end;
-         end loop;
+                  else
+                     for B in 0 .. Blocks - 1 loop
+                        declare
+                           Largest, Signed : N.Real := 0.0;
+                           Scale, Inverse : N.Real;
+                        begin
+                           for Index in B * Block
+                             .. N.Element_Count'Min ((B + 1) * Block, Width) - 1
+                           loop
+                              if abs Source (From + Index) > Largest then
+                                 Largest := abs Source (From + Index);
+                                 Signed := Source (From + Index);
+                              end if;
+                           end loop;
+                           Scale := Signed / (-8.0);
+                           Inverse := (if Scale /= 0.0 then 1.0 / Scale else 0.0);
+                           Wanted_Scales (Row * Blocks + B) := Scale;
+                           for Index in B * Block
+                             .. N.Element_Count'Min ((B + 1) * Block, Width) - 1
+                           loop
+                              declare
+                                 Level : constant N.Real :=
+                                   N.Real'Floor (Source (From + Index) * Inverse + 8.5);
+                                 Q : constant Integer :=
+                                   Integer (N.Real'Max (0.0, N.Real'Min (15.0, Level)));
+                                 Where : constant Model_Runner.Bytes.Byte_Count :=
+                                   At_Byte + Model_Runner.Bytes.Byte_Count (Index / 2);
+                              begin
+                                 if Index mod 2 = 0 then
+                                    Wanted_Bytes (Where) := Model_Runner.Bytes.Byte (Q);
+                                 else
+                                    Wanted_Bytes (Where) :=
+                                      Wanted_Bytes (Where) or Model_Runner.Bytes.Byte (Q * 16);
+                                 end if;
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end if;
+               end;
+            end loop;
 
-         --  The rows through a product that hands them on unchanged, and
-         --  the placing step that packs them.
-         Model_Runner.Bytes.Allocate
-           (Model_Runner.Bytes.Byte_Count (Width * Width) * 4, Identity);
-         Assert (Identity /= null, "no room for the matrix");
-         Identity.all := [others => 0];
-         for Row in 0 .. N.Element_Count (Width) - 1 loop
+            --  The rows through a product that hands them on unchanged, and
+            --  the placing step that packs them.
+            Model_Runner.Bytes.Allocate
+              (Model_Runner.Bytes.Byte_Count (Width * Width) * 4, Identity);
+            Assert (Identity /= null, "no room for the matrix");
+            Identity.all := [others => 0];
+            for Row in 0 .. Width - 1 loop
+               declare
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Row * Width + Row) * 4 + 1;
+               begin
+                  Identity.all (At_Byte .. At_Byte + 3) :=
+                    Model_Runner.Bytes.Put_F32 (1.0);
+               end;
+            end loop;
+
+            Products.Reserve (Engine, Whole, Ok);
+            Assert (Ok, "the cache would not be reserved for " & What);
+
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Identity.all'Address,
+               Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+               0, Products.Values_F32, Natural (Width), Natural (Width), Added);
+            Assert (Added, "a sequence would not take the product for " & What);
+            Products.Add_Place
+              (Steps, Natural (Width), Natural (Width), 0, Added,
+               Packed => (Bits => Bits, Row_Bytes => Natural (Row_Bytes),
+                          At_Byte => Interfaces.Unsigned_64 (Base) * 4,
+                          At_Scale => Natural (Scale_At),
+                          Blocks => Natural (Blocks)));
+            Assert (Added, "a sequence would not take the packing step for " & What);
+            Products.Run (Engine, Steps, Source, Rows, Through, Ok, Halted);
+            Assert (Ok, "the sequence with the packing step was refused for " & What);
+            Model_Runner.Bytes.Free (Identity);
+
+            Products.Get_Bytes (Engine, Interfaces.Unsigned_64 (Base) * 4, Got_Bytes, Ok);
+            Assert (Ok, "the packed rows would not be read back for " & What);
+            Products.Get_Cache (Engine, Scale_At, Got_Scales, Ok);
+            Assert (Ok, "the scales would not be read back for " & What);
+
+            for Index in Wanted_Scales'Range loop
+               Assert (Got_Scales (Index) = Wanted_Scales (Index),
+                       "the device's scale" & N.Element_Count'Image (Index)
+                       & " for " & What & " is" & N.Real'Image (Got_Scales (Index))
+                       & " where the host makes" & N.Real'Image (Wanted_Scales (Index)));
+            end loop;
+            for Index in Wanted_Bytes'Range loop
+               Assert (Got_Bytes (Index) = Wanted_Bytes (Index),
+                       "the device's byte" & Model_Runner.Bytes.Byte_Count'Image (Index)
+                       & " for " & What & " is"
+                       & Model_Runner.Bytes.Byte'Image (Got_Bytes (Index))
+                       & " where the host makes"
+                       & Model_Runner.Bytes.Byte'Image (Wanted_Bytes (Index)));
+            end loop;
+         end Compare;
+      begin
+         --  Row 0: a spread with its largest at 127, so a byte's level is
+         --  the number itself and the halves are exact halves. Row 1: the
+         --  same negated, largest at the other sign. Row 2: all zero. Row 3:
+         --  small numbers, where the scale is a fraction. Row 4: levels that
+         --  land halfway for nibbles -- the block's largest is -8, so a
+         --  nibble's level is the number plus eight, and halves are halves.
+         for Index in N.Element_Count range 0 .. Width - 1 loop
             declare
-               At_Byte : constant Model_Runner.Bytes.Byte_Count :=
-                 Model_Runner.Bytes.Byte_Count (Row * Width + Row) * 4 + 1;
+               I : constant N.Real := N.Real (Index);
             begin
-               Identity.all (At_Byte .. At_Byte + 3) :=
-                 Model_Runner.Bytes.Put_F32 (1.0);
+               Source (0 * Width + Index) :=
+                 (if Index = 3 then 127.0
+                  elsif Index mod 4 = 0 then N.Real (Index mod 61) + 0.5
+                  elsif Index mod 4 = 1 then -(N.Real (Index mod 47) + 0.5)
+                  elsif Index mod 4 = 2 then 0.0
+                  else N.Real (Index mod 23) - 11.0);
+               Source (1 * Width + Index) := -Source (Index);
+               Source (2 * Width + Index) := 0.0;
+               Source (3 * Width + Index) := (I - 128.0) / 1000.0;
+               Source (4 * Width + Index) :=
+                 (if Index mod Block = 0 then -8.0
+                  elsif Index mod 2 = 0 then N.Real (Index mod 16) - 7.5
+                  else N.Real (Index mod 9) - 4.0);
             end;
          end loop;
 
-         Products.Reserve (Engine, Whole, Ok);
-         Assert (Ok, "the cache would not be reserved for " & What);
+         Compare (8, "bytes" & Suffix);
+         Compare (4, "nibbles" & Suffix);
 
-         Products.Open_Sequence (Steps);
-         Products.Add_Product
-           (Steps, Identity.all'Address,
-            Model_Runner.Bytes.Byte_Count (Identity.all'Length),
-            0, Products.Values_F32, Width, Width, Added);
-         Assert (Added, "a sequence would not take the product for " & What);
-         Products.Add_Place
-           (Steps, Width, Width, 0, Added,
-            Packed => (Bits => Bits, Row_Bytes => Natural (Row_Bytes),
-                       At_Byte => Interfaces.Unsigned_64 (Base) * 4,
-                       At_Scale => Natural (Scale_At),
-                       Blocks => Natural (Blocks)));
-         Assert (Added, "a sequence would not take the packing step for " & What);
-         Products.Run (Engine, Steps, Source, Rows, Through, Ok, Halted);
-         Assert (Ok, "the sequence with the packing step was refused for " & What);
-         Model_Runner.Bytes.Free (Identity);
-
-         Products.Get_Bytes (Engine, Interfaces.Unsigned_64 (Base) * 4, Got_Bytes, Ok);
-         Assert (Ok, "the packed rows would not be read back for " & What);
-         Products.Get_Cache (Engine, Scale_At, Got_Scales, Ok);
-         Assert (Ok, "the scales would not be read back for " & What);
-
-         for Index in Wanted_Scales'Range loop
-            Assert (Got_Scales (Index) = Wanted_Scales (Index),
-                    "the device's scale" & N.Element_Count'Image (Index)
-                    & " for " & What & " is" & N.Real'Image (Got_Scales (Index))
-                    & " where the host makes" & N.Real'Image (Wanted_Scales (Index)));
-         end loop;
-         for Index in Wanted_Bytes'Range loop
-            Assert (Got_Bytes (Index) = Wanted_Bytes (Index),
-                    "the device's byte" & Model_Runner.Bytes.Byte_Count'Image (Index)
-                    & " for " & What & " is"
-                    & Model_Runner.Bytes.Byte'Image (Got_Bytes (Index))
-                    & " where the host makes"
-                    & Model_Runner.Bytes.Byte'Image (Wanted_Bytes (Index)));
-         end loop;
-      end Compare;
+         --  And through the compilation without subgroup operations.
+         Products.Prefer_Plain_Packing (Engine, True);
+         Compare (8, "bytes, through shared memory alone" & Suffix);
+         Compare (4, "nibbles, through shared memory alone" & Suffix);
+         Products.Prefer_Plain_Packing (Engine, False);
+      end Over;
    begin
       Devices.Open (Held, Found);
       if not Found or else Devices.Count (Held) = 0 then
@@ -6350,40 +6401,9 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
-      --  Row 0: a spread with its largest at 127, so a byte's level is
-      --  the number itself and the halves are exact halves. Row 1: the
-      --  same negated, largest at the other sign. Row 2: all zero. Row 3:
-      --  small numbers, where the scale is a fraction. Row 4: levels that
-      --  land halfway for nibbles -- the block's largest is -8, so a
-      --  nibble's level is the number plus eight, and halves are halves.
-      for Index in N.Element_Count range 0 .. Width - 1 loop
-         declare
-            I : constant N.Real := N.Real (Index);
-         begin
-            Source (0 * Width + Index) :=
-              (if Index = 3 then 127.0
-               elsif Index mod 4 = 0 then N.Real (Index mod 61) + 0.5
-               elsif Index mod 4 = 1 then -(N.Real (Index mod 47) + 0.5)
-               elsif Index mod 4 = 2 then 0.0
-               else N.Real (Index mod 23) - 11.0);
-            Source (1 * Width + Index) := -Source (Index);
-            Source (2 * Width + Index) := 0.0;
-            Source (3 * Width + Index) := (I - 128.0) / 1000.0;
-            Source (4 * Width + Index) :=
-              (if Index mod Block = 0 then -8.0
-               elsif Index mod 2 = 0 then N.Real (Index mod 16) - 7.5
-               else N.Real (Index mod 9) - 4.0);
-         end;
-      end loop;
-
-      Compare (8, "bytes");
-      Compare (4, "nibbles");
-
-      --  And through the compilation without subgroup operations.
-      Products.Prefer_Plain_Packing (Engine, True);
-      Compare (8, "bytes, through shared memory alone");
-      Compare (4, "nibbles, through shared memory alone");
-      Products.Prefer_Plain_Packing (Engine, False);
+      Over (256);
+      Over (48);
+      Over (16);
 
       Products.Close (Engine);
       Devices.Close (Opened);

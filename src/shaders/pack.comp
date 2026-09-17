@@ -196,7 +196,12 @@ void main() {
         float inverse = scale != 0.0 ? float (1.0lf / double (scale)) : 0.0;
         kvf[scale_at + b] = scale;
 
-        for (uint w = 0u; w < BLOCK / 8u; w++) {
+        //  The words the block's own elements fill and no more: a block
+        //  cut short by the row's end -- a row of sixteen, or of eighty
+        //  -- has words past it that belong to the next row, and writing
+        //  the block's four whole wrote the next row's first over with
+        //  nothing.
+        for (uint w = 0u; w * 8u < span; w++) {
             uint word = 0u;
             for (uint j = 0u; j < 8u; j++) {
                 uint i = w * 8u + j;

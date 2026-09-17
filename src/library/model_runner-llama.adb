@@ -4971,6 +4971,16 @@ package body Model_Runner.Llama is
       Span            : Element_Count := 0;
    end record;
 
+   --  The most positions any layer holds.
+   function Widest_Cells (Cells : Cell_Counts) return Element_Count is
+      Most : Element_Count := 0;
+   begin
+      for Held of Cells loop
+         Most := Element_Count'Max (Most, Held);
+      end loop;
+      return Most;
+   end Widest_Cells;
+
    function Packed_Layout (Item : Session) return Packed_Block is
       Key_Words : constant Element_Count :=
         (if Item.Byte_Keys = null then 0
@@ -4982,14 +4992,33 @@ package body Model_Runner.Llama is
         (if Item.Key_Scales = null then 0 else Item.Key_Scales.all'Length);
       Value_Scales : constant Element_Count :=
         (if Item.Value_Scales = null then 0 else Item.Value_Scales.all'Length);
+
+      --  And room enough that one layer's rows unpack into the block's
+      --  own half-precision copy for the matrix attention. The copy is
+      --  as many halves as the block is words; a layer's rows in halves
+      --  are a fraction of a block that holds every layer's in bytes or
+      --  nibbles, so they fit where the model has four layers or more in
+      --  bytes and eight in nibbles, and a shallower model's block is
+      --  padded out to the deepest layer's rows -- a fraction of a layer
+      --  the model has not got, on a model small enough not to mind. The
+      --  unpacking counts against this span before it asks.
+      Halves : constant Element_Count :=
+        (if Item.Owner = null or else Item.Cells = null then 0
+         else Element_Count
+                (Item.Owner.Settings.KV_Heads
+                 * (Item.Owner.Settings.Head_Size
+                    + Item.Owner.Settings.Value_Size))
+              * Widest_Cells (Item.Cells.all));
    begin
       return (Key_Words       => Key_Words,
               Value_Words     => Value_Words,
               Values_At       => Key_Words,
               Key_Scales_At   => Key_Words + Value_Words,
               Value_Scales_At => Key_Words + Value_Words + Key_Scales,
-              Span            => Key_Words + Value_Words + Key_Scales
-                                 + Value_Scales);
+              Span            =>
+                Element_Count'Max
+                  (Key_Words + Value_Words + Key_Scales + Value_Scales,
+                   Halves));
    end Packed_Layout;
 
    --  How wide a session's block is, in elements: the exact cache's keys
