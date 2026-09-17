@@ -7253,6 +7253,161 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Packed_Session_On_The_Device_Packs_There;
 
+   ------------------------------------------------
+   -- A_Packed_Round_On_The_Device_Reads_Each_Block --
+   ------------------------------------------------
+
+   --  A round of three packed sessions on the device, in bytes and in
+   --  nibbles, on a model that holds every position and on one that
+   --  slides a window: each member says what it says alone on the same
+   --  device, step for step, to the bound a batched product is held to
+   --  against a single one. The three prompts differ, and so do their
+   --  answers, so a row reading another member's block would show.
+   procedure A_Packed_Round_On_The_Device_Reads_Each_Block
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Steps   : constant := 4;
+      Members : constant := 3;
+
+      Prompts : constant array (1 .. Members, 1 .. Steps) of Vocab.Token_Id :=
+        [[4, 5, 6, 7], [9, 8, 7, 6], [5, 5, 9, 4]];
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      procedure Stepped (Window : Natural; Cache : L.Cache_Precision; What : String);
+
+      procedure Stepped (Window : Natural; Cache : L.Cache_Precision; What : String) is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Window => Window);
+
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Able  : Boolean;
+
+            Alone  : array (1 .. Members) of Trail :=
+              [others => [others => [others => 0.0]]];
+            Status : E.Error_Info;
+         begin
+            Start (Under, Model_Runner.Backend.Backend_Device, Able);
+            if not Able then
+               B.Free (Image);
+               return;
+            end if;
+
+            for Member in 1 .. Members loop
+               declare
+                  Live : L.Session;
+               begin
+                  L.Open (Live, Under.Ready, Cache => Cache, Status => Status);
+                  Assert (E.Is_Ok (Status), "a session did not open for " & What);
+                  for Step in 1 .. Steps loop
+                     L.Evaluate (Live, Under.Ready, Prompts (Member, Step),
+                                 Alone (Member) (Step), Status => Status);
+                     Assert (E.Is_Ok (Status), "a sequence alone failed for " & What);
+                  end loop;
+                  L.Close (Live);
+               end;
+            end loop;
+
+            --  The answers differ between members, or a collision would
+            --  pass for a coincidence.
+            for Member in 2 .. Members loop
+               declare
+                  Apart : N.Real := 0.0;
+               begin
+                  for Index in Logit_Vector'Range loop
+                     Apart := N.Real'Max
+                       (Apart, abs (Alone (1) (Steps) (Index)
+                                    - Alone (Member) (Steps) (Index)));
+                  end loop;
+                  Assert (Apart > 0.2,
+                          "two members answer alike for " & What
+                          & ", so this fixture cannot tell a collision");
+               end;
+            end loop;
+
+            declare
+               One, Two, Three : aliased L.Session;
+               Both : Model_Runner.Tensors.Real_Array_Access := null;
+            begin
+               L.Open (One, Under.Ready, Cache => Cache, Status => Status);
+               L.Open (Two, Under.Ready, Cache => Cache, Status => Status);
+               L.Open (Three, Under.Ready, Cache => Cache, Status => Status);
+               Assert (E.Is_Ok (Status), "the round's sessions did not open for " & What);
+               Model_Runner.Tensors.Allocate
+                 (Members * N.Element_Count (Tiny_Model.Vocabulary), Both);
+               Assert (Both /= null, "the round had no room for its logits");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate_Round
+                    (Members => [One'Unchecked_Access, Two'Unchecked_Access,
+                                 Three'Unchecked_Access],
+                     Source  => Under.Ready,
+                     Tokens  => [Prompts (1, Step), Prompts (2, Step),
+                                 Prompts (3, Step)],
+                     Logits  => Both,
+                     Status  => Status);
+                  Assert (E.Is_Ok (Status),
+                          "a round of three failed at step" & Integer'Image (Step)
+                          & " for " & What & ": " & E.Error_Code'Image (Status.Code));
+
+                  for Member in 1 .. Members loop
+                     declare
+                        Worst : N.Real := 0.0;
+                        Row_At : constant N.Element_Count :=
+                          Both.all'First
+                          + N.Element_Count (Member - 1)
+                            * N.Element_Count (Tiny_Model.Vocabulary);
+                     begin
+                        for Index in Logit_Vector'Range loop
+                           Worst := N.Real'Max
+                             (Worst, abs (Both.all (Row_At + Index)
+                                          - Alone (Member) (Step) (Index)));
+                        end loop;
+                        Assert (Worst < 5.0e-2,
+                                "member" & Integer'Image (Member)
+                                & " of a packed round on the device differs by"
+                                & N.Real'Image (Worst) & " from the same sequence "
+                                & "alone at step" & Integer'Image (Step)
+                                & " for " & What);
+                     end;
+                  end loop;
+               end loop;
+
+               Model_Runner.Tensors.Free (Both);
+               L.Close (One);
+               L.Close (Two);
+               L.Close (Three);
+            end;
+
+            L.Close (Under.Ready, Status);
+         end;
+
+         B.Free (Image);
+      end Stepped;
+
+      Awake : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device attended a packed round here");
+         return;
+      end if;
+
+      Stepped (0, L.Eighth, "bytes, every position held");
+      Stepped (3, L.Eighth, "bytes, a window of three");
+      Stepped (0, L.Fourth, "nibbles, every position held");
+      Stepped (3, L.Fourth, "nibbles, a window of three");
+
+      Model_Runner.Backend.Device.Close;
+   end A_Packed_Round_On_The_Device_Reads_Each_Block;
+
    procedure Values_Stored_Apart_From_Keys
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10899,6 +11054,11 @@ package body Tests.Inference_Cases is
          & "there as they are placed, and what it snapshots is the bytes a "
          & "processor session makes of the same text, a token at a time "
          & "and as a batch, in bytes and in nibbles");
+      Register_Routine
+        (T, A_Packed_Round_On_The_Device_Reads_Each_Block'Access,
+         "a round of three packed sessions on the device, in bytes and in "
+         & "nibbles, on a model holding every position and on one sliding "
+         & "a window, gives each member what it gets alone");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");

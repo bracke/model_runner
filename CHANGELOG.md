@@ -186,8 +186,15 @@ Keep a Changelog and the project uses semantic versioning.
   over the numbers the bytes stand for to a ten-thousandth, alone, in a
   windowed batch, and as a sliced step of a sequence, and to the
   rounding reference by the sweep's device arms. A round of packed
-  sessions, a layer with sinks, a value head wider than 128 and a device
-  without subgroup arithmetic attend on the host as before. What it
+  sessions -- several callers served a token at a time from one model --
+  goes over as an exact round does: the kernel reads each row's block
+  and position out of the round's table, as `attention.comp` does, a
+  workgroup a position's heads and no more since a round's rows share
+  no keys, and the packing step puts each row into its own member's
+  block out of the same table; members holding their values in
+  different storages are served on the host. A layer with sinks, a
+  value head wider than 128 and a device without subgroup arithmetic
+  attend on the host as before. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
   1.65 s generating with the byte cache against 1.38 s with the exact
   one -- 25.8 ms a token against 21.5 -- and the prompt itself 0.70 s

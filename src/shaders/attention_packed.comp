@@ -60,8 +60,14 @@
 //  and the prompt three times what the exact kernels took. What it lacked
 //  was the two things above.
 //
-//  What this does not do, and the caller does on the host: sinks, a round
-//  of several sessions, and a value head wider than the room below.
+//  A round of several sessions reads its per-row table as attention.comp
+//  does: two words a row at the end of the cache, where the row has got
+//  to and where its block begins -- in words of the buffer, which is
+//  bytes over four and floats as they are. A round's rows share no keys,
+//  so a workgroup of a round takes one position's heads and no more.
+//
+//  What this does not do, and the caller does on the host: sinks, and a
+//  value head wider than the room below.
 
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -123,6 +129,10 @@ layout(push_constant, std430) uniform Shape {
     //  so a workgroup never crosses a group.
     uint bundle;
     uint queries;
+
+    //  A round: where its per-row table begins, in words of the buffer,
+    //  or zero for a batch.
+    uint table_at;
 } shape;
 
 //  The widest query head this takes, and the widest value head: four
@@ -270,7 +280,8 @@ void main () {
     uint group = head0 / shape.group_size;
 
     //  Each row's last and first, as attention.comp derives them, and
-    //  where its own query sits.
+    //  where its own query sits. A round's rows are all of one position,
+    //  so its last and its block are read once.
     uint row_last[ROWS];
     uint row_first[ROWS];
     uint row_asking[ROWS];
@@ -279,12 +290,16 @@ void main () {
     uint first_min = 0xFFFFFFFFu;
     uint last_max = 0u;
 
+    uint block = shape.table_at != 0u ? kvw[shape.table_at + slot0 * 2u + 1u] : 0u;
+
     for (uint r = 0u; r < ROWS; r++) {
         uint head = head0 + r / shape.queries;
         uint slot = slot0 + r % shape.queries;
         row_live[r] = r < rows && head < shape.heads && slot < shape.positions;
 
-        uint last = shape.last + (shape.causal != 0u ? slot : 0u);
+        uint last = shape.table_at != 0u
+                    ? kvw[shape.table_at + slot * 2u]
+                    : shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
             first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
@@ -331,6 +346,13 @@ void main () {
     uint k_off = group * shape.head_size;
     uint v_off = group * shape.value_size;
 
+    //  Where this row's block begins: nothing for a batch, the row's own
+    //  for a round, in bytes for the rows and in floats for the scales.
+    uint k_bytes = shape.k_bytes + block * 4u;
+    uint v_bytes = shape.v_bytes + block * 4u;
+    uint ks_at = shape.ks_at + block;
+    uint vs_at = shape.vs_at + block;
+
     //  The value components this lane owns: one, two or four in a run,
     //  which is one word's worth of bytes at most and never straddles a
     //  word, since the run's start is a multiple of its length.
@@ -366,8 +388,8 @@ void main () {
             //  read a word of the row at a time and dotted into each
             //  row's query, then scaled, sloped and bounded -- and
             //  nothing for a row that may not see this position.
-            uint row_at = shape.k_bytes + pos * k_row;
-            uint scale_at = shape.ks_at + pos * shape.k_blocks;
+            uint row_at = k_bytes + pos * k_row;
+            uint scale_at = ks_at + pos * shape.k_blocks;
             float row_scale = kvf[scale_at];
             float acc[ROWS];
             for (uint r = 0u; r < ROWS; r++) {
@@ -448,9 +470,9 @@ void main () {
 
             for (uint t = 0u; t < count; t++) {
                 uint p = base + t;
-                uint row_at = shape.v_bytes + p * v_row;
+                uint row_at = v_bytes + p * v_row;
                 vec4 held = four_of (shape.v_bits, row_at, e4);
-                float sc = kvf[shape.vs_at + p * shape.v_blocks
+                float sc = kvf[vs_at + p * shape.v_blocks
                                + scale_of (shape.v_bits, e0)];
                 held *= sc;
 

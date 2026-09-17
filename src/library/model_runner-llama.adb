@@ -5355,16 +5355,20 @@ package body Model_Runner.Llama is
    --  @param V_Base Where this layer's values begin.
    --  @param KV_Width How far apart one position's keys are from the next.
    --  @param V_Width How far apart one position's values are from the next.
+   --  @param Seated True for a round, whose rows each add their own
+   --    block out of the table: the bases are then the layer's offsets
+   --    alone, and this session's block is not in them.
    --  @return The block as the kernel reads it.
    function Packed_Shape
      (Item     : Session;
       K_Base   : Element_Count;
       V_Base   : Element_Count;
       KV_Width : Element_Count;
-      V_Width  : Element_Count)
+      V_Width  : Element_Count;
+      Seated   : Boolean := False)
       return Model_Runner.Backend.Device.Packed_Cache
    is
-      Base : constant Element_Count := Block_Base (Item);
+      Base : constant Element_Count := (if Seated then 0 else Block_Base (Item));
       Laid : constant Packed_Block := Packed_Layout (Item);
    begin
       if Item.Held not in Eighth | Fourth then
@@ -5398,14 +5402,19 @@ package body Model_Runner.Llama is
    --    host's flat keys or values.
    --  @param Width How wide a row is.
    --  @param Keys True for the keys, False for the values.
+   --  @param Seated True for a round, whose rows each add their own
+   --    block and their own cell out of the table: Slot is then the
+   --    layer's first row, and this session's block is not in it.
    --  @return The packing, as the placing step is told it.
    function Packing_Of
-     (Item  : Session;
-      Slot  : Element_Count;
-      Width : Element_Count;
-      Keys  : Boolean) return Model_Runner.Backend.Device.Packing_Shape
+     (Item   : Session;
+      Slot   : Element_Count;
+      Width  : Element_Count;
+      Keys   : Boolean;
+      Seated : Boolean := False)
+      return Model_Runner.Backend.Device.Packing_Shape
    is
-      Base : constant Element_Count := Block_Base (Item);
+      Base : constant Element_Count := (if Seated then 0 else Block_Base (Item));
       Laid : constant Packed_Block := Packed_Layout (Item);
       Held : constant Cache_Precision :=
         (if Keys then Item.Held else Item.Held_Values);
@@ -13306,7 +13315,12 @@ package body Model_Runner.Llama is
       --  and the layer has to know that before it starts rather than after
       --  it has written half a round's positions to a device.
       if Rounding
-        and then Item.Held = Exact
+        and then Item.Held in Exact | Eighth | Fourth
+        --  A packed round's rows are read by one kernel told one storage
+        --  for the values: members holding theirs differently attend on
+        --  the host.
+        and then (for all Which in 0 .. Count - 1 =>
+                    Held_By (Which).Held_Values = Item.Held_Values)
         and then Members <= Element_Count (Model_Runner.Backend.Device
                                              .Block_Limit)
         and then Count * Element_Count (Item.Owner.Settings.Layers)
@@ -13788,12 +13802,11 @@ package body Model_Runner.Llama is
                   --  the host's attention knows and the device's does not.
                   --  A packed session's keys and values are packed as
                   --  they are placed, by a step of the same sequence; a
-                  --  round of packed sessions attends on the host.
+                  --  round's each into its own member's block, out of the
+                  --  table, as an exact round's are.
                   if Turnable
                     and then Resident
-                    and then (Item.Held = Exact
-                              or else (Item.Held in Eighth | Fourth
-                                       and then not Rounding))
+                    and then Item.Held in Exact | Eighth | Fourth
                     and then (Settings.Experts = 0
                               or else Mixture_Whole (Current))
                     and then Whole_Layer_Fits (Current)
@@ -13887,30 +13900,39 @@ package body Model_Runner.Llama is
                         --  A packed session's block, and how its keys and
                         --  values are packed into it as they are placed:
                         --  from this batch's first cell on.
+                        --  A round's rows each add their own block and
+                        --  cell out of the table, so a round is given
+                        --  the layer's offsets alone.
                         Packed      => Packed_Shape (Item, Base, V_Base,
-                                                     KV_Width, V_Width),
+                                                     KV_Width, V_Width,
+                                                     Seated => Rounding),
                         Pack_Keys   =>
                           Packing_Of
                             (Item,
-                             Base + Cell_Of (Item, Natural (Index), Reserved)
-                                    * KV_Width,
-                             KV_Width, True),
+                             Base + (if Rounding then 0
+                                     else Cell_Of (Item, Natural (Index),
+                                                   Reserved) * KV_Width),
+                             KV_Width, True, Seated => Rounding),
                         Pack_Values =>
                           Packing_Of
                             (Item,
-                             V_Base + Cell_Of (Item, Natural (Index), Reserved)
-                                      * V_Width,
-                             V_Width, False),
+                             V_Base + (if Rounding then 0
+                                       else Cell_Of (Item, Natural (Index),
+                                                     Reserved) * V_Width),
+                             V_Width, False, Seated => Rounding),
 
                         --  And the layer unpacked into the copy for the
                         --  matrix instruction, where the batch is long
                         --  enough for it: every cell up to the batch's
-                        --  last.
+                        --  last. A round's rows read different blocks,
+                        --  and none is unpacked.
                         Unpacked    =>
-                          Unpacking_Of
-                            (Item, Base, V_Base, KV_Width, V_Width,
-                             Cell_Of (Item, Natural (Index), Reserved)
-                             + Count));
+                          (if Rounding
+                           then Model_Runner.Backend.Device.Not_Unpacked
+                           else Unpacking_Of
+                                  (Item, Base, V_Base, KV_Width, V_Width,
+                                   Cell_Of (Item, Natural (Index), Reserved)
+                                   + Count)));
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14160,17 +14182,21 @@ package body Model_Runner.Llama is
                            Held_By (Which).Byte_Values.all, V_Place, V_Width,
                            Held_By (Which).Value_Scales.all, Item.Held_Values);
 
-                        --  And the device's copy of the packed block, for
-                        --  a batch of one session; a round of packed
-                        --  sessions attends on the host.
-                        if not Rounding then
+                        --  And the device's copy of the packed block --
+                        --  a round's into each row's own member's block.
+                        --  Written already where the layer went over
+                        --  whole: the sequence packed them there.
+                        if not Cached then
                            declare
                               Placed : Boolean;
                            begin
                               Put_Packed_Position
                                 (Held_By (Which), Place, V_Place, KV_Width,
                                  V_Width, Placed);
-                              Resident := Placed;
+                              Resident :=
+                                (if Rounding
+                                 then Resident and Placed
+                                 else Placed);
                            end;
                         end if;
                      elsif Item.Held = Exact then
@@ -14253,7 +14279,6 @@ package body Model_Runner.Llama is
                  and then not Fused
                  and then not Hybrid (Settings.Kind)
                  and then not Has_Runs
-                 and then not (Item.Held in Eighth | Fourth and then Rounding)
                then
                   declare
                      --  What Earliest would return for the batch's first
@@ -14312,8 +14337,8 @@ package body Model_Runner.Llama is
                      --  position count differs, and every kernel in them was
                      --  written to take one.
                      --  A packed block's step reads it with the packed
-                     --  kernel; a round of packed sessions is attended on
-                     --  the host, and never reaches here.
+                     --  kernel, a round's rows each out of their own
+                     --  block through the table.
                      if Item.Held in Exact | Eighth | Fourth
                        and then Settings.Experts = 0
                        and then T.Is_Present (Current.Gate)
@@ -14344,10 +14369,17 @@ package body Model_Runner.Llama is
                            Max_Bias  => Settings.Max_Bias,
                            Table_At  => Table,
                            Packed    => Packed_Shape (Item, Base, V_Base,
-                                                      KV_Width, V_Width));
+                                                      KV_Width, V_Width,
+                                                      Seated => Rounding));
                      end if;
 
-                     if Fused then
+                     --  A packed round the device would not take as one
+                     --  sequence is attended on the host below: the
+                     --  single call reads one block, and a round's rows
+                     --  are in several.
+                     if Fused
+                       or else (Rounding and then Item.Held in Eighth | Fourth)
+                     then
                         Usable := True;
                      else
                         Attend_There
@@ -14784,17 +14816,24 @@ package body Model_Runner.Llama is
                            At_Val : constant Element_Count :=
                              Layer_Vals + Sits_At (Which) * V_Width;
                         begin
-                           Model_Runner.Backend.Device.Get_Cache
-                             (Block_Base (Whose.all) + At_Key,
-                              Whose.Keys.all
-                                (At_Key .. At_Key + KV_Width - 1), Read);
-
-                           if Read then
+                           if Whose.Held in Eighth | Fourth then
+                              Read_Back_Packed
+                                (Whose.all, At_Key, At_Val, 1, KV_Width,
+                                 V_Width, Read);
+                           else
                               Model_Runner.Backend.Device.Get_Cache
-                                (Block_Base (Whose.all)
-                                 + Whose.Keys.all'Length + At_Val,
-                                 Whose.Values.all
-                                   (At_Val .. At_Val + V_Width - 1), Read);
+                                (Block_Base (Whose.all) + At_Key,
+                                 Whose.Keys.all
+                                   (At_Key .. At_Key + KV_Width - 1), Read);
+
+                              if Read then
+                                 Model_Runner.Backend.Device.Get_Cache
+                                   (Block_Base (Whose.all)
+                                    + Whose.Keys.all'Length + At_Val,
+                                    Whose.Values.all
+                                      (At_Val .. At_Val + V_Width - 1),
+                                    Read);
+                              end if;
                            end if;
 
                            exit when not Read;

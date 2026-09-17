@@ -1078,8 +1078,9 @@ package Model_Runner.Platform.Device.Products is
    --  @param Packed How the rows are packed, for a packed session's block:
    --    the step then rounds each row to bytes or nibbles and a scale as
    --    the host rounds it, through pack.comp, and At_First and Stride go
-   --    unread. Run refuses the sequence where the device has no such
-   --    kernel; a round is not taken packed.
+   --    unread; a round's rows go each to its own block, out of the
+   --    table. Run refuses the sequence where the device has no such
+   --    kernel.
    --  @param Unpack True to read packed rows and write them as halves
    --    into the copy instead: Packed says how the rows are packed and
    --    where the first is, Width how wide a row is, Half_At where the
@@ -1448,11 +1449,11 @@ package Model_Runner.Platform.Device.Products is
    --  Through one kernel of its own: a workgroup eight rows sharing one
    --  group's keys and values -- heads of a position, or positions of a
    --  head -- the positions a tile of sixty-four at a time with the
-   --  softmax carried along, a row read a word at a time. One slice here;
-   --  a sequence's step cuts a token's long cache into slices and merges
-   --  them. No round, and the caller keeps a value head wider than
-   --  Attention_Room, a layer with sinks, and a base or width that is not
-   --  a multiple of four on the host. The kernel joins a tile through
+   --  softmax carried along, a row read a word at a time. One slice and
+   --  no round here; a sequence's step cuts a token's long cache into
+   --  slices and merges them, and reads a round's table. The caller keeps
+   --  a value head wider than Attention_Room, a layer with sinks, and a
+   --  base or width that is not a multiple of four on the host. The kernel joins a tile through
    --  subgroup operations, so a device without them has no kernel and
    --  Attends_Packed says so.
    --

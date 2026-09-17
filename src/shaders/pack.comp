@@ -52,7 +52,7 @@ const uint BLOCK = 32u;
 
 layout(local_size_x = LANES) in;
 
-layout(std430, binding = 0) readonly  buffer Kept   { float kept[]; };
+layout(std430, binding = 0) readonly  buffer Kept   { uint kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Words  { uint  kvw[]; };
 layout(std430, binding = 2) writeonly buffer Scales { float kvf[]; };
@@ -78,7 +78,12 @@ layout(push_constant) uniform Shape {
     uint at_scale;
     uint blocks;
 
-    uint unused_table;
+    //  A round: where its per-row table begins, in words, or zero for a
+    //  batch. A batch's rows go one after the first; a round's each into
+    //  its own member's block at its own position, which the table says
+    //  as place.comp reads it -- where the row has got to, and where its
+    //  block begins in words.
+    uint table_at;
 } shape;
 
 shared float shared_max[64];
@@ -123,8 +128,11 @@ void main() {
     }
 
     uint from = slot * shape.width;
-    uint row_at = shape.at_byte + slot * shape.row_bytes;
-    uint scale_at = shape.at_scale + slot * shape.blocks;
+
+    uint cell = shape.table_at != 0u ? kept[shape.table_at + slot * 2u] : slot;
+    uint block = shape.table_at != 0u ? kept[shape.table_at + slot * 2u + 1u] : 0u;
+    uint row_at = shape.at_byte + block * 4u + cell * shape.row_bytes;
+    uint scale_at = shape.at_scale + block + cell * shape.blocks;
 
     if (shape.bits == 8u) {
         float largest = 0.0;

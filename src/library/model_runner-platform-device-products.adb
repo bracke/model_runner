@@ -806,8 +806,9 @@ package body Model_Runner.Platform.Device.Products is
 
    --  And the packed kernel's, which has the bases twice over -- the
    --  rows' in bytes and the scales' in floats -- the bits an element of
-   --  each side, and how many heads and positions a workgroup answers.
-   Packed_Bytes    : constant := 96;
+   --  each side, how many heads and positions a workgroup answers, and a
+   --  round's table.
+   Packed_Bytes    : constant := 100;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Shape_Bytes     : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -964,6 +965,7 @@ package body Model_Runner.Platform.Device.Products is
       Causal     : C.unsigned := 1;
       Bundle     : C.unsigned := 1;
       Queries    : C.unsigned := 1;
+      Table_At   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -5709,7 +5711,8 @@ package body Model_Runner.Platform.Device.Products is
             Window     => C.unsigned (Window),
             Causal     => (if Causal then 1 else 0),
             Bundle     => C.unsigned (Bundle),
-            Queries    => C.unsigned (Queries));
+            Queries    => C.unsigned (Queries),
+            Table_At   => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -6852,10 +6855,11 @@ package body Model_Runner.Platform.Device.Products is
         --  A packed row begins on a word and is read four elements at a
         --  time by the attention that follows, and eight to a word by the
         --  nibble packing; a round's rows go each to its own block, which
-        --  the packing kernel does not look up.
+        --  the packing kernel looks up in the table as place.comp does and
+        --  the unpacking kernel does not.
         or else (Packed.Bits /= 0
                  and then (Packed.Bits not in 4 | 8
-                           or else Table_At /= 0
+                           or else (Unpack and then Table_At /= 0)
                            or else Width mod (if Packed.Bits = 4 then 8 else 4)
                                    /= 0
                            or else Packed.Row_Bytes mod 4 /= 0
@@ -8577,7 +8581,11 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
 
                   declare
-                     Queries : constant Positive := Packed_Queries (Count);
+                     --  A round's rows share no keys, so a workgroup
+                     --  takes one position's heads and no more.
+                     Queries : constant Positive :=
+                       (if This.Table /= 0 then 1
+                        else Packed_Queries (Count));
                      Bundle  : constant Positive :=
                        Packed_Bundle (This.Group_Size, Queries,
                                       This.Last - This.First + 1);
@@ -8606,10 +8614,13 @@ package body Model_Runner.Platform.Device.Products is
                         Window     => C.unsigned (This.Window),
                         Causal     => (if This.Causal then 1 else 0),
                         Bundle     => C.unsigned (Bundle),
-                        Queries    => C.unsigned (Queries));
+                        Queries    => C.unsigned (Queries),
+                        Table_At   => C.unsigned (This.Table));
 
+                     --  A round is never sliced: its rows' lasts are in
+                     --  the table, not in First and Last.
                      Slices : constant Natural :=
-                       (if Barrier = null then 1
+                       (if Barrier = null or else This.Table /= 0 then 1
                         else Packed_Slices
                                (Item, Count, This.First, This.Last));
                   begin
@@ -8841,7 +8852,7 @@ package body Model_Runner.Platform.Device.Products is
                         Packing => C.unsigned (This.Pack.Bits),
                         Base    => C.unsigned (This.Pack.At_Scale),
                         Joins   => C.unsigned (This.Pack.Blocks),
-                        Table   => 0,
+                        Table   => C.unsigned (This.Table),
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
