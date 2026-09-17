@@ -20630,7 +20630,8 @@ panels A798D1393A1C47D0 src/library/model_runner-quantization-interleave.ads src
 # at load 0.5 of 16 for the exact cache the device figures use: twelve
 # tokens 0.273 s, and 1,419 prompt tokens with sixty-four after 2.140 s
 # -- 0.725 s evaluating and 1.377 s generating -- before the table was
-# doubled, and TAKEN after. Restamped on that.
+# doubled, and 0.273 s and 2.090 s -- 0.687 s evaluating and 1.358 s
+# generating -- after, at load 0.5. Restamped on that.
 #
 #   GROUPS. quality A8E9ACCF4A7D3427 -> C6AF7F7E2D890979,
 #   engine AD8BED70A8B95442 -> B425BDC2981E7818,
@@ -20640,5 +20641,5 @@ panels A798D1393A1C47D0 src/library/model_runner-quantization-interleave.ads src
 #   outside 647FE0094527178F -> C3058834295A63E7,
 #   panels 4F39DE565A2BCE8E -> A798D1393A1C47D0.
 #
-# load:  see above
+# load:  0.5 of 16 for the two device runs
 # model: TinyLlama-1.1B-Chat Q8_0 for the two device runs
