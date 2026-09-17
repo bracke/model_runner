@@ -1866,7 +1866,9 @@ package body Model_Runner.Backend.Device is
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
-      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null)
+      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
+      Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1994,6 +1996,38 @@ package body Model_Runner.Backend.Device is
          Step_Room (Rows);
       end Add_Projection_Bias;
 
+      --  A normalization of the step just named, where the architecture
+      --  puts one before a residual join: the step's number then becomes
+      --  the normalized step's, so the join reads it normalized.
+      procedure Add_Post_Norm
+        (Gain  : T.Real_Array_Access;
+         Rows  : Model_Runner.Numerics.Element_Count;
+         Which : in out Natural;
+         Added : out Boolean) is
+      begin
+         Added := True;
+
+         if Gain = null then
+            return;
+         end if;
+
+         declare
+            At_Weight : constant System.Address :=
+              Gain.all (Gain.all'First)'Address;
+         begin
+            Products.Add_Norm
+              (Steps, At_Weight,
+               Model_Runner.Bytes.Byte_Count (Gain.all'Length) * 4, 0,
+               Natural (Rows), Epsilon, Added,
+               From_Step => Which, Key => At_Weight, Kept => False);
+         end;
+         if not Added then
+            return;
+         end if;
+         Which := Products.Length (Steps);
+         Step_Room (Rows);
+      end Add_Post_Norm;
+
       procedure Add_Down_Bias
         (Down_Bias : T.Real_Array_Access;
          Each, Experts, Route : Natural;
@@ -2039,6 +2073,13 @@ package body Model_Runner.Backend.Device is
         or else Keys.all'Length < Slots * Key.Rows
         or else Values.all'Length < Slots * Value.Rows
         or else Into.all'Length < Slots * Width
+        --  A post-norm is a gain of the width; and a mixture's sum joins
+        --  the residual as it sums, with no room for one after it.
+        or else (Post_Attention_Norm /= null
+                 and then Post_Attention_Norm.all'Length /= Width)
+        or else (Post_Feed_Norm /= null
+                 and then (Post_Feed_Norm.all'Length /= Width
+                           or else Experts > 0))
       then
          return;
       end if;
@@ -2454,8 +2495,13 @@ package body Model_Runner.Backend.Device is
       Step_Out := Products.Length (Steps);
       Step_Room (Weight.Rows);
 
-      --  The bias on the way out, before the join reads it.
+      --  The bias on the way out, and the normalization Gemma puts on
+      --  what attention produced, before the join reads it.
       Add_Projection_Bias (Out_Bias, Weight.Rows, Step_Out, Added);
+      if not Added then
+         return;
+      end if;
+      Add_Post_Norm (Post_Attention_Norm, Weight.Rows, Step_Out, Added);
       if not Added then
          return;
       end if;
@@ -2707,6 +2753,13 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Downs := Products.Length (Steps);
          Step_Room (Down.Rows);
+
+         --  And the normalization Gemma puts on what the feed-forward
+         --  produced, before the second join reads it.
+         Add_Post_Norm (Post_Feed_Norm, Down.Rows, Step_Downs, Added);
+         if not Added then
+            return;
+         end if;
 
          Products.Add_Join
            (Steps, Added, From_Step => Step_Downs, Residual_Step => Step_Join,

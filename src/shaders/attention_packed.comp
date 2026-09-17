@@ -73,8 +73,15 @@
 //  What this does not do, and the caller does on the host: a value head
 //  wider than the room below.
 
+//  On SUBGROUPS, as attention.comp: with them a tile's largest and its
+//  sum are one instruction a row and a partial a subgroup; without them
+//  every lane walks the tile's sixty-four entries for each row, which is
+//  what a device that speaks only Vulkan 1.0 gets, and the engine binds
+//  the compilation the device can run.
+#ifdef SUBGROUPS
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
 
 layout(local_size_x = 64) in;
 
@@ -163,6 +170,7 @@ shared float tile[BUNDLE * LANES];
 shared float shared_max[BUNDLE * 64];
 shared float shared_sum[BUNDLE * 64];
 
+#ifdef SUBGROUPS
 //  The largest of a value across the workgroup, and the sum of one, for
 //  every row at once: the barriers are what a reduction costs, and eight
 //  rows reduced together pay for one pair. The test on the
@@ -229,6 +237,41 @@ void whole_sum_all (inout float mine[BUNDLE]) {
     }
     barrier ();
 }
+#else
+//  The same two through shared memory alone: every lane's value of every
+//  row put down, and every lane walking the sixty-four of each row.
+void whole_max_all (inout float mine[BUNDLE]) {
+    uint lane = gl_LocalInvocationID.x;
+    for (uint h = 0u; h < BUNDLE; h++) {
+        shared_max[h * 64u + lane] = mine[h];
+    }
+    barrier ();
+    for (uint h = 0u; h < BUNDLE; h++) {
+        float whole = shared_max[h * 64u];
+        for (uint i = 1u; i < LANES; i++) {
+            whole = max (whole, shared_max[h * 64u + i]);
+        }
+        mine[h] = whole;
+    }
+    barrier ();
+}
+
+void whole_sum_all (inout float mine[BUNDLE]) {
+    uint lane = gl_LocalInvocationID.x;
+    for (uint h = 0u; h < BUNDLE; h++) {
+        shared_sum[h * 64u + lane] = mine[h];
+    }
+    barrier ();
+    for (uint h = 0u; h < BUNDLE; h++) {
+        float whole = 0.0;
+        for (uint i = 0u; i < LANES; i++) {
+            whole += shared_sum[h * 64u + i];
+        }
+        mine[h] = whole;
+    }
+    barrier ();
+}
+#endif
 
 //  Four elements of a packed row, e to e + 3, as the numbers they stand
 //  for before their scale: the word they sit in, read once. e is a

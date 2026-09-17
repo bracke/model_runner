@@ -146,6 +146,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Gemma's layers go over whole.** The normalizations Gemma 2 and 3 put
+  on what attention and the feed-forward produced before each residual
+  join -- which kept every layer of both off the device's whole-layer
+  sequence, rotating and writing the cache from the host -- are steps of
+  it now, `Add_Norm` before each join. Gemma 3's 1B reads a 1,328-token
+  prompt on the device in 0.88 s against 2.16, and generates at 17.9 ms
+  a token against 22.9; Gemma 2's twenty-four tokens read 0.845 s
+  against 0.941. The same text as before on all three Gemmas. Found on
+  the way, and the first thing it broke: the angle table a sequence
+  rotates by was one standing mapping, written for the next layer while
+  the last was still running, and Gemma 3 -- whose windowed layers turn
+  on a base of their own -- had the layer still running read the next
+  one's angles; the table is two now, swapped with the command buffer.
+  Every model whose layers turn on one base wrote the same numbers over
+  the last and never saw it.
+- **A round's members hold their values in one storage.** Members
+  holding theirs differently were served on the host, since the packed
+  kernel is told one storage a round; they are refused by name now, as
+  another cache precision is, which is what a round's members are.
+- **The packed kernels compiled twice.** `attention_packed.comp` and
+  `pack.comp` fold through subgroup operations where the device offers
+  them to a compute shader and through shared memory alone everywhere
+  else, as `attention.comp` does; both compilations are made, the plain
+  pair bound where the device has no other, and the suite runs the
+  plain pair on a device that has both.
 - **Gemma's heads attend on the device.** The attention kernels took a
   value head up to 128 wide, and every Gemma here -- 1, 2 and 3, whose
   heads are 256 wide -- attended on the host with the products on the
@@ -242,8 +267,7 @@ Keep a Changelog and the project uses semantic versioning.
   attended and projected in one submission with them, exact or in
   bytes, held to the independent implementation; its batch's attention
   stays on the host, since its expert biases keep the mixture from going
-  over whole. A device without subgroup arithmetic attends on the host
-  as before. What it
+  over whole. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
   1.65 s generating with the byte cache against 1.38 s with the exact
   one -- 25.8 ms a token against 21.5 -- and the prompt itself 0.70 s

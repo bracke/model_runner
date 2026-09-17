@@ -2027,15 +2027,27 @@ package body Model_Runner.Platform.Device.Products is
          Item.Attender := Made;
 
          --  And the packed kernel, over a cache of bytes or nibbles and
-         --  scales. It joins a tile's scores through subgroup operations
-         --  and is compiled for nothing else, so a device without them
-         --  attends a packed session on the host. Allowed to fail on its
-         --  own for the same reason.
-         if Has_Subgroup_Arithmetic (On) then
-            declare
-               Packed : aliased constant Model_Runner.Shaders.Word_Array :=
-                 Model_Runner.Shaders.Attention_Packed;
-            begin
+         --  scales, compiled twice as attention.comp is: with subgroup
+         --  operations where the device offers them to a compute shader,
+         --  and through shared memory alone everywhere else. Allowed to
+         --  fail on its own: a device that refuses it attends a packed
+         --  session on the host.
+         declare
+            Plain  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Attention_Packed;
+            Packed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Attention_Packed_Subgroups;
+         begin
+            Request.Size := Interfaces.C.size_t (Plain'Length * 4);
+            Request.Code := Plain'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Packed_Plain := Made;
+            end if;
+
+            if Has_Subgroup_Arithmetic (On) then
                Request.Size := Interfaces.C.size_t (Packed'Length * 4);
                Request.Code := Packed'Address;
 
@@ -2044,14 +2056,27 @@ package body Model_Runner.Platform.Device.Products is
                then
                   Item.Packed_Attend := Made;
                end if;
-            end;
+            end if;
+         end;
 
-            --  And the kernel that packs a step's rows into such a cache,
-            --  which finds a row's largest through the same operations.
-            declare
-               Packer : aliased constant Model_Runner.Shaders.Word_Array :=
-                 Model_Runner.Shaders.Pack;
-            begin
+         --  And the kernel that packs a step's rows into such a cache,
+         --  which finds a row's largest the same two ways.
+         declare
+            Plain  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Pack;
+            Packer : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Pack_Subgroups;
+         begin
+            Request.Size := Interfaces.C.size_t (Plain'Length * 4);
+            Request.Code := Plain'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Packer_Plain := Made;
+            end if;
+
+            if Has_Subgroup_Arithmetic (On) then
                Request.Size := Interfaces.C.size_t (Packer'Length * 4);
                Request.Code := Packer'Address;
 
@@ -2060,26 +2085,26 @@ package body Model_Runner.Platform.Device.Products is
                then
                   Item.Packer := Made;
                end if;
-            end;
+            end if;
+         end;
 
-            --  And the one that unpacks a layer of it into the copy for
-            --  a batch, which is worth having only where the matrix
-            --  kernel is -- whose module is made below, so the pipeline
-            --  is what is gated on it.
-            declare
-                  Unpacker : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Unpack;
-               begin
-                  Request.Size := Interfaces.C.size_t (Unpacker'Length * 4);
-                  Request.Code := Unpacker'Address;
+         --  And the one that unpacks a layer of it into the copy for a
+         --  batch, which is worth having only where the matrix kernel is
+         --  -- whose module is made below, so the pipeline is what is
+         --  gated on it.
+         declare
+            Unpacker : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Unpack;
+         begin
+            Request.Size := Interfaces.C.size_t (Unpacker'Length * 4);
+            Request.Code := Unpacker'Address;
 
-                  if Create (Item.Logical, Request'Address, Null_Handle,
-                             Made'Access) = 0
-                  then
-                     Item.Unpacker := Made;
-                  end if;
-               end;
-         end if;
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Unpacker := Made;
+            end if;
+         end;
 
          --  And the same source compiled with SUBGROUPS, where the device
          --  offers them. Allowed to fail on its own: a device that takes
@@ -2676,6 +2701,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Packed_Plain /= Null_Handle then
+            Request.Stage.Module := Item.Packed_Plain;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Packed_Plain_Line := Made;
+            end if;
+         end if;
+
          if Item.Packer /= Null_Handle then
             Request.Stage.Module := Item.Packer;
 
@@ -2685,6 +2720,20 @@ package body Model_Runner.Platform.Device.Products is
                Item.Pack_Line := Made;
             end if;
          end if;
+
+         if Item.Packer_Plain /= Null_Handle then
+            Request.Stage.Module := Item.Packer_Plain;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Pack_Plain_Line := Made;
+            end if;
+         end if;
+
+         --  Bound where the device offers no subgroup operations, or where
+         --  a test asks.
+         Item.Plain_Packing := Item.Packed_Line = Null_Handle;
 
          if Item.Halved_Line /= Null_Handle
            and then Item.Bundled_Attend /= Null_Handle
@@ -3289,13 +3338,16 @@ package body Model_Runner.Platform.Device.Products is
 
       Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
       Unmap_Standing (Item, Item.Turn_Memory, Item.Turn_At);
+      Unmap_Standing (Item, Item.Turn_Memory_Two, Item.Turn_At_Two);
       Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
       Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
       Give_Back_Buffer (Item, Item.Turn_Buffer, Item.Turn_Memory);
+      Give_Back_Buffer (Item, Item.Turn_Buffer_Two, Item.Turn_Memory_Two);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
       Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
       Item.Vector_Bytes := 0;
       Item.Turn_Bytes := 0;
+      Item.Turn_Bytes_Two := 0;
       Item.Result_Bytes := 0;
       Item.Half_Bytes := 0;
 
@@ -3333,7 +3385,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Packed_Line, "vkDestroyPipeline");
+      Give_Back (Item.Packed_Plain_Line, "vkDestroyPipeline");
       Give_Back (Item.Pack_Line, "vkDestroyPipeline");
+      Give_Back (Item.Pack_Plain_Line, "vkDestroyPipeline");
       Give_Back (Item.Unpack_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
@@ -3357,7 +3411,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Packed_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Packed_Plain, "vkDestroyShaderModule");
       Give_Back (Item.Packer, "vkDestroyShaderModule");
+      Give_Back (Item.Packer_Plain, "vkDestroyShaderModule");
       Give_Back (Item.Unpacker, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
@@ -3432,6 +3488,25 @@ package body Model_Runner.Platform.Device.Products is
 
    function Prefers_Exact_Attention (Item : Engine) return Boolean
    is (Item.Exact_Attention);
+
+   --------------------------
+   -- Prefer_Plain_Packing --
+   --------------------------
+
+   procedure Prefer_Plain_Packing (Item : in out Engine; On : Boolean) is
+   begin
+      Item.Plain_Packing := On or else Item.Packed_Line = Null_Handle;
+   end Prefer_Plain_Packing;
+
+   --  The packed kernels as bound: the shared-memory compilations where
+   --  those are preferred or the only ones made, the subgroup ones else.
+   function Packed_Pipeline (Item : Engine) return Address
+   is (if Item.Plain_Packing then Item.Packed_Plain_Line
+       else Item.Packed_Line);
+
+   function Pack_Pipeline (Item : Engine) return Address
+   is (if Item.Plain_Packing then Item.Pack_Plain_Line
+       else Item.Pack_Line);
 
    function Last_Timeline (Item : Engine) return Timeline is (Item.Line);
 
@@ -4403,6 +4478,24 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Item.Queries := Item.Queries_Two;
          Item.Queries_Two := Queries;
+      end;
+
+      --  The angle table with the rest: the one the running sequence
+      --  reads stays as it is while the next sequence writes the other.
+      declare
+         Buffer : constant Address := Item.Turn_Buffer;
+         Memory : constant Address := Item.Turn_Memory;
+         Bytes  : constant Interfaces.Unsigned_64 := Item.Turn_Bytes;
+         Where  : constant Address := Item.Turn_At;
+      begin
+         Item.Turn_Buffer := Item.Turn_Buffer_Two;
+         Item.Turn_Memory := Item.Turn_Memory_Two;
+         Item.Turn_Bytes := Item.Turn_Bytes_Two;
+         Item.Turn_At := Item.Turn_At_Two;
+         Item.Turn_Buffer_Two := Buffer;
+         Item.Turn_Memory_Two := Memory;
+         Item.Turn_Bytes_Two := Bytes;
+         Item.Turn_At_Two := Where;
       end;
    end Swap_Slots;
 
@@ -5495,7 +5588,7 @@ package body Model_Runner.Platform.Device.Products is
    --------------------
 
    function Attends_Packed (Item : Engine) return Boolean
-   is (Item.Packed_Line /= Null_Handle);
+   is (Packed_Pipeline (Item) /= Null_Handle);
 
    --  Whether the packed kernel takes this shape over this block: the
    --  kernel reads a row a word at a time, four elements of it, and a
@@ -5509,7 +5602,7 @@ package body Model_Runner.Platform.Device.Products is
       Value_Size : Natural;
       KV_Width   : Natural;
       V_Width    : Natural) return Boolean
-   is (Item.Packed_Line /= Null_Handle
+   is (Packed_Pipeline (Item) /= Null_Handle
        and then Packed.K_Bits in 4 | 8
        and then Packed.V_Bits in 4 | 8
        and then Head_Size in 4 .. 256
@@ -5774,7 +5867,8 @@ package body Model_Runner.Platform.Device.Products is
          --  A workgroup its rows of heads and positions, and one slice:
          --  the single call has no merge after it, and a sequence is
          --  where a token's long cache is cut.
-         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute,
+                        Packed_Pipeline (Item));
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
@@ -7517,7 +7611,7 @@ package body Model_Runner.Platform.Device.Products is
                  --  room in the copy for what it writes.
                  or else (This.Pack.Bits /= 0
                           and then not This.Unpacks
-                          and then Item.Pack_Line = Null_Handle)
+                          and then Pack_Pipeline (Item) = Null_Handle)
                  or else (This.Unpacks
                           and then (Item.Unpack_Line = Null_Handle
                                     or else This.Half_At
@@ -8764,7 +8858,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  dispatches it -- and no slices, no merge, no
                   --  half-precision copy, which are the exact kernels'.
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
+                    (Item.Buffer, Bind_Point_Compute, Packed_Pipeline (Item));
 
                   declare
                      --  A round's rows share no keys, so a workgroup
@@ -9029,7 +9123,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  where the packed attention reads them, through the
                   --  kernel that rounds as the host rounds.
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Pack_Line);
+                    (Item.Buffer, Bind_Point_Compute, Pack_Pipeline (Item));
 
                   declare
                      Shape : aliased Shape_Constants :=

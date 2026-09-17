@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 37) of Text_Access :=
+   Held : constant array (1 .. 38) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -112,7 +112,12 @@ package body Library_Surface is
       --  otherwise than its keys. The command chose and has no reason to
       --  ask back; a caller handed a session, or a test holding one to
       --  what it asked for, does.
-      new String'("Value_Precision_Of")];
+      new String'("Value_Precision_Of"),
+
+      --  Which of the packed kernels' two compilations is bound: the one
+      --  through shared memory alone, which a device without subgroup
+      --  operations gets and the suite asks for on one that has them.
+      new String'("Prefer_Plain_Packing")];
 
    ---------------
    -- Is_Listed --

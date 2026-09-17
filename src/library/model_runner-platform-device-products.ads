@@ -474,6 +474,18 @@ package Model_Runner.Platform.Device.Products is
    --  @param On True to attend in binary32, False as the device prefers.
    procedure Prefer_Exact_Attention (Item : in out Engine; On : Boolean);
 
+   --  Whether a packed session's kernels -- the attention over its block
+   --  and the packing into it -- go through shared memory alone rather
+   --  than subgroup operations, which is what a device without those
+   --  operations gets and what a test asks for on a device that has
+   --  them, so the compilation the other devices run is run here too.
+   --  Both compilations are made; this says which is bound.
+   --
+   --  @param Item Ready engine.
+   --  @param On True to bind the shared-memory compilations, False to
+   --    bind whichever the device can run best.
+   procedure Prefer_Plain_Packing (Item : in out Engine; On : Boolean);
+
    --  Whether a batch's attention is kept off the matrix instruction.
    --
    --  @param Item Engine to ask.
@@ -2002,6 +2014,15 @@ private
       Packer        : System.Address := System.Null_Address;
       Pack_Line     : System.Address := System.Null_Address;
 
+      --  The two again compiled without subgroup operations, for a device
+      --  that offers none to a compute shader -- and for a test on one
+      --  that does. Plain_Packing says which pair is bound.
+      Packed_Plain      : System.Address := System.Null_Address;
+      Packed_Plain_Line : System.Address := System.Null_Address;
+      Packer_Plain      : System.Address := System.Null_Address;
+      Pack_Plain_Line   : System.Address := System.Null_Address;
+      Plain_Packing     : Boolean := False;
+
       --  And the one that unpacks a layer of it into the half-precision
       --  copy for a batch, with its pipeline.
       Unpacker      : System.Address := System.Null_Address;
@@ -2358,6 +2379,18 @@ private
       Turn_Memory   : System.Address := System.Null_Address;
       Turn_Bytes    : Interfaces.Unsigned_64 := 0;
       Turn_At       : System.Address := System.Null_Address;
+
+      --  And a second of it, swapped with the command buffer: a sequence
+      --  is handed over and the next recorded while it runs, and the next
+      --  writes its angles before anything waits. One table served every
+      --  model whose layers turn on one base, since every layer wrote the
+      --  same numbers over the last; Gemma 3's windowed layers turn on a
+      --  base of their own, and the layer still running read the next
+      --  one's angles.
+      Turn_Buffer_Two : System.Address := System.Null_Address;
+      Turn_Memory_Two : System.Address := System.Null_Address;
+      Turn_Bytes_Two  : Interfaces.Unsigned_64 := 0;
+      Turn_At_Two     : System.Address := System.Null_Address;
 
       --  Where that memory is mapped, kept from one call to the next, for
       --  the reason written against Result_At below.

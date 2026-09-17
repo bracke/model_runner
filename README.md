@@ -642,7 +642,7 @@ cd tests && ./bin/tests docs               # regenerate docs/error-codes.md
 cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                              [SOURCE.comp OUT.spv ...] [ROOT]
                                            # after recompiling a shader, and
-                                           # naming every one of the eighteen
+                                           # naming every one of the thirty-two
                                            # compilations: the package is
                                            # written whole. route.comp and
                                            # mix.comp compile with -V as
@@ -660,7 +660,12 @@ cd tests && ./bin/tests shader ../src/shaders/row_product.comp out.spv \
                                            # vulkan1.1 -DSUBGROUPS -DWIDE`
                                            # and with `--target-env
                                            # vulkan1.1 -DSUBGROUPS
-                                           # -DQUERY_TILE`.
+                                           # -DQUERY_TILE`; the packed
+                                           # attention and the packing
+                                           # each once plain and once
+                                           # with `--target-env vulkan1.1
+                                           # -DSUBGROUPS`. The checks name
+                                           # every compilation's flags.
                                            # `attention_matrix.comp` needs
                                            # `--target-env vulkan1.3` as
                                            # the matrix product does. A

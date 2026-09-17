@@ -86,6 +86,7 @@ layout(push_constant) uniform Shape {
     uint table_at;
 } shape;
 
+#ifdef SUBGROUPS
 shared float shared_max[64];
 
 //  The largest of a value across the workgroup.
@@ -108,6 +109,21 @@ float whole_max (float mine) {
     barrier ();
     return whole;
 }
+#else
+shared float shared_max[LANES];
+
+float whole_max (float mine) {
+    shared_max[gl_LocalInvocationID.x] = mine;
+    barrier ();
+
+    float whole = shared_max[0];
+    for (uint i = 1u; i < LANES; i++) {
+        whole = max (whole, shared_max[i]);
+    }
+    barrier ();
+    return whole;
+}
+#endif
 
 //  Real'Rounding: to the nearest whole number, halves away from zero.
 float rounded (float v) {

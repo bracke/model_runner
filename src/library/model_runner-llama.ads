@@ -1473,9 +1473,11 @@ package Model_Runner.Llama is
    --  only its own session's cache.
    --
    --  Members must agree about the things the kernels cannot vary a row at
-   --  a time: the same prepared model, the same cache precision and the same
-   --  context capacity. They need not agree about anything else -- different
-   --  prompts, lengths, positions and sliding windows are ordinary.
+   --  a time: the same prepared model, the same cache precision -- the
+   --  values' storage included, since the packed kernel is told one -- and
+   --  the same context capacity. They need not agree about anything else
+   --  -- different prompts, lengths, positions and sliding windows are
+   --  ordinary.
    --
    --  @param Members The sessions taking part, one a row.
    --  @param Source The model they all belong to.

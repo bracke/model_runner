@@ -5875,6 +5875,20 @@ package body Checks is
                   & "was compiled; compile it and run 'tests shader' again "
                   & "with every shader named");
          end if;
+
+         --  And its second compilation, with SUBGROUPS.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest
+                    /= Model_Runner.Shaders.Attention_Packed_Subgroups_Digest
+         then
+            Fail ("the second compilation of "
+                  & "src/shaders/attention_packed.comp is older than the "
+                  & "source; compile it with --target-env vulkan1.1 "
+                  & "-DSUBGROUPS to attention_packed_subgroups.spv, and run "
+                  & "'tests shader' again with every shader named");
+         end if;
       end;
 
       --  And the kernel that packs a step's rows into such a cache.
@@ -5894,6 +5908,18 @@ package body Checks is
             Fail ("src/shaders/pack.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader' again with "
                   & "every shader named");
+         end if;
+
+         --  And its second compilation, with SUBGROUPS.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Pack_Subgroups_Digest
+         then
+            Fail ("the second compilation of src/shaders/pack.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS to pack_subgroups.spv, and run "
+                  & "'tests shader' again with every shader named");
          end if;
       end;
 

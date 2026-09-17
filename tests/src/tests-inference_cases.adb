@@ -2751,6 +2751,33 @@ package body Tests.Inference_Cases is
                        & "was not refused as a shape: "
                        & E.Error_Code'Image (Status.Code));
 
+               --  And a member holding its values in another storage than
+               --  the others, which the packed kernel is told once for
+               --  the round: refused by name, as another cache precision
+               --  is.
+               declare
+                  Apart : aliased L.Session;
+               begin
+                  L.Open (Apart, Under.Ready, Cache => L.Eighth,
+                          Values => L.Value_Fourth, Status => Status);
+                  Assert (E.Is_Ok (Status), "the mixed session did not open");
+                  L.Close (Two);
+                  L.Open (Two, Under.Ready, Cache => L.Eighth, Status => Status);
+                  Assert (E.Is_Ok (Status), "the byte session did not open");
+
+                  L.Evaluate_Round
+                    (Members => [Two'Unchecked_Access, Apart'Unchecked_Access],
+                     Source  => Under.Ready,
+                     Tokens  => [First_Prompt (1), Second_Prompt (1)],
+                     Logits  => Both,
+                     Status  => Status);
+                  Assert (Status.Code = E.Generation_Invalid_Request,
+                          "a round of members holding their values in "
+                          & "different storages was not refused: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Close (Apart);
+               end;
+
                L.Close (Two);
 
                L.Evaluate_Round

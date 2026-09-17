@@ -11738,8 +11738,14 @@ package body Model_Runner.Llama is
           and then L.Up_Bias = null
           and then L.Down_Bias = null
           and then L.Feed_Norm_Bias = null
-          and then L.Post_Attention_Norm = null
-          and then L.Post_Feed_Norm = null);
+
+          --  The normalizations Gemma puts before its joins are steps of
+          --  the sequence; the ones Bert puts after, with a shift, are
+          --  not.
+          and then L.Post_Attention_Norm_Bias = null
+          and then L.Post_Feed_Norm_Bias = null
+          and then not Normalizes_After (Settings.Kind)
+          and then (L.Post_Feed_Norm = null or else Settings.Experts = 0));
 
       --  A slice of a token's work, for the pool.
       --
@@ -12257,7 +12263,9 @@ package body Model_Runner.Llama is
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
-                        Out_Bias    => Current.Out_Bias);
+                        Out_Bias    => Current.Out_Bias,
+                        Post_Attention_Norm => Current.Post_Attention_Norm,
+                        Post_Feed_Norm      => Current.Post_Feed_Norm);
                   end if;
                end if;
 
@@ -13096,8 +13104,10 @@ package body Model_Runner.Llama is
           and then L.Up_Bias = null
           and then L.Down_Bias = null
           and then L.Feed_Norm_Bias = null
-          and then L.Post_Attention_Norm = null
-          and then L.Post_Feed_Norm = null
+          and then L.Post_Attention_Norm_Bias = null
+          and then L.Post_Feed_Norm_Bias = null
+          and then not Normalizes_After (Settings.Kind)
+          and then (L.Post_Feed_Norm = null or else Settings.Experts = 0)
 
           --  The attention projections' biases go as steps of the
           --  sequence, all three or none, as the token's whole layer
@@ -13521,11 +13531,6 @@ package body Model_Runner.Llama is
       --  it has written half a round's positions to a device.
       if Rounding
         and then Item.Held in Exact | Eighth | Fourth
-        --  A packed round's rows are read by one kernel told one storage
-        --  for the values: members holding theirs differently attend on
-        --  the host.
-        and then (for all Which in 0 .. Count - 1 =>
-                    Held_By (Which).Held_Values = Item.Held_Values)
         and then Members <= Element_Count (Model_Runner.Backend.Device
                                              .Block_Limit)
         and then Count * Element_Count (Item.Owner.Settings.Layers)
@@ -14150,7 +14155,9 @@ package body Model_Runner.Llama is
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
-                        Out_Bias    => Current.Out_Bias);
+                        Out_Bias    => Current.Out_Bias,
+                        Post_Attention_Norm => Current.Post_Attention_Norm,
+                        Post_Feed_Norm      => Current.Post_Feed_Norm);
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -15478,6 +15485,7 @@ package body Model_Runner.Llama is
 
             if Which.Owner /= Members (Members'First).Owner
               or else Which.Held /= Members (Members'First).Held
+              or else Which.Held_Values /= Members (Members'First).Held_Values
               or else Which.Context /= Members (Members'First).Context
             then
                --  Named rather than guessed at: a round that ran anyway

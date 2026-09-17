@@ -920,6 +920,12 @@ package Model_Runner.Backend.Device is
    --    receives the biased values.
    --  @param Out_Bias The bias on the way out of attention, added to the
    --    projection before the residual join, or null.
+   --  @param Post_Attention_Norm The normalization Gemma 2 and 3 put on
+   --    what attention produced before it joins the residual, a gain of
+   --    Width, or null for none.
+   --  @param Post_Feed_Norm The same on what the feed-forward produced,
+   --    or null; refused with a mixture, whose sum joins the residual as
+   --    it sums.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -994,7 +1000,9 @@ package Model_Runner.Backend.Device is
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
-      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null);
+      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
+      Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  A gated feed-forward block, whole, in one submission.
    --

@@ -5779,6 +5779,13 @@ package body Tests.Backend_Cases is
       Compare (8, 4, "byte keys and nibble values");
       Compare (4, 8, "nibble keys and byte values");
 
+      --  And through the compilation without subgroup operations, which
+      --  a device that offers none to a compute shader is bound to.
+      Products.Prefer_Plain_Packing (Engine, True);
+      Compare (8, 8, "bytes, through shared memory alone");
+      Compare (4, 8, "nibble keys and byte values, through shared memory alone");
+      Products.Prefer_Plain_Packing (Engine, False);
+
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);
@@ -6011,6 +6018,12 @@ package body Tests.Backend_Cases is
 
       Compare (8, "bytes");
       Compare (4, "nibbles");
+
+      --  And through the compilation without subgroup operations.
+      Products.Prefer_Plain_Packing (Engine, True);
+      Compare (8, "bytes, through shared memory alone");
+      Compare (4, "nibbles, through shared memory alone");
+      Products.Prefer_Plain_Packing (Engine, False);
 
       Products.Close (Engine);
       Devices.Close (Opened);
