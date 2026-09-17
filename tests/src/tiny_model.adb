@@ -69,7 +69,8 @@ package body Tiny_Model is
       Apart_Widths : Boolean := False;
       Head_Factor : Positive := 1;
       Sections     : Boolean := False;
-      Depth        : Natural := 0)
+      Depth        : Natural := 0;
+      Code_Norms   : Boolean := True)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -1074,6 +1075,22 @@ package body Tiny_Model is
             Norm (Layer_Name (Index, "layer_output_norm.weight"));
             Norm_Of
               (Layer_Name (Index, "layer_output_norm.bias"), Embedding);
+         end if;
+
+         --  The code variant's six: over the whole of the queries and of
+         --  the keys, each the width of its projection, and the attention
+         --  sublayer's second, the width of the embedding.
+         if Kind = Jina_Bert_V2 and then Code_Norms then
+            Gain_Of (Layer_Name (Index, "attn_q_norm.weight"),
+                     Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_q_norm.bias"),
+                     Heads * Key_Size);
+            Gain_Of (Layer_Name (Index, "attn_k_norm.weight"),
+                     KV_Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_k_norm.bias"),
+                     KV_Heads * Key_Size);
+            Norm (Layer_Name (Index, "attn_norm_2.weight"));
+            Norm_Of (Layer_Name (Index, "attn_norm_2.bias"), Embedding);
          end if;
 
          if Kind not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2

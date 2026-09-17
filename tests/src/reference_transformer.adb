@@ -1890,6 +1890,51 @@ package body Reference_Transformer is
                end if;
             end if;
 
+            --  The code variant of jina-bert-v2, told from the text one by
+            --  its tensors: six of them, and all six once any is there.
+            if Item.Kind = Jina_Bert_V2
+              and then Containers.Find_Tensor
+                         (Source, Layer_Name (Index, "attn_norm_2.weight"))
+                       /= 0
+            then
+               Current.Query_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Query_Whole_Norm_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.bias"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Key_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Key_Whole_Norm_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.bias"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Second_Attention_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_norm_2.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Second_Attention_Norm_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_norm_2.bias"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
             if Is_Linear then
                Present := True;
             else
@@ -2160,6 +2205,12 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Value);
             Free_Vector (Item.Blocks (Index).Query_Norm);
             Free_Vector (Item.Blocks (Index).Key_Norm);
+            Free_Vector (Item.Blocks (Index).Query_Whole_Norm);
+            Free_Vector (Item.Blocks (Index).Query_Whole_Norm_Bias);
+            Free_Vector (Item.Blocks (Index).Key_Whole_Norm);
+            Free_Vector (Item.Blocks (Index).Key_Whole_Norm_Bias);
+            Free_Vector (Item.Blocks (Index).Second_Attention_Norm);
+            Free_Vector (Item.Blocks (Index).Second_Attention_Norm_Bias);
             Free_Matrix (Item.Blocks (Index).Attention_Out);
             Free_Vector (Item.Blocks (Index).Feed_Norm);
             Free_Vector (Item.Blocks (Index).Feed_Norm_Bias);
@@ -3315,6 +3366,30 @@ package body Reference_Transformer is
                         Current.Key_Norm.all);
                   end if;
 
+                  --  The code variant of jina-bert-v2 normalizes the whole
+                  --  of the queries and the whole of the keys instead --
+                  --  centred, with a shift, over the projection and not a
+                  --  head of it -- after the bias and before the heads are
+                  --  cut.
+                  if Current.Query_Whole_Norm /= null then
+                     declare
+                        Room : Real_Vector (Query'Range) := [others => 0.0];
+                     begin
+                        Normalize_Centred
+                          (Query, Current.Query_Whole_Norm.all,
+                           Current.Query_Whole_Norm_Bias, Room);
+                        Query := Room;
+                     end;
+                     declare
+                        Room : Real_Vector (Key_Row'Range) := [others => 0.0];
+                     begin
+                        Normalize_Centred
+                          (Key_Row, Current.Key_Whole_Norm.all,
+                           Current.Key_Whole_Norm_Bias, Room);
+                        Key_Row := Room;
+                     end;
+                  end if;
+
                   Rotate (Query, Item.Heads, Step, Block);
                   Rotate (Key_Row, Item.KV_Heads, Step, Block);
 
@@ -3595,6 +3670,24 @@ package body Reference_Transformer is
                         Normalize_Centred
                           (State, Current.Post_Attention_Norm.all,
                            Current.Post_Attention_Norm_Bias, Room);
+                        State (0 .. Width - 1) := Room;
+                     end;
+                  end if;
+
+                  --  And the code variant's second: the layer's input,
+                  --  which Whole still holds for this step, is added once
+                  --  more to what the first normalized, and the sum is
+                  --  normalized again by a gain and shift of its own.
+                  if Current.Second_Attention_Norm /= null then
+                     declare
+                        Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           State (Index) := State (Index) + Whole (Step, Index);
+                        end loop;
+                        Normalize_Centred
+                          (State, Current.Second_Attention_Norm.all,
+                           Current.Second_Attention_Norm_Bias, Room);
                         State (0 .. Width - 1) := Room;
                      end;
                   end if;

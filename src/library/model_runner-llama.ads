@@ -1740,6 +1740,22 @@ private
       --  does not normalize its heads, which is what Llama and Qwen2 are.
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access;
+
+      --  What the code variant of jina-bert-v2 carries and the text one
+      --  does not: a centred normalization over the whole of the queries
+      --  and another over the whole of the keys, after their biases and
+      --  before the heads are cut -- the width of the projection, not of
+      --  a head, which is what tells them from the two above -- and a
+      --  third normalization of the attention sublayer, taken over the
+      --  normalized sum with the layer's input added to it once more.
+      --  Six tensors, all six or none: a file with some of them is a
+      --  model this does not compute. Null for every other architecture.
+      Query_Whole_Norm      : Model_Runner.Tensors.Real_Array_Access;
+      Query_Whole_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Key_Whole_Norm        : Model_Runner.Tensors.Real_Array_Access;
+      Key_Whole_Norm_Bias   : Model_Runner.Tensors.Real_Array_Access;
+      Second_Attention_Norm      : Model_Runner.Tensors.Real_Array_Access;
+      Second_Attention_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Attention_Out : aliased Model_Runner.Tensors.View;
 
       --  Added to what a projection produced, for an architecture that
@@ -2130,6 +2146,11 @@ private
       --  an invariant violation rather than as anything a reader could act
       --  on. Allocated only for an architecture that normalizes that way.
       Post_Room  : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  The layer's input, kept across the attention join for the code
+      --  variant of jina-bert-v2, whose third normalization adds it once
+      --  more. Allocated for a model carrying that normalization alone.
+      Kept_Input : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Room for every chosen expert's two arms at once.

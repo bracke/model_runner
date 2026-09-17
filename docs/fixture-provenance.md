@@ -247,6 +247,27 @@ It earned its keep before a line of the architecture was written. It states
 `cls_token_id` and `seperator_token_id` and neither `bos_token_id` nor
 `eos_token_id`, and the tokenizer read only the latter two.
 
+### jina-embeddings-v2-base-code, F16 and Q8_0
+
+| | |
+|---|---|
+| Files | `jina-v2-base-code.f16.gguf`, `jina-v2-base-code.Q8_0.gguf` |
+| Size | 322 997 920 and 26 603 520 bytes |
+| Source | `second-state/jina-embeddings-v2-base-code-GGUF` on Hugging Face |
+| Upstream model | `jinaai/jina-embeddings-v2-base-code` |
+| Licence | Apache-2.0 |
+
+The code variant of the architecture above, and the one published file of
+it that carries the six tensors the text variant does not -- the two
+normalizations over the whole of the queries and the keys and the second
+normalization of the attention sublayer -- which this build refused by name
+until it computed them. A fixture crosses the arithmetic with the
+independent implementation; this file is what says the arrangement is the
+one the model was trained with. Its vocabulary is a byte-pair one under the
+bert arrangement, where every other bert here is WordPiece, and its epsilon
+is a millionth of a millionth. The recording is
+`tests/fixtures/jina-v2-code-embedding.expect`.
+
 ### The vocabularies `llama.cpp` ships for its own tokenizer tests
 
 | | |

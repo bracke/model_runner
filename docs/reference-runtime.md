@@ -91,11 +91,14 @@ again.
 ## The embedding models, against the same runtime
 
 The three recordings above are of language models and compare tokens and a
-greedy continuation. The two embedding architectures are compared on the
+greedy continuation. The embedding architectures are compared on the
 thing they produce -- a pooled vector -- and the comparison is recorded in
-`tests/fixtures/all-minilm-embedding.expect` and
-`tests/fixtures/nomic-embed-embedding.expect`, which `tests external-model`
-reads and checks rather than merely holding for a reader.
+`tests/fixtures/all-minilm-embedding.expect`,
+`tests/fixtures/nomic-embed-embedding.expect`,
+`tests/fixtures/jina-v2-embedding.expect` and, for the code variant of the
+last of those, `tests/fixtures/jina-v2-code-embedding.expect`, which
+`tests external-model` reads and checks rather than merely holding for a
+reader.
 
 It is the only comparison in this repository that does not rest on a reading
 of a description made here. The engine, the fixture and

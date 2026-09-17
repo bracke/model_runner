@@ -193,6 +193,18 @@ private
       --  itself before the rotation, with one gain per element of a head.
       Query_Norm     : Vector_Access := null;
       Key_Norm       : Vector_Access := null;
+
+      --  The code variant of jina-bert-v2 normalizes the whole of its
+      --  queries and the whole of its keys, centred and with a shift,
+      --  after their biases, and normalizes the attention sublayer a
+      --  second time over the joined residual with the layer's input added
+      --  once more. Null for every other model, and for the text variant.
+      Query_Whole_Norm      : Vector_Access := null;
+      Query_Whole_Norm_Bias : Vector_Access := null;
+      Key_Whole_Norm        : Vector_Access := null;
+      Key_Whole_Norm_Bias   : Vector_Access := null;
+      Second_Attention_Norm      : Vector_Access := null;
+      Second_Attention_Norm_Bias : Vector_Access := null;
       Attention_Out  : Matrix_Access := null;
 
       --  What Phi2 adds to a projection that is not one of the three above:

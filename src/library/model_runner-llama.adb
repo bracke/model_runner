@@ -191,13 +191,16 @@ package body Model_Runner.Llama is
        [Exact => 4, Halved => 2, Eighth => 1];
 
    --  The per-layer tensors jina-bert-v2's code variant carries and its text
-   --  variant does not. Named here so the refusal below spells each one
-   --  exactly as the file does.
+   --  variant does not. Named here so that the loading below asks for
+   --  all six by one list: a file with any of them has to carry every one.
    type Tensor_Name is access constant String;
-   Unread_Jina_Norms : constant array (1 .. 3) of Tensor_Name :=
-     [new String'("attn_norm_2.weight"),
-      new String'("attn_q_norm.weight"),
-      new String'("attn_k_norm.weight")];
+   Jina_Code_Norms : constant array (1 .. 6) of Tensor_Name :=
+     [new String'("attn_q_norm.weight"),
+      new String'("attn_q_norm.bias"),
+      new String'("attn_k_norm.weight"),
+      new String'("attn_k_norm.bias"),
+      new String'("attn_norm_2.weight"),
+      new String'("attn_norm_2.bias")];
 
    --  Metadata keys are built once, here, so that no other package spells a
    --  tensor or metadata name.
@@ -2211,6 +2214,52 @@ package body Model_Runner.Llama is
       end if;
    end Join_Residual;
 
+   --  Normalize a projection over the whole of its width, in place, as the
+   --  code variant of jina-bert-v2 does its queries and its keys: a centred
+   --  normalization with a gain and a shift, over the projection rather
+   --  than a head of it. The room is the projection's own width, taken
+   --  here: the keys' is not the layer's where the key heads are fewer,
+   --  and a scratch of the layer width would be the wrong length for them.
+   --  Nothing is done where the gain is null.
+   procedure Normalize_Whole
+     (Item   : Model'Class;
+      Vector : in out Real_Array;
+      Gain   : T.Real_Array_Access;
+      Bias   : T.Real_Array_Access)
+   is
+      Room : Real_Array (Vector'Range);
+   begin
+      if Gain = null then
+         return;
+      end if;
+
+      Normalize (Item, Vector, Gain.all, Bias, Room);
+      Vector := Room;
+   end Normalize_Whole;
+
+   --  The code variant's third normalization of the attention sublayer:
+   --  the layer's input is added once more to the residual as the first
+   --  join normalized it, and the sum is normalized again by a gain and a
+   --  shift of its own. Input is the layer's input as it stood before the
+   --  first join, which the caller kept.
+   procedure Join_Again
+     (Item     : Model'Class;
+      Residual : in out Real_Array;
+      Input    : Real_Array;
+      Current  : Layer;
+      Room     : T.Real_Array_Access) is
+   begin
+      if Current.Second_Attention_Norm = null or else Room = null then
+         return;
+      end if;
+
+      K.Add (Residual, Input);
+      Normalize
+        (Item, Residual, Current.Second_Attention_Norm.all,
+         Current.Second_Attention_Norm_Bias, Room.all);
+      Residual := Room.all;
+   end Join_Again;
+
    --  What the embedding row is multiplied by before the first layer.
    --
    --  One everywhere but Gemma, which scales by the square root of the
@@ -2663,23 +2712,51 @@ package body Model_Runner.Llama is
             end if;
 
             --  What the code variant of this architecture carries and
-            --  the text one does not: a third normalization inside the
-            --  attention sublayer, and one over the queries and one over
-            --  the keys. None of the three is computed here, and a file
-            --  carrying any of them is refused by name rather than read
-            --  as a model with three normalizations missing -- which is
-            --  an embedding, and a plausible one.
-            if Item.Settings.Kind = Jina_Bert_V2 then
-               for Name of Unread_Jina_Norms loop
-                  if Containers.Find_Tensor
-                       (Source, Layer_Key (Index, Name.all)) /= 0
-                  then
-                     Status := E.Make (E.Arch_Unsupported_Feature);
-                     E.Add_Text
-                       (Status, "feature", Name.all, E.Param_Identifier);
-                     exit;
-                  end if;
-               end loop;
+            --  the text one does not: a centred normalization over the
+            --  whole of the queries and another over the whole of the
+            --  keys, and a third normalization of the attention sublayer.
+            --  Six tensors with their biases, wanted all together where
+            --  the file carries any one of them: a file with some would
+            --  otherwise be read as a model with a normalization or two
+            --  missing -- which is an embedding, and a plausible one.
+            if Item.Settings.Kind = Jina_Bert_V2
+              and then (for some Name of Jina_Code_Norms =>
+                          Containers.Find_Tensor
+                            (Source, Layer_Key (Index, Name.all)) /= 0)
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+                  Wide, Current.Query_Whole_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.bias"),
+                  Wide, Current.Query_Whole_Norm_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  KV, Current.Key_Whole_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.bias"),
+                  KV, Current.Key_Whole_Norm_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm_2.weight"),
+                  Width, Current.Second_Attention_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm_2.bias"),
+                  Width, Current.Second_Attention_Norm_Bias, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
@@ -7292,6 +7369,12 @@ package body Model_Runner.Llama is
             --  that architecture has them, which is why closing a llama
             --  model looked clean.
             T.Free (Which.Query_Norm);
+            T.Free (Which.Query_Whole_Norm);
+            T.Free (Which.Query_Whole_Norm_Bias);
+            T.Free (Which.Key_Whole_Norm);
+            T.Free (Which.Key_Whole_Norm_Bias);
+            T.Free (Which.Second_Attention_Norm);
+            T.Free (Which.Second_Attention_Norm_Bias);
             T.Free (Which.Key_Norm);
             T.Free (Which.Query_Bias);
             T.Free (Which.Key_Bias);
@@ -9069,6 +9152,12 @@ package body Model_Runner.Llama is
             T.Allocate (Width, Item.Post_Room);
          end if;
 
+         if (for some L of Source.Layers.all =>
+               L.Second_Attention_Norm /= null)
+         then
+            T.Allocate (Width, Item.Kept_Input);
+         end if;
+
          T.Allocate (Wide, Item.Query);
          T.Allocate (KV, Item.Key_Row);
          T.Allocate (KV_Out, Item.Value_Row);
@@ -9307,6 +9396,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Activation);
       T.Free (Item.Normalized);
       T.Free (Item.Post_Room);
+      T.Free (Item.Kept_Input);
       T.Free (Item.Query);
       T.Free (Item.Key_Row);
       T.Free (Item.Value_Row);
@@ -11454,6 +11544,17 @@ package body Model_Runner.Llama is
                      Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
                end if;
 
+               --  And the code variant's, over the whole of each
+               --  projection rather than a head of it.
+               if Current.Query_Whole_Norm /= null then
+                  Normalize_Whole
+                    (Source, Item.Query.all, Current.Query_Whole_Norm,
+                     Current.Query_Whole_Norm_Bias);
+                  Normalize_Whole
+                    (Source, Item.Key_Row.all, Current.Key_Whole_Norm,
+                     Current.Key_Whole_Norm_Bias);
+               end if;
+
                K.Apply_Rotary
                  (Item.Query.all, Heads, Head_Size,
                   Element_Count (Settings.Rotary), Item.Committed,
@@ -11667,10 +11768,21 @@ package body Model_Runner.Llama is
                   if Current.Out_Bias /= null then
                      K.Add (Item.Normalized.all, Current.Out_Bias.all);
                   end if;
+
+                  --  The code variant reads the layer's input once more
+                  --  after the join, so it is kept across it.
+                  if Current.Second_Attention_Norm /= null then
+                     Item.Kept_Input.all := Item.Activation.all;
+                  end if;
                   Joined
                     (Item.Normalized, Current.Post_Attention_Norm,
                      Current.Post_Attention_Norm_Bias, Status);
                   exit when E.Is_Error (Status);
+                  if Current.Second_Attention_Norm /= null then
+                     Join_Again
+                       (Source, Item.Activation.all, Item.Kept_Input.all,
+                        Current, Item.Post_Room);
+                  end if;
 
                   Charge (Item, Joining, Mark);
                end if;
@@ -12755,6 +12867,11 @@ package body Model_Runner.Llama is
                To    : Element_Count)
             is
                Room : T.Real_Array_Access := null;
+
+               --  The layer's input, kept across the attention join for
+               --  the code variant of jina-bert-v2 and allocated for it
+               --  alone.
+               Kept : T.Real_Array_Access := null;
             begin
                if From > To then
                   return;
@@ -12763,6 +12880,15 @@ package body Model_Runner.Llama is
                if Item.Post_Room /= null then
                   T.Allocate (Width, Room);
                   if Room = null then
+                     Share.Ok := False;
+                     return;
+                  end if;
+               end if;
+
+               if Current.Second_Attention_Norm /= null then
+                  T.Allocate (Width, Kept);
+                  if Kept = null then
+                     T.Free (Room);
                      Share.Ok := False;
                      return;
                   end if;
@@ -12781,6 +12907,11 @@ package body Model_Runner.Llama is
                            Current.Post_Feed_Norm_Bias,
                            Room);
                      else
+                        --  The code variant reads the layer's input once
+                        --  more after the join, so it is kept across it.
+                        if Current.Second_Attention_Norm /= null then
+                           Kept.all := Acts.all (Origin .. Origin + Width - 1);
+                        end if;
                         Join_Residual
                           (Source,
                            Norm.all (Origin .. Origin + Width - 1),
@@ -12788,6 +12919,11 @@ package body Model_Runner.Llama is
                            Current.Post_Attention_Norm,
                            Current.Post_Attention_Norm_Bias,
                            Room);
+                        if Current.Second_Attention_Norm /= null then
+                           Join_Again
+                             (Source, Acts.all (Origin .. Origin + Width - 1),
+                              Kept.all, Current, Room);
+                        end if;
 
                         --  What the feed-forward reads: the block's own
                         --  normalized input where the two sublayers run in
@@ -12813,6 +12949,7 @@ package body Model_Runner.Llama is
                end loop;
 
                T.Free (Room);
+               T.Free (Kept);
             end Run;
 
             --  And the fifth, which was the largest of them and the last to
@@ -13305,6 +13442,19 @@ package body Model_Runner.Llama is
                           (Keys.all (KV_At .. KV_At + KV_Width - 1),
                            KV_Heads, Head_Size, Current.Key_Norm.all,
                            Settings.Epsilon, Item.Head_Row.all);
+                     end if;
+
+                     --  And the code variant's, over the whole of each
+                     --  projection rather than a head of it.
+                     if Current.Query_Whole_Norm /= null then
+                        Normalize_Whole
+                          (Source, Query.all (Q_At .. Q_At + Wide - 1),
+                           Current.Query_Whole_Norm,
+                           Current.Query_Whole_Norm_Bias);
+                        Normalize_Whole
+                          (Source, Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           Current.Key_Whole_Norm,
+                           Current.Key_Whole_Norm_Bias);
                      end if;
 
                      --  The queries and the keys of this position turn by

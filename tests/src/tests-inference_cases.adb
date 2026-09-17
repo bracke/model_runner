@@ -7062,6 +7062,177 @@ package body Tests.Inference_Cases is
               & Long_Float'Image (Worst));
    end Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding;
 
+   --  The code variant of jina-bert-v2 agrees with the independent
+   --  implementation, and is told from the text one by its tensors.
+   --
+   --  The variant carries six tensors a block the text one does not: a
+   --  centred normalization over the whole of the queries and another
+   --  over the whole of the keys, each with a shift, and a second
+   --  normalization of the attention sublayer over the joined residual
+   --  with the layer's input added once more. Each is a place where a
+   --  reader that skipped it would produce an embedding rather than a
+   --  refusal, so the fixture with them is crossed with the reference on
+   --  every position's state, and the fixture without them beside it,
+   --  through the same code, says the six are read only where they are.
+   --  And a file with some of the six and not the rest is refused as a
+   --  missing tensor rather than read as a model with a normalization
+   --  missing.
+   procedure Jina_Code_Variant_Agrees_With_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+      Width  : constant N.Element_Count := Tiny_Model.Embedding;
+      Span   : constant N.Element_Count := Prompt'Length * Width;
+
+      --  Run the engine and the reference over one fixture, and how far
+      --  apart every position's state came out.
+      procedure Cross (Code_Norms : Boolean; Worst : out Long_Float) is
+         Image : B.Byte_Array_Access;
+         Rows  : Model_Runner.Tensors.Real_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Jina_Bert_V2, Code_Norms => Code_Norms);
+         Model_Runner.Tensors.Allocate (Span, Rows);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Nothing : N.Real_Array (1 .. 0);
+         begin
+            Start (Under);
+            Assert (L."=" (L.Config (Under.Ready).Kind, L.Jina_Bert_V2),
+                    "the architecture was not read from the file");
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Nothing, States => Rows,
+               Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the text was not read: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+
+            Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+            Expected : Reference_Transformer.Real_Vector
+              (0 .. Natural (Span) - 1);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run_States (Second, Tokens, Expected, Made);
+            Assert (Made, "the reference produced no states");
+
+            Worst := 0.0;
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Rows.all (N.Element_Count (Index)))
+                       - Expected (Index)));
+            end loop;
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         Model_Runner.Tensors.Free (Rows);
+         B.Free (Image);
+      end Cross;
+
+      Worst : Long_Float;
+   begin
+      Cross (Code_Norms => False, Worst => Worst);
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about the text variant by" & Long_Float'Image (Worst));
+
+      Cross (Code_Norms => True, Worst => Worst);
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about the code variant by" & Long_Float'Image (Worst));
+
+      --  Some of the six and not the rest: the second normalization's
+      --  gain without its shift, or the queries' without the keys'. One
+      --  of the six is renamed in the image to a name nothing asks for,
+      --  which is the tensor gone as far as a reader is concerned.
+      for Missing in 1 .. 2 loop
+         declare
+            Image : B.Byte_Array_Access;
+            Name  : constant String :=
+              (if Missing = 1 then "blk.0.attn_norm_2.bias"
+               else "blk.0.attn_k_norm.weight");
+            Other : constant String :=
+              (if Missing = 1 then "blk.0.attn_norm_x.bias"
+               else "blk.0.attn_x_norm.weight");
+            Found : Boolean := False;
+         begin
+            Tiny_Model.Build
+              (Image, Kind => Tiny_Model.Jina_Bert_V2, Code_Norms => True);
+
+            for Here in Image.all'First
+                     .. Image.all'Last - B.Byte_Count (Name'Length) + 1
+            loop
+               if (for all K in Name'Range =>
+                     Natural (Image.all (Here + B.Byte_Count (K - Name'First)))
+                     = Character'Pos (Name (K)))
+               then
+                  for K in Other'Range loop
+                     Image.all (Here + B.Byte_Count (K - Other'First)) :=
+                       Character'Pos (Other (K));
+                  end loop;
+                  Found := True;
+                  exit;
+               end if;
+            end loop;
+            Assert (Found, "the fixture does not carry " & Name);
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Parsed : Containers.Container;
+               Ready  : L.Model;
+               Local  : E.Error_Info;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Local);
+               Assert (E.Is_Ok (Local), "the edited fixture did not parse");
+
+               L.Prepare (Ready, Parsed, Source, Status => Local);
+               Assert (Local.Code = E.Arch_Missing_Tensor,
+                       "a code variant without " & Name
+                       & " was prepared: "
+                       & E.Error_Code'Image (Local.Code));
+
+               L.Close (Ready, Local);
+               Containers.Close (Parsed);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+   end Jina_Code_Variant_Agrees_With_The_Reference;
+
    --  The architecture that attends to nothing, and clamps its gate.
    --
    --  GPT_OSS is the model MXFP4 exists for and the first architecture here
@@ -10110,6 +10281,13 @@ package body Tests.Inference_Cases is
          "a gemma3 of sixty-two layers scales its scores by the width the "
          & "embedding implies, as the 27B does, and one of six by the "
          & "head's, each agreeing with the independent implementation");
+      Register_Routine
+        (T, Jina_Code_Variant_Agrees_With_The_Reference'Access,
+         "the code variant of jina-bert-v2 -- the whole of its queries and "
+         & "keys normalized and the attention sublayer normalized twice -- "
+         & "agrees with the independent implementation at every position, "
+         & "the text variant beside it, and a file with some of its six "
+         & "tensors is refused as a missing tensor");
       Register_Routine
         (T, Sinks_And_A_Clamped_Gate'Access,
          "an attention sink and a clamped gate agree with the independent "

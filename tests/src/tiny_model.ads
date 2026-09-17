@@ -331,6 +331,16 @@ package Tiny_Model is
    --    others by nothing but its depth, sixty-two, and scales its scores
    --    differently for it: a fixture of that depth is the one file that
    --    can say whether the engine knows so.
+   --  @param Code_Norms Write, for a Jina_Bert_V2 fixture, what the code
+   --    variant carries and the text one does not: a centred normalization
+   --    over the whole of the queries and another over the whole of the
+   --    keys, each with its shift, and a third normalization of the
+   --    attention sublayer with its shift -- six tensors a block. On by
+   --    default, so that the sweeps cross the six with the independent
+   --    implementation in every format and shape and the check that moves
+   --    every tensor asks whether each of them is read; False writes the
+   --    text variant, which carries everything else the same. Nothing for
+   --    any other architecture.
    --  @param Byte_Pair Write the vocabulary as a byte-pair one -- a `gpt2`
    --    model with a merge table, pieces in the stand-in alphabet and the
    --    same three control tokens -- instead of a SentencePiece one. That
@@ -356,6 +366,7 @@ package Tiny_Model is
       Apart_Widths   : Boolean := False;
       Head_Factor   : Positive := 1;
       Sections       : Boolean := False;
-      Depth          : Natural := 0);
+      Depth          : Natural := 0;
+      Code_Norms     : Boolean := True);
 
 end Tiny_Model;

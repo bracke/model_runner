@@ -92,7 +92,13 @@ package Fixture_Mutation is
       --  What that means for the sweep is worth stating plainly: an error in
       --  gemma3's late query and key projections has to be larger than a
       --  quarter before those comparisons would report it. Every other
-      --  architecture's every tensor answers louder than that. Not a failure either, and not a defect in the engine:
+      --  architecture's every tensor answers louder than that, but for one
+      --  of jina-bert-v2's code variant: the shift of the normalization
+      --  over the whole of the keys. A constant added to every key moves
+      --  every score a query makes by the same amount -- the query's dot
+      --  product with the shift -- and the softmax divides that out, so
+      --  the tensor is read, as the reference runtime reads it, and can
+      --  change nothing. It answers at the noise. Not a failure either, and not a defect in the engine:
       --  it says that a mistake the size of this displacement, in this
       --  tensor, in this fixture, would pass the conformance sweep without
       --  being remarked on. That is the measure the sweep cannot take of

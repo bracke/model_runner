@@ -132,6 +132,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The code variant of jina-bert-v2 is read.** jina-embeddings-v2-base-code
+  carries six tensors a block the text variant does not -- a centred
+  normalization over the whole of the queries and another over the whole
+  of the keys, each with its shift, after the projection's bias and before
+  the heads are cut, and a second normalization of the attention sublayer
+  over the residual the first normalized with the layer's input added once
+  more -- and a file carrying any of them was refused by name. They are
+  computed now, all six required where any is there, and the published
+  file agrees with the reference runtime to a cosine of 0.9999998, recorded
+  in `tests/fixtures/jina-v2-code-embedding.expect`. The jina fixture is
+  the code variant, so the sweeps cross the six in every format and shape
+  and the tensor-moving check asks whether each is read -- the shift over
+  the keys cannot move a score, since a constant on every key moves every
+  score of a query alike and the softmax divides it out, and it is noted
+  there as read at the noise. The text variant is crossed beside it, and a
+  file with some of the six is refused as a missing tensor.
+
 - **The picture encoder's attention runs on the device.** Where the device
   backend is open, each block's keys and values go into the device's cache
   past whatever the sessions hold there, and every patch's queries attend
