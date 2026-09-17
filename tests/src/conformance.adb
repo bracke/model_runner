@@ -1551,6 +1551,51 @@ package body Conformance is
 
                   B.Free (Image);
                end loop;
+
+               --  And the mixture shape, on the device, for every
+               --  architecture that holds one: the routing, the gathered
+               --  and listed products and the shared expert are the
+               --  device's own kernels, and the hybrid mixture's one
+               --  position on the device went without its shared expert
+               --  for as long as this pass built the dense shape alone.
+               --  The first device format, and the four sequences with
+               --  the tiled one after them.
+               if not Tiny_Model.Cannot_Hold (Crossed (Which_Arch), Mixed)
+               then
+                  Since := Ada.Calendar.Clock;
+                  Tiny_Model.Build
+                    (Image, Device_Formats (Device_Formats'First),
+                     Kind => Crossed (Which_Arch), Room => 64,
+                     Experts => 4, Experts_Used => 2);
+                  Current_Kind := Crossed (Which_Arch);
+                  Result.Built := Result.Built
+                    + (Ada.Calendar.Clock - Since);
+                  Forget;
+
+                  for Which in Sequence_Index loop
+                     if Which /= Tiled_Index then
+                        Compare
+                          (Which, L.Exact,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack);
+                        On_Device := On_Device + 1;
+                     end if;
+                  end loop;
+
+                  Compare
+                    (4, L.Exact, Model_Runner.Backend.Backend_Device,
+                     L.No_Repack, Batched => True);
+                  Compare
+                    (Tiled_Index, L.Exact,
+                     Model_Runner.Backend.Backend_Device, L.No_Repack,
+                     Batched => True);
+                  Compare
+                    (Tiled_Index, L.Exact,
+                     Model_Runner.Backend.Backend_Device, L.No_Repack,
+                     Batched => True, Chunk => 17);
+                  On_Device := On_Device + 3;
+
+                  B.Free (Image);
+               end if;
             end loop;
          end if;
 

@@ -1880,6 +1880,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Mix;
             Biased : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Bias;
+            Picked : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Pick;
          begin
             Request.Size := Interfaces.C.size_t (Routed'Length * 4);
             Request.Code := Routed'Address;
@@ -1906,6 +1908,15 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Biaser := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Picked'Length * 4);
+            Request.Code := Picked'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Picker := Made;
             end if;
          end;
 
@@ -2603,6 +2614,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Bias_Line := Made;
+            end if;
+         end if;
+
+         if Item.Picker /= Null_Handle then
+            Request.Stage.Module := Item.Picker;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Pick_Line := Made;
             end if;
          end if;
 
@@ -3437,6 +3458,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Route_Line, "vkDestroyPipeline");
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
       Give_Back (Item.Bias_Line, "vkDestroyPipeline");
+      Give_Back (Item.Pick_Line, "vkDestroyPipeline");
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
@@ -3444,6 +3466,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Router, "vkDestroyShaderModule");
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
       Give_Back (Item.Biaser, "vkDestroyShaderModule");
+      Give_Back (Item.Picker, "vkDestroyShaderModule");
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
@@ -6487,6 +6510,8 @@ package body Model_Runner.Platform.Device.Products is
             return "mix";
          elsif This.Biases then
             return "bias";
+         elsif This.Picks then
+            return "pick";
          elsif This.Inverts then
             return "invert";
          elsif This.Listed then
@@ -6946,6 +6971,49 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Bias;
 
+   --------------
+   -- Add_Pick --
+   --------------
+
+   procedure Add_Pick
+     (Steps     : in out Sequence;
+      Rows      : Natural;
+      Each      : Natural;
+      Which     : Natural;
+      Among     : Positive;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Rows = 0
+        or else Each = 0
+        or else Rows mod Each /= 0
+        or else Which >= Among
+        or else Source not in 1 .. Steps.Held
+        or else Steps.Items (Source).Rows /= Rows * Among
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Rows, Columns => Rows * Among,
+         Key => System.Null_Address,
+         Chained => True, Reads => Source, Kept => Kept,
+         Picks => True, Each => Each, Which => Which, Among => Among,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Pick;
+
    ---------------------
    -- Add_Combination --
    ---------------------
@@ -6956,18 +7024,37 @@ package body Model_Runner.Platform.Device.Products is
       Added : out Boolean;
       Kept  : Boolean := True;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0) is
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      From_Step  : Natural := 0;
+      Other_Step : Natural := 0)
+   is
       --  A unit alone reads the one step before it, for both arms: the
       --  kernel reads the first and not the second, and naming the same
       --  step twice is what keeps the two-arm binding as it is.
       Alone : constant Boolean := Unit in 4 | 5;
+
+      --  The arms: named, or the two before this step -- the one before,
+      --  twice, for a unit alone.
+      First  : constant Natural :=
+        (if From_Step /= 0 then From_Step
+         elsif Alone then Steps.Held
+         else Steps.Held - 1);
+      Second : constant Natural :=
+        (if Other_Step /= 0 then Other_Step else Steps.Held);
    begin
       if Steps.Held < (if Alone then 1 else 2)
         or else Steps.Held = Sequence_Limit
-        or else (not Alone
-                 and then Steps.Items (Steps.Held).Rows
-                            /= Steps.Items (Steps.Held - 1).Rows)
-        or else Unit > 5
+        or else (From_Step = 0) /= (Other_Step = 0)
+        or else First not in 1 .. Steps.Held
+        or else Second not in 1 .. Steps.Held
+        --  The seventh unit's second arm is one number a position, and
+        --  every other unit's is as wide as the first.
+        or else (if Unit = 7
+                 then Steps.Items (Second).Rows /= 1
+                 elsif not Alone
+                 then Steps.Items (First).Rows /= Steps.Items (Second).Rows
+                 else False)
+        or else Unit > 7
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -6980,11 +7067,11 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => System.Null_Address, Span => 0, At_Byte => 0,
          Packing => Weight_Packing'First,
-         Rows => Steps.Items (Steps.Held - 1).Rows,
-         Columns => Steps.Items (Steps.Held - 1).Rows,
+         Rows => Steps.Items (First).Rows,
+         Columns => Steps.Items (First).Rows,
          Key => System.Null_Address, Chained => True, Kept => Kept,
-         Reads => (if Alone then Steps.Held - 1 else 0),
-         Reads_Two => (if Alone then Steps.Held - 1 else 0),
+         Reads => (if Alone or else From_Step /= 0 then First else 0),
+         Reads_Two => (if Alone or else Other_Step /= 0 then Second else 0),
          Blends => True, Unit => Unit, Alpha => Alpha, Limit => Limit,
          Attends => False,
          others => <>);
@@ -7483,8 +7570,25 @@ package body Model_Runner.Platform.Device.Products is
           and then Listed_Pipeline (Item, Steps.Items (Which).Packing)
                    /= Null_Handle);
 
+      --  A product, as against every other kind of step: the tile is
+      --  theirs alone, and a question asked of a step's rows and columns
+      --  without asking what kind it is would say yes of an attention
+      --  step with the right numbers.
+      function Is_Product (Which : Positive) return Boolean
+      is (not (Steps.Items (Which).Norms or else Steps.Items (Which).Rotates
+               or else Steps.Items (Which).Places
+               or else Steps.Items (Which).Readies
+               or else Steps.Items (Which).Attends
+               or else Steps.Items (Which).Routes
+               or else Steps.Items (Which).Mixes
+               or else Steps.Items (Which).Biases
+               or else Steps.Items (Which).Picks
+               or else Steps.Items (Which).Inverts
+               or else Steps.Items (Which).Blends));
+
       function Tiled (Which : Positive) return Boolean
-      is (Steps.Items (Which).Gathers <= 1
+      is (Is_Product (Which)
+          and then Steps.Items (Which).Gathers <= 1
           and then not Steps.Items (Which).Listed
           and then not Steps.Items (Which).Exact
           and then Uses_Matrix
@@ -7806,6 +7910,16 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                Places (Index).Weight := 0;
+            elsif This.Picks then
+               --  A picking step reads one step and carries no weight.
+               if This.Rows = 0
+                 or else This.Reads not in 1 .. Index - 1
+                 or else Item.Pick_Line = Null_Handle
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := 0;
             elsif This.Blends then
                --  Two arms in and one out. A combination takes the two
                --  steps before it; a join names one of them and takes its
@@ -7821,10 +7935,14 @@ package body Model_Runner.Platform.Device.Products is
                      then This.Reads
                      else Index - 2);
                begin
+                  --  The seventh unit's second arm is one number a
+                  --  position; every other unit's is as wide as the
+                  --  first.
                   if This.Rows = 0
                     or else Arm not in 1 .. Index - 1
                     or else Other > Index - 1
-                    or else Steps.Items (Arm).Rows /= This.Rows
+                    or else Steps.Items (Arm).Rows
+                            /= (if This.Unit = 7 then 1 else This.Rows)
                     or else (Other /= 0
                              and then Steps.Items (Other).Rows /= This.Rows)
                   then
@@ -7968,6 +8086,7 @@ package body Model_Runner.Platform.Device.Products is
             --  the cache the device holds.
             if This.Blends or else This.Attends or else This.Places
               or else This.Rotates or else This.Mixes or else This.Inverts
+              or else This.Picks
               or else (This.Routes and then This.Base = System.Null_Address)
               or else (This.Readies and then This.Base = System.Null_Address)
             then
@@ -8328,6 +8447,27 @@ package body Model_Runner.Platform.Device.Products is
                   Extent => Places (Index).Bytes);
                Told (1) := Told (3);
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Picks then
+               --  The step it takes apart, and its own room out.
+               Told (1) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (2) := Told (1);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
@@ -8803,10 +8943,15 @@ package body Model_Runner.Platform.Device.Products is
                         end;
                      end loop;
 
+                     --  The two elementwise units and the units alone
+                     --  read their arms as halves; the join adds an
+                     --  activation the host may have sent, and the head
+                     --  gate and the shared expert's scaling each read
+                     --  an arm no product made.
                      if not Many
                        and then Only > 0
                        and then Steps.Items (Only).Blends
-                       and then Steps.Items (Only).Unit /= 2
+                       and then Steps.Items (Only).Unit in 0 | 1 | 3 | 4 | 5
                        and then Halved (Only)
                      then
                         Halved (Which) := True;
@@ -8916,7 +9061,7 @@ package body Model_Runner.Platform.Device.Products is
                      elsif This.Rotates or else This.Places
                        or else This.Readies or else This.Routes
                        or else This.Mixes or else This.Biases
-                       or else This.Inverts
+                       or else This.Inverts or else This.Picks
                      then False
                      else Tiled (Index)
                           and then (Was_From /= Source
@@ -9463,6 +9608,33 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
+               if This.Picks then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Pick_Line);
+
+                  declare
+                     --  A workgroup a position: the row it writes, the
+                     --  stretch, which of each group, and how many a
+                     --  group holds.
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Each),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.Which),
+                        Packing => C.unsigned (This.Among),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
                if This.Biases then
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute, Item.Bias_Line);
@@ -9625,6 +9797,10 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           (if Arms then C.unsigned (Sits (Up_Step))
                            else 0),
+
+                        --  How wide a position is, for the unit that
+                        --  reads one number a position.
+                        Base    => C.unsigned (This.Rows),
 
                         --  The clamped gate's slope and limit, by their
                         --  bits, in the two words after the base.

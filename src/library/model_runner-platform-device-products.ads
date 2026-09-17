@@ -906,6 +906,38 @@ package Model_Runner.Platform.Device.Products is
       Members     : Member_List := [others => 0];
       Count       : Natural := 0);
 
+   --  Name a step that picks every other stretch of a row.
+   --
+   --  The hybrid architecture projects each head's queries and a gate for
+   --  the head in one tensor, the queries and then the gate, head after
+   --  head; the host takes the row apart before anything reads it. This
+   --  is that taking apart, on the device: the step reads a row of Among
+   --  stretches a group, each Each wide, and writes the Which'th of every
+   --  group one after another, a row of Rows -- one call for the queries
+   --  and one for the gates.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Rows Elements a position holds on the way out.
+   --  @param Each Elements one stretch holds; Rows is a whole number of
+   --    them.
+   --  @param Which Which stretch of each group to take, from nought.
+   --  @param Among How many stretches a group holds on the way in.
+   --  @param Added False when the sequence is full, when the shape does
+   --    not hold together, or when the step named does not hold Rows
+   --    times Of elements a position.
+   --  @param From_Step Step whose result to read, or zero for the step
+   --    before this one.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Pick
+     (Steps     : in out Sequence;
+      Rows      : Natural;
+      Each      : Natural;
+      Which     : Natural;
+      Among     : Positive;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Kept      : Boolean := True);
+
    --  Name one product that reads what the product before it produced.
    --
    --  This is the point of a sequence rather than a convenience on top of it.
@@ -977,7 +1009,13 @@ package Model_Runner.Platform.Device.Products is
    --    the two multiplied. Four and five are the first two alone, on the
    --    one step before this and multiplied by nothing, which is the
    --    feed-forward of an architecture without a gate; one step behind
-   --    is enough for those.
+   --    is enough for those. Six is the logistic of the first arm
+   --    multiplied by the second, elementwise: the gate beside each head
+   --    that the hybrid architecture puts on what attention produced.
+   --    Seven is the first arm scaled by the logistic of one number a
+   --    position, read from a second arm that holds one element a
+   --    position: a hybrid mixture's shared expert, by its own router's
+   --    score.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
    --  @param Kept False when nothing on the host reads this step's answer,
@@ -985,13 +1023,19 @@ package Model_Runner.Platform.Device.Products is
    --    will read it.
    --  @param Alpha The clamped gate's slope; unread by the other units.
    --  @param Limit The clamped gate's limit; unread by the other units.
+   --  @param From_Step The first arm, named, or zero for the step two
+   --    before this one -- the one before, for a unit alone.
+   --  @param Other_Step The second arm, named, or zero for the step
+   --    before this one. Both named or neither.
    procedure Add_Combination
      (Steps : in out Sequence;
       Unit  : Natural;
       Added : out Boolean;
       Kept  : Boolean := True;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0);
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      From_Step  : Natural := 0;
+      Other_Step : Natural := 0);
 
    --  Name a residual join for a sequence to perform.
    --
@@ -2143,6 +2187,7 @@ private
       --  And the one that adds each expert's bias to a gathered product's
       --  answers, for the mixture that carries them.
       Biaser     : System.Address := System.Null_Address;
+      Picker     : System.Address := System.Null_Address;
 
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
@@ -2208,6 +2253,7 @@ private
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
       Bias_Line   : System.Address := System.Null_Address;
+      Pick_Line   : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
@@ -2650,6 +2696,13 @@ private
       --  Span, At_Byte and Key, Stack slices of Each, added to the
       --  answers of the step in Reads by the routing in Reads_Two.
       Biases  : Boolean := False;
+
+      --  A picking step, as Add_Pick describes it: of every Among
+      --  stretches of Each in the step in Reads, the Which'th, written
+      --  one after another as a row of Rows.
+      Picks   : Boolean := False;
+      Which   : Natural := 0;
+      Among   : Positive := 1;
 
       --  A product kept off the tile whatever the count: the row kernel
       --  reads its activations in binary32 where the tile's operand is

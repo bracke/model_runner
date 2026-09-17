@@ -4484,6 +4484,176 @@ package body Tests.Backend_Cases is
       Device.Close;
    end The_Backend_Routes_And_Gathers_As_It_Slices;
 
+   -----------------------------------------------------------
+   -- A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says --
+   -----------------------------------------------------------
+
+   --  The steps a hybrid's attention layer needs and no other has: the
+   --  queries and the gates picked apart from one projection, the blend
+   --  through the logistic of its gate, and a shared expert's answer
+   --  scaled by the logistic of one score a position. Each against the
+   --  host's arithmetic, over one position and over a batch.
+   procedure A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width  : constant := 32;
+      Head   : constant := 4;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      --  The identity, so a product hands its input on; and one row,
+      --  whose product is one score a position.
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Row      : N.Real_Array (0 .. Width - 1);
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      function Sigmoid (X : N.Real) return N.Real
+      is (1.0 / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                  (Float (-X)))));
+
+      procedure Over (Count : Positive) is
+         Input   : N.Real_Array (0 .. N.Element_Count (Count * Width) - 1);
+         Landing : N.Real_Array (0 .. N.Element_Count (5 * Count * Width) - 1)
+           := [others => 0.0];
+         Worst   : N.Real := 0.0;
+      begin
+         for Index in Input'Range loop
+            Input (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.45;
+         end loop;
+
+         --  One: the input through the identity. Two: the even stretches
+         --  of Head picked out -- half the width. Three: the odd ones.
+         --  Four: the logistic of the odd ones times the even ones.
+         --  Five: a score a position through the row, and the input
+         --  scaled by its logistic.
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+            Products.Values_F32, Width, Width, Added, Kept => False);
+         Assert (Added, "the product was refused");
+         Products.Add_Pick (Steps, Width / 2, Head, 0, 2, Added, From_Step => 1);
+         Assert (Added, "the first pick was refused");
+         Products.Add_Pick (Steps, Width / 2, Head, 1, 2, Added, From_Step => 1);
+         Assert (Added, "the second pick was refused");
+         Products.Add_Combination
+           (Steps, 6, Added, From_Step => 3, Other_Step => 2);
+         Assert (Added, "the head gate was refused");
+         Products.Add_Chained_Product
+           (Steps, Row (Row'First)'Address, Bytes_Of (Row), 0,
+            Products.Values_F32, 1, Width, Added, From_Step => 1,
+            Kept => False);
+         Assert (Added, "the one-row product was refused");
+         Products.Add_Combination
+           (Steps, 7, Added, From_Step => 1, Other_Step => 5);
+         Assert (Added, "the scaling was refused");
+
+         --  And what a pick refuses: a row that is not a whole number of
+         --  stretches, and a stretch past the group.
+         Products.Add_Pick (Steps, Width / 2 + 1, Head, 0, 2, Added,
+                            From_Step => 1);
+         Assert (not Added, "a pick of a row and a half was taken");
+         Products.Add_Pick (Steps, Width / 2, Head, 2, 2, Added,
+                            From_Step => 1);
+         Assert (not Added, "a pick past the group was taken");
+
+         Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+         Assert (Ok, "the sequence was refused over"
+                 & Positive'Image (Count) & " positions");
+
+         for Slot in 0 .. N.Element_Count (Count) - 1 loop
+            declare
+               From   : constant N.Element_Count := Slot * Width;
+               Evens  : constant N.Element_Count :=
+                 N.Element_Count (Count * Width) + Slot * (Width / 2);
+               Odds   : constant N.Element_Count :=
+                 N.Element_Count (Count * Width + Count * (Width / 2))
+                 + Slot * (Width / 2);
+               Gated  : constant N.Element_Count :=
+                 N.Element_Count (2 * Count * Width) + Slot * (Width / 2);
+               Scaled : constant N.Element_Count :=
+                 N.Element_Count (2 * Count * Width + Count * (Width / 2)
+                                  + Count)
+                 + Slot * Width;
+               Score  : N.Real := 0.0;
+            begin
+               for C in 0 .. N.Element_Count (Width / 2) - 1 loop
+                  declare
+                     Group : constant N.Element_Count := C / Head;
+                     Place : constant N.Element_Count := C mod Head;
+                     Even  : constant N.Real :=
+                       Input (From + Group * 2 * Head + Place);
+                     Odd   : constant N.Real :=
+                       Input (From + Group * 2 * Head + Head + Place);
+                  begin
+                     Worst := N.Real'Max
+                       (Worst, abs (Landing (Evens + C) - Even));
+                     Worst := N.Real'Max
+                       (Worst, abs (Landing (Odds + C) - Odd));
+                     Worst := N.Real'Max
+                       (Worst,
+                        abs (Landing (Gated + C) - Sigmoid (Odd) * Even));
+                  end;
+               end loop;
+
+               for C in 0 .. N.Element_Count (Width) - 1 loop
+                  Score := Score + Input (From + C) * Row (C);
+               end loop;
+               for C in 0 .. N.Element_Count (Width) - 1 loop
+                  Worst := N.Real'Max
+                    (Worst,
+                     abs (Landing (Scaled + C)
+                          - Input (From + C) * Sigmoid (Score)));
+               end loop;
+            end;
+         end loop;
+
+         Assert (Worst <= 1.0E-5,
+                 "over" & Positive'Image (Count)
+                 & " positions the picks, the head gate or the scaling "
+                 & "differ from the host's by " & N.Real'Image (Worst));
+      end Over;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in 0 .. N.Element_Count (Width) - 1 loop
+         Identity (Index * Width + Index) := 1.0;
+         Row (Index) := N.Real ((Index * 5) mod 9) / 9.0 - 0.4;
+      end loop;
+
+      Over (1);
+      Over (3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says;
+
    -----------------------------------------------
    -- A_Cache_Past_The_Storage_Bound_Is_Refused --
    -----------------------------------------------
@@ -7591,6 +7761,12 @@ package body Tests.Backend_Cases is
          "the fused heads step -- a head normalization, a rotation and a "
          & "placement as one dispatch -- says what the three steps say, to "
          & "the bit");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says'Access,
+         "the queries and the gates picked apart from one projection, the "
+         & "blend through the logistic of its gate, and an answer scaled by "
+         & "the logistic of one score a position -- what a hybrid's "
+         & "attention layer needs -- say what the host says");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Past_The_Storage_Bound_Is_Refused'Access,
          "a cache past what the device says one storage buffer may hold "

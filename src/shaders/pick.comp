@@ -1,0 +1,61 @@
+#version 450
+
+//  Every other stretch of a row, picked out into a row of its own.
+//
+//  The hybrid architecture projects each head's queries and a gate for
+//  the head in one tensor, the head's queries and then its gate, head
+//  after head: a row twice the width the queries alone take, with the
+//  two interleaved a head at a time. The host takes the row apart into
+//  the queries and the gates before anything reads either; this is that
+//  step on the device, one call for the queries and one for the gates,
+//  so a layer with a gate beside each head can go over whole. Nothing in
+//  it is about heads: it takes a row of Of stretches a group, each
+//  Stretch wide, and writes the Which'th stretch of every group, one
+//  after another.
+//
+//  A workgroup a position, its lanes over the row it writes.
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Unused { float unused[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a position's row holds on the way out.
+    uint width;
+
+    //  Elements one stretch holds.
+    uint stretch;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  Which stretch of each group to take, counting from nought.
+    uint which;
+
+    //  How many stretches a group holds on the way in, so a row read is
+    //  width times this.
+    uint of;
+} shape;
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint from = slot * shape.width * shape.of;
+    uint into = slot * shape.width;
+
+    for (uint c = lane; c < shape.width; c += LANES) {
+        uint group = c / shape.stretch;
+        uint at = c - group * shape.stretch;
+
+        y[into + c] = x[from + (group * shape.of + shape.which) * shape.stretch + at];
+    }
+}

@@ -5944,6 +5944,26 @@ package body Checks is
          end if;
       end;
 
+      --  And the one that picks every other stretch of a row apart.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/pick.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/pick.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Pick_Digest then
+            Fail ("src/shaders/pick.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  And the one that unpacks a layer of it into the copy.
       declare
          Found : Boolean;

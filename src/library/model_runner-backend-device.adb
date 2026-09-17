@@ -1870,7 +1870,15 @@ package body Model_Runner.Backend.Device is
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;
       Shifted        : Boolean := False;
-      After          : Boolean := False)
+      After          : Boolean := False;
+      Head_Gates     : Boolean := False;
+      Shared_Gate    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Up      : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Down    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1893,7 +1901,15 @@ package body Model_Runner.Backend.Device is
 
       Step_Norm_In, Step_Q, Step_K, Step_V, Step_Q_Turned, Step_K_Turned,
       Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
-      Step_Router, Step_Route, Step_Downs : Natural := 0;
+      Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
+
+      --  Whether the mixture has a shared expert beside the chosen ones.
+      Shared : constant Boolean := T.Is_Present (Shared_Gate);
+
+      --  The query rows the heads take: the projection's, or half of them
+      --  where the other half are the gates beside the heads.
+      Q_Rows : constant Model_Runner.Numerics.Element_Count :=
+        (if Head_Gates then Query.Rows / 2 else Query.Rows);
 
       Width : constant Model_Runner.Numerics.Element_Count := Query.Columns;
 
@@ -1922,6 +1938,7 @@ package body Model_Runner.Backend.Device is
       K_P     : Products.Weight_Packing;
       V_P     : Products.Weight_Packing;
       Router_P : Products.Weight_Packing;
+      Shared_Gate_P, Shared_Up_P, Shared_Down_P : Products.Weight_Packing;
       Known   : Boolean;
 
       --  Every step's rows, in order, so the offsets above are a sum rather
@@ -2121,6 +2138,25 @@ package body Model_Runner.Backend.Device is
         --  A feed-forward without a gate takes a unit alone on its one
         --  arm, and a mixture is gated by its stacks.
         or else (not Gated and then not Mixed and then Unit not in 0 | 1)
+        --  A gate beside each head is elementwise over the blend, so
+        --  the value heads are as wide as the query heads; the query
+        --  rows are then two a head, and the heads are a whole number.
+        or else (Head_Gates
+                 and then (Value_Size /= Head_Size
+                           or else Query.Rows mod 2 /= 0
+                           or else Natural (Q_Rows) mod Head_Size /= 0))
+        --  A shared expert is a mixture's, all four parts or none.
+        or else (Shared
+                 and then (not Mixed
+                           or else not T.Is_Present (Shared_Up)
+                           or else not T.Is_Present (Shared_Down)
+                           or else Shared_Router = null
+                           or else Shared_Router.all'Length /= Width
+                           or else Shared_Gate.Columns /= Width
+                           or else Shared_Up.Columns /= Width
+                           or else Shared_Up.Rows /= Shared_Gate.Rows
+                           or else Shared_Down.Rows /= Width
+                           or else Shared_Down.Columns /= Shared_Gate.Rows))
         or else Residual'Length < Slots * Width
         or else Query.Columns /= Width
         or else Key.Columns /= Width
@@ -2188,6 +2224,21 @@ package body Model_Runner.Backend.Device is
          Packing_Of (Down_Stack.Format, Down_P, Known);
          if not Known then
             return;
+         end if;
+
+         if Shared then
+            Packing_Of (Shared_Gate.Format, Shared_Gate_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Shared_Up.Format, Shared_Up_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Shared_Down.Format, Shared_Down_P, Known);
+            if not Known then
+               return;
+            end if;
          end if;
 
          if Feed = 0 or else Used = 0 or else Experts < Used
@@ -2263,10 +2314,38 @@ package body Model_Runner.Backend.Device is
       if not Added then
          return;
       end if;
+
       Step_Q := Products.Length (Steps);
       Step_Room (Query.Rows);
 
-      Add_Projection_Bias (Query_Bias, Query.Rows, Step_Q, Added);
+      --  The hybrid's queries and the gates beside its heads, picked
+      --  apart: the heads read the queries, and the gates wait for the
+      --  blend.
+      if Head_Gates then
+         declare
+            Step_Full : constant Natural := Step_Q;
+         begin
+            Products.Add_Pick
+              (Steps, Natural (Q_Rows), Head_Size, 0, 2, Added,
+               From_Step => Step_Full, Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Q := Products.Length (Steps);
+            Step_Room (Q_Rows);
+
+            Products.Add_Pick
+              (Steps, Natural (Q_Rows), Head_Size, 1, 2, Added,
+               From_Step => Step_Full, Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Gates := Products.Length (Steps);
+            Step_Room (Q_Rows);
+         end;
+      end if;
+
+      Add_Projection_Bias (Query_Bias, Q_Rows, Step_Q, Added);
       if not Added then
          return;
       end if;
@@ -2347,7 +2426,7 @@ package body Model_Runner.Backend.Device is
                 else Model_Runner.Bytes.Byte_Count (Norm.all'Length) * 4);
          begin
             Products.Add_Heads
-              (Steps, Step_Q, Natural (Query.Rows) / Head_Size, Head_Size,
+              (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
                Rotary, Pairing, At_Turn, Span, Epsilon, Added,
                Weight => Weight_Of (Query_Norm),
                Weight_Span => Span_Of (Query_Norm),
@@ -2356,7 +2435,7 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
             Step_Q_Turned := Products.Length (Steps);
-            Step_Room (Query.Rows);
+            Step_Room (Q_Rows);
 
             --  A packed session's keys are turned into their own room
             --  and packed from there, with the values, by the two steps
@@ -2422,15 +2501,15 @@ package body Model_Runner.Backend.Device is
             Products.Add_Norm
               (Steps, At_Weight,
                Model_Runner.Bytes.Byte_Count (Query_Norm.all'Length) * 4, 0,
-               Natural (Query.Rows), Epsilon, Added,
+               Natural (Q_Rows), Epsilon, Added,
                From_Step => Step_Q, Key => At_Weight, Kept => False,
-               Groups => Natural (Query.Rows) / Head_Size);
+               Groups => Natural (Q_Rows) / Head_Size);
          end;
          if not Added then
             return;
          end if;
          Step_Q := Products.Length (Steps);
-         Step_Room (Query.Rows);
+         Step_Room (Q_Rows);
       end if;
 
       if Key_Norm /= null then
@@ -2472,14 +2551,14 @@ package body Model_Runner.Backend.Device is
            (if Split then Products.Split else Products.Interleaved);
       begin
          Products.Add_Rotation
-           (Steps, At_Turn, Span, 0, Natural (Query.Rows),
-            Natural (Query.Rows) / Head_Size, Rotary, Pairing, Added,
+           (Steps, At_Turn, Span, 0, Natural (Q_Rows),
+            Natural (Q_Rows) / Head_Size, Rotary, Pairing, Added,
             From_Step => Step_Q, Kept => False);
          if not Added then
             return;
          end if;
          Step_Q_Turned := Products.Length (Steps);
-         Step_Room (Query.Rows);
+         Step_Room (Q_Rows);
 
          Products.Add_Rotation
            (Steps, At_Turn, Span, 0, Natural (Key.Rows),
@@ -2563,6 +2642,21 @@ package body Model_Runner.Backend.Device is
       <<Attended>>
       Step_Room
         (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+
+      --  Each head's blend through the logistic of its gate, where the
+      --  query projection carried one, before the projection out reads
+      --  it.
+      if Head_Gates then
+         Products.Add_Combination
+           (Steps, 6, Added, Kept => False,
+            From_Step => Step_Gates, Other_Step => Step_Attend);
+         if not Added then
+            return;
+         end if;
+         Step_Attend := Products.Length (Steps);
+         Step_Room
+           (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+      end if;
 
       --  The second half, as Attend_And_Feed builds it, with the residual
       --  coming from the front of the activation rather than the back of
@@ -2815,12 +2909,96 @@ package body Model_Runner.Backend.Device is
          Products.Add_Mix
            (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
             Residual_Step => Step_Join,
-            Kept => not Carry_Out and then not After);
+            Kept => not Carry_Out and then not After and then not Shared);
          if not Added then
             return;
          end if;
+         Step_Mix := Products.Length (Steps);
          At_Out := Wanted;
          Step_Room (Width);
+
+         --  And the shared expert, where the mixture has one: the same
+         --  gated block an expert is, over the normalized input every
+         --  position, scaled by the logistic of its router's one score
+         --  a position, and joined to the sum.
+         if Shared then
+            Products.Add_Chained_Product
+              (Steps, Shared_Gate.Base, Shared_Gate.Span, Shared_Gate.Offset,
+               Shared_Gate_P, Natural (Shared_Gate.Rows),
+               Natural (Shared_Gate.Columns), Added,
+               Key => At_Offset (Shared_Gate.Base, Shared_Gate.Offset),
+               Kept => False, From_Step => Step_Norm_Feed);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Shared_Gate.Rows);
+
+            Products.Add_Chained_Product
+              (Steps, Shared_Up.Base, Shared_Up.Span, Shared_Up.Offset,
+               Shared_Up_P, Natural (Shared_Up.Rows),
+               Natural (Shared_Up.Columns), Added,
+               Key => At_Offset (Shared_Up.Base, Shared_Up.Offset),
+               Kept => False, From_Step => Step_Norm_Feed);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Shared_Up.Rows);
+
+            Products.Add_Combination (Steps, 0, Added, Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Shared_Gate.Rows);
+
+            Products.Add_Chained_Product
+              (Steps, Shared_Down.Base, Shared_Down.Span, Shared_Down.Offset,
+               Shared_Down_P, Natural (Shared_Down.Rows),
+               Natural (Shared_Down.Columns), Added,
+               Key => At_Offset (Shared_Down.Base, Shared_Down.Offset),
+               Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Width);
+
+            declare
+               Step_Shared : constant Natural := Products.Length (Steps);
+
+               --  The router's row as a matrix of one row, resident as
+               --  a norm's weight is.
+               At_Row : constant System.Address :=
+                 Shared_Router.all (Shared_Router.all'First)'Address;
+            begin
+               Products.Add_Chained_Product
+                 (Steps, At_Row,
+                  Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
+                  0, Products.Values_F32, 1, Natural (Width), Added,
+                  Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (1);
+
+               Products.Add_Combination
+                 (Steps, 7, Added, Kept => False,
+                  From_Step => Step_Shared,
+                  Other_Step => Products.Length (Steps));
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Width);
+            end;
+
+            Products.Add_Join
+              (Steps, Added, From_Step => Products.Length (Steps),
+               Residual_Step => Step_Mix,
+               Kept => not Carry_Out and then not After);
+            if not Added then
+               return;
+            end if;
+            At_Out := Wanted;
+            Step_Room (Width);
+         end if;
       else
          if Gated then
             Products.Add_Chained_Product

@@ -6740,7 +6740,11 @@ package body Model_Runner.Llama is
                K.Add (Result.all, Item.Expert_Row.all);
             end loop;
 
-            return;
+            --  On to the shared expert, not out: this road returned
+            --  here, and a hybrid mixture's one position on the device
+            --  went without its shared expert -- the batch had it, and
+            --  the sweep's device pass never built the mixture shape.
+            goto Summed;
          end;
       end if;
 
@@ -6940,6 +6944,7 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      <<Summed>>
       if T.Is_Present (Current.Shared_Gate) then
          Shared_Expert (Item, Current, Input, Result.all, Status);
       end if;
@@ -11827,14 +11832,21 @@ package body Model_Runner.Llama is
       --  A dense layer goes whole gated or not -- the one projection up
       --  with a unit alone on it is a shape the sequence takes -- and a
       --  mixture where the device holds its stacks.
-      function Whole_Layer_Fits (L : Layer) return Boolean
+      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
       is ((if Settings.Experts > 0 then Mixture_Whole (L)
            else T.Is_Present (L.Up))
 
-          --  A hybrid's head gates and shared expert are not in the
-          --  device's sequence; its full attention layers go a step at a
-          --  time.
-          and then not Hybrid (Settings.Kind)
+          --  A hybrid's linear layers keep a state on the host and are
+          --  not attention; its attention layers go whole, the gate
+          --  beside each head and the shared expert as steps of the
+          --  sequence, where the value heads are as wide as the query
+          --  heads -- the gate is elementwise over the blend -- and the
+          --  projections carry no bias, which the picking apart of the
+          --  queries and the gates does not take.
+          and then not Linear (Settings, Index)
+          and then (not Hybrid (Settings.Kind)
+                    or else (Settings.Value_Size = Settings.Head_Size
+                             and then L.Query_Bias = null))
 
           --  The device's attention takes a layer's sinks where the
           --  cache has room for them. A mixture with them went whole for
@@ -12290,7 +12302,7 @@ package body Model_Runner.Llama is
                if Item.Held in Exact | Eighth | Fourth
                  and then Element_Count (Settings.Rotary) <= Head_Size
                  and then (Settings.Experts = 0 or else Mixture_Whole (Current))
-                 and then Whole_Layer_Fits (Current)
+                 and then Whole_Layer_Fits (Current, Natural (Index))
                  and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
@@ -12354,7 +12366,8 @@ package body Model_Runner.Llama is
                           Chaining
                           and then Index < Source.Layers.all'Last
                           and then Whole_Layer_Fits
-                                     (Source.Layers.all (Index + 1)),
+                                     (Source.Layers.all (Index + 1),
+                                      Natural (Index) + 1),
                         Mirror    => not Chaining,
                         Window   =>
                           (if Settings.Window > 0
@@ -12418,7 +12431,15 @@ package body Model_Runner.Llama is
                           Device_Norm (Current.Post_Feed_Norm,
                                        Current.Post_Feed_Norm_Pair),
                         Shifted => Norms_Shifted (Current),
-                        After   => Normalizes_After (Settings.Kind));
+                        After   => Normalizes_After (Settings.Kind),
+
+                        --  A hybrid's gate beside each head, and its
+                        --  mixture's shared expert.
+                        Head_Gates    => Hybrid (Settings.Kind),
+                        Shared_Gate   => Current.Shared_Gate,
+                        Shared_Up     => Current.Shared_Up,
+                        Shared_Down   => Current.Shared_Down,
+                        Shared_Router => Current.Shared_Router);
                   end if;
                end if;
 
@@ -12426,7 +12447,9 @@ package body Model_Runner.Llama is
                  Chaining
                  and then Fused
                  and then Index < Source.Layers.all'Last
-                 and then Whole_Layer_Fits (Source.Layers.all (Index + 1));
+                 and then Whole_Layer_Fits
+                            (Source.Layers.all (Index + 1),
+                             Natural (Index) + 1);
 
                if Fused then
                   --  The host keeps its own copy of the cache -- the
@@ -13248,15 +13271,15 @@ package body Model_Runner.Llama is
 
       --  As the token's: a dense layer gated or not, a mixture where the
       --  device holds its stacks, the normalizations as the architecture
-      --  arranges them and centred all or none.
-      function Whole_Layer_Fits (L : Layer) return Boolean
+      --  arranges them and centred all or none, and a hybrid's attention
+      --  layers but not its linear ones.
+      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
       is ((if Settings.Experts > 0 then Mixture_Whole (L)
            else T.Is_Present (L.Up))
-
-          --  A hybrid's head gates and shared expert are not in the
-          --  device's sequence; its full attention layers go a step at a
-          --  time.
-          and then not Hybrid (Settings.Kind)
+          and then not Linear (Settings, Index)
+          and then (not Hybrid (Settings.Kind)
+                    or else (Settings.Value_Size = Settings.Head_Size
+                             and then L.Query_Bias = null))
           and then Sinks_Fit (L.Sinks)
           and then (L.Attention_Norm /= null)
                    = not Normalizes_After (Settings.Kind)
@@ -14078,7 +14101,7 @@ package body Model_Runner.Llama is
                          and then Source.Settings.Kind not in Falcon | Phi2)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then not Rounding
-                                 and then Whole_Layer_Fits (Current)
+                                 and then Whole_Layer_Fits (Current, Natural (Index))
                                  and then Has_Block (Item'Unchecked_Access)))
             then
                Charge (Item, Normalizing, Mark);
@@ -14186,7 +14209,7 @@ package body Model_Runner.Llama is
                     and then Item.Held in Exact | Eighth | Fourth
                     and then (Settings.Experts = 0
                               or else Mixture_Whole (Current))
-                    and then Whole_Layer_Fits (Current)
+                    and then Whole_Layer_Fits (Current, Natural (Index))
                     and then not Has_Runs
                   then
                      Model_Runner.Backend.Device.Whole_Layer
@@ -14262,7 +14285,8 @@ package body Model_Runner.Llama is
                           Carrying
                           and then Index < Source.Layers.all'Last
                           and then Whole_Layer_Fits
-                                     (Source.Layers.all (Index + 1)),
+                                     (Source.Layers.all (Index + 1),
+                                      Natural (Index) + 1),
 
                         --  The head normalizations, where the layer has
                         --  them, and the mixture where the layer is one.
@@ -14341,7 +14365,12 @@ package body Model_Runner.Llama is
                           Device_Norm (Current.Post_Feed_Norm,
                                        Current.Post_Feed_Norm_Pair),
                         Shifted => Norms_Shifted (Current),
-                        After   => Normalizes_After (Settings.Kind));
+                        After   => Normalizes_After (Settings.Kind),
+                        Head_Gates    => Hybrid (Settings.Kind),
+                        Shared_Gate   => Current.Shared_Gate,
+                        Shared_Up     => Current.Shared_Up,
+                        Shared_Down   => Current.Shared_Down,
+                        Shared_Router => Current.Shared_Router);
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14351,7 +14380,8 @@ package body Model_Runner.Llama is
                     and then Whole_Layer_Done
                     and then Index < Source.Layers.all'Last
                     and then Whole_Layer_Fits
-                               (Source.Layers.all (Index + 1));
+                               (Source.Layers.all (Index + 1),
+                                Natural (Index) + 1);
 
                   if Whole_Layer_Done then
                      Projected := True;

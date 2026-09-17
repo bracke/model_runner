@@ -939,6 +939,23 @@ package Model_Runner.Backend.Device is
    --    it, and Post_Feed_Norm normalizes the second sum into the
    --    layer's answer. Both must be present.
    --
+   --  @param Head_Gates True for the hybrid architecture's attention
+   --    layers, whose query projection is twice as wide -- each head's
+   --    queries and then a gate for the head -- and whose blend is
+   --    multiplied by the logistic of that gate before the projection
+   --    out. The queries and the gates are picked apart on the device,
+   --    and the value heads must be as wide as the query heads, since
+   --    the gate is elementwise over the blend.
+   --  @param Shared_Gate A hybrid mixture's shared expert, the gated
+   --    block every position goes through beside its chosen experts:
+   --    its gate matrix. Not present for a mixture without one, and
+   --    refused without a mixture.
+   --  @param Shared_Up The shared expert's up matrix, the same shape.
+   --  @param Shared_Down The shared expert's projection down.
+   --  @param Shared_Router The row of the width whose score against the
+   --    input, through the logistic, scales the shared expert's answer
+   --    before it joins the sum.
+   --
    --  The two normalization weights are named by reference, as every
    --  weight the device keeps is: the device remembers a weight by its
    --  address, and an array passed by value is a copy at a new one each
@@ -1031,7 +1048,15 @@ package Model_Runner.Backend.Device is
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;
       Shifted        : Boolean := False;
-      After          : Boolean := False);
+      After          : Boolean := False;
+      Head_Gates     : Boolean := False;
+      Shared_Gate    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Up      : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Down    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  A gated feed-forward block, whole, in one submission.
    --

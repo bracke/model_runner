@@ -55,6 +55,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A hybrid mixture's one position on the device went without its
+  shared expert.** The token mixture's device road -- the chosen experts
+  gathered as one dispatch -- returned before the shared expert every
+  position goes through, so a generated token of a Qwen3.5 mixture on
+  the device summed its chosen experts and nothing else; a batch had
+  the expert, and the sweep's device pass never built the mixture shape.
+  The road goes on to the shared expert now, and the sweep's device pass
+  builds the mixture shape for every architecture that holds one.
 - **The nibble cache on the device wrote past a short row.** `pack.comp`
   wrote every block's four words whole, and a block cut short by the
   row's end -- a row of sixteen, or of eighty -- has spare words that are
@@ -197,6 +205,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hybrid's attention layers go over whole.** Qwen3.5's attention
+  layers project each head's queries and a gate for the head in one
+  tensor and multiply the blend by the logistic of the gate, and its
+  mixture runs a shared expert beside the chosen ones, scaled by the
+  logistic of its own router's score; both kept every attention layer
+  of the hybrid off the device's whole-layer sequence. A picking step
+  (`pick.comp`) takes the queries and the gates apart on the device,
+  and `combine.comp` has two units more: the logistic of one arm times
+  the other, and one arm scaled by the logistic of one number a
+  position. `Whole_Layer` takes `Head_Gates` and the shared expert's
+  four parts; the linear layers keep their state on the host between.
+  Qwen3.5-0.8B reads a 101-token prompt and generates 64 on the device
+  in 1.383 s against 1.488, the same text -- a quarter of its layers
+  attend, and the linear three quarters run where they ran. The
+  two-backend comparison runs the hybrid dense and as a mixture, and
+  the sweep's device pass builds the mixture shape for every
+  architecture that holds one.
 - **The conformance sweep puts the device's tile kernels under the
   reference.** Its device arms were sequences of eight tokens or fewer,
   and a batch takes the tile kernels from sixteen: the three device bugs
@@ -242,8 +267,8 @@ Keep a Changelog and the project uses semantic versioning.
   their own. GPT-2 small reads a 104-token prompt and generates 64 on
   the device in 0.223 s against 0.513 -- 0.014 s evaluating against
   0.053, 0.209 s generating against 0.460 -- with the same text as
-  before. What still goes a step at a time is a hybrid's attention
-  layers.
+  before. What still went a step at a time was a hybrid's attention
+  layers, until the entry above.
 - **Gemma's layers go over whole.** The normalizations Gemma 2 and 3 put
   on what attention and the feed-forward produced before each residual
   join -- which kept every layer of both off the device's whole-layer

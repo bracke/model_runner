@@ -66,6 +66,16 @@ layout(push_constant) uniform Shape {
     //  feed-forward of an architecture without a gate puts its unit on
     //  the one projection up and multiplies by nothing. The caller names
     //  the same step for both arms, and the second is not read.
+    //
+    //  Six is the logistic of the first arm multiplied by the second --
+    //  the gate beside each head that the hybrid architecture puts on
+    //  what attention produced, elementwise. Seven is the first arm
+    //  scaled by the logistic of one number a position, read from the
+    //  second arm at the position's index: the shared expert of a hybrid
+    //  mixture, whose answer is scaled by a sigmoid of its own router's
+    //  score before it joins the sum. How wide a position is comes in
+    //  the word after the up arm's place, which the other units leave
+    //  unread.
     uint unit;
 
     //  The remaining words of the block the pipeline layout declares. Unused
@@ -84,12 +94,19 @@ layout(push_constant) uniform Shape {
     uint gate_at;
     uint up_at;
 
-    uint unused_base;
+    //  Elements a position holds, for the unit that reads one number a
+    //  position; unread by the others.
+    uint row;
 
     //  The clamped gate's slope and limit, as binary32 by their bits.
     uint alpha_bits;
     uint limit_bits;
 } shape;
+
+//  1 / (1 + exp(-x)), guarded as the weighted one is.
+float logistic(float x) {
+    return 1.0 / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
 
 //  x / (1 + exp(-x)), guarded so a large negative x cannot overflow the
 //  exponential. The host computes the same thing the same way.
@@ -125,11 +142,17 @@ void main() {
     bool  halves = shape.gate_at > 0u;
 
     float gate = halves ? float (a[shape.gate_at - 1u + index]) : g[index];
-    float other = halves ? float (a[shape.up_at - 1u + index]) : u[index];
+    float other = shape.unit == 7
+                  ? u[index / shape.row]
+                  : (halves ? float (a[shape.up_at - 1u + index]) : u[index]);
     float made;
 
     if (shape.unit == 2) {
         made = gate + other;
+    } else if (shape.unit == 6) {
+        made = logistic(gate) * other;
+    } else if (shape.unit == 7) {
+        made = gate * logistic(other);
     } else if (shape.unit == 4) {
         made = sigmoid_weighted(gate);
     } else if (shape.unit == 5) {

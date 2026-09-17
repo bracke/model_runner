@@ -2222,24 +2222,33 @@ package body Tests.Inference_Cases is
       --  hundred days it did not decline it, and every Gemma answered in
       --  nonsense while every fixture, four wide, agreed to the bit.
       declare
+         --  And the hybrid, dense and as a mixture with its shared
+         --  expert: its attention layers go whole with the gate beside
+         --  each head and the shared expert as steps of the sequence,
+         --  and its linear layers run on the host between them.
          type Case_Row is record
-            Kind   : Tiny_Model.Fixture_Architecture;
-            Format : Tiny_Model.Weight_Format;
-            Window : Natural;
-            Heads  : Positive;
+            Kind    : Tiny_Model.Fixture_Architecture;
+            Format  : Tiny_Model.Weight_Format;
+            Window  : Natural;
+            Heads   : Positive;
+            Experts : Natural := 0;
+            Used    : Natural := 0;
          end record;
-         Rows : constant array (1 .. 11) of Case_Row :=
-           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1),
-            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1),
-            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2)];
+         Rows : constant array (1 .. 14) of Case_Row :=
+           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1, 0, 0),
+            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1, 0, 0),
+            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2),
+            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0)];
       begin
          for Row of Rows loop
             declare
@@ -2251,11 +2260,13 @@ package body Tests.Inference_Cases is
                Name   : constant String :=
                  Tiny_Model.Fixture_Architecture'Image (Row.Kind) & " "
                  & Tiny_Model.Weight_Format'Image (Row.Format)
-                 & (if Row.Heads > 1 then " with heads as wide as Gemma's" else "");
+                 & (if Row.Heads > 1 then " with heads as wide as Gemma's" else "")
+                 & (if Row.Experts > 0 then " as a mixture" else "");
             begin
                Tiny_Model.Build
                  (Image, Row.Format, Room => Room, Kind => Row.Kind,
-                  Window => Row.Window, Head_Factor => Row.Heads);
+                  Window => Row.Window, Head_Factor => Row.Heads,
+                  Experts => Row.Experts, Experts_Used => Row.Used);
                Logits_On
                  (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
                Assert (Why = E.No_Error,
