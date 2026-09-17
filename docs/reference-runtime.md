@@ -686,7 +686,8 @@ makes of the small picture beside it -- the first, the middle and the last
 of seventy-seven -- and `tests see --mmproj MMPROJ --image plaza.png --expect
 qwen35-0.8b.expect` compares this build's rows against them, each within a
 hundredth of its norm; they sit within a few millionths on the host and
-within three thousandths with `--device`, the device's halves. `record.py`
+within a hundredth with `--device`, nearly all of it the matrix kernel's
+half-precision operand under the linear products. `record.py`
 there writes the file afresh from the reference. A checkout with the
 projector file, and no Python, reruns that much of the crossing; without
 the projector file the command says `see: skipped (no projector at ...)`

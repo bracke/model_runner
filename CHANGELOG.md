@@ -132,10 +132,14 @@ Keep a Changelog and the project uses semantic versioning.
   hold a half-precision copy past them -- and a base that moved by half
   the cache a block grew the cache by half twenty-seven times, which is
   what took the machine's memory. The rows agree with the recorded
-  reference within a hundredth of their norm on the device -- a
-  thousandth to nine thousandths, which is the device's halves over
-  every key and value of every block -- and within a hundred-thousandth
-  on the host.
+  reference within a hundredth of their norm on the device and within a
+  hundred-thousandth on the host. On the device the rows sit a
+  thousandth to a hundredth apart, and nearly all of that is the linear
+  products, which were there before: the matrix kernel's operand is half
+  precision, so every block's activations go through its four products
+  rounded to halves. Measured apart, the attention's halves -- the keys,
+  values and queries of all twenty-seven blocks -- move a row by three
+  ten-thousandths.
 - **`tests see` skips without its projector, and Gemma 3's rows are
   recorded too.** A missing projector file is `see: skipped (no projector
   at PATH)` and a clean exit, as an external model that is not there is,
