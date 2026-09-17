@@ -5060,6 +5060,67 @@ package body Model_Runner.Llama is
    is (if Item.Seat < 0 then 0
        else Element_Count (Item.Seat) * Block_Span_Of (Item));
 
+   --  A layer's rows of a packed session, read back out of the device's
+   --  block into the host's copy: the bytes the device packed and their
+   --  scales, which are the same bytes the host would have packed. What
+   --  Settle_Cache and the end of a token or a batch do for an exact
+   --  session by reading floats.
+   --
+   --  @param Item Session whose block it is.
+   --  @param Slot Where the first row begins, in elements of the host's
+   --    flat keys.
+   --  @param V_Slot The same for the values.
+   --  @param Span How many rows, one after the other.
+   --  @param KV_Width How wide a row of keys is.
+   --  @param V_Width How wide a row of values is.
+   --  @param Read True when every read succeeded.
+   procedure Read_Back_Packed
+     (Item     : in out Session;
+      Slot     : Element_Count;
+      V_Slot   : Element_Count;
+      Span     : Element_Count;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count;
+      Read     : out Boolean)
+   is
+      Base : constant Element_Count := Block_Base (Item);
+      Laid : constant Packed_Block := Packed_Layout (Item);
+      Held : constant Cache_Precision := Item.Held;
+      V_Held : constant Cache_Precision := Item.Held_Values;
+      K_At : constant B.Byte_Count := Byte_Of (Held, Slot, KV_Width);
+      V_At : constant B.Byte_Count := Byte_Of (V_Held, V_Slot, V_Width);
+      K_Scale : constant Element_Count := Scale_Of (Held, Slot, KV_Width);
+      V_Scale : constant Element_Count := Scale_Of (V_Held, V_Slot, V_Width);
+   begin
+      Model_Runner.Backend.Device.Get_Cache_Bytes
+        (Interfaces.Unsigned_64 (Base) * 4 + Interfaces.Unsigned_64 (K_At),
+         Item.Byte_Keys.all
+           (K_At .. K_At + B.Byte_Count (Span) * Row_Bytes (Held, KV_Width) - 1),
+         Read);
+      if Read then
+         Model_Runner.Backend.Device.Get_Cache_Bytes
+           (Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4
+            + Interfaces.Unsigned_64 (V_At),
+            Item.Byte_Values.all
+              (V_At .. V_At + B.Byte_Count (Span) * Row_Bytes (V_Held, V_Width) - 1),
+            Read);
+      end if;
+      if Read then
+         Model_Runner.Backend.Device.Get_Cache
+           (Base + Laid.Key_Scales_At + K_Scale,
+            Item.Key_Scales.all
+              (K_Scale .. K_Scale + Span * Blocks_Of (Held, KV_Width) - 1),
+            Read);
+      end if;
+      if Read then
+         Model_Runner.Backend.Device.Get_Cache
+           (Base + Laid.Value_Scales_At + V_Scale,
+            Item.Value_Scales.all
+              (V_Scale .. V_Scale + Span * Blocks_Of (V_Held, V_Width) - 1),
+            Read);
+      end if;
+   end Read_Back_Packed;
+
    --  Give the host's copy of the cache the positions the device wrote.
    --
    --  A device that computed a layer wrote its keys and values into its own
@@ -5119,15 +5180,20 @@ package body Model_Runner.Llama is
                Base : constant Element_Count := Layer_Keys + Cell * KV_Width;
                V_At : constant Element_Count := Layer_Vals + Cell * V_Width;
             begin
-               Model_Runner.Backend.Device.Get_Cache
-                 (Block_Base (Item) + Base,
-                  Item.Keys.all (Base .. Base + Span * KV_Width - 1), Read);
-
-               if Read then
+               if Item.Held in Eighth | Fourth then
+                  Read_Back_Packed
+                    (Item, Base, V_At, Span, KV_Width, V_Width, Read);
+               else
                   Model_Runner.Backend.Device.Get_Cache
-                    (Block_Base (Item) + Item.Keys.all'Length + V_At,
-                     Item.Values.all (V_At .. V_At + Span * V_Width - 1),
-                     Read);
+                    (Block_Base (Item) + Base,
+                     Item.Keys.all (Base .. Base + Span * KV_Width - 1), Read);
+
+                  if Read then
+                     Model_Runner.Backend.Device.Get_Cache
+                       (Block_Base (Item) + Item.Keys.all'Length + V_At,
+                        Item.Values.all (V_At .. V_At + Span * V_Width - 1),
+                        Read);
+                  end if;
                end if;
 
                exit when not Read;
@@ -5321,6 +5387,45 @@ package body Model_Runner.Llama is
          K_Blocks => Natural (Blocks_Of (Item.Held, KV_Width)),
          V_Blocks => Natural (Blocks_Of (Item.Held_Values, V_Width)));
    end Packed_Shape;
+
+   --  How a whole layer packs its keys, or its values, into a packed
+   --  session's block on the device: the storage's bits, the bytes a row
+   --  takes, where the first written row's bytes and scales go, and the
+   --  scales a row has. Not_Packing for a session that is not packed.
+   --
+   --  @param Item Session whose block it is.
+   --  @param Slot Where the first written row begins, in elements of the
+   --    host's flat keys or values.
+   --  @param Width How wide a row is.
+   --  @param Keys True for the keys, False for the values.
+   --  @return The packing, as the placing step is told it.
+   function Packing_Of
+     (Item  : Session;
+      Slot  : Element_Count;
+      Width : Element_Count;
+      Keys  : Boolean) return Model_Runner.Backend.Device.Packing_Shape
+   is
+      Base : constant Element_Count := Block_Base (Item);
+      Laid : constant Packed_Block := Packed_Layout (Item);
+      Held : constant Cache_Precision :=
+        (if Keys then Item.Held else Item.Held_Values);
+   begin
+      if Item.Held not in Eighth | Fourth then
+         return Model_Runner.Backend.Device.Not_Packing;
+      end if;
+
+      return
+        (Bits      => (if Held = Fourth then 4 else 8),
+         Row_Bytes => Natural (Row_Bytes (Held, Width)),
+         At_Byte   => Interfaces.Unsigned_64
+                        (Base + (if Keys then 0 else Laid.Values_At)) * 4
+                      + Interfaces.Unsigned_64 (Byte_Of (Held, Slot, Width)),
+         At_Scale  => Natural (Base
+                               + (if Keys then Laid.Key_Scales_At
+                                  else Laid.Value_Scales_At)
+                               + Scale_Of (Held, Slot, Width)),
+         Blocks    => Natural (Blocks_Of (Held, Width)));
+   end Packing_Of;
 
    --  One position attending, on the device, to the cache it already holds.
    --
@@ -11803,8 +11908,10 @@ package body Model_Runner.Llama is
             else
 
                --  The whole layer as one submission. A generated token made
-               --  two of them a layer and makes one.
-               if Item.Held = Exact
+               --  two of them a layer and makes one. A packed session's
+               --  keys and values are packed as they are placed, by a step
+               --  of the same sequence.
+               if Item.Held in Exact | Eighth | Fourth
                  and then Settings.Rotary > 0
                  and then Element_Count (Settings.Rotary) <= Head_Size
                  and then (Settings.Experts = 0 or else Mixture_Whole (Current))
@@ -11839,7 +11946,7 @@ package body Model_Runner.Llama is
                         K."=" (Settings.Pairing, K.Split),
                         Natural (Block_Base (Item) + Slot),
                         Natural (Block_Base (Item)
-                                 + Item.Keys.all'Length + V_Slot),
+                                 + Exact_Keys (Item) + V_Slot),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index),
@@ -11848,7 +11955,7 @@ package body Model_Runner.Llama is
                         Natural (Cell),
                         Natural (Block_Base (Item) + Base),
                         Natural (Block_Base (Item)
-                                 + Item.Keys.all'Length + V_Base),
+                                 + Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -11892,7 +11999,16 @@ package body Model_Runner.Llama is
                         Down_Stack  => Current.Down_Stack,
                         Feed        => Settings.Expert_Feed,
                         Used        => Settings.Experts_Used,
-                        Experts     => Settings.Experts);
+                        Experts     => Settings.Experts,
+
+                        --  A packed session's block, and how its keys
+                        --  and values are packed into it as they are
+                        --  placed.
+                        Packed      => Packed_Shape (Item, Base, V_Base,
+                                                     KV_Width, V_Width),
+                        Pack_Keys   => Packing_Of (Item, Slot, KV_Width, True),
+                        Pack_Values => Packing_Of (Item, V_Slot, V_Width,
+                                                   False));
                   end if;
                end if;
 
@@ -11908,8 +12024,19 @@ package body Model_Runner.Llama is
                   --  read it -- and reads it out of the device's own once the
                   --  token is done rather than a layer at a time, which is
                   --  what lets a layer be handed over without waiting.
+                  --  A packed session's copy is the rows packed as the
+                  --  device packed them, the same bytes.
                   if Chaining then
                      Deferred (Index) := True;
+                  elsif Item.Held in Eighth | Fourth then
+                     Pack_Row
+                       (Item.Key_Row.all (0 .. KV_Width - 1),
+                        Item.Byte_Keys.all, Slot, KV_Width,
+                        Item.Key_Scales.all, Item.Held);
+                     Pack_Row
+                       (Item.Value_Row.all (0 .. V_Width - 1),
+                        Item.Byte_Values.all, V_Slot, V_Width,
+                        Item.Value_Scales.all, Item.Held_Values);
                   else
                      for Offset in 0 .. KV_Width - 1 loop
                         Item.Keys.all (Slot + Offset) :=
@@ -12401,15 +12528,20 @@ package body Model_Runner.Llama is
 
                   Read : Boolean;
                begin
-                  Model_Runner.Backend.Device.Get_Cache
-                    (Block_Base (Item) + At_Key,
-                     Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
-
-                  if Read then
+                  if Item.Held in Eighth | Fourth then
+                     Read_Back_Packed
+                       (Item, At_Key, At_Val, 1, KV_Width, V_Width, Read);
+                  else
                      Model_Runner.Backend.Device.Get_Cache
-                       (Block_Base (Item) + Item.Keys.all'Length + At_Val,
-                        Item.Values.all (At_Val .. At_Val + V_Width - 1),
-                        Read);
+                       (Block_Base (Item) + At_Key,
+                        Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
+
+                     if Read then
+                        Model_Runner.Backend.Device.Get_Cache
+                          (Block_Base (Item) + Item.Keys.all'Length + At_Val,
+                           Item.Values.all (At_Val .. At_Val + V_Width - 1),
+                           Read);
+                     end if;
                   end if;
 
                   if not Read then
@@ -13508,7 +13640,8 @@ package body Model_Runner.Llama is
               --  goes to the host, which is what the fallback below
               --  keeps to.
               and then (Current.Query_Norm = null
-                        or else (Item.Held = Exact
+                        or else (Item.Held in Exact | Eighth | Fourth
+                                 and then not Rounding
                                  and then Whole_Layer_Fits (Current)
                                  and then Has_Block (Item'Unchecked_Access)))
               and then Source.Settings.Kind not in Falcon | Phi2
@@ -13580,7 +13713,7 @@ package body Model_Runner.Llama is
                   --  whole layer writes them itself and has to know before
                   --  it starts. Asking for room already taken returns at
                   --  once.
-                  if Item.Held = Exact
+                  if Item.Held in Exact | Eighth | Fourth
                     and then Model_Runner.Backend."="
                                (Item.Owner.Able.Kind,
                                 Model_Runner.Backend.Backend_Device)
@@ -13609,9 +13742,14 @@ package body Model_Runner.Llama is
                   --  whole layer attends every position to itself and
                   --  before, and those rows attend to each other, which
                   --  the host's attention knows and the device's does not.
+                  --  A packed session's keys and values are packed as
+                  --  they are placed, by a step of the same sequence; a
+                  --  round of packed sessions attends on the host.
                   if Turnable
                     and then Resident
-                    and then Item.Held = Exact
+                    and then (Item.Held = Exact
+                              or else (Item.Held in Eighth | Fourth
+                                       and then not Rounding))
                     and then (Settings.Experts = 0
                               or else Mixture_Whole (Current))
                     and then Whole_Layer_Fits (Current)
@@ -13634,7 +13772,7 @@ package body Model_Runner.Llama is
                                   else Block_Base (Item)
                                        + Cell_Of (Item, Natural (Index),
                                                   Reserved) * V_Width)
-                                 + Item.Keys.all'Length + V_Base),
+                                 + Exact_Keys (Item) + V_Base),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index),
@@ -13648,7 +13786,7 @@ package body Model_Runner.Llama is
                                   else Block_Base (Item)) + Base),
                         Natural ((if Rounding then 0
                                   else Block_Base (Item))
-                                 + Item.Keys.all'Length + V_Base),
+                                 + Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -13700,7 +13838,25 @@ package body Model_Runner.Llama is
                         Down_Stack  => Current.Down_Stack,
                         Feed        => Settings.Expert_Feed,
                         Used        => Settings.Experts_Used,
-                        Experts     => Settings.Experts);
+                        Experts     => Settings.Experts,
+
+                        --  A packed session's block, and how its keys and
+                        --  values are packed into it as they are placed:
+                        --  from this batch's first cell on.
+                        Packed      => Packed_Shape (Item, Base, V_Base,
+                                                     KV_Width, V_Width),
+                        Pack_Keys   =>
+                          Packing_Of
+                            (Item,
+                             Base + Cell_Of (Item, Natural (Index), Reserved)
+                                    * KV_Width,
+                             KV_Width, True),
+                        Pack_Values =>
+                          Packing_Of
+                            (Item,
+                             V_Base + Cell_Of (Item, Natural (Index), Reserved)
+                                      * V_Width,
+                             V_Width, False));
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14602,17 +14758,25 @@ package body Model_Runner.Llama is
                         V_At : constant Element_Count :=
                           Layer_Vals + Cell * V_Width;
                      begin
-                        Model_Runner.Backend.Device.Get_Cache
-                          (Block_Base (Item) + Base,
-                           Item.Keys.all (Base .. Base + Count * KV_Width - 1),
-                           Read);
-
-                        if Read then
-                           Model_Runner.Backend.Device.Get_Cache
-                             (Block_Base (Item) + Item.Keys.all'Length + V_At,
-                              Item.Values.all
-                                (V_At .. V_At + Count * V_Width - 1),
+                        if Item.Held in Eighth | Fourth then
+                           Read_Back_Packed
+                             (Item, Base, V_At, Count, KV_Width, V_Width,
                               Read);
+                        else
+                           Model_Runner.Backend.Device.Get_Cache
+                             (Block_Base (Item) + Base,
+                              Item.Keys.all
+                                (Base .. Base + Count * KV_Width - 1),
+                              Read);
+
+                           if Read then
+                              Model_Runner.Backend.Device.Get_Cache
+                                (Block_Base (Item) + Item.Keys.all'Length
+                                 + V_At,
+                                 Item.Values.all
+                                   (V_At .. V_At + Count * V_Width - 1),
+                                 Read);
+                           end if;
                         end if;
                      end;
                   end if;

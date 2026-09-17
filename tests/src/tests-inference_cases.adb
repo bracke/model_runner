@@ -7123,6 +7123,136 @@ package body Tests.Inference_Cases is
    --  caches'; a snapshot of one reads back to the bit into a session of
    --  the same pair and is refused by a session of another; and a pairing
    --  that is not two packed storages is refused as a shape.
+   --------------------------------------------
+   -- A_Packed_Session_On_The_Device_Packs_There --
+   --------------------------------------------
+
+   --  A packed session on the device has its keys and values packed by
+   --  the device, as they are placed, and its own copy of the block read
+   --  back afterwards: what it snapshots is the block the device packed,
+   --  and a processor session adopting it goes on as one that read the
+   --  text itself does. Token by token and as a batch, in bytes and in
+   --  nibbles. Not to the bit: the device's keys and values are its own
+   --  arithmetic's before they are packed, a few units in the last place
+   --  from the processor's, and a row on a rounding boundary packs a
+   --  level apart -- what the exact cache's sessions differ by too. The
+   --  bytes the device packs of a given row are the host's to the bit,
+   --  and the backend suite holds them there.
+   procedure A_Packed_Session_On_The_Device_Packs_There
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+      Next   : constant Vocab.Token_Id := 3;
+
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Over   : Harness (Held'Access);
+         Status : E.Error_Info;
+         Able, Awake : Boolean;
+
+         --  The same text into a device session and a processor session
+         --  of one storage, one token at a time or all at once; the
+         --  device's snapshot adopted by a fresh processor session; and
+         --  the token after, from the two processor sessions, the same.
+         procedure Cross
+           (Cache   : L.Cache_Precision;
+            Batched : Boolean;
+            What    : String)
+         is
+            Live, Plain, Adopted : L.Session;
+            From_Device, From_Host, Direct : Logit_Vector;
+            Kept : B.Byte_Array_Access;
+         begin
+            L.Open (Live, Over.Ready, Cache => Cache, Status => Status);
+            Assert (E.Is_Ok (Status), "the device session did not open for " & What);
+            L.Open (Plain, Under.Ready, Cache => Cache, Status => Status);
+            Assert (E.Is_Ok (Status), "the processor session did not open for " & What);
+
+            if Batched then
+               L.Evaluate_Batch (Live, Over.Ready, Prompt, From_Device, Status => Status);
+               Assert (E.Is_Ok (Status), "the device batch failed for " & What
+                       & ": " & E.Error_Code'Image (Status.Code));
+               L.Evaluate_Batch (Plain, Under.Ready, Prompt, From_Host, Status => Status);
+               Assert (E.Is_Ok (Status), "the processor batch failed for " & What);
+            else
+               for Token of Prompt loop
+                  L.Evaluate (Live, Over.Ready, Token, From_Device, Status => Status);
+                  Assert (E.Is_Ok (Status), "the device evaluation failed for " & What
+                          & ": " & E.Error_Code'Image (Status.Code));
+                  L.Evaluate (Plain, Under.Ready, Token, From_Host, Status => Status);
+                  Assert (E.Is_Ok (Status), "the processor evaluation failed for " & What);
+               end loop;
+            end if;
+
+            L.Snapshot (Live, Over.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the device session did not snapshot for " & What);
+            L.Close (Live);
+
+            L.Open (Adopted, Under.Ready, Cache => Cache, Status => Status);
+            L.Adopt (Adopted, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status), "the device's snapshot was not adopted for "
+                    & What & ": " & E.Error_Code'Image (Status.Code));
+            B.Free (Kept);
+
+            L.Evaluate (Adopted, Under.Ready, Next, From_Device, Status => Status);
+            Assert (E.Is_Ok (Status), "the adopted session did not go on for " & What);
+            L.Evaluate (Plain, Under.Ready, Next, Direct, Status => Status);
+            Assert (E.Is_Ok (Status), "the processor session did not go on for " & What);
+            L.Close (Adopted);
+            L.Close (Plain);
+
+            declare
+               Worst : N.Real := 0.0;
+            begin
+               for Index in Direct'Range loop
+                  Worst := N.Real'Max
+                    (Worst, abs (From_Device (Index) - Direct (Index)));
+               end loop;
+               Assert (Worst < 5.0e-2,
+                       "the block the device packed " & What
+                       & " goes on" & N.Real'Image (Worst)
+                       & " away from the block the processor packs");
+            end;
+         end Cross;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if not Awake then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device packed a block here");
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Over, Model_Runner.Backend.Backend_Device, Able);
+         if not Able then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device packed a block here");
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+         Start (Under);
+
+         Cross (L.Eighth, False, "in bytes, a token at a time");
+         Cross (L.Fourth, False, "in nibbles, a token at a time");
+         Cross (L.Eighth, True, "in bytes, as a batch");
+         Cross (L.Fourth, True, "in nibbles, as a batch");
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Packed_Session_On_The_Device_Packs_There;
+
    procedure Values_Stored_Apart_From_Keys
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10763,6 +10893,12 @@ package body Tests.Inference_Cases is
          & "between the two; snapshots to the bit into the same pair and "
          & "not another; and a pairing that is not two packed storages is "
          & "refused");
+      Register_Routine
+        (T, A_Packed_Session_On_The_Device_Packs_There'Access,
+         "a packed session on the device has its keys and values packed "
+         & "there as they are placed, and what it snapshots is the bytes a "
+         & "processor session makes of the same text, a token at a time "
+         & "and as a batch, in bytes and in nibbles");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");

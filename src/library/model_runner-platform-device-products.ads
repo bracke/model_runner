@@ -522,6 +522,22 @@ package Model_Runner.Platform.Device.Products is
    --  A cache the exact kernels read.
    Not_Packed : constant Packed_Cache := (others => <>);
 
+   --  How a placing step packs the rows it writes, for a packed session's
+   --  block: how many bits an element, the bytes from one row to the
+   --  next, where the first row's bytes and scales go, and how many
+   --  scales a row has. Bits zero is a row placed as it is, into the
+   --  exact cache.
+   type Packing_Shape is record
+      Bits      : Natural := 0;
+      Row_Bytes : Natural := 0;
+      At_Byte   : Interfaces.Unsigned_64 := 0;
+      At_Scale  : Natural := 0;
+      Blocks    : Natural := 0;
+   end record;
+
+   --  A row placed as it is.
+   Not_Packing : constant Packing_Shape := (others => <>);
+
    --  Empty a sequence so that products may be added to it.
    --
    --  @param Steps Sequence to empty.
@@ -1042,6 +1058,11 @@ package Model_Runner.Platform.Device.Products is
    --    begins, in elements. Each row then goes into its own member's block
    --    at its own position, and At_First is the layer's offset alone. Zero
    --    for a batch, whose rows go one stride apart from the first.
+   --  @param Packed How the rows are packed, for a packed session's block:
+   --    the step then rounds each row to bytes or nibbles and a scale as
+   --    the host rounds it, through pack.comp, and At_First and Stride go
+   --    unread. Run refuses the sequence where the device has no such
+   --    kernel; a round is not taken packed.
    procedure Add_Place
      (Steps     : in out Sequence;
       Width     : Natural;
@@ -1049,7 +1070,8 @@ package Model_Runner.Platform.Device.Products is
       At_First  : Natural;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Table_At  : Natural := 0);
+      Table_At  : Natural := 0;
+      Packed    : Packing_Shape := Not_Packing);
 
    --  Name a root-mean-square normalization for a sequence to perform.
    --
@@ -1341,6 +1363,20 @@ package Model_Runner.Platform.Device.Products is
      (Item    : in out Engine;
       At_Byte : Interfaces.Unsigned_64;
       Data    : Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean);
+
+   --  And bytes back out of it, as they are: a packed session's rows and
+   --  scales the device packed itself, which is how the host's copy of a
+   --  packed block is brought up to date at the end of a token or a batch.
+   --
+   --  @param Item Ready engine.
+   --  @param At_Byte Where in the cache the bytes begin, in bytes.
+   --  @param Data Receives what is there.
+   --  @param Ok False where there is no cache or it is too small.
+   procedure Get_Bytes
+     (Item    : Engine;
+      At_Byte : Interfaces.Unsigned_64;
+      Data    : out Model_Runner.Bytes.Byte_Array;
       Ok      : out Boolean);
 
    --  Attend, on the device, over a cache kept packed: a byte an element
@@ -1832,6 +1868,11 @@ private
       --  device without them attends a packed session on the host.
       Packed_Attend : System.Address := System.Null_Address;
       Packed_Line   : System.Address := System.Null_Address;
+
+      --  And the kernel that packs a step's rows into such a cache, with
+      --  its pipeline: the placing step of a packed session's sequence.
+      Packer        : System.Address := System.Null_Address;
+      Pack_Line     : System.Address := System.Null_Address;
 
       --  The same kernel compiled with SUBGROUPS, where the device says a
       --  compute shader may reduce across a subgroup. Its tile reductions
@@ -2361,6 +2402,9 @@ private
 
       --  A packed session's block, where the attention reads one.
       Packed     : Packed_Cache := Not_Packed;
+
+      --  And how a placing step packs its rows into one.
+      Pack       : Packing_Shape := Not_Packing;
 
       --  A gathered product, as Add_Gathered_Product describes it: how
       --  many members, which slices they are, the rows of the whole stack

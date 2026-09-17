@@ -356,6 +356,18 @@ package Model_Runner.Backend.Device is
       Data    : Model_Runner.Bytes.Byte_Array;
       Ok      : out Boolean);
 
+   --  And bytes back out of it: a packed session's rows and scales the
+   --  device packed itself, read into the host's copy once a token or a
+   --  batch is done.
+   --
+   --  @param At_Byte Where in the cache the bytes begin, in bytes.
+   --  @param Data Receives what is there.
+   --  @param Ok True when it was read.
+   procedure Get_Cache_Bytes
+     (At_Byte : Interfaces.Unsigned_64;
+      Data    : out Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean);
+
    --  Whether the device has the kernel that attends over a packed cache.
    --
    --  @return True when Attend_Packed can run.
@@ -500,6 +512,15 @@ package Model_Runner.Backend.Device is
    --  A cache the exact kernels read.
    Not_Packed : constant Packed_Cache :=
      Model_Runner.Platform.Device.Products.Not_Packed;
+
+   --  How a whole layer packs the keys or the values it places, for a
+   --  packed session, as Products describes it.
+   subtype Packing_Shape is
+     Model_Runner.Platform.Device.Products.Packing_Shape;
+
+   --  Rows placed as they are.
+   Not_Packing : constant Packing_Shape :=
+     Model_Runner.Platform.Device.Products.Not_Packing;
 
    --  Attend, and project the blend, in one submission.
    --
@@ -844,6 +865,12 @@ package Model_Runner.Backend.Device is
    --  @param Feed One expert's feed width: the rows of a gate or up slice.
    --  @param Used How many experts a position reads.
    --  @param Experts How many experts there are.
+   --  @param Packed The session's packed block, where it has one: the
+   --    attention step then reads it with the packed kernel, and K_Base
+   --    and V_Base go unread.
+   --  @param Pack_Keys How the keys are packed into that block as they
+   --    are placed, and where; At_Key then goes unread.
+   --  @param Pack_Values The same for the values, and At_Value.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -904,7 +931,10 @@ package Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Feed           : Natural := 0;
       Used           : Natural := 0;
-      Experts        : Natural := 0);
+      Experts        : Natural := 0;
+      Packed         : Packed_Cache := Not_Packed;
+      Pack_Keys      : Packing_Shape := Not_Packing;
+      Pack_Values    : Packing_Shape := Not_Packing);
 
    --  A gated feed-forward block, whole, in one submission.
    --

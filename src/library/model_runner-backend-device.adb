@@ -885,6 +885,24 @@ package body Model_Runner.Backend.Device is
       Products.Put_Bytes (Engine, At_Byte, Data, Ok);
    end Put_Cache_Bytes;
 
+   ---------------------
+   -- Get_Cache_Bytes --
+   ---------------------
+
+   procedure Get_Cache_Bytes
+     (At_Byte : Interfaces.Unsigned_64;
+      Data    : out Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean) is
+   begin
+      if not Ready_Now then
+         Data := [others => 0];
+         Ok := False;
+         return;
+      end if;
+
+      Products.Get_Bytes (Engine, At_Byte, Data, Ok);
+   end Get_Cache_Bytes;
+
    --------------------
    -- Attends_Packed --
    --------------------
@@ -1787,7 +1805,10 @@ package body Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Feed           : Natural := 0;
       Used           : Natural := 0;
-      Experts        : Natural := 0)
+      Experts        : Natural := 0;
+      Packed         : Packed_Cache := Not_Packed;
+      Pack_Keys      : Packing_Shape := Not_Packing;
+      Pack_Values    : Packing_Shape := Not_Packing)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -2037,6 +2058,41 @@ package body Model_Runner.Backend.Device is
             Step_Q_Turned := Products.Length (Steps);
             Step_Room (Query.Rows);
 
+            --  A packed session's keys are turned into their own room
+            --  and packed from there, with the values, by the two steps
+            --  after: the fused step writes the exact cache and no other.
+            if Packed.K_Bits /= 0 then
+               Products.Add_Heads
+                 (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
+                  Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+                  Weight => Weight_Of (Key_Norm),
+                  Weight_Span => Span_Of (Key_Norm),
+                  Key => Weight_Of (Key_Norm), Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_K_Turned := Products.Length (Steps);
+               Step_Room (Key.Rows);
+
+               Products.Add_Place
+                 (Steps, Natural (Key.Rows), KV_Width, 0, Added,
+                  From_Step => Step_K_Turned, Packed => Pack_Keys);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Key.Rows);
+
+               Products.Add_Place
+                 (Steps, Natural (Value.Rows), V_Width, 0, Added,
+                  From_Step => Step_V, Packed => Pack_Values);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Value.Rows);
+
+               goto Attend;
+            end if;
+
             Products.Add_Heads
               (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
                Rotary, Pairing, At_Turn, Span, Epsilon, Added,
@@ -2128,10 +2184,12 @@ package body Model_Runner.Backend.Device is
          Step_Room (Key.Rows);
       end;
 
-      --  Into the cache, before anything attends to it.
+      --  Into the cache, before anything attends to it -- packed, for a
+      --  packed session's block.
       Products.Add_Place
         (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
-         From_Step => Step_K_Turned, Table_At => Table_At);
+         From_Step => Step_K_Turned, Table_At => Table_At,
+         Packed => Pack_Keys);
       if not Added then
          return;
       end if;
@@ -2139,7 +2197,8 @@ package body Model_Runner.Backend.Device is
 
       Products.Add_Place
         (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
-         From_Step => Step_V, Table_At => Table_At);
+         From_Step => Step_V, Table_At => Table_At,
+         Packed => Pack_Values);
       if not Added then
          return;
       end if;
@@ -2153,7 +2212,7 @@ package body Model_Runner.Backend.Device is
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
          Chained => True, From_Step => Step_Q_Turned, Kept => False,
-         Table_At => Table_At);
+         Table_At => Table_At, Packed => Packed);
       if not Added then
          return;
       end if;

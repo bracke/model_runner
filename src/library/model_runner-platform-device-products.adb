@@ -2021,6 +2021,22 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Packed_Attend := Made;
                end if;
             end;
+
+            --  And the kernel that packs a step's rows into such a cache,
+            --  which finds a row's largest through the same operations.
+            declare
+               Packer : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Pack;
+            begin
+               Request.Size := Interfaces.C.size_t (Packer'Length * 4);
+               Request.Code := Packer'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Packer := Made;
+               end if;
+            end;
          end if;
 
          --  And the same source compiled with SUBGROUPS, where the device
@@ -2605,6 +2621,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Packed_Line := Made;
+            end if;
+         end if;
+
+         if Item.Packer /= Null_Handle then
+            Request.Stage.Module := Item.Packer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Pack_Line := Made;
             end if;
          end if;
 
@@ -3241,6 +3267,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Packed_Line, "vkDestroyPipeline");
+      Give_Back (Item.Pack_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
@@ -3263,6 +3290,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Packed_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Packer, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
@@ -5346,6 +5374,45 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Bytes;
 
+   ---------------
+   -- Get_Bytes --
+   ---------------
+
+   procedure Get_Bytes
+     (Item    : Engine;
+      At_Byte : Interfaces.Unsigned_64;
+      Data    : out Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean)
+   is
+      use type System.Storage_Elements.Integer_Address;
+
+      Span : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Data'Length);
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_At = Null_Handle
+        or else Data'Length = 0
+        or else At_Byte + Span > Item.Cache_Bytes
+      then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Bytes.Byte_Array (Data'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Data := Room;
+      end;
+
+      Ok := True;
+   end Get_Bytes;
+
    --------------------
    -- Attends_Packed --
    --------------------
@@ -6723,7 +6790,8 @@ package body Model_Runner.Platform.Device.Products is
       At_First  : Natural;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Table_At  : Natural := 0)
+      Table_At  : Natural := 0;
+      Packed    : Packing_Shape := Not_Packing)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -6733,6 +6801,17 @@ package body Model_Runner.Platform.Device.Products is
         or else Stride < Width
         or else Source = 0
         or else Source > Steps.Held
+        --  A packed row begins on a word and is read four elements at a
+        --  time by the attention that follows, and eight to a word by the
+        --  nibble packing; a round's rows go each to its own block, which
+        --  the packing kernel does not look up.
+        or else (Packed.Bits /= 0
+                 and then (Packed.Bits not in 4 | 8
+                           or else Table_At /= 0
+                           or else Width mod (if Packed.Bits = 4 then 8 else 4)
+                                   /= 0
+                           or else Packed.Row_Bytes mod 4 /= 0
+                           or else Packed.At_Byte mod 4 /= 0))
       then
          Added := False;
          return;
@@ -6745,7 +6824,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Width, Columns => Width, Key => System.Null_Address,
          Chained => True, Reads => Source,
          Kept => False, Places => True, Stride => Stride,
-         At_First => At_First, Table => Table_At,
+         At_First => At_First, Table => Table_At, Pack => Packed,
          Attends => False, Blends => False, Norms => False,
          Rotates => False,
          others => <>);
@@ -7246,6 +7325,9 @@ package body Model_Runner.Platform.Device.Products is
                  or else Item.Cache_Buffer = Null_Handle
                  or else This.Reads = 0
                  or else This.Reads > Steps.Held
+                 --  And the kernel that packs, for a packed row.
+                 or else (This.Pack.Bits /= 0
+                          and then Item.Pack_Line = Null_Handle)
                then
                   return;
                end if;
@@ -8647,6 +8729,36 @@ package body Model_Runner.Platform.Device.Products is
                      Half_From := Index;
                      Half_Wide := This.Rows;
                   end if;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Places and then This.Pack.Bits /= 0 then
+                  --  Packed as it is placed: the row's bytes and scales
+                  --  where the packed attention reads them, through the
+                  --  kernel that rounds as the host rounds.
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Pack_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Pack.Row_Bytes),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.Pack.At_Byte),
+                        Packing => C.unsigned (This.Pack.Bits),
+                        Base    => C.unsigned (This.Pack.At_Scale),
+                        Joins   => C.unsigned (This.Pack.Blocks),
+                        Table   => 0,
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                  end;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,

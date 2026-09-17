@@ -1190,15 +1190,22 @@ eight heads of a group, or a batch's eight positions of a head -- each
 key read once, a word of four elements at a time, and dotted into every
 row, the softmax carried along a tile of sixty-four positions at a time
 through subgroup reductions, a long cache cut into slices and merged as
-the exact kernel's is, and the whole of it a step of the layer's fused
-sequence. Twelve tokens read **0.303 s** with the byte cache against
-**0.275 s** with the exact one on the six-token prompt, which is inside
-what a short context can show; after a prompt of 1,419 tokens, sixty-four
-more read **1.96 s** generating against **1.38 s** -- 30.7 ms a token
-against 21.6. The first form of this kernel, a workgroup a head reading a
-byte at a time and the keys twice, took 36.5 ms a token there. What the
-byte cache still pays on the device is the prompt: **2.55 s** against
-**0.74 s** for those 1,419 tokens, because an exact cache's batch attends
+the exact kernel's is. And the layer goes over whole, as an exact
+session's does: the keys and values are packed where they are made, by a
+step of the same sequence that rounds as the host rounds -- every
+division through a double, because a device's single-precision quotient
+need only be within two and a half units of the last place and the
+host's is exact -- so the host's copy of the block, read back once the
+token is done, is the bytes the host would have packed, which the suite
+holds to the bit. Twelve tokens read **0.270 s** with the byte cache
+against **0.291 s** with the exact one on the six-token prompt, which is
+to say the same; after a prompt of 1,419 tokens, sixty-four more read
+**1.65 s** generating against **1.38 s** -- 25.8 ms a token against
+21.5. The first form of this kernel, a workgroup a head reading a byte
+at a time and the keys twice, with the host packing every row between
+the two halves of a layer, took 36.5 ms a token there. What the byte
+cache still pays on the device is the prompt: **2.07 s** against **0.73
+s** for those 1,419 tokens, because an exact cache's batch attends
 through the matrix instruction and a packed one through this kernel, a
 block of eight positions at a time against every position before them.
 That is the next thing this kernel lacks, and it is named under
@@ -1472,7 +1479,7 @@ Named in the specification, absent here:
   cooperative-matrix kernel over its half-precision copy. A packed block
   has no such copy -- that is what it saves -- and the kernel that would
   unpack a tile of it into one for the instruction is not written; a
-  1,419-token prompt reads 2.55 s against 0.74.
+  1,419-token prompt reads 2.07 s against 0.73.
 
 ## Speed
 

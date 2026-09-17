@@ -1,0 +1,189 @@
+#version 450
+
+//  A step's result, packed into the cache the device holds: a byte an
+//  element with a scale a row, or a nibble an element with a scale a block
+//  of thirty-two, which are the two storages a session chooses with
+//  --kv-cache q8 and q4.
+//
+//  place.comp writes a layer's keys and values into the exact cache so
+//  that they never leave the device between the projection that made them
+//  and the attention that reads them. A packed session had no such step:
+//  the host read the rows back, rounded them and put the bytes there, and
+//  stood between the two halves of every layer for it. This is that step
+//  for a packed block, and it rounds as the host rounds -- the same scale,
+//  the same level, the same byte -- so that the copy the host keeps, read
+//  back out of this cache or packed on the host from the same rows, is the
+//  same bytes.
+//
+//  Rounding as the host does it, exactly. A byte is the row's largest
+//  magnitude over a hundred and twenty-seven for its scale and each
+//  element over that scale rounded half away from zero, which is
+//  Real'Rounding; the rounding is done with a floor and a difference, both
+//  exact, rather than with round(), whose halves the language leaves to
+//  the implementation. A nibble is the block's largest signed element
+//  over minus eight for its scale and each element times the inverse plus
+//  eight and a half, floored, held to the sixteen levels -- llama.cpp's
+//  Q4_0 block, as the host packs it; the product and the sum are marked
+//  precise so the compiler does not fuse them into one rounding where the
+//  host makes two.
+//
+//  Every division goes through a double. A device's single-precision
+//  division need only be within two and a half units of the last place,
+//  and a reciprocal is one instruction that is not exact; the host's is
+//  exact, and a level that lands on a whole number for one and just under
+//  it for the other is a nibble apart. A double's quotient narrowed to a
+//  single is the single the host computes: rounding twice is harmless for
+//  division at these widths, since two singles' quotient is never within
+//  a double's reach of a single's midpoint without being on one, which it
+//  cannot be either. The turning table is doubles already, so the device
+//  has them.
+//
+//  A workgroup a position. For bytes, the lanes find the row's largest
+//  together and each then writes a word of four bytes; for nibbles, a lane
+//  takes a block of thirty-two and writes its four words, since a block's
+//  scale is its own and the blocks of a row are few. A row begins on a
+//  word, which the engine's layout gives and the caller holds it to.
+
+#extension GL_KHR_shader_subgroup_basic      : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+const uint LANES = 256u;
+const uint BLOCK = 32u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Kept   { float kept[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Words  { uint  kvw[]; };
+layout(std430, binding = 2) writeonly buffer Scales { float kvf[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a position holds.
+    uint width;
+
+    //  Bytes from one position's packed row to the next.
+    uint row_bytes;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  Where the first of them goes, in bytes of the cache buffer.
+    uint at_byte;
+
+    //  Eight or four: how many bits an element.
+    uint bits;
+
+    //  Where the first position's scales go, in floats of the cache
+    //  buffer, and how many a row has.
+    uint at_scale;
+    uint blocks;
+
+    uint unused_table;
+} shape;
+
+shared float shared_max[64];
+
+//  The largest of a value across the workgroup.
+float whole_max (float mine) {
+    float found = subgroupMax (mine);
+
+    if (gl_NumSubgroups == 1u) {
+        return found;
+    }
+
+    if (subgroupElect ()) {
+        shared_max[gl_SubgroupID] = found;
+    }
+    barrier ();
+
+    float whole = shared_max[0];
+    for (uint i = 1u; i < gl_NumSubgroups; i++) {
+        whole = max (whole, shared_max[i]);
+    }
+    barrier ();
+    return whole;
+}
+
+//  Real'Rounding: to the nearest whole number, halves away from zero.
+float rounded (float v) {
+    float r = floor (v);
+    float f = v - r;
+    if (f > 0.5 || (f == 0.5 && v > 0.0)) {
+        return r + 1.0;
+    }
+    return r;
+}
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint from = slot * shape.width;
+    uint row_at = shape.at_byte + slot * shape.row_bytes;
+    uint scale_at = shape.at_scale + slot * shape.blocks;
+
+    if (shape.bits == 8u) {
+        float largest = 0.0;
+        for (uint c = lane; c < shape.width; c += LANES) {
+            largest = max (largest, abs (x[from + c]));
+        }
+        largest = whole_max (largest);
+
+        float scale = largest > 0.0 ? float (double (largest) / 127.0lf) : 1.0;
+        if (lane == 0u) {
+            kvf[scale_at] = scale;
+        }
+
+        for (uint w = lane; w * 4u < shape.width; w += LANES) {
+            uint word = 0u;
+            for (uint j = 0u; j < 4u; j++) {
+                uint c = w * 4u + j;
+                float step = c < shape.width
+                             ? rounded (float (double (x[from + c]) / double (scale)))
+                             : 0.0;
+                float held = max (-127.0, min (127.0, step));
+                uint byte = uint (int (held) + 128);
+                word |= byte << (8u * j);
+            }
+            kvw[(row_at >> 2u) + w] = word;
+        }
+        return;
+    }
+
+    //  Nibbles: a lane a block.
+    for (uint b = lane; b * BLOCK < shape.width; b += LANES) {
+        uint start = b * BLOCK;
+        uint span = min (BLOCK, shape.width - start);
+
+        float largest = 0.0;
+        float signed_largest = 0.0;
+        for (uint i = 0u; i < span; i++) {
+            float v = x[from + start + i];
+            if (abs (v) > largest) {
+                largest = abs (v);
+                signed_largest = v;
+            }
+        }
+        float scale = signed_largest / (-8.0);
+        float inverse = scale != 0.0 ? float (1.0lf / double (scale)) : 0.0;
+        kvf[scale_at + b] = scale;
+
+        for (uint w = 0u; w < BLOCK / 8u; w++) {
+            uint word = 0u;
+            for (uint j = 0u; j < 8u; j++) {
+                uint i = w * 8u + j;
+                uint nibble = 0u;
+                if (i < span) {
+                    precise float level = floor (x[from + start + i] * inverse + 8.5);
+                    nibble = uint (int (max (0.0, min (15.0, level))));
+                }
+                word |= nibble << (4u * j);
+            }
+            kvw[((row_at + start / 2u) >> 2u) + w] = word;
+        }
+    }
+}

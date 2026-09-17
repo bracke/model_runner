@@ -173,22 +173,31 @@ Keep a Changelog and the project uses semantic versioning.
   a word at a time and dotted into every row, with the softmax carried
   along a tile of sixty-four positions at a time through subgroup
   reductions; a token's long cache is cut into slices merged as the
-  exact kernel's are; and the step is one of the layer's fused sequence,
-  so a packed session pays the submissions the exact one pays. The host
-  packs a row and puts it there; a context shift moves the rows and puts
-  them again. Held to the exact kernel over the numbers the bytes stand
-  for to a ten-thousandth, alone, in a windowed batch, and as a sliced
-  step of a sequence, and to the rounding reference by the sweep's
-  device arms. A round of packed sessions, a layer with sinks, a value
-  head wider than 128 and a device without subgroup arithmetic attend on
-  the host as before. What it costs: sixty-four tokens of TinyLlama after
-  a prompt of 1,419 read 1.96 s generating with the byte cache against
-  1.38 s with the exact one -- 30.7 ms a token against 21.6 -- and the
-  prompt itself 2.55 s against 0.74, because the exact cache's batch goes
-  through the matrix instruction and a packed one through this kernel a
-  position at a time. The first form of the kernel, a workgroup a head
-  reading a byte at a time and the keys twice, read the same sixty-four
-  tokens at 36.5 ms each.
+  exact kernel's are; and a packed session's layer goes over whole, as
+  the exact one's does -- normalized, projected, turned, packed, attended
+  and fed in one submission, chained to the next layer's. The packing is
+  a step of it, `pack.comp`, which rounds as the host rounds: the same
+  scale, the same level, the same byte, every division taken through a
+  double because a device's single-precision quotient need not be exact
+  and the host's is; the host's copy of the block is read back out of
+  the device's once a token or a batch is done, and a row the host packs
+  itself is the same bytes, which the suite holds to the bit. A context
+  shift moves the rows and puts them again. Held to the exact kernel
+  over the numbers the bytes stand for to a ten-thousandth, alone, in a
+  windowed batch, and as a sliced step of a sequence, and to the
+  rounding reference by the sweep's device arms. A round of packed
+  sessions, a layer with sinks, a value head wider than 128 and a device
+  without subgroup arithmetic attend on the host as before. What it
+  costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
+  1.65 s generating with the byte cache against 1.38 s with the exact
+  one -- 25.8 ms a token against 21.5 -- and the prompt itself 2.07 s
+  against 0.73, because the exact cache's batch goes through the matrix
+  instruction and a packed one through this kernel eight positions at a
+  time; twelve tokens on the six-token prompt read the same 0.27 s in
+  either. The first form of the kernel, a workgroup a head reading a byte
+  at a time and the keys twice, with the host packing every row between
+  the two halves of a layer, read the same sixty-four tokens at 36.5 ms
+  each.
 - **`--kv-cache q4`: the context in four bits an element.** Two to a
   byte, with a scale for every thirty-two rather than for the row --
   llama.cpp's four-bit cache block, rounded as it rounds: the block's
