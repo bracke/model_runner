@@ -255,8 +255,15 @@ layout(push_constant, std430) uniform Shape {
 
 //  The largest value width this kernel will take. A head wider than this is
 //  refused by the caller and done on the processor, which is better than a
-//  kernel that quietly writes past the end of what it kept.
-const uint room = 128;
+//  kernel that quietly writes past the end of what it kept. Two hundred
+//  and fifty-six is Gemma's, whose smaller sizes give every head that
+//  width; the loops below stop at the width they are given, so a head of
+//  a hundred and twenty-eight costs what it cost at a room of that.
+const uint room = 256;
+
+//  And the widest the path four at a time takes, which lays its parts out
+//  by this stride: a wider head goes a word at a time.
+const uint vroom = 128;
 
 //  How many query positions a workgroup answers.
 #ifdef QUERY_TILE
@@ -1140,7 +1147,7 @@ void main() {
                 barrier ();
 
                 for (uint hh = 0u; hh < 2u && from + hh < HEADS; hh++) {
-                    uint at = (hh * (LANES / 32u) + v_part) * room
+                    uint at = (hh * (LANES / 32u) + v_part) * vroom
                               + v_comp * 4u;
                     vec4 mine = heldv[i][from + hh];
                     parts[at]      = mine.x;
@@ -1151,15 +1158,15 @@ void main() {
 
                 barrier ();
 
-                for (uint slot = lane; slot < 2u * room; slot += LANES) {
-                    uint hh = slot / room;
-                    uint c = slot % room;
+                for (uint slot = lane; slot < 2u * vroom; slot += LANES) {
+                    uint hh = slot / vroom;
+                    uint c = slot % vroom;
 
                     if (from + hh < HEADS && c < shape.value_size) {
                         float total = 0.0;
 
                         for (uint pp = 0u; pp < LANES / 32u; pp++) {
-                            total += parts[(hh * (LANES / 32u) + pp) * room
+                            total += parts[(hh * (LANES / 32u) + pp) * vroom
                                            + c];
                         }
 
@@ -1196,13 +1203,20 @@ void main() {
         //  past the end of the store -- which a device answers with
         //  whatever lies there, and this one answered with the second
         //  four heads wrong.
-        const uint CHUNK = 8u / (room / 64u);
+        //  As many folds of sixty-four as the value head is wide, and as
+        //  many heads a turn as the store holds of them: a head of two
+        //  hundred and fifty-six takes two heads a turn, one of a hundred
+        //  and twenty-eight four, as it always did.
+        uint folds = (shape.value_size + 63u) / 64u;
+        uint chunk = 8u / folds;
 
-        for (uint from = 0u; from < HEADS; from += CHUNK) {
-            for (uint hh = 0u; hh < CHUNK && from + hh < HEADS; hh++) {
+        for (uint from = 0u; from < HEADS; from += chunk) {
+            for (uint hh = 0u; hh < chunk && from + hh < HEADS; hh++) {
                 for (uint k = 0; k < room / 64; k++) {
-                    parts[(hh * (room / 64) + k) * LANES + lane]
-                      = held[i][from + hh][k];
+                    if (k < folds) {
+                        parts[(hh * folds + k) * LANES + lane]
+                          = held[i][from + hh][k];
+                    }
                 }
             }
 
@@ -1211,10 +1225,10 @@ void main() {
             //  Every lane of the workgroup writes a component of some
             //  head: the parts are read in the order the subgroups lie,
             //  as before.
-            for (uint slot = lane; slot < CHUNK * (room / 64) * 64u;
+            for (uint slot = lane; slot < chunk * folds * 64u;
                  slot += LANES) {
-                uint hh = slot / ((room / 64) * 64u);
-                uint rest = slot % ((room / 64) * 64u);
+                uint hh = slot / (folds * 64u);
+                uint rest = slot % (folds * 64u);
                 uint k = rest / 64u;
                 uint c = rest % 64u + k * 64u;
 
@@ -1222,7 +1236,7 @@ void main() {
                     float total = 0.0;
 
                     for (uint pp = 0u; pp < LANES / 64u; pp++) {
-                        total += parts[(hh * (room / 64) + k) * LANES
+                        total += parts[(hh * folds + k) * LANES
                                        + pp * 64u + c - k * 64u];
                     }
 

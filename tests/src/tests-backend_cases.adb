@@ -6183,6 +6183,12 @@ package body Tests.Backend_Cases is
       Compare (Head_Size => 64);
       Compare (Head_Size => 128);
 
+      --  And two hundred and fifty-six, which is Gemma's: past the
+      --  instruction's widest head and the four-at-a-time path's, so
+      --  both arms go a word at a time, held to the queries one at a
+      --  time and, with a sink a head, to the softmax worked out here.
+      Compare (Head_Size => 256);
+
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);

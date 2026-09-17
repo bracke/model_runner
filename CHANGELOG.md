@@ -146,6 +146,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Gemma's heads attend on the device.** The attention kernels took a
+  value head up to 128 wide, and every Gemma here -- 1, 2 and 3, whose
+  heads are 256 wide -- attended on the host with the products on the
+  device. The room is 256 again: the kernel's loops stop at the width
+  they are given, its reduction takes fewer heads a turn where the head
+  is wide, and the path four at a time keeps its own bound of 128 and
+  leaves a wider head to go a word at a time; the packed kernel took 256
+  already. Held to the queries one at a time and to a softmax worked out
+  on the host at 256, in the backend suite. Gemma 3's 1B reads a
+  1,328-token prompt on the device in 2.16 s against 3.68 with its
+  attention on the host, and generates at 22.9 ms a token against 27.8,
+  the same text.
 - **The clamped gate on the device.** The gate gpt-oss states -- both
   arms held at a limit, the gate through the logistic at a steeper
   slope, one added to the other arm, the two multiplied -- is the third
@@ -224,8 +236,8 @@ Keep a Changelog and the project uses semantic versioning.
   attended and projected in one submission with them, exact or in
   bytes, held to the independent implementation; its batch's attention
   stays on the host, since its expert biases keep the mixture from going
-  over whole. A value head wider than 128 and a device without subgroup
-  arithmetic attend on the host as before. What it
+  over whole. A device without subgroup arithmetic attends on the host
+  as before. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
   1.65 s generating with the byte cache against 1.38 s with the exact
   one -- 25.8 ms a token against 21.5 -- and the prompt itself 0.70 s

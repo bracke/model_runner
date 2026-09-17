@@ -1695,8 +1695,13 @@ package Model_Runner.Platform.Device.Products is
    --  while every fixture, four wide, agreed with the processor to the bit.
    --  The shader check proves the words came from the source; nothing
    --  proved this constant did, which is why it now says where it comes
-   --  from.
-   Attention_Room : constant := 128;
+   --  from. Two hundred and fifty-six again now: the kernel's loops stop
+   --  at the width they are given and its reduction takes fewer heads a
+   --  turn where the head is wide, so a Gemma's heads fit and a narrower
+   --  head costs what it cost. The path four at a time keeps its own
+   --  bound of a hundred and twenty-eight, `vroom`, and a wider head goes
+   --  a word at a time.
+   Attention_Room : constant := 256;
 
    --  Bytes one row of a matrix takes.
    --
