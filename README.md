@@ -1203,13 +1203,20 @@ to say the same; after a prompt of 1,419 tokens, sixty-four more read
 **1.65 s** generating against **1.38 s** -- 25.8 ms a token against
 21.5. The first form of this kernel, a workgroup a head reading a byte
 at a time and the keys twice, with the host packing every row between
-the two halves of a layer, took 36.5 ms a token there. What the byte
-cache still pays on the device is the prompt: **2.07 s** against **0.73
-s** for those 1,419 tokens, because an exact cache's batch attends
-through the matrix instruction and a packed one through this kernel, a
-block of eight positions at a time against every position before them.
-That is the next thing this kernel lacks, and it is named under
-`## Not implemented`.
+the two halves of a layer, took 36.5 ms a token there. A batch goes
+another way: an exact session's batch attends through the matrix
+instruction over the half-precision copy the cache keeps beside itself,
+and a packed block keeps no copy -- so a step of the layer's sequence
+unpacks the layer's keys and values into the room that copy would have
+had for this block, which is nobody's while the block is packed, and the
+matrix kernel reads them there as it reads an exact session's. A layer
+in halves is a fraction of the block, which holds every layer in bytes
+or nibbles, so it fits where the model has four layers or more in bytes
+and eight in nibbles; a shallower model's batch takes the packed kernel,
+eight positions at a time. The 1,419-token prompt reads **0.701 s** with
+the byte cache against **0.729 s** with the exact one, which is to say
+the same, from the 2.07 s it read through the packed kernel a block of
+eight positions at a time.
 
 What it costs in time is nothing this machine can measure: twelve tokens of
 TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
@@ -1472,14 +1479,6 @@ Named in the specification, absent here:
   stricter instead: the source's digest is recorded beside the compiled form,
   so a shader edited and not recompiled fails the checklist rather than going
   on running the old one.
-- **A packed batch through the matrix instruction.** A `--kv-cache q8`
-  or `q4` session attends through `attention_packed.comp` for a batch as
-  for a token, a block of eight positions at a time against every
-  position before them, where an exact cache's batch goes through the
-  cooperative-matrix kernel over its half-precision copy. A packed block
-  has no such copy -- that is what it saves -- and the kernel that would
-  unpack a tile of it into one for the instruction is not written; a
-  1,419-token prompt reads 2.07 s against 0.73.
 
 ## Speed
 

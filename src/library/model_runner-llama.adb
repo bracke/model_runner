@@ -5427,6 +5427,50 @@ package body Model_Runner.Llama is
          Blocks    => Natural (Blocks_Of (Held, Width)));
    end Packing_Of;
 
+   --  How a packed session's batch may attend through the matrix
+   --  instruction: this layer's cells, from the first to the batch's
+   --  last, unpacked into the half-precision copy where the exact copy
+   --  of this block would have been -- nobody's while the block is
+   --  packed -- and the attention pointed there. Not_Unpacked where the
+   --  layer's rows in halves do not fit that room, which is half the
+   --  block's bytes: a model of fewer than four layers in bytes, or eight
+   --  in nibbles.
+   --
+   --  @param Item Session whose block it is.
+   --  @param K_Base Where this layer's keys begin, in elements of the
+   --    host's flat keys.
+   --  @param V_Base The same for the values.
+   --  @param KV_Width How wide a row of keys is.
+   --  @param V_Width How wide a row of values is.
+   --  @param Cells How many cells of the layer the batch reads, its own
+   --    included.
+   --  @return The unpacking, as the whole layer is told it.
+   function Unpacking_Of
+     (Item     : Session;
+      K_Base   : Element_Count;
+      V_Base   : Element_Count;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count;
+      Cells    : Element_Count)
+      return Model_Runner.Backend.Device.Unpacking_Shape
+   is
+      Base : constant Element_Count := Block_Base (Item);
+   begin
+      if Item.Held not in Eighth | Fourth
+        or else Cells = 0
+        or else Cells * (KV_Width + V_Width) > Packed_Layout (Item).Span
+      then
+         return Model_Runner.Backend.Device.Not_Unpacked;
+      end if;
+
+      return
+        (Keys   => Packing_Of (Item, K_Base, KV_Width, True),
+         Values => Packing_Of (Item, V_Base, V_Width, False),
+         Cells  => Natural (Cells),
+         K_Base => Natural (Base),
+         V_Base => Natural (Base + Cells * KV_Width));
+   end Unpacking_Of;
+
    --  One position attending, on the device, to the cache it already holds.
    --
    --  The arguments the processor's own attention takes, in the same order,
@@ -13856,7 +13900,17 @@ package body Model_Runner.Llama is
                             (Item,
                              V_Base + Cell_Of (Item, Natural (Index), Reserved)
                                       * V_Width,
-                             V_Width, False));
+                             V_Width, False),
+
+                        --  And the layer unpacked into the copy for the
+                        --  matrix instruction, where the batch is long
+                        --  enough for it: every cell up to the batch's
+                        --  last.
+                        Unpacked    =>
+                          Unpacking_Of
+                            (Item, Base, V_Base, KV_Width, V_Width,
+                             Cell_Of (Item, Natural (Index), Reserved)
+                             + Count));
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;

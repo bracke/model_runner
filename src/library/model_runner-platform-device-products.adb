@@ -2037,6 +2037,24 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Packer := Made;
                end if;
             end;
+
+            --  And the one that unpacks a layer of it into the copy for
+            --  a batch, which is worth having only where the matrix
+            --  kernel is -- whose module is made below, so the pipeline
+            --  is what is gated on it.
+            declare
+                  Unpacker : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Unpack;
+               begin
+                  Request.Size := Interfaces.C.size_t (Unpacker'Length * 4);
+                  Request.Code := Unpacker'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Unpacker := Made;
+                  end if;
+               end;
          end if;
 
          --  And the same source compiled with SUBGROUPS, where the device
@@ -2724,6 +2742,20 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         --  And the unpacking of a packed layer into the copy that
+         --  kernel reads, which is worth having only where it is.
+         if Item.Unpacker /= Null_Handle
+           and then Item.Matrix_Attend /= Null_Handle
+         then
+            Request.Stage.Module := Item.Unpacker;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Unpack_Line := Made;
+            end if;
+         end if;
+
          C.Strings.Free (Name);
       end;
 
@@ -3268,6 +3300,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Packed_Line, "vkDestroyPipeline");
       Give_Back (Item.Pack_Line, "vkDestroyPipeline");
+      Give_Back (Item.Unpack_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
@@ -3291,6 +3324,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Packed_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Packer, "vkDestroyShaderModule");
+      Give_Back (Item.Unpacker, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
@@ -5374,6 +5408,13 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Bytes;
 
+   -------------
+   -- Copy_At --
+   -------------
+
+   function Copy_At (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Cache_Elements * 2);
+
    ---------------
    -- Get_Bytes --
    ---------------
@@ -6791,16 +6832,23 @@ package body Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       From_Step : Natural := 0;
       Table_At  : Natural := 0;
-      Packed    : Packing_Shape := Not_Packing)
+      Packed    : Packing_Shape := Not_Packing;
+      Unpack    : Boolean := False;
+      Cells     : Natural := 0;
+      Half_At   : Interfaces.Unsigned_64 := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
    begin
+      --  An unpacking step reads the cache and nothing a step made, so
+      --  it may open a sequence; every other placing step writes what a
+      --  step before it made.
       if Steps.Held = Sequence_Limit
         or else Width = 0
         or else Stride < Width
-        or else Source = 0
+        or else (Source = 0 and then not Unpack)
         or else Source > Steps.Held
+        or else (Unpack and then (Packed.Bits = 0 or else Cells = 0))
         --  A packed row begins on a word and is read four elements at a
         --  time by the attention that follows, and eight to a word by the
         --  nibble packing; a round's rows go each to its own block, which
@@ -6825,6 +6873,8 @@ package body Model_Runner.Platform.Device.Products is
          Chained => True, Reads => Source,
          Kept => False, Places => True, Stride => Stride,
          At_First => At_First, Table => Table_At, Pack => Packed,
+         Unpacks => Unpack, Half_At => Half_At,
+         Cells => (if Unpack then Cells else 0),
          Attends => False, Blends => False, Norms => False,
          Rotates => False,
          others => <>);
@@ -7323,11 +7373,20 @@ package body Model_Runner.Platform.Device.Products is
                --  it needs is a cache to write into.
                if This.Rows = 0
                  or else Item.Cache_Buffer = Null_Handle
-                 or else This.Reads = 0
+                 or else (This.Reads = 0 and then not This.Unpacks)
                  or else This.Reads > Steps.Held
-                 --  And the kernel that packs, for a packed row.
+                 --  And the kernel that packs, for a packed row, or the
+                 --  one that unpacks, for a batch's copy of them -- and
+                 --  room in the copy for what it writes.
                  or else (This.Pack.Bits /= 0
+                          and then not This.Unpacks
                           and then Item.Pack_Line = Null_Handle)
+                 or else (This.Unpacks
+                          and then (Item.Unpack_Line = Null_Handle
+                                    or else This.Half_At
+                                            + Interfaces.Unsigned_64 (This.Cells)
+                                              * Interfaces.Unsigned_64 (This.Rows)
+                                            > Item.Cache_Bytes / 2))
                then
                   return;
                end if;
@@ -8729,6 +8788,36 @@ package body Model_Runner.Platform.Device.Products is
                      Half_From := Index;
                      Half_Wide := This.Rows;
                   end if;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Places and then This.Unpacks then
+                  --  A packed layer unpacked into the copy, for the matrix
+                  --  kernel: a workgroup a row, Cells of them, and not
+                  --  Count -- the rows are the cache's, not the batch's.
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Unpack_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Pack.Row_Bytes),
+                        Count   => C.unsigned (This.Cells),
+                        First   => C.unsigned (This.Pack.At_Byte),
+                        Packing => C.unsigned (This.Pack.Bits),
+                        Base    => C.unsigned (This.Pack.At_Scale),
+                        Joins   => C.unsigned (This.Pack.Blocks),
+                        Table   => C.unsigned (This.Half_At),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (This.Cells), 1, 1);
+                  end;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,

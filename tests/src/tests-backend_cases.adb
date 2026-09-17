@@ -4902,10 +4902,11 @@ package body Tests.Backend_Cases is
       Head_Size : constant := 64;
       Positions : constant := 300;
       Batch     : constant := 7;
+      Wide      : constant := 32;
       Block     : constant := 32;
 
       KV_Span : constant N.Element_Count := Groups * Head_Size;
-      Rows    : constant N.Element_Count := Positions + Batch;
+      Rows    : constant N.Element_Count := Positions + Wide;
       Room    : constant N.Element_Count := Rows * KV_Span;
       Span    : constant N.Element_Count := Heads * Head_Size;
 
@@ -4918,7 +4919,7 @@ package body Tests.Backend_Cases is
       --  numbers those stand for -- which is what the exact kernel is
       --  handed, so the two kernels are asked the same question.
       Exact_Cache : N.Real_Array (0 .. 2 * Room - 1);
-      Query       : N.Real_Array (0 .. Span * Batch - 1);
+      Query       : N.Real_Array (0 .. Span * Wide - 1);
 
       procedure Compare (K_Bits, V_Bits : Positive; What : String) is
          use type Interfaces.Unsigned_64;
@@ -5026,7 +5027,7 @@ package body Tests.Backend_Cases is
             end if;
          end Pack;
 
-         Exact_Blend, Packed_Blend : N.Real_Array (0 .. Span * Batch - 1);
+         Exact_Blend, Packed_Blend : N.Real_Array (0 .. Span * Wide - 1);
          Worst : N.Real := 0.0;
       begin
          for Row in 0 .. Rows - 1 loop
@@ -5177,6 +5178,118 @@ package body Tests.Backend_Cases is
                end;
             end;
          end loop;
+
+         --  And a batch long enough for the matrix instruction, where the
+         --  device has it: the packed rows unpacked into the copy by two
+         --  steps and attended there through that kernel, against the
+         --  packed kernel over the same rows. Not to a ten-thousandth:
+         --  the copy is halves, and what the packed kernel reads is not.
+         if Products.Attends_By_Matrix (Engine, Wide, Head_Size, Head_Size) then
+            declare
+               Steps    : Products.Sequence;
+               Added    : Boolean;
+               Halted   : Boolean;
+               Identity : Model_Runner.Bytes.Byte_Array_Access;
+               Through  : N.Real_Array (0 .. 4 * Span * Wide - 1) :=
+                 [others => 0.0];
+               Blend_At : constant N.Element_Count :=
+                 Span * Wide + 2 * KV_Span * Wide;
+
+               --  The copy's room for this block: past the standing cache's
+               --  own copy, where an exact block at the packed block's base
+               --  would have had it.
+               Cells    : constant N.Element_Count := Positions + Wide;
+               Copy_K   : constant N.Element_Count := 2 * Room + Base;
+               Copy_V   : constant N.Element_Count := Copy_K + Cells * KV_Span;
+            begin
+               Packed_Blend := [others => 0.0];
+               Products.Attend_Packed
+                 (Engine, K_Bits, V_Bits, Query,
+                  Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                  Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                  K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                  V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  KS_At => Natural (2 * Room + K_Scale_At),
+                  VS_At => Natural (2 * Room + V_Scale_At),
+                  K_Blocks => Natural (K_Blocks), V_Blocks => Natural (V_Blocks),
+                  Scale => 0.125, Cap => 0.0, Target => Packed_Blend, Ok => Ok,
+                  Positions => Wide);
+               Assert (Ok, "the packed attention over " & Positive'Image (Wide)
+                       & " positions was refused for " & What);
+
+               Model_Runner.Bytes.Allocate
+                 (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Identity);
+               Assert (Identity /= null, "no room for the matrix");
+               Identity.all := [others => 0];
+               for Row in 0 .. Span - 1 loop
+                  declare
+                     At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                       Model_Runner.Bytes.Byte_Count (Row * Span + Row) * 4 + 1;
+                  begin
+                     Identity.all (At_Byte .. At_Byte + 3) :=
+                       Model_Runner.Bytes.Put_F32 (1.0);
+                  end;
+               end loop;
+
+               --  Room in the copy for the layer's rows in halves, which a
+               --  block this small -- one layer's rows -- has not got of
+               --  its own.
+               Products.Reserve (Engine, Copy_V + Cells * KV_Span, Ok);
+               Assert (Ok, "the cache would not be widened for the copy for " & What);
+
+               Products.Open_Sequence (Steps);
+               --  The product first: a sequence's first step says how
+               --  wide the activation is, and the unpacking steps read
+               --  no activation.
+               Products.Add_Product
+                 (Steps, Identity.all'Address,
+                  Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+                  0, Products.Values_F32,
+                  Natural (Span), Natural (Span), Added);
+               Assert (Added, "a sequence would not take the product for " & What);
+               Products.Add_Place
+                 (Steps, Natural (KV_Span), Natural (KV_Span), 0, Added,
+                  Packed => (Bits => K_Bits, Row_Bytes => Natural (K_Row_Bytes),
+                             At_Byte => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                             At_Scale => Natural (2 * Room + K_Scale_At),
+                             Blocks => Natural (K_Blocks)),
+                  Unpack => True, Cells => Natural (Cells),
+                  Half_At => Interfaces.Unsigned_64 (Copy_K) + Products.Copy_At (Engine));
+               Assert (Added, "a sequence would not take the keys' unpacking for " & What);
+               Products.Add_Place
+                 (Steps, Natural (KV_Span), Natural (KV_Span), 0, Added,
+                  Packed => (Bits => V_Bits, Row_Bytes => Natural (V_Row_Bytes),
+                             At_Byte => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                             At_Scale => Natural (2 * Room + V_Scale_At),
+                             Blocks => Natural (V_Blocks)),
+                  Unpack => True, Cells => Natural (Cells),
+                  Half_At => Interfaces.Unsigned_64 (Copy_V) + Products.Copy_At (Engine));
+               Assert (Added, "a sequence would not take the values' unpacking for " & What);
+               Products.Add_Attention
+                 (Steps,
+                  Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                  Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                  K_Base => Natural (Copy_K), V_Base => Natural (Copy_V),
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.125, Cap => 0.0, Added => Added, Chained => True,
+                  From_Step => 1);
+               Assert (Added, "a sequence would not take the attention over the copy for " & What);
+               Products.Run (Engine, Steps, Query, Wide, Through, Ok, Halted);
+               Assert (Ok, "the sequence unpacking into the copy was refused for " & What);
+               Model_Runner.Bytes.Free (Identity);
+
+               Worst := 0.0;
+               for Index in 0 .. Span * Wide - 1 loop
+                  Worst := N.Real'Max
+                    (Worst, abs (Packed_Blend (Index) - Through (Blend_At + Index)));
+               end loop;
+               Assert (Worst <= 5.0e-3,
+                       "the matrix kernel over the copy unpacked from " & What
+                       & " answers" & N.Real'Image (Worst)
+                       & " away from the packed kernel over the same rows");
+            end;
+         end if;
       end Compare;
    begin
       Devices.Open (Held, Found);

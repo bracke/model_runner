@@ -1006,6 +1006,47 @@ package body Model_Runner.Backend.Device is
          Target, Ok, Positions, Window, Causal, Max_Bias);
    end Attend;
 
+   --  Whether a packed session's batch of this many positions goes
+   --  through the matrix instruction, over its layer unpacked into the
+   --  copy: the caller offered the unpacking, and the kernel is the one
+   --  the batch would take.
+   function Through_Matrix
+     (Unpacked   : Unpacking_Shape;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Unpacked.Cells > 0
+       and then Products.Attends_By_Matrix
+                  (Engine, Positions, Head_Size, Value_Size));
+
+   --  The two unpacking steps, keys then values, after the step From --
+   --  the one that last wrote the packed block, or none.
+   procedure Add_Unpacking
+     (Steps    : in out Products.Sequence;
+      Unpacked : Unpacking_Shape;
+      KV_Width : Natural;
+      V_Width  : Natural;
+      From     : Natural;
+      Added    : out Boolean) is
+   begin
+      Products.Add_Place
+        (Steps, KV_Width, KV_Width, 0, Added,
+         From_Step => From, Packed => Unpacked.Keys, Unpack => True,
+         Cells => Unpacked.Cells,
+         Half_At => Interfaces.Unsigned_64 (Unpacked.K_Base)
+                    + Products.Copy_At (Engine));
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Place
+        (Steps, V_Width, V_Width, 0, Added,
+         From_Step => From, Packed => Unpacked.Values, Unpack => True,
+         Cells => Unpacked.Cells,
+         Half_At => Interfaces.Unsigned_64 (Unpacked.V_Base)
+                    + Products.Copy_At (Engine));
+   end Add_Unpacking;
+
    ------------------------
    -- Attend_And_Project --
    ------------------------
@@ -1808,7 +1849,8 @@ package body Model_Runner.Backend.Device is
       Experts        : Natural := 0;
       Packed         : Packed_Cache := Not_Packed;
       Pack_Keys      : Packing_Shape := Not_Packing;
-      Pack_Values    : Packing_Shape := Not_Packing)
+      Pack_Values    : Packing_Shape := Not_Packing;
+      Unpacked       : Unpacking_Shape := Not_Unpacked)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -2206,6 +2248,36 @@ package body Model_Runner.Backend.Device is
 
       <<Attend>>
 
+      --  A packed session's batch through the matrix instruction, where
+      --  that is the kernel the batch would take: the layer's packed keys
+      --  and values unpacked into the copy first, after the step that
+      --  packed them, and the attention then reads the copy as an exact
+      --  session's does, from the bases the caller says.
+      if Packed.K_Bits /= 0
+        and then Through_Matrix (Unpacked, Positions, Head_Size, Value_Size)
+      then
+         Add_Unpacking
+           (Steps, Unpacked, KV_Width, V_Width,
+            From => Products.Length (Steps), Added => Added);
+         if not Added then
+            return;
+         end if;
+         Step_Room (Model_Runner.Numerics.Element_Count (KV_Width));
+         Step_Room (Model_Runner.Numerics.Element_Count (V_Width));
+
+         Products.Add_Attention
+           (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
+            Unpacked.K_Base, Unpacked.V_Base, KV_Width, V_Width, Scale, Cap,
+            Added,
+            Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+            Chained => True, From_Step => Step_Q_Turned, Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Attend := Products.Length (Steps);
+         goto Attended;
+      end if;
+
       --  Attention, against the turned queries.
       Products.Add_Attention
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
@@ -2217,6 +2289,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
       Step_Attend := Products.Length (Steps);
+
+      <<Attended>>
       Step_Room
         (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
 

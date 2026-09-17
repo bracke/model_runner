@@ -1,0 +1,99 @@
+#version 450
+
+//  A layer's packed rows, unpacked into the half-precision copy for the
+//  matrix attention kernel.
+//
+//  A batch of an exact session attends through the cooperative-matrix
+//  kernel, which reads the keys and values as halves out of the copy the
+//  cache keeps beside itself. A packed session keeps no copy -- that is
+//  what it saves -- and its batch went through the packed kernel, a block
+//  of eight positions against every position before them, which is three
+//  times the time. This writes one layer's keys, or its values, as halves
+//  into the room the copy would have had for this session's block, which
+//  is nobody's while the block is packed; the matrix kernel then reads
+//  them there, and the next layer writes over them. A layer's rows in
+//  halves are a fraction of the block, which holds every layer's in bytes
+//  or nibbles, so they fit where the model has four layers or more in
+//  bytes and eight in nibbles, and the caller counts before it asks.
+//
+//  A workgroup a position, a lane a word of the row: four bytes or eight
+//  nibbles read once and written as as many halves. A row begins on a
+//  word, which the engine's layout gives and the caller holds it to.
+
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+const uint LANES = 64u;
+const uint BLOCK = 32u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Words  { uint  kvw[]; };
+layout(std430, binding = 0) readonly  buffer Scales { float kvf[]; };
+layout(std430, binding = 2) writeonly buffer Halves { float16_t kvh[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a position holds.
+    uint width;
+
+    //  Bytes from one position's packed row to the next.
+    uint row_bytes;
+
+    //  Positions to unpack, from the first.
+    uint count;
+
+    //  Where the first position's packed row begins, in bytes of the
+    //  cache buffer.
+    uint at_byte;
+
+    //  Eight or four: how many bits an element.
+    uint bits;
+
+    //  Where the first position's scales begin, in floats of the cache
+    //  buffer, and how many a row has.
+    uint at_scale;
+    uint blocks;
+
+    //  Where the first position's halves go, in halves of the buffer.
+    uint half_at;
+} shape;
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint row_at = shape.at_byte + slot * shape.row_bytes;
+    uint scale_at = shape.at_scale + slot * shape.blocks;
+    uint into = shape.half_at + slot * shape.width;
+
+    if (shape.bits == 8u) {
+        float scale = kvf[scale_at];
+        for (uint w = lane; w * 4u < shape.width; w += LANES) {
+            uint word = kvw[(row_at >> 2u) + w];
+            for (uint j = 0u; j < 4u; j++) {
+                uint c = w * 4u + j;
+                if (c < shape.width) {
+                    float held = float (int ((word >> (8u * j)) & 0xFFu) - 128) * scale;
+                    kvh[into + c] = float16_t (held);
+                }
+            }
+        }
+        return;
+    }
+
+    for (uint w = lane; w * 8u < shape.width; w += LANES) {
+        uint word = kvw[(row_at >> 2u) + w];
+        float scale = kvf[scale_at + (w * 8u) / BLOCK];
+        for (uint j = 0u; j < 8u; j++) {
+            uint c = w * 8u + j;
+            if (c < shape.width) {
+                float held = float (int ((word >> (4u * j)) & 0xFu) - 8) * scale;
+                kvh[into + c] = float16_t (held);
+            }
+        }
+    }
+}

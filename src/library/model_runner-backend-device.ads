@@ -522,6 +522,15 @@ package Model_Runner.Backend.Device is
    Not_Packing : constant Packing_Shape :=
      Model_Runner.Platform.Device.Products.Not_Packing;
 
+   --  A packed layer unpacked into the half-precision copy for a batch's
+   --  attention through the matrix instruction, as Products describes it.
+   subtype Unpacking_Shape is
+     Model_Runner.Platform.Device.Products.Unpacking_Shape;
+
+   --  No unpacking.
+   Not_Unpacked : constant Unpacking_Shape :=
+     Model_Runner.Platform.Device.Products.Not_Unpacked;
+
    --  Attend, and project the blend, in one submission.
    --
    --  A layer's attention and the matrix that reads its result are two
@@ -871,6 +880,11 @@ package Model_Runner.Backend.Device is
    --  @param Pack_Keys How the keys are packed into that block as they
    --    are placed, and where; At_Key then goes unread.
    --  @param Pack_Values The same for the values, and At_Value.
+   --  @param Unpacked Where a packed session's batch may attend through
+   --    the matrix instruction instead: the layer's packed keys and
+   --    values are unpacked into the copy first, and the attention reads
+   --    them there as an exact session's does. Taken where that kernel
+   --    would be the one for the batch, and otherwise not.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -934,7 +948,8 @@ package Model_Runner.Backend.Device is
       Experts        : Natural := 0;
       Packed         : Packed_Cache := Not_Packed;
       Pack_Keys      : Packing_Shape := Not_Packing;
-      Pack_Values    : Packing_Shape := Not_Packing);
+      Pack_Values    : Packing_Shape := Not_Packing;
+      Unpacked       : Unpacking_Shape := Not_Unpacked);
 
    --  A gated feed-forward block, whole, in one submission.
    --

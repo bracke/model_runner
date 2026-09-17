@@ -190,14 +190,20 @@ Keep a Changelog and the project uses semantic versioning.
   without subgroup arithmetic attend on the host as before. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
   1.65 s generating with the byte cache against 1.38 s with the exact
-  one -- 25.8 ms a token against 21.5 -- and the prompt itself 2.07 s
-  against 0.73, because the exact cache's batch goes through the matrix
-  instruction and a packed one through this kernel eight positions at a
-  time; twelve tokens on the six-token prompt read the same 0.27 s in
-  either. The first form of the kernel, a workgroup a head reading a byte
-  at a time and the keys twice, with the host packing every row between
-  the two halves of a layer, read the same sixty-four tokens at 36.5 ms
-  each.
+  one -- 25.8 ms a token against 21.5 -- and the prompt itself 0.70 s
+  against 0.73: a batch attends through the matrix instruction as an
+  exact session's does, over the layer's keys and values unpacked by
+  `unpack.comp`, a step of the same sequence, into the room the
+  half-precision copy would have had for this block, which is nobody's
+  while the block is packed. A layer in halves is a fraction of the
+  block, so it fits where the model has four layers or more in bytes and
+  eight in nibbles, and a shallower model's batch takes the packed
+  kernel eight positions at a time, which read that prompt in 2.07 s.
+  Twelve tokens on the six-token prompt read the same 0.27 s in either.
+  The first form of the kernel, a workgroup a head reading a byte at a
+  time and the keys twice, with the host packing every row between the
+  two halves of a layer, read the same sixty-four tokens at 36.5 ms
+  each and the prompt in 2.55 s.
 - **`--kv-cache q4`: the context in four bits an element.** Two to a
   byte, with a scale for every thirty-two rather than for the row --
   llama.cpp's four-bit cache block, rounded as it rounds: the block's

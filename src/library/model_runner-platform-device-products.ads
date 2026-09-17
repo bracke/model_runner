@@ -538,6 +538,23 @@ package Model_Runner.Platform.Device.Products is
    --  A row placed as it is.
    Not_Packing : constant Packing_Shape := (others => <>);
 
+   --  A packed layer's keys or values unpacked into the half-precision
+   --  copy for a batch, so that the matrix kernel attends over them as
+   --  it does over an exact session's: how the rows are packed and where
+   --  the first is, how many positions from it, and where the halves go
+   --  -- an element index the attention step is given as its K_Base or
+   --  V_Base, into the copy. Cells zero asks for no unpacking.
+   type Unpacking_Shape is record
+      Keys   : Packing_Shape := Not_Packing;
+      Values : Packing_Shape := Not_Packing;
+      Cells  : Natural := 0;
+      K_Base : Natural := 0;
+      V_Base : Natural := 0;
+   end record;
+
+   --  No unpacking.
+   Not_Unpacked : constant Unpacking_Shape := (others => <>);
+
    --  Empty a sequence so that products may be added to it.
    --
    --  @param Steps Sequence to empty.
@@ -1063,6 +1080,16 @@ package Model_Runner.Platform.Device.Products is
    --    the host rounds it, through pack.comp, and At_First and Stride go
    --    unread. Run refuses the sequence where the device has no such
    --    kernel; a round is not taken packed.
+   --  @param Unpack True to read packed rows and write them as halves
+   --    into the copy instead: Packed says how the rows are packed and
+   --    where the first is, Width how wide a row is, Half_At where the
+   --    first row's halves go, and Count -- given to Run -- is not how
+   --    many rows; Cells is. The step reads the cache alone, so From_Step
+   --    names the step whose writing it must wait for; At_First and
+   --    Stride go unread.
+   --  @param Cells How many rows an unpacking step unpacks.
+   --  @param Half_At Where an unpacking step writes the first row, in
+   --    halves of the cache buffer.
    procedure Add_Place
      (Steps     : in out Sequence;
       Width     : Natural;
@@ -1071,7 +1098,10 @@ package Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       From_Step : Natural := 0;
       Table_At  : Natural := 0;
-      Packed    : Packing_Shape := Not_Packing);
+      Packed    : Packing_Shape := Not_Packing;
+      Unpack    : Boolean := False;
+      Cells     : Natural := 0;
+      Half_At   : Interfaces.Unsigned_64 := 0);
 
    --  Name a root-mean-square normalization for a sequence to perform.
    --
@@ -1364,6 +1394,34 @@ package Model_Runner.Platform.Device.Products is
       At_Byte : Interfaces.Unsigned_64;
       Data    : Model_Runner.Bytes.Byte_Array;
       Ok      : out Boolean);
+
+   --  Whether a batch of this many positions with heads these wide
+   --  attends through the matrix instruction, over the half-precision
+   --  copy: what an exact session's batch takes where the device has the
+   --  instruction and the batch is long enough for its tile, and what a
+   --  packed session's may take over its layer unpacked into the copy.
+   --
+   --  @param Item Engine to ask.
+   --  @param Positions How many positions attend at once.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @return True where the matrix kernel would be bound.
+   function Attends_By_Matrix
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean;
+
+   --  Where the half-precision copy begins, in halves of the cache
+   --  buffer: after the cache proper, two halves an element of it. An
+   --  unpacking step is told where in the copy to write in halves, and
+   --  the attention that reads the copy is told an element index, which
+   --  the engine adds this to -- so a caller naming the same place to
+   --  both asks here.
+   --
+   --  @param Item Engine to ask.
+   --  @return The copy's first half, in halves.
+   function Copy_At (Item : Engine) return Interfaces.Unsigned_64;
 
    --  And bytes back out of it, as they are: a packed session's rows and
    --  scales the device packed itself, which is how the host's copy of a
@@ -1873,6 +1931,11 @@ private
       --  its pipeline: the placing step of a packed session's sequence.
       Packer        : System.Address := System.Null_Address;
       Pack_Line     : System.Address := System.Null_Address;
+
+      --  And the one that unpacks a layer of it into the half-precision
+      --  copy for a batch, with its pipeline.
+      Unpacker      : System.Address := System.Null_Address;
+      Unpack_Line   : System.Address := System.Null_Address;
 
       --  The same kernel compiled with SUBGROUPS, where the device says a
       --  compute shader may reduce across a subgroup. Its tile reductions
@@ -2403,8 +2466,13 @@ private
       --  A packed session's block, where the attention reads one.
       Packed     : Packed_Cache := Not_Packed;
 
-      --  And how a placing step packs its rows into one.
+      --  And how a placing step packs its rows into one -- or, where
+      --  Unpacks, how the rows it unpacks into the half-precision copy
+      --  are packed, and where in halves it writes them.
       Pack       : Packing_Shape := Not_Packing;
+      Unpacks    : Boolean := False;
+      Cells      : Natural := 0;
+      Half_At    : Interfaces.Unsigned_64 := 0;
 
       --  A gathered product, as Add_Gathered_Product describes it: how
       --  many members, which slices they are, the rows of the whole stack
