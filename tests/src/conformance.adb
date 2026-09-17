@@ -125,6 +125,12 @@ package body Conformance is
 
       Expected : Expectation := [others => [others => 0.0]];
 
+      --  And what it makes of them with its keys and values rounded to
+      --  nibbles as the engine's four-bit cache rounds them: what that
+      --  cache is held to, since what it claims is that rounding and no
+      --  other, where the exact answer measures the rounding itself.
+      Expected_Nibbles : Expectation := [others => [others => 0.0]];
+
       --  And what the reference's block past the stack drafts from the
       --  same text, for the architecture that carries one: compared
       --  beside the logits, in the same buckets, so that the draft the
@@ -149,6 +155,8 @@ package body Conformance is
         R.Real_Vector (0 .. Longest * Widest - 1);
 
       Expected_States : State_Expectation := [others => [others => 0.0]];
+      Expected_States_Nibbles : State_Expectation :=
+        [others => [others => 0.0]];
 
       --  Which architecture the fixture in hand is. Learn and Compare are
       --  written above the loop that chooses it, and what they do differs
@@ -278,13 +286,34 @@ package body Conformance is
          then
             declare
                Span : constant Natural := Tokens'Length * Current_Width;
+               Also : Boolean;
             begin
                R.Run_States
                  (Second, Tokens, Expected_States (Which) (0 .. Span - 1),
                   Made);
+               if Made then
+                  R.Round_Cache_To_Nibbles (Second, True);
+                  R.Run_States
+                    (Second, Tokens,
+                     Expected_States_Nibbles (Which) (0 .. Span - 1), Also);
+                  R.Round_Cache_To_Nibbles (Second, False);
+                  Made := Also;
+               end if;
             end;
          else
             R.Run (Second, Tokens, Expected (Which), Made);
+
+            --  The same once more, rounding the cache to nibbles.
+            if Made then
+               declare
+                  Also : Boolean;
+               begin
+                  R.Round_Cache_To_Nibbles (Second, True);
+                  R.Run (Second, Tokens, Expected_Nibbles (Which), Also);
+                  R.Round_Cache_To_Nibbles (Second, False);
+                  Made := Also;
+               end;
+            end if;
 
             if Made and then R.Drafts (Second) then
                declare
@@ -571,7 +600,10 @@ package body Conformance is
             end Draft_Too;
          begin
             if Both_Ways then
-               Answer := Expected_States (Which) (0 .. Span - 1);
+               Answer :=
+                 (if L."=" (Cache, L.Fourth)
+                  then Expected_States_Nibbles (Which) (0 .. Span - 1)
+                  else Expected_States (Which) (0 .. Span - 1));
                Model_Runner.Tensors.Allocate
                  (N.Element_Count (Span), Room);
                if Room = null then
@@ -591,6 +623,8 @@ package body Conformance is
                   Containers.Close (Parsed);
                   return;
                end if;
+            elsif L."=" (Cache, L.Fourth) then
+               Answer := Expected_Nibbles (Which);
             else
                Answer := Expected (Which);
             end if;
@@ -761,6 +795,12 @@ package body Conformance is
                           Long_Float'Max (Result.Eighth_Worst_Abs, Gap);
                         Result.Eighth_Worst_Rel :=
                           Long_Float'Max (Result.Eighth_Worst_Rel, Relative);
+                     elsif L."=" (Cache, L.Fourth) then
+                        Result.Fourth_Compared := Result.Fourth_Compared + 1;
+                        Result.Fourth_Worst_Abs :=
+                          Long_Float'Max (Result.Fourth_Worst_Abs, Gap);
+                        Result.Fourth_Worst_Rel :=
+                          Long_Float'Max (Result.Fourth_Worst_Rel, Relative);
                      elsif L."=" (Cache, L.Halved) then
                         Result.Cached_Compared := Result.Cached_Compared + 1;
                         Result.Cached_Worst_Abs :=
@@ -815,6 +855,9 @@ package body Conformance is
                         if L."=" (Cache, L.Eighth) then
                            Widen (Eighth_Absolute_Tolerance,
                                   Eighth_Relative_Tolerance);
+                        elsif L."=" (Cache, L.Fourth) then
+                           Widen (Fourth_Absolute_Tolerance,
+                                  Fourth_Relative_Tolerance);
                         elsif L."=" (Cache, L.Halved) then
                            Widen (Cached_Absolute_Tolerance,
                                   Cached_Relative_Tolerance);
@@ -1192,10 +1235,17 @@ package body Conformance is
                            Compare (3, L.Eighth, Backend, Repack);
                            Compare (4, L.Eighth, Backend, Repack);
 
+                           --  And in four bits an element with a scale a
+                           --  block, the fourth storage.
+                           Compare (3, L.Fourth, Backend, Repack);
+                           Compare (4, L.Fourth, Backend, Repack);
+
                            if Batches (Backend) then
                               Compare (4, L.Halved, Backend, Repack,
                                        Batched => True);
                               Compare (4, L.Eighth, Backend, Repack,
+                                       Batched => True);
+                              Compare (4, L.Fourth, Backend, Repack,
                                        Batched => True);
                            end if;
                         end if;
@@ -1307,7 +1357,16 @@ package body Conformance is
                      Compare
                        (4, L.Eighth, Model_Runner.Backend.Backend_Device,
                         L.No_Repack, Batched => True);
-                     On_Device := On_Device + 6;
+                     Compare
+                       (3, L.Fourth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack);
+                     Compare
+                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True);
+                     On_Device := On_Device + 9;
                   end if;
 
                   B.Free (Image);

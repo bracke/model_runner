@@ -93,6 +93,19 @@ package Reference_Transformer is
       Logits : out Real_Vector;
       Ok     : out Boolean);
 
+   --  Round every key and value the model keeps to four bits an element
+   --  the way the engine's nibble cache does, or stop: a block of
+   --  thirty-two elements scaled by its largest, sign and all, over minus
+   --  eight, each element its share of that plus eight and a half cut to
+   --  a whole number and held to fifteen. Written here on its own, in
+   --  binary64, so that the engine's nibble cache can be held to what it
+   --  claims -- the same rounding -- rather than to the exact cache,
+   --  which it is not.
+   --
+   --  @param Item Loaded model.
+   --  @param On True to round from now on.
+   procedure Round_Cache_To_Nibbles (Item : in out Model; On : Boolean);
+
    --  What the model made of every position, for the model that produces
    --  states and no distribution.
    --
@@ -273,6 +286,10 @@ private
    type Model is limited record
       Loaded       : Boolean := False;
       Kind         : Architecture := Llama;
+
+      --  Whether the keys and values are rounded to nibbles as they are
+      --  kept, as Round_Cache_To_Nibbles says.
+      Nibbles      : Boolean := False;
       Embedding    : Natural := 0;
       Feed_Forward : Natural := 0;
       Layers       : Natural := 0;

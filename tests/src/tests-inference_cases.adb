@@ -6824,6 +6824,292 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Halved_Cache_Holds_Half;
 
+   --  A four-bit cache holds a sixth and a bit, answers near the exact
+   --  one, and survives a snapshot.
+   --
+   --  The plan: five bits an element with its scales against the byte
+   --  cache's eight and a bit, so fewer bytes than the byte cache and more
+   --  than half of them. The answer: the logits of the tiny model with
+   --  the context in nibbles are not the exact cache's, and are the
+   --  independent implementation's when it rounds its keys and values the
+   --  same way, on the sweep's four sequences. The snapshot: a
+   --  session written out and read back into another nibble session
+   --  answers to the bit, since a block rounded once rounds the same
+   --  again. And the two kernels that read it, against a plain
+   --  computation over nibbles laid as the cache lays them, including a
+   --  head that begins inside a block and a row shorter than one.
+   procedure Fourth_Cache_Holds_A_Sixth
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image  : B.Byte_Array_Access;
+      Exact_Logits, Fourth_Logits : Logit_Vector;
+      Apart : Model_Runner.Numerics.Real := 0.0;
+      Kept  : B.Byte_Array_Access;
+      Direct, Restored : Logit_Vector;
+
+      procedure Answer
+        (Cache  : L.Cache_Precision;
+         Under  : in out Harness;
+         Result : out Logit_Vector)
+      is
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         L.Open (Live, Under.Ready, Cache => Cache, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+         L.Close (Live);
+      end Answer;
+   begin
+      --  The kernels, on a cache of two rows of forty elements: two blocks
+      --  a row, the second of eight. Nibble n stands for n - 8 times its
+      --  block's scale.
+      declare
+         package MK renames Model_Runner.Kernels;
+         package MB renames Model_Runner.Bytes;
+
+         Width  : constant N.Element_Count := 40;
+         Bytes  : constant MB.Byte_Count := 20;
+         Blocks : constant N.Element_Count := 2;
+         Rows   : MB.Byte_Array (0 .. 2 * Bytes - 1);
+         Scales : constant N.Real_Array (0 .. 3) := [0.5, 0.25, 2.0, 0.125];
+         Query  : N.Real_Array (0 .. 39);
+
+         function Nibble (Row, Element : N.Element_Count) return Integer
+         is (Integer ((Row * 7 + Element * 3) mod 16));
+
+         function Value (Row, Element : N.Element_Count) return N.Real
+         is (N.Real (Nibble (Row, Element) - 8)
+             * Scales (Row * Blocks + Element / 32));
+      begin
+         for Row in 0 .. 1 loop
+            for Element in 0 .. Width - 1 loop
+               declare
+                  Where : constant MB.Byte_Count :=
+                    MB.Byte_Count (Row) * Bytes + MB.Byte_Count (Element / 2);
+                  Held  : constant MB.Byte := MB.Byte (Nibble (N.Element_Count (Row), Element));
+                  use type MB.Byte;
+               begin
+                  if Element mod 2 = 0 then
+                     Rows (Where) := Held;
+                  else
+                     Rows (Where) := Rows (Where) or (Held * 16);
+                  end if;
+               end;
+            end loop;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Integer (Index) mod 5) * 0.5 - 1.0;
+         end loop;
+
+         --  A dot over the second row's elements 24 to 39: it starts in
+         --  the first block and ends in the second.
+         declare
+            Wanted : N.Real := 0.0;
+            Got    : N.Real;
+         begin
+            for Element in 24 .. 39 loop
+               Wanted := Wanted + Query (N.Element_Count (Element - 24)) * Value (1, N.Element_Count (Element));
+            end loop;
+            Got := MK.Head_Dot_Fourth
+              (Query, 0, Rows, Bytes, 24, Scales, 2, 16);
+            Assert (abs (Got - Wanted) <= 1.0e-4,
+                    "the nibble dot product is" & N.Real'Image (Got)
+                    & " where" & N.Real'Image (Wanted) & " was wanted");
+            Assert (MK.Head_Dot_Fourth (Query, 0, Rows, Bytes, 24, Scales, 2, 0) = 0.0
+                    and then MK.Head_Dot_Fourth (Query, 0, Rows, Bytes, 24, Scales, 2, 17) = 0.0,
+                    "a nibble dot product past its bounds was taken");
+         end;
+
+         --  A blend over both rows of elements 30 to 37, with weights.
+         declare
+            Weights : constant N.Real_Array (0 .. 1) := [0.75, -0.5];
+            Sums    : N.Real_Array (0 .. 7) := [others => 0.0];
+            Kept_Sums : N.Real_Array (0 .. 7) := [others => 3.0];
+         begin
+            MK.Blend_Run_Fourth
+              (Sums, Weights, 0, Scales, 0, Blocks, Rows, 0, Bytes, 30, 2);
+            for Component in 0 .. 7 loop
+               declare
+                  Wanted : constant N.Real :=
+                    Weights (0) * Value (0, N.Element_Count (30 + Component))
+                    + Weights (1) * Value (1, N.Element_Count (30 + Component));
+               begin
+                  Assert (abs (Sums (N.Element_Count (Component)) - Wanted) <= 1.0e-4,
+                          "the nibble blend is" & N.Real'Image (Sums (N.Element_Count (Component)))
+                          & " at" & Integer'Image (Component) & " where"
+                          & N.Real'Image (Wanted) & " was wanted");
+               end;
+            end loop;
+            MK.Blend_Run_Fourth
+              (Kept_Sums, Weights, 0, Scales, 0, Blocks, Rows, 0, Bytes, 30, 3);
+            Assert ((for all Sum of Kept_Sums => Sum = 3.0),
+                    "a nibble blend past the rows was taken");
+         end;
+      end;
+
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+
+         declare
+            use type Interfaces.Unsigned_64;
+            Byte_Plan, Nibble_Plan, Wide : Model_Runner.Memory.Session_Plan;
+            Status : E.Error_Info;
+         begin
+            L.Plan_Session (Under.Ready, 0, Wide, Status, L.Exact);
+            L.Plan_Session (Under.Ready, 0, Byte_Plan, Status, L.Eighth);
+            L.Plan_Session (Under.Ready, 0, Nibble_Plan, Status, L.Fourth);
+            Assert (E.Is_Ok (Status), "the nibble plan was refused");
+            Assert (Nibble_Plan.KV_Cache_Bytes < Byte_Plan.KV_Cache_Bytes
+                    and then 2 * Nibble_Plan.KV_Cache_Bytes > Byte_Plan.KV_Cache_Bytes
+                    and then Nibble_Plan.KV_Cache_Bytes * 6 < Wide.KV_Cache_Bytes,
+                    "a nibble cache did not plan for a sixth and a bit:"
+                    & Interfaces.Unsigned_64'Image (Nibble_Plan.KV_Cache_Bytes)
+                    & " against" & Interfaces.Unsigned_64'Image (Byte_Plan.KV_Cache_Bytes)
+                    & " and" & Interfaces.Unsigned_64'Image (Wide.KV_Cache_Bytes));
+         end;
+
+         Answer (L.Exact, Under, Exact_Logits);
+         Answer (L.Fourth, Under, Fourth_Logits);
+
+         for Index in Exact_Logits'Range loop
+            Apart := Model_Runner.Numerics.Real'Max
+              (Apart, abs (Exact_Logits (Index) - Fourth_Logits (Index)));
+         end loop;
+         Assert (Apart > 0.0,
+                 "a nibble cache produced exactly the logits of a binary32 "
+                 & "one, so nothing was rounded");
+
+         --  How far from the exact answer is the rounding's own doing --
+         --  a third of a logit here, on rows of four elements -- and says
+         --  nothing about the cache. What does is the independent
+         --  implementation rounding its keys and values the same way, on
+         --  the sweep's own sequences: what the nibble cache claims is
+         --  that rounding and nothing else, so the two agree to the exact
+         --  cache's tolerance.
+         declare
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+            Expected : Reference_Transformer.Real_Vector
+              (0 .. Tiny_Model.Vocabulary - 1);
+            Worst : Long_Float := 0.0;
+
+            procedure Cross (Sequence : Vocab.Token_Array) is
+               Tokens : Reference_Transformer.Token_Vector (Sequence'Range);
+               Live   : L.Session;
+               Result : Logit_Vector;
+            begin
+               for Index in Sequence'Range loop
+                  Tokens (Index) := Integer (Sequence (Index));
+               end loop;
+               Reference_Transformer.Run (Second, Tokens, Expected, Made);
+               Assert (Made, "the rounding reference produced no logits");
+
+               L.Open (Live, Under.Ready, Cache => L.Fourth, Status => Status);
+               Assert (E.Is_Ok (Status), "the nibble session did not open");
+               for Token of Sequence loop
+                  L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+               end loop;
+               L.Close (Live);
+
+               for Index in Expected'Range loop
+                  Worst := Long_Float'Max
+                    (Worst,
+                     abs (Long_Float (Result (N.Element_Count (Index)))
+                          - Expected (Index)));
+               end loop;
+            end Cross;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+            Reference_Transformer.Round_Cache_To_Nibbles (Second, True);
+
+            Cross ([1 => 4]);
+            Cross ([4, 5]);
+            Cross ([1, 4, 5, 6, 7]);
+            Cross ([4, 4, 4, 5, 5, 6, 7, 8]);
+
+            Assert (Worst < 1.0E-3,
+                    "the nibble cache and the independent implementation "
+                    & "rounding the same way disagree by"
+                    & Long_Float'Image (Worst));
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         --  The snapshot, out of one packed session and into another of
+         --  the same storage: the nibble cache, and the byte cache beside
+         --  it, whose values went out through the halved arm -- which
+         --  holds nothing for it -- until this asked.
+         for Packed in L.Cache_Precision range L.Eighth .. L.Fourth loop
+            declare
+               Live   : L.Session;
+               Status : E.Error_Info;
+               Name   : constant String := L.Cache_Name (Packed);
+            begin
+               L.Open (Live, Under.Ready, Cache => Packed, Status => Status);
+               Assert (E.Is_Ok (Status), "the " & Name & " session did not open");
+               for Token of Prompt loop
+                  L.Evaluate (Live, Under.Ready, Token, Direct, Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+               end loop;
+               L.Snapshot (Live, Under.Ready, Kept, Status);
+               Assert (E.Is_Ok (Status), "a " & Name & " session did not snapshot: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Evaluate (Live, Under.Ready, 4, Direct, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed after the snapshot");
+               L.Close (Live);
+
+               L.Open (Live, Under.Ready, Cache => Packed, Status => Status);
+               Assert (E.Is_Ok (Status), "the second " & Name & " session did not open");
+               L.Adopt (Live, Under.Ready, Kept.all, Status);
+               Assert (E.Is_Ok (Status), "a " & Name & " snapshot was not adopted: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Evaluate (Live, Under.Ready, 4, Restored, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed after adopting");
+               L.Close (Live);
+
+               declare
+                  Worst : Model_Runner.Numerics.Real := 0.0;
+               begin
+                  for Index in Direct'Range loop
+                     Worst := Model_Runner.Numerics.Real'Max
+                       (Worst, abs (Direct (Index) - Restored (Index)));
+                  end loop;
+                  Assert (Worst = 0.0,
+                          "a " & Name & " cache did not survive being written "
+                          & "out and read back; the logits moved by"
+                          & Model_Runner.Numerics.Real'Image (Worst));
+               end;
+               B.Free (Kept);
+            end;
+         end loop;
+      end;
+
+      B.Free (Image);
+   end Fourth_Cache_Holds_A_Sixth;
+
    --  A mixture under the qwen3moe keys is read as one.
    --
    --  The sweep crosses llama, qwen2 and qwen3 with every format and path,
@@ -10273,6 +10559,11 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Halved_Cache_Holds_Half'Access,
          "a half-precision cache holds half the bytes and answers the same");
+      Register_Routine
+        (T, Fourth_Cache_Holds_A_Sixth'Access,
+         "a four-bit cache holds a sixth and a bit of the bytes, answers "
+         & "near the exact one, survives a snapshot to the bit, and its two "
+         & "kernels read nibbles and block scales as a plain computation does");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");

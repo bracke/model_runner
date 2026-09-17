@@ -977,7 +977,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 52588, logits compared 1871576,
+conformance: sequences 54432, logits compared 1871576,
              worst absolute 6.04463587507986E-05,
              worst relative 5.51705186852182E-02,
              rounded logits compared 166360,
@@ -992,21 +992,28 @@ conformance: sequences 52588, logits compared 1871576,
              byte logits compared 71696,
              byte worst absolute 3.02784067592779E-01,
              byte worst relative 1.99904656218687E+00,
+             nibble logits compared 71696,
+             nibble worst absolute 2.90289949633689E-02,
+             nibble worst relative 1.41904710438192E-02,
              outside tolerance 0, unlearned 0
 ```
 
-Five buckets, because five things are being compared and mixing them would
+Six buckets, because six things are being compared and mixing them would
 let the loosest hide the tightest. The first is the exact path and answers to
 1.0E-3 relative and 1.0E-4 absolute; the rounded, cached and byte ones are
 `--repack bf16`, an f16 context and a q8 context, each with a measured pair
-of its own; the quantized one is `--arith int8`, the arithmetic a run uses by
+of its own; the nibble one is a q4 context held not to the exact reference
+but to the reference rounding its own keys and values the same way, since on
+these fixtures' rows of four elements sixteen levels move a logit by whole
+units -- 4.14 against the exact reference -- which measures the rounding
+and says nothing about the cache; the quantized one is `--arith int8`, the arithmetic a run uses by
 default, held to 5.0E-2 and 5.0E-1. A count of zero in any of them would say
 the sweep ran none of that kind -- which is what a mode that quietly fell
 back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
 The run above crossed 14 architectures, in 16 formats and 6 shapes,
-of which 1428 ran on a device -- which is the same claim the paragraph below makes in
+of which 1470 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
 Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
@@ -1129,16 +1136,36 @@ the memory the exact cache takes, and **0.303** worst absolute on these
 fixtures, which is thirty times what the halved cache costs and four
 thousand times the exact one. The bound this sweep holds it to is 0.4,
 measured over every architecture, shape and format it crosses and rounded up.
-It is the coarsest thing this program does to a number it will read back,
-and it is offered for the case the halved cache does not fit rather than as
-a default: nothing chooses it unless asked.
+It is offered for the case the halved cache does not fit rather than as a
+default: nothing chooses it unless asked.
+
+`--kv-cache q4` stores it in four bits an element, two to a byte, with a
+scale for every thirty-two rather than for the row: sixteen levels are too
+few to spread over a row whose one outlying channel would set the step for
+the hundreds beside it, and a block of thirty-two is the unit llama.cpp's
+four-bit cache scales by -- the block's largest element, sign and all, over
+minus eight, and each element its share of that plus eight and a half cut to
+a whole number -- and this rounds the way it rounds. Five bits an element
+with its scales, a sixth and a bit of the exact cache's bytes, and the
+coarsest thing this program does to a number it will read back. It is not
+measured against the exact reference as the other two are: these fixtures'
+rows are four elements, and sixteen levels over four elements move a logit
+by whole units -- **4.14** worst absolute -- which measures the rounding
+and says nothing about whether the cache does it right. So the sweep holds
+it to the independent implementation rounding its own keys and values the
+same way, in binary64, and there it reads **0.029** worst absolute, held to
+0.1: what is left between the two is binary32 against binary64 at the
+rounding's edges, an element a level off where its share sits on a half.
+On TinyLlama the four storages answer the same first sentence and the
+nibble one parts from the other three in the second.
 
 What it saves is now a number the program will tell you rather than one this
 document works out: `inspect --kv-cache` reports what a session would take in
 each storage, and on TinyLlama-1.1B-Chat Q8_0 at its full 2048-token context
-that is **97,251,904** bytes exact, **48,807,695** halved and **24,585,588**
-in bytes -- a little under a quarter, the difference being the buffers a
-session holds whatever it stores its context in, and the scales.
+that is **97,251,904** bytes exact, **48,807,695** halved, **24,585,588**
+in bytes and **15,502,296** in nibbles -- a little under a quarter and a
+sixth, the difference being the buffers a session holds whatever it stores
+its context in, and the scales.
 
 On the device it is the same story and worth stating separately, because a
 storage that halves what crosses to a device might have been expected to pay

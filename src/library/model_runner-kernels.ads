@@ -270,6 +270,60 @@ package Model_Runner.Kernels is
       Stride    : Element_Count;
       Steps     : Element_Count);
 
+   --  Elements a scale in the nibble cache: the other runtime's block.
+   Nibble_Block : constant Element_Count := 32;
+
+   --  What Head_Dot does, reading a key cache kept as nibbles with a
+   --  scale a block of Nibble_Block: two elements to a byte, the even
+   --  offset in the row in the low half and the odd in the high, each
+   --  eight less than its nibble times the block's scale.
+   --
+   --  @param Left Vector the query is taken from.
+   --  @param At_Left Index of the query's first component.
+   --  @param Right Bytes the key's row is in.
+   --  @param At_Row Index of the row's first byte.
+   --  @param Offset The key's first element, counted within the row.
+   --  @param Scales The block scales.
+   --  @param At_Scale Index of the row's first block's scale.
+   --  @param Span How many components.
+   --  @return The dot product of the two.
+   function Head_Dot_Fourth
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Model_Runner.Bytes.Byte_Array;
+      At_Row   : Model_Runner.Bytes.Byte_Index;
+      Offset   : Element_Count;
+      Scales   : Real_Array;
+      At_Scale : Element_Count;
+      Span     : Element_Count) return Real;
+
+   --  What Blend_Run_Eighth does, reading a value cache kept as nibbles
+   --  with a scale a block, laid out as Head_Dot_Fourth reads it.
+   --
+   --  @param Sums Run of sums, added to in place.
+   --  @param Weights Vector the scores are taken from.
+   --  @param At_Weight Index of the first position's score.
+   --  @param Scales The block scales.
+   --  @param At_Scale Index of the first position's row's first scale.
+   --  @param Blocks Scales a row.
+   --  @param Values Bytes the values are taken from.
+   --  @param At_Row Index of the first position's row's first byte.
+   --  @param Row_Bytes Bytes between one position's row and the next's.
+   --  @param Offset The run's first element, counted within the row.
+   --  @param Steps How many positions.
+   procedure Blend_Run_Fourth
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Scales    : Real_Array;
+      At_Scale  : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Model_Runner.Bytes.Byte_Array;
+      At_Row    : Model_Runner.Bytes.Byte_Index;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Offset    : Element_Count;
+      Steps     : Element_Count);
+
    --  What Head_Dot does, reading a key cache kept at half precision.
    --  Same shape, same fold, one convert for every eight pairs and half the
    --  bytes read on the key side.

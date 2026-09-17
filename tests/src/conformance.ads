@@ -58,6 +58,19 @@ package Conformance is
    Eighth_Relative_Tolerance : constant := 5.0E-2;
    Eighth_Absolute_Tolerance : constant := 4.0E-1;
 
+   --  And what storing it in four bits an element is allowed to move a
+   --  logit by -- against the independent implementation rounding its
+   --  keys and values the same way, not against the exact one: sixteen
+   --  levels over these fixtures' rows of four move a logit by whole
+   --  units, which measures the rounding and says nothing about the
+   --  cache, where holding the cache to the same rounding done twice
+   --  says whether it does what it claims. What is left between the two
+   --  is binary32 against binary64 at the rounding's edges -- an element
+   --  a level off where its share sits on a half -- measured over this
+   --  sweep and rounded up.
+   Fourth_Relative_Tolerance : constant := 5.0E-2;
+   Fourth_Absolute_Tolerance : constant := 1.0E-1;
+
    --  And what quantizing the activations to one byte an element is allowed
    --  to move a logit by.
    --
@@ -142,6 +155,11 @@ package Conformance is
       Eighth_Compared  : Natural := 0;
       Eighth_Worst_Abs : Long_Float := 0.0;
       Eighth_Worst_Rel : Long_Float := 0.0;
+
+      --  And in four bits an element, kept apart for the same reason.
+      Fourth_Compared  : Natural := 0;
+      Fourth_Worst_Abs : Long_Float := 0.0;
+      Fourth_Worst_Rel : Long_Float := 0.0;
 
       --  Where the sweep's time goes, in seconds. Building fixtures,
       --  loading and running the independent implementation, and everything

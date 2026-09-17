@@ -1375,6 +1375,12 @@ begin
             & Long_Float'Image (Result.Eighth_Worst_Abs)
             & ", byte worst relative"
             & Long_Float'Image (Result.Eighth_Worst_Rel)
+            & ", nibble logits compared"
+            & Natural'Image (Result.Fourth_Compared)
+            & ", nibble worst absolute"
+            & Long_Float'Image (Result.Fourth_Worst_Abs)
+            & ", nibble worst relative"
+            & Long_Float'Image (Result.Fourth_Worst_Rel)
             & ", outside tolerance" & Natural'Image (Result.Failures)
             & ", unlearned" & Natural'Image (Result.Unlearned));
 
@@ -2733,7 +2739,7 @@ begin
             Repack      => Mode_Of (Option ("--repack", "none")),
 
             --  The storage the session keeps its context in, named the way
-            --  the command names it: f32, f16 or q8.
+            --  the command names it: f32, f16, q8 or q4.
             Cache       =>
               (declare
                  Named : constant String := Option ("--kv-cache", "f32");
@@ -2744,6 +2750,9 @@ begin
                   elsif Named = Model_Runner.Llama.Cache_Name
                                   (Model_Runner.Llama.Eighth)
                   then Model_Runner.Llama.Eighth
+                  elsif Named = Model_Runner.Llama.Cache_Name
+                                  (Model_Runner.Llama.Fourth)
+                  then Model_Runner.Llama.Fourth
                   else Model_Runner.Llama.Exact)),
             Backend     => Backend_Of (Option ("--backend", "cpu")),
             Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),

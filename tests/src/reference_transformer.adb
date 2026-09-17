@@ -15,6 +15,44 @@ package body Reference_Transformer is
    package Functions is
      new Ada.Numerics.Generic_Elementary_Functions (Long_Float);
 
+   --  A row rounded to four bits an element in blocks of thirty-two, as
+   --  the spec describes: what a value becomes when the engine's nibble
+   --  cache keeps it and hands it back.
+   procedure Round_To_Nibbles (Row : in out Real_Vector) is
+      Block : constant := 32;
+      Offset : Natural := Row'First;
+   begin
+      while Offset <= Row'Last loop
+         declare
+            Last    : constant Natural := Natural'Min (Row'Last, Offset + Block - 1);
+            Largest : Long_Float := 0.0;
+            Signed  : Long_Float := 0.0;
+            Scale   : Long_Float;
+         begin
+            for Index in Offset .. Last loop
+               if abs Row (Index) > Largest then
+                  Largest := abs Row (Index);
+                  Signed := Row (Index);
+               end if;
+            end loop;
+            Scale := Signed / (-8.0);
+            for Index in Offset .. Last loop
+               declare
+                  Level : constant Long_Float :=
+                    (if Scale /= 0.0
+                     then Long_Float'Floor (Row (Index) / Scale + 8.5)
+                     else 8.0);
+                  Held : constant Long_Float :=
+                    Long_Float'Max (0.0, Long_Float'Min (15.0, Level));
+               begin
+                  Row (Index) := (Held - 8.0) * Scale;
+               end;
+            end loop;
+            Offset := Last + 1;
+         end;
+      end loop;
+   end Round_To_Nibbles;
+
    procedure Free_Matrix is
      new Ada.Unchecked_Deallocation (Matrix, Matrix_Access);
    procedure Free_Vector is
@@ -3393,6 +3431,10 @@ package body Reference_Transformer is
                   Rotate (Query, Item.Heads, Step, Block);
                   Rotate (Key_Row, Item.KV_Heads, Step, Block);
 
+                  if Item.Nibbles then
+                     Round_To_Nibbles (Key_Row);
+                     Round_To_Nibbles (Val_Row);
+                  end if;
                   for Index in 0 .. KV_Width - 1 loop
                      Keys (Slot, Index) := Key_Row (Index);
                   end loop;
@@ -3987,6 +4029,15 @@ package body Reference_Transformer is
          Free_History (Linear_Rows);
          Ok := False;
    end Evaluate;
+
+   ----------------------------
+   -- Round_Cache_To_Nibbles --
+   ----------------------------
+
+   procedure Round_Cache_To_Nibbles (Item : in out Model; On : Boolean) is
+   begin
+      Item.Nibbles := On;
+   end Round_Cache_To_Nibbles;
 
    ---------
    -- Run --

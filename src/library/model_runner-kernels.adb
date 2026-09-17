@@ -757,6 +757,156 @@ package body Model_Runner.Kernels is
       end;
    end Head_Dot_Eighth;
 
+   ---------------------
+   -- Head_Dot_Fourth --
+   ---------------------
+
+   function Head_Dot_Fourth
+     (Left     : Real_Array;
+      At_Left  : Element_Count;
+      Right    : Model_Runner.Bytes.Byte_Array;
+      At_Row   : Model_Runner.Bytes.Byte_Index;
+      Offset   : Element_Count;
+      Scales   : Real_Array;
+      At_Scale : Element_Count;
+      Span     : Element_Count) return Real
+   is
+      use type Model_Runner.Bytes.Byte_Count;
+      use type Model_Runner.Bytes.Byte;
+
+      Last_Byte : constant Model_Runner.Bytes.Byte_Count :=
+        At_Row + Model_Runner.Bytes.Byte_Count ((Offset + Span - 1) / 2);
+      Last_Scale : constant Element_Count :=
+        At_Scale + (Offset + Span - 1) / Nibble_Block;
+      Sum : N.Wide_Real := 0.0;
+   begin
+      if Span = 0
+        or else At_Left < Left'First
+        or else At_Row < Right'First
+        or else At_Scale < Scales'First
+        or else At_Left - Left'First + Span > Element_Count (Left'Length)
+        or else Last_Byte > Right'Last
+        or else Last_Scale > Scales'Last
+      then
+         return 0.0;
+      end if;
+
+      --  A block at a time, its scale taken out of the sum: the nibbles
+      --  are small whole numbers and the query's components are added up
+      --  against them in binary32, eight at a time where the compiler
+      --  finds the lanes, and the block's scale multiplies the total once.
+      declare
+         Index : Element_Count := 0;
+      begin
+         while Index < Span loop
+            declare
+               Element : constant Element_Count := Offset + Index;
+               In_Block : constant Element_Count :=
+                 Element_Count'Min
+                   (Nibble_Block - Element mod Nibble_Block, Span - Index);
+               Part : N.Real := 0.0;
+            begin
+               for Within in 0 .. In_Block - 1 loop
+                  declare
+                     E    : constant Element_Count := Element + Within;
+                     Held : constant Model_Runner.Bytes.Byte :=
+                       Right (At_Row + Model_Runner.Bytes.Byte_Count (E / 2));
+                     Nibble : constant Integer :=
+                       Integer (if E mod 2 = 0 then Held and 15 else Held / 16);
+                  begin
+                     Part := Part
+                       + Left (At_Left + Index + Within) * N.Real (Nibble - 8);
+                  end;
+               end loop;
+               Sum := Sum
+                 + N.Wide_Real (Part)
+                   * N.Wide_Real (Scales (At_Scale + Element / Nibble_Block));
+               Index := Index + In_Block;
+            end;
+         end loop;
+      end;
+
+      return N.Real (Sum);
+   end Head_Dot_Fourth;
+
+   ----------------------
+   -- Blend_Run_Fourth --
+   ----------------------
+
+   procedure Blend_Run_Fourth
+     (Sums      : in out Real_Array;
+      Weights   : Real_Array;
+      At_Weight : Element_Count;
+      Scales    : Real_Array;
+      At_Scale  : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Model_Runner.Bytes.Byte_Array;
+      At_Row    : Model_Runner.Bytes.Byte_Index;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Offset    : Element_Count;
+      Steps     : Element_Count)
+   is
+      use type Model_Runner.Bytes.Byte_Count;
+      use type Model_Runner.Bytes.Byte;
+
+      Span : constant Element_Count := Element_Count (Sums'Length);
+   begin
+      if Steps = 0
+        or else Span = 0
+        or else At_Weight < Weights'First
+        or else At_Scale < Scales'First
+        or else At_Row < Values'First
+        or else At_Weight - Weights'First + Steps
+                  > Element_Count (Weights'Length)
+        or else At_Scale + (Steps - 1) * Blocks
+                  + (Offset + Span - 1) / Nibble_Block > Scales'Last
+        or else At_Row + Model_Runner.Bytes.Byte_Count (Steps - 1) * Row_Bytes
+                  + Model_Runner.Bytes.Byte_Count ((Offset + Span - 1) / 2)
+                  > Values'Last
+      then
+         return;
+      end if;
+
+      --  A position at a time: its weight times each block's scale is one
+      --  factor for the block's nibbles, so the innermost loop is a
+      --  small whole number times a factor, added to the run's sums.
+      for Step in 0 .. Steps - 1 loop
+         declare
+            Weight : constant N.Real := Weights (At_Weight + Step);
+            Row    : constant Model_Runner.Bytes.Byte_Count :=
+              At_Row + Model_Runner.Bytes.Byte_Count (Step) * Row_Bytes;
+            Scale_Row : constant Element_Count := At_Scale + Step * Blocks;
+            Index : Element_Count := 0;
+         begin
+            while Index < Span loop
+               declare
+                  Element : constant Element_Count := Offset + Index;
+                  In_Block : constant Element_Count :=
+                    Element_Count'Min
+                      (Nibble_Block - Element mod Nibble_Block, Span - Index);
+                  Factor : constant N.Real :=
+                    Weight * Scales (Scale_Row + Element / Nibble_Block);
+               begin
+                  for Within in 0 .. In_Block - 1 loop
+                     declare
+                        E    : constant Element_Count := Element + Within;
+                        Held : constant Model_Runner.Bytes.Byte :=
+                          Values (Row + Model_Runner.Bytes.Byte_Count (E / 2));
+                        Nibble : constant Integer :=
+                          Integer (if E mod 2 = 0 then Held and 15 else Held / 16);
+                     begin
+                        Sums (Sums'First + Index + Within) :=
+                          Sums (Sums'First + Index + Within)
+                          + Factor * N.Real (Nibble - 8);
+                     end;
+                  end loop;
+                  Index := Index + In_Block;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Blend_Run_Fourth;
+
    ----------------------
    -- Blend_Run_Eighth --
    ----------------------

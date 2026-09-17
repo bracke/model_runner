@@ -55,6 +55,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A `--kv-cache q8` session could not snapshot.** The values of a byte
+  cache went out through the halved storage's arm, which holds nothing
+  for it, and the write failed as an internal error. The packed caches'
+  values are unpacked as their keys were, and a snapshot of a byte or
+  nibble session reads back to the bit into a session of the same
+  storage, held by a test that does both.
 - **A Qwen3.5 picture's side sixteen past a multiple of thirty-two rounds
   as the reference rounds it.** The reference's smart_resize rounds a
   side to the nearest window with a half going to the even one -- eighty
@@ -140,6 +146,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-cache q4`: the context in four bits an element.** Two to a
+  byte, with a scale for every thirty-two rather than for the row --
+  llama.cpp's four-bit cache block, rounded as it rounds: the block's
+  largest element, sign and all, over minus eight, and each element its
+  share of that plus eight and a half cut to a whole number and held to
+  fifteen. Five bits an element with its scales, a sixth and a bit of the
+  exact cache: 15,502,296 bytes for TinyLlama's full context against
+  24,585,588 in bytes and 97,251,904 exact. The conformance sweep crosses
+  it in a bucket of its own, held to the independent implementation
+  rounding its keys and values the same way -- on the fixtures' rows of
+  four elements the rounding itself moves a logit by 4.14, which says
+  nothing about the cache -- at 0.029 worst absolute, and a snapshot of
+  a nibble session reads back to the bit. On the host: the device's
+  attention reads the exact or the halved copy, as it did for the byte
+  cache.
 - **A video file is read, through the host's FFmpeg libraries.** A video
   part may name a file as well as a directory of frames: libavformat,
   libavcodec, libavutil and libswscale are opened by name at first use, as

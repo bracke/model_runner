@@ -563,12 +563,19 @@ package Model_Runner.Llama is
    --  between a session that fits and one that does not. It is lossy and it
    --  is measured; the README says by how much.
    --  Eighth stores each element as one signed byte with a scale for the
-   --  row it belongs to: a quarter of the bytes, and the coarsest thing this
-   --  program does to a number it will read back. A row is one position's
+   --  row it belongs to: a quarter of the bytes. A row is one position's
    --  keys, or its values, for one layer -- which is the unit the evaluator
    --  already writes and reads whole, and the smallest unit that has a
    --  magnitude of its own to scale by.
-   type Cache_Precision is (Exact, Halved, Eighth);
+   --  Fourth stores each element as four bits -- two an element to a byte
+   --  -- with a scale for every thirty-two of them rather than for the
+   --  row: sixteen levels are too few to spread over a row whose one
+   --  outlying channel would set the step for the rest, and a block of
+   --  thirty-two is the unit the other runtime's four-bit cache scales by,
+   --  and rounds the way it rounds. Five bits an element with its scale,
+   --  a sixth and a bit of the exact cache's bytes, and the coarsest thing
+   --  this program does to a number it will read back.
+   type Cache_Precision is (Exact, Halved, Eighth, Fourth);
 
    --  The identifier a caller names a cache precision by.
    --
@@ -578,7 +585,8 @@ package Model_Runner.Llama is
    is (case Item is
          when Exact  => "f32",
          when Halved => "f16",
-         when Eighth => "q8");
+         when Eighth => "q8",
+         when Fourth => "q4");
 
    --  How a matrix product multiplies.
    --
