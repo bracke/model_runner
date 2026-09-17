@@ -867,12 +867,18 @@ package Model_Runner.Platform.Device.Products is
    --    product was gathered by -- or zero for a bias that is no
    --    expert's: one slice of Each, added to every row the source made,
    --    which is what a projection's bias is. Experts is one then, and
-   --    the source a product of Each rows.
+   --    the source a product of Each rows. Or zero with Members given,
+   --    for a gather whose members the host chose.
    --  @param Added False when the sequence is full, when the source is
    --    not a gathered product of Each a member, or when the routing
    --    step is not one.
    --  @param Key Identifies the stack so the device may keep it.
    --  @param Kept False when nothing on the host reads this step's answer.
+   --  @param Members Which experts the source's members are, in the
+   --    source's own order, where the host chose them: member m of the
+   --    source is expert Members (1 + m mod Count). Count zero reads the
+   --    routing step, or none.
+   --  @param Count How many of Members are meant.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -884,7 +890,9 @@ package Model_Runner.Platform.Device.Products is
       Route_Step  : Natural;
       Added       : out Boolean;
       Key         : System.Address := System.Null_Address;
-      Kept        : Boolean := True);
+      Kept        : Boolean := True;
+      Members     : Member_List := [others => 0];
+      Count       : Natural := 0);
 
    --  Name one product that reads what the product before it produced.
    --

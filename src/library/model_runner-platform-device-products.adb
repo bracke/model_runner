@@ -6773,7 +6773,9 @@ package body Model_Runner.Platform.Device.Products is
       Route_Step  : Natural;
       Added       : out Boolean;
       Key         : System.Address := System.Null_Address;
-      Kept        : Boolean := True) is
+      Kept        : Boolean := True;
+      Members     : Member_List := [others => 0];
+      Count       : Natural := 0) is
    begin
       Added := False;
 
@@ -6785,10 +6787,16 @@ package body Model_Runner.Platform.Device.Products is
         or else Source_Step > Steps.Held
         or else Route_Step > Steps.Held
         or else Steps.Items (Source_Step).Rows mod Each /= 0
+        or else Count > Max_Gather
+        or else (Count > 0 and then Route_Step /= 0)
+        or else (for some Index in 1 .. Count => Members (Index) >= Experts)
         --  A projection's bias: one slice, over a product of Each rows.
-        or else (Route_Step = 0
+        or else (Route_Step = 0 and then Count = 0
                  and then (Experts /= 1
                            or else Steps.Items (Source_Step).Rows /= Each))
+        --  A gather the host chose: as many members as the source has.
+        or else (Count > 0
+                 and then Steps.Items (Source_Step).Gathers /= Count)
         --  An expert's: a gathered product of Each a member, and the
         --  routing it was gathered by.
         or else (Route_Step /= 0
@@ -6815,8 +6823,10 @@ package body Model_Runner.Platform.Device.Products is
          Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
          Kept => Kept, Biases => True,
          Stack => Experts, Each => Each,
-         Used => (if Route_Step = 0 then 0
+         Used => (if Count > 0 then Count
+                  elsif Route_Step = 0 then 0
                   else Steps.Items (Route_Step).Used),
+         Members => Members,
          Listed => Steps.Items (Source_Step).Listed,
          --  The source's gather, so that what read the source -- the mix,
          --  which asks how many members its downs hold -- reads this.
@@ -9287,10 +9297,19 @@ package body Model_Runner.Platform.Device.Products is
                                   (Steps.Items (This.Reads_Two).Columns)
                            else 0),
 
+                        --  Listed, where the host chose the members and
+                        --  no routing step did.
+                        Packing =>
+                          (if This.Reads_Two = 0 and then This.Used > 0
+                           then 1 else 0),
+
                         --  Where the stack begins in the buffer it shares
                         --  with whatever else the device kept, in
                         --  elements, as a norm's weight is found.
                         Base    => C.unsigned (Places (Index).Base / 4),
+                        Members =>
+                          [for Which in Member_Words'Range =>
+                             C.unsigned (This.Members (Which + 1))],
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,

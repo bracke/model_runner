@@ -4133,6 +4133,8 @@ package body Tests.Backend_Cases is
       Up_At   : T.Real_Array_Access;
       Down_At : T.Real_Array_Access;
       Both    : T.Real_Array_Access;
+      Gate_Bias, Up_Bias, Down_Bias : T.Real_Array_Access;
+      Mixed_Biased, Both_Biased     : T.Real_Array_Access;
 
       Choice : Device.Choice_Array (0 .. Used - 1);
       Shares : N.Real_Array (0 .. Used - 1);
@@ -4222,6 +4224,34 @@ package body Tests.Backend_Cases is
               "the gathered mixture was refused: "
               & E.Error_Code'Image (Status.Code));
 
+      --  And gathered with a bias an expert on each projection, as
+      --  gpt-oss carries them: the biasing steps read the members the
+      --  host chose, and the answer is held below to the slices with the
+      --  biases added here.
+      T.Allocate (Experts * Feed, Gate_Bias);
+      T.Allocate (Experts * Feed, Up_Bias);
+      T.Allocate (Experts * Width, Down_Bias);
+      T.Allocate (Used * Width, Mixed_Biased);
+      T.Allocate (2 * Width, Both_Biased);
+      Assert (Gate_Bias /= null and then Up_Bias /= null
+              and then Down_Bias /= null and then Mixed_Biased /= null
+              and then Both_Biased /= null, "no room for the biases");
+      for Index in Gate_Bias.all'Range loop
+         Gate_Bias.all (Index) := N.Real (Index mod 3) / 3.0 - 0.3;
+         Up_Bias.all (Index) := N.Real ((Index * 5) mod 7) / 7.0 - 0.5;
+      end loop;
+      for Index in Down_Bias.all'Range loop
+         Down_Bias.all (Index) := N.Real ((Index * 3) mod 11) / 11.0 - 0.4;
+      end loop;
+
+      Device.Dispatch_Mixture
+        (Gates, Ups, Downs, Feed, Width, Members, Used, 0, Input,
+         Mixed_Biased, Status,
+         Gate_Bias => Gate_Bias, Up_Bias => Up_Bias, Down_Bias => Down_Bias);
+      Assert (E.Is_Ok (Status),
+              "the gathered mixture with biases was refused: "
+              & E.Error_Code'Image (Status.Code));
+
       for Slot in 0 .. Used - 1 loop
          declare
             Which : constant Natural := Choice (Slot);
@@ -4282,8 +4312,76 @@ package body Tests.Backend_Cases is
                     "expert" & Natural'Image (Which) & " over a batch answers"
                     & N.Real'Image (Worst)
                     & " away from the same expert gathered");
+
+            --  The same expert with its biases, a slice at a time with
+            --  them added here, against the gathered mixture with them
+            --  and the expert over a batch with them.
+            Device.Dispatch_Slice
+              (Gates, Feed, Which, Input, 1, Gate_At, Status);
+            Assert (E.Is_Ok (Status), "a gate slice was refused");
+            Device.Dispatch_Slice (Ups, Feed, Which, Input, 1, Up_At, Status);
+            Assert (E.Is_Ok (Status), "an up slice was refused");
+            for Index in N.Element_Count range 0 .. Feed - 1 loop
+               declare
+                  G : constant N.Real :=
+                    Gate_At.all (Index)
+                    + Gate_Bias.all (N.Element_Count (Which) * Feed + Index);
+                  U : constant N.Real :=
+                    Up_At.all (Index)
+                    + Up_Bias.all (N.Element_Count (Which) * Feed + Index);
+               begin
+                  Gate_At.all (Index) :=
+                    G / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                         (Float (-G))))
+                    * U;
+               end;
+            end loop;
+            Device.Dispatch_Slice
+              (Downs, Width, Which, Gate_At, 1, Down_At, Status);
+            Assert (E.Is_Ok (Status), "a down slice was refused");
+            for Row in N.Element_Count range 0 .. Width - 1 loop
+               Down_At.all (Row) := Down_At.all (Row)
+                 + Down_Bias.all (N.Element_Count (Which) * Width + Row);
+            end loop;
+
+            Worst := 0.0;
+            for Row in N.Element_Count range 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Down_At.all (Row)
+                       - Mixed_Biased.all (N.Element_Count (Slot) * Width + Row)));
+            end loop;
+            Assert (Worst < 1.0E-5,
+                    "expert" & Natural'Image (Which) & " gathered with its "
+                    & "biases answers" & N.Real'Image (Worst)
+                    & " away from the same expert a slice at a time with them");
+
+            Device.Dispatch_Expert
+              (Gates, Ups, Downs, Feed, Width, Which, 0, Two, 2, Both_Biased,
+               Status,
+               Gate_Bias => Gate_Bias, Up_Bias => Up_Bias,
+               Down_Bias => Down_Bias);
+            Assert (E.Is_Ok (Status), "an expert over a batch with biases was refused");
+            Worst := 0.0;
+            for Row in N.Element_Count range 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  N.Real'Max
+                    (abs (Both_Biased.all (Row) - Down_At.all (Row)),
+                     abs (Both_Biased.all (Width + Row) - Down_At.all (Row))));
+            end loop;
+            Assert (Worst < 1.0E-5,
+                    "expert" & Natural'Image (Which) & " over a batch with its "
+                    & "biases answers" & N.Real'Image (Worst)
+                    & " away from the same expert a slice at a time with them");
          end;
       end loop;
+
+      T.Free (Gate_Bias);
+      T.Free (Up_Bias);
+      T.Free (Down_Bias);
+      T.Free (Mixed_Biased);
+      T.Free (Both_Biased);
 
       T.Free (Input);
       T.Free (Two);

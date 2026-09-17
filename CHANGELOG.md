@@ -182,7 +182,13 @@ Keep a Changelog and the project uses semantic versioning.
   sinks, its clamped gate and its biases -- held to the independent
   implementation on the device as on the host. Found on the way: a join
   folded into the biasing step before it was a join lost, and the step
-  is one a join no longer folds into.
+  is one a join no longer folds into. The two mixture paths that are not
+  the whole layer -- a token's experts gathered on their own, and an
+  expert over a batch -- take the biases too, the biasing step told the
+  members the host chose rather than reading a routing step, so a
+  biased mixture keeps its experts on the device wherever its layer
+  does not go over whole; held to the same experts a slice at a time
+  with the biases added on the host.
 - **`--kv-values q8|q4`: the values stored otherwise than the keys.**
   Attention reads a key through a dot product with the query, where a
   rounded element moves every score it enters, and a value through a

@@ -23,6 +23,11 @@
 //  row a product made, which is what a projection's bias is. Used is
 //  zero then, and the routing is not read.
 //
+//  And a gather whose members the host chose, named in the push block
+//  rather than read from a routing step: member m is the expert listed
+//  at m modulo the count listed, which is one expert over every position
+//  of a batch or a position's few experts one after another.
+//
 //  A workgroup a member -- a position and rank, or a slot -- its lanes
 //  over the slice.
 
@@ -51,11 +56,18 @@ layout(push_constant) uniform Shape {
     //  routing, where a member is found by its position and rank.
     uint experts;
 
-    uint unused_packing;
+    //  One where the members are listed below rather than routed.
+    uint listed;
 
     //  Where the stack begins in the buffer it shares with whatever else
     //  the device kept, in elements.
     uint base;
+
+    uint unused_joins;
+    uint unused_table;
+
+    //  The members the host chose, where listed is one: Used of them.
+    uint members[16];
 } shape;
 
 shared uint chosen;
@@ -69,6 +81,16 @@ void main() {
 
         for (uint c = lane; c < shape.each; c += LANES) {
             y[at + c] = x[at + c] + b[shape.base + c];
+        }
+        return;
+    }
+
+    if (shape.listed != 0u) {
+        uint expert = shape.members[member % shape.used];
+        uint at = member * shape.each;
+
+        for (uint c = lane; c < shape.each; c += LANES) {
+            y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
         }
         return;
     }

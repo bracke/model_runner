@@ -1124,6 +1124,12 @@ package Model_Runner.Backend.Device is
    --  @param Cancel Stop request to watch, or null for none.
    --  @param Alpha The clamped gate's slope, where Unit is three.
    --  @param Limit The clamped gate's limit, where Unit is three.
+   --  @param Gate_Bias A bias on each expert's gate projection, Experts
+   --    slices of Feed, added to each member's gate arm before the gate,
+   --    or null for none.
+   --  @param Up_Bias The same on the up projection, or null.
+   --  @param Down_Bias The same on the projection down, Experts slices of
+   --    Width, added after it, or null.
    procedure Dispatch_Mixture
      (Gates   : Model_Runner.Tensors.View;
       Ups     : Model_Runner.Tensors.View;
@@ -1138,7 +1144,10 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0);
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  One expert's whole feed-forward over a batch, as one submission:
    --  its gate and up slices over every vector, the unit and the multiply
@@ -1161,6 +1170,12 @@ package Model_Runner.Backend.Device is
    --  @param Cancel Stop request to watch, or null for none.
    --  @param Alpha The clamped gate's slope, where Unit is three.
    --  @param Limit The clamped gate's limit, where Unit is three.
+   --  @param Gate_Bias A bias on each expert's gate projection, Experts
+   --    slices of Feed, added to each member's gate arm before the gate,
+   --    or null for none.
+   --  @param Up_Bias The same on the up projection, or null.
+   --  @param Down_Bias The same on the projection down, Experts slices of
+   --    Width, added after it, or null.
    procedure Dispatch_Expert
      (Gates   : Model_Runner.Tensors.View;
       Ups     : Model_Runner.Tensors.View;
@@ -1175,7 +1190,10 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0);
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  A batch's routing, decided on the device: the router's product over
    --  every position and the choosing after it, as one submission, with

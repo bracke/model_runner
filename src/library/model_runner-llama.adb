@@ -6412,8 +6412,8 @@ package body Model_Runner.Llama is
       --  that every road through a mixture on the device chooses alike.
       Gathered : constant Boolean :=
         Item.Owner.all.Stacked
-        and then Current.Expert_Gate_Bias = null
-        and then Current.Expert_Down_Bias = null
+        and then (Current.Expert_Gate_Bias = null)
+                 = (Current.Expert_Up_Bias = null)
         and then Used <= Model_Runner.Backend.Device.Max_Members
         and then T.Is_Present (Current.Gate_Stack)
         and then T.Is_Present (Current.Up_Stack)
@@ -6605,7 +6605,10 @@ package body Model_Runner.Llama is
                Feed, Width, Members, Used, Gate_Unit (Item.Owner.all),
                Input, Item.Mixed, Status, Item.Stopping,
                         Alpha => Item.Owner.all.Settings.Gate_Alpha,
-                        Limit => Item.Owner.all.Settings.Gate_Limit);
+                        Limit => Item.Owner.all.Settings.Gate_Limit,
+                        Gate_Bias => Current.Expert_Gate_Bias,
+                        Up_Bias   => Current.Expert_Up_Bias,
+                        Down_Bias => Current.Expert_Down_Bias);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -7809,9 +7812,9 @@ package body Model_Runner.Llama is
                --  mixture puts it through, which is what keeps a prompt
                --  and a token agreeing to the bit.
                if Item.Owner.all.Stacked
-                 and then Current.Expert_Gate_Bias = null
-                 and then Current.Expert_Down_Bias = null
-                          and then Model_Runner.Backend."="
+                 and then (Current.Expert_Gate_Bias = null)
+                          = (Current.Expert_Up_Bias = null)
+                 and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
                  and then T.Is_Present (Current.Gate_Stack)
@@ -7852,7 +7855,10 @@ package body Model_Runner.Llama is
                      Gate_Unit (Item.Owner.all), Item.Gather_In, Held,
                      Item.Gather_Out, Status, Item.Stopping,
                         Alpha => Item.Owner.all.Settings.Gate_Alpha,
-                        Limit => Item.Owner.all.Settings.Gate_Limit);
+                        Limit => Item.Owner.all.Settings.Gate_Limit,
+                        Gate_Bias => Current.Expert_Gate_Bias,
+                        Up_Bias   => Current.Expert_Up_Bias,
+                        Down_Bias => Current.Expert_Down_Bias);
                   if E.Is_Error (Status) then
                      return;
                   end if;

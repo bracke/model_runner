@@ -3031,6 +3031,74 @@ package body Model_Runner.Backend.Device is
       end if;
    end Run_Sequence;
 
+
+   --  The three bias stacks of a mixture whose members the host chose,
+   --  as steps of the sequence: the two arms' after both arms, so the
+   --  combination reads the biased pair as the two steps before it, and
+   --  the projection down's after the downs. Members says which expert
+   --  each of the source's Count members is. Nothing added where the
+   --  layer carries none.
+   procedure Add_Chosen_Biases
+     (Steps     : in out Products.Sequence;
+      Gate_Bias : T.Real_Array_Access;
+      Up_Bias   : T.Real_Array_Access;
+      Feed      : Natural;
+      Experts   : Natural;
+      Members   : Products.Member_List;
+      Count     : Positive;
+      Added     : out Boolean)
+   is
+      Gate_Step : constant Natural := Products.Length (Steps) - 1;
+      Up_Step   : constant Natural := Products.Length (Steps);
+   begin
+      Added := True;
+
+      if Gate_Bias = null or else Up_Bias = null then
+         Added := Gate_Bias = null and then Up_Bias = null;
+         return;
+      end if;
+
+      Products.Add_Bias
+        (Steps, Gate_Bias.all (Gate_Bias.all'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Gate_Bias.all'Length) * 4, 0,
+         Experts, Feed, Gate_Step, 0, Added,
+         Key => Gate_Bias.all (Gate_Bias.all'First)'Address,
+         Kept => False, Members => Members, Count => Count);
+      if not Added then
+         return;
+      end if;
+
+      Products.Add_Bias
+        (Steps, Up_Bias.all (Up_Bias.all'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Up_Bias.all'Length) * 4, 0,
+         Experts, Feed, Up_Step, 0, Added,
+         Key => Up_Bias.all (Up_Bias.all'First)'Address,
+         Kept => False, Members => Members, Count => Count);
+   end Add_Chosen_Biases;
+
+   procedure Add_Chosen_Down_Bias
+     (Steps     : in out Products.Sequence;
+      Down_Bias : T.Real_Array_Access;
+      Width     : Natural;
+      Experts   : Natural;
+      Members   : Products.Member_List;
+      Count     : Positive;
+      Added     : out Boolean) is
+   begin
+      Added := True;
+
+      if Down_Bias = null then
+         return;
+      end if;
+
+      Products.Add_Bias
+        (Steps, Down_Bias.all (Down_Bias.all'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Down_Bias.all'Length) * 4, 0,
+         Experts, Width, Products.Length (Steps), 0, Added,
+         Key => Down_Bias.all (Down_Bias.all'First)'Address,
+         Members => Members, Count => Count);
+   end Add_Chosen_Down_Bias;
+
    --------------------
    -- Dispatch_Slice --
    --------------------
@@ -3112,7 +3180,10 @@ package body Model_Runner.Backend.Device is
       Status  : out E.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0)
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias : Model_Runner.Tensors.Real_Array_Access := null)
    is
       Steps : Products.Sequence;
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
@@ -3120,8 +3191,12 @@ package body Model_Runner.Backend.Device is
 
       Arms   : constant Model_Runner.Numerics.Element_Count := Count * Feed;
       Outs   : constant Model_Runner.Numerics.Element_Count := Count * Width;
+
+      --  Biased, two more of the arms' size and one more of the answer's:
+      --  the biasing steps' rooms.
+      Biased : constant Boolean := Gate_Bias /= null;
       Wanted : constant Model_Runner.Numerics.Element_Count :=
-        3 * Arms + Outs;
+        3 * Arms + Outs + (if Biased then 2 * Arms + Outs else 0);
    begin
       if not Ready_Now then
          Status := E.Make (E.Backend_Closed);
@@ -3178,6 +3253,14 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      Add_Chosen_Biases
+        (Steps, Gate_Bias, Up_Bias, Natural (Feed),
+         Natural (Gates.Rows / Feed), [1 => Member, others => 0], 1, Added);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
       Products.Add_Combination (Steps, Unit, Added, Kept => False,
                                         Alpha => Alpha, Limit => Limit);
       if not Added then
@@ -3189,7 +3272,16 @@ package body Model_Runner.Backend.Device is
         (Steps, Downs.Base, Downs.Span, Downs.Offset, Down_Packing,
          Natural (Downs.Rows), Natural (Width), Natural (Feed),
          [1 => Member, others => 0], 1, Added,
-         Key => At_Offset (Downs.Base, Downs.Offset), Chained => True);
+         Key => At_Offset (Downs.Base, Downs.Offset), Chained => True,
+         Kept => Down_Bias = null);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Add_Chosen_Down_Bias
+        (Steps, Down_Bias, Natural (Width), Natural (Downs.Rows / Width),
+         [1 => Member, others => 0], 1, Added);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -3207,9 +3299,10 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      --  The answer is the last step's: the downs', or the bias's after.
       Target.all (Target.all'First .. Target.all'First + Outs - 1) :=
-        Landing.all (Landing.all'First + 3 * Arms
-                     .. Landing.all'First + 3 * Arms + Outs - 1);
+        Landing.all (Landing.all'First + Wanted - Outs
+                     .. Landing.all'First + Wanted - 1);
    end Dispatch_Expert;
 
    ----------
@@ -3401,7 +3494,10 @@ package body Model_Runner.Backend.Device is
       Status  : out E.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0)
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias : Model_Runner.Tensors.Real_Array_Access := null)
    is
       Steps : Products.Sequence;
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
@@ -3415,8 +3511,12 @@ package body Model_Runner.Backend.Device is
         Model_Runner.Numerics.Element_Count (Count) * Feed;
       Outs   : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Count) * Width;
+
+      --  Biased, two more of the arms' size and one more of the answer's:
+      --  the biasing steps' rooms.
+      Biased : constant Boolean := Gate_Bias /= null;
       Wanted : constant Model_Runner.Numerics.Element_Count :=
-        3 * Arms + Outs;
+        3 * Arms + Outs + (if Biased then 2 * Arms + Outs else 0);
 
       Asked : Interfaces.Unsigned_64 := 0;
    begin
@@ -3501,6 +3601,14 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      Add_Chosen_Biases
+        (Steps, Gate_Bias, Up_Bias, Natural (Feed),
+         Natural (Gates.Rows / Feed), Chosen, Count, Added);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
       Products.Add_Combination (Steps, Unit, Added, Kept => False,
                                         Alpha => Alpha, Limit => Limit);
       if not Added then
@@ -3513,7 +3621,16 @@ package body Model_Runner.Backend.Device is
          Natural (Downs.Rows), Natural (Width), Natural (Feed),
          Chosen, Count, Added,
          Key => At_Offset (Downs.Base, Downs.Offset),
-         Chained => True, Apart => Natural (Feed));
+         Chained => True, Apart => Natural (Feed),
+         Kept => Down_Bias = null);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Add_Chosen_Down_Bias
+        (Steps, Down_Bias, Natural (Width), Natural (Downs.Rows / Width),
+         Chosen, Count, Added);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -3524,9 +3641,10 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
+      --  The answer is the last step's: the downs', or the bias's after.
       Target.all (Target.all'First .. Target.all'First + Outs - 1) :=
-        Landing.all (Landing.all'First + 3 * Arms
-                     .. Landing.all'First + 3 * Arms + Outs - 1);
+        Landing.all (Landing.all'First + Wanted - Outs
+                     .. Landing.all'First + Wanted - 1);
    end Dispatch_Mixture;
 
 end Model_Runner.Backend.Device;
