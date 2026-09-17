@@ -3788,6 +3788,10 @@ package body Model_Runner.Platform.Device.Products is
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Cache_Bytes);
 
+   function Cached_Elements
+     (Item : Engine) return Model_Runner.Numerics.Element_Count
+   is (Model_Runner.Numerics.Element_Count (Item.Cache_Elements));
+
    --  Whether a buffer of this many bytes is past what the device said it
    --  will read. A device that stated nothing bounds nothing here: the
    --  request goes to the driver, which is where it went before anything

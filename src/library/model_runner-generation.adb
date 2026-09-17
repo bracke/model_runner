@@ -913,8 +913,11 @@ package body Model_Runner.Generation is
                Last : constant Natural := Batch_End;
             begin
                --  With every position's state where the next block will
-               --  be run over the prompt behind it.
-               if By_Next then
+               --  be run over the prompt behind it -- which is only where
+               --  a draft will be asked of it: the block's chain is made
+               --  for a drafting run, and a run that samples, or asked for
+               --  no draft, has no chain to hand the block.
+               if By_Next and then Drafting then
                   declare
                      Rows : T.Real_Array_Access := null;
                   begin

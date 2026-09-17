@@ -474,6 +474,20 @@ package Model_Runner.Kernels is
    --  @param Target Values to transform, updated in place.
    procedure GELU (Target : in out Real_Array);
 
+   --  The Gaussian error linear unit itself, x times the normal
+   --  distribution's value at x, for the one place a model was trained
+   --  against the function rather than its approximation: the merger of
+   --  the Qwen3-VL encoder, which the reference writes as torch's GELU
+   --  with no approximation named. The two differ by a thousandth of an
+   --  input near one, which is a thousandth of a picture's row.
+   --
+   --  The error function is computed by Abramowitz and Stegun's 7.1.26,
+   --  whose error is under 1.5e-7 everywhere -- below what a binary32
+   --  output can hold.
+   --
+   --  @param Target Values to transform, updated in place.
+   procedure Exact_GELU (Target : in out Real_Array);
+
    --  How a head's elements are paired for the rotation.
    --
    --  Interleaved rotates element 2i against element 2i + 1 within a head,

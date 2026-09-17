@@ -1480,6 +1480,17 @@ package Model_Runner.Platform.Device.Products is
    --  @return Bytes of key and value cache resident, or zero for none.
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  How many values that cache holds room for: the count Reserve was
+   --  last asked for and met, keys and values together. The bytes are
+   --  more than four times it, since a half-precision copy of every
+   --  value lies past the values, so a caller placing something in the
+   --  cache by element counts from this and not from the bytes.
+   --
+   --  @param Item Engine to ask.
+   --  @return Values the cache holds room for, or zero for none.
+   function Cached_Elements
+     (Item : Engine) return Model_Runner.Numerics.Element_Count;
+
    --  How many matrices one engine will keep, as a count.
    --
    --  Two bounds decide residency and the tighter one wins: this count, and

@@ -55,6 +55,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A model with a next-token block generated nothing unless it was
+  drafting.** Since the block past the stack learned to draft, the
+  prefill ran every position of the prompt through it wherever the file
+  carried one -- into a state that is only allocated for a drafting run,
+  so Qwen3.5 with sampling on, or `--draft-tokens 0`, ended in
+  `MR-INTERNAL-0002` at the first prompt. The prefill feeds the block
+  only where a draft will be asked of it; a sampled run, and a greedy
+  one, say the same sentence about the plaza on either backend.
+- **Qwen3-VL's merger applies the Gaussian unit itself, not its
+  approximation.** The reference writes the merger's activation as
+  torch's GELU with no approximation named, where the blocks name the
+  tanh one; this build applied the approximation in both places, which
+  is a thousandth of an input near one and a thousandth of a picture's
+  row. `Kernels.Exact_GELU` computes the function through Abramowitz and
+  Stegun's error function, under 1.5e-7 everywhere, and the merger goes
+  through it. The suite's binary64 model of the encoder computes the
+  error function its own way, by series and continued fraction, so the
+  two stay two computations; `tests see` against the reference's
+  recorded rows went from three ten-thousandths of a row's norm apart
+  to a few millionths.
 - **A picture's marker is framed as the reference processor frames it.**
   Gemma 3's processor rewrites the rendered prompt before it tokenizes:
   every `<start_of_image>` becomes `\n\n<start_of_image>…<end_of_image>\n\n`.
@@ -99,6 +119,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The picture encoder's attention runs on the device.** Where the device
+  backend is open, each block's keys and values go into the device's cache
+  past whatever the sessions hold there, and every patch's queries attend
+  over all of them through the text model's own attention kernel, told
+  that no position comes before another, 512 queries a call; the device
+  did the linear products already, and the attention was most of what
+  was left on the pool. The block's keys and values are placed once a
+  picture, where the cache ended when the first block asked, and every
+  block takes that same region; a first cut counted the base from the
+  cache's bytes over four, which is half again the values -- the bytes
+  hold a half-precision copy past them -- and a base that moved by half
+  the cache a block grew the cache by half twenty-seven times, which is
+  what took the machine's memory. The rows agree with the recorded
+  reference within a hundredth of their norm on the device -- a
+  thousandth to nine thousandths, which is the device's halves over
+  every key and value of every block -- and within a hundred-thousandth
+  on the host.
+- **`tests see` skips without its projector, and Gemma 3's rows are
+  recorded too.** A missing projector file is `see: skipped (no projector
+  at PATH)` and a clean exit, as an external model that is not there is,
+  so a gate may name the expectations on every machine.
+  `tests/fixtures/vision-crossing/gemma3-4b.expect` records three rows the
+  reference's vision tower and projector make of the small drawing, from
+  the weights of google/gemma-3-4b-it alone.
 - **A round's members bring pictures.** `Serving.Admit` takes the rows
   given at a prompt's marker tokens, and `Llama.Evaluate_Round` a set of
   rows a member: each member's rows are read by its own positions, a run
@@ -117,7 +161,7 @@ Keep a Changelog and the project uses semantic versioning.
   the reference vision tower makes of the small picture beside it, and
   `tests see --mmproj MMPROJ --image PICTURE --expect FILE` compares this
   build's rows against them, the grid and the count too, each row within a
-  hundredth of its norm -- they sit within three ten-thousandths. A checkout
+  hundredth of its norm -- they sit within a few millionths. A checkout
   with the projector file reruns that much of the crossing with no Python.
 - **The pictures are crossed with the reference runtime.** Two scripts under
   `tests/fixtures/vision-crossing/` set this build beside `transformers`:

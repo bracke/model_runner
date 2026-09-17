@@ -1722,6 +1722,41 @@ package body Model_Runner.Kernels is
 
    end GELU;
 
+   ----------------
+   -- Exact_GELU --
+   ----------------
+
+   procedure Exact_GELU (Target : in out Real_Array) is
+      --  Abramowitz and Stegun 7.1.26: erf x = 1 - (a1 t + ... + a5 t^5)
+      --  exp (-x^2), t = 1 / (1 + p x), for x >= 0, and odd about zero.
+      P  : constant Wide_Real := 0.327_591_1;
+      A1 : constant Wide_Real := 0.254_829_592;
+      A2 : constant Wide_Real := -0.284_496_736;
+      A3 : constant Wide_Real := 1.421_413_741;
+      A4 : constant Wide_Real := -1.453_152_027;
+      A5 : constant Wide_Real := 1.061_405_429;
+      Root_Half : constant Wide_Real := 0.707_106_781_186_547_5;
+
+      function Erf (X : Wide_Real) return Wide_Real is
+         Z : constant Wide_Real := abs X;
+         T : constant Wide_Real := 1.0 / (1.0 + P * Z);
+         Y : constant Wide_Real :=
+           1.0 - (((((A5 * T + A4) * T) + A3) * T + A2) * T + A1) * T
+                 * N.Exp (-Z * Z);
+      begin
+         return (if X < 0.0 then -Y else Y);
+      end Erf;
+   begin
+      for Index in Target'Range loop
+         declare
+            Value : constant Wide_Real := Wide_Real (Target (Index));
+         begin
+            Target (Index) :=
+              Real (0.5 * Value * (1.0 + Erf (Value * Root_Half)));
+         end;
+      end loop;
+   end Exact_GELU;
+
    -------------------
    -- Apply_Rotary --
    -------------------

@@ -542,6 +542,9 @@ package body Model_Runner.Backend.Device is
    function Cached_Bytes return Interfaces.Unsigned_64
    is (Products.Cached_Bytes (Engine));
 
+   function Cached_Elements return Model_Runner.Numerics.Element_Count
+   is (Products.Cached_Elements (Engine));
+
    function Queues return Natural is (Devices.Queue_Count (Opened));
 
    function Waited return Natural is (Products.Waited (Engine));

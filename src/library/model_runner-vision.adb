@@ -840,7 +840,7 @@ package body Model_Runner.Vision is
 
    --  Work over rows: a bias added, the Gaussian unit, a softmax or a
    --  layer normalization, each row on its own.
-   type Row_Task is (Add_Bias, Gaussian, Soft_Max, Normalize);
+   type Row_Task is (Add_Bias, Gaussian, Gaussian_Exact, Soft_Max, Normalize);
 
    type Row_Work is new Model_Runner.Shares.Work with record
       Task_Kind : Row_Task := Add_Bias;
@@ -866,6 +866,8 @@ package body Model_Runner.Vision is
                   K.Add (Item.Target (From .. To), Item.Bias.all);
                when Gaussian =>
                   K.GELU (Item.Target (From .. To));
+               when Gaussian_Exact =>
+                  K.Exact_GELU (Item.Target (From .. To));
                when Soft_Max =>
                   K.Softmax (Item.Target (From .. To), Ok);
                   if not Ok then
@@ -970,6 +972,12 @@ package body Model_Runner.Vision is
       Over_Rows : aliased Row_Work;
       Decoded, In_Chunk, Out_Chunk : T.Real_Array_Access := null;
       Status    : E.Error_Info := E.Success;
+      --  Where in the device's cache this picture's attention puts a
+      --  block's keys and values: the cache's end as the sessions had it
+      --  when the first block asked, and the same place for every block
+      --  after, so the cache grows once a picture. Not yet chosen is
+      --  Element_Count'Last.
+      Cache_Base : Element_Count := Element_Count'Last;
    end record;
 
    --  Every row of Target through one of the row tasks.
@@ -1129,6 +1137,139 @@ package body Model_Runner.Vision is
    --  values are read from three arrays -- or one, at three offsets --
    --  each Stride wide a patch; the blend is written to Attended, Width
    --  a patch.
+   --  Queries one call of the device's attention takes: the batch its
+   --  kernel was built for.
+   Device_Queries : constant Element_Count := 512;
+
+   --  The attention on the device, where one is open: the block's keys
+   --  and values written into the device's cache past whatever the
+   --  sessions hold there, then every patch's queries against all of
+   --  them, a batch of queries a call, both ways -- which is the kernel
+   --  the text model's prompts use, told that no position comes before
+   --  another. The region begins where the cache ended when this
+   --  picture's first block asked, and every block takes the same region
+   --  again, so the cache is grown once a picture; a session that later
+   --  reserves a block of its own asks for what it needs and the cache
+   --  only grows. Counting the base from the cache's bytes over four was
+   --  wrong by half -- the bytes hold a half-precision copy past the
+   --  values -- and a base that moved by half the cache a block made the
+   --  cache half again as large twenty-seven times, which is what took
+   --  the machine's memory.
+   --
+   --  @param Took True when the device did it all; False leaves Attended
+   --    untouched and the pool to do it.
+   procedure Attend_On_Device
+     (Work     : in out Workspace;
+      Q, Kv, V : T.Real_Array_Access;
+      Q_At, K_At, V_At : Element_Count;
+      Stride   : Element_Count;
+      Attended : T.Real_Array_Access;
+      Width, Patches, Heads, Head : Element_Count;
+      Took     : out Boolean)
+   is
+      Scale : constant Real :=
+        Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
+      K_Base : Element_Count;
+      V_Base : Element_Count;
+      Whole  : T.Real_Array_Access := null;
+      Ok     : Boolean;
+   begin
+      Took := False;
+      if not Model_Runner.Backend.Device.Is_Ready
+        or else Model_Runner.Cancellation.Is_Cancelled (Work.Cancel)
+      then
+         return;
+      end if;
+
+      if Work.Cache_Base = Element_Count'Last then
+         Work.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
+      end if;
+      K_Base := Work.Cache_Base;
+      V_Base := K_Base + Patches * Width;
+
+      Model_Runner.Backend.Device.Reserve_Cache (V_Base + Patches * Width, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      --  The keys and the values, each as one run of Patches positions of
+      --  Width: as they are where they lie that way, gathered where they
+      --  lie Stride apart.
+      if Stride = Width then
+         Model_Runner.Backend.Device.Put_Cache
+           (K_Base, Kv (K_At .. K_At + Patches * Width - 1), Ok);
+         if Ok then
+            Model_Runner.Backend.Device.Put_Cache
+              (V_Base, V (V_At .. V_At + Patches * Width - 1), Ok);
+         end if;
+      else
+         T.Allocate (Patches * Width, Whole);
+         if Whole = null then
+            return;
+         end if;
+         for P in 0 .. Patches - 1 loop
+            Whole (P * Width .. (P + 1) * Width - 1) :=
+              Kv (K_At + P * Stride .. K_At + P * Stride + Width - 1);
+         end loop;
+         Model_Runner.Backend.Device.Put_Cache (K_Base, Whole.all, Ok);
+         if Ok then
+            for P in 0 .. Patches - 1 loop
+               Whole (P * Width .. (P + 1) * Width - 1) :=
+                 V (V_At + P * Stride .. V_At + P * Stride + Width - 1);
+            end loop;
+            Model_Runner.Backend.Device.Put_Cache (V_Base, Whole.all, Ok);
+         end if;
+      end if;
+      if not Ok then
+         T.Free (Whole);
+         return;
+      end if;
+
+      --  The queries, a batch at a time, gathered contiguous where they
+      --  lie Stride apart; the blends land in Attended as they are.
+      declare
+         From : Element_Count := 0;
+      begin
+         while From < Patches loop
+            declare
+               Take : constant Element_Count :=
+                 Element_Count'Min (Device_Queries, Patches - From);
+            begin
+               if Stride = Width then
+                  Model_Runner.Backend.Device.Attend
+                    (Q (Q_At + From * Width .. Q_At + (From + Take) * Width - 1),
+                     Natural (Heads), Natural (Head), Natural (Head), 1,
+                     0, Natural (Patches - 1),
+                     Natural (K_Base), Natural (V_Base),
+                     Natural (Width), Natural (Width),
+                     Scale, 0.0,
+                     Attended (From * Width .. (From + Take) * Width - 1), Ok,
+                     Positions => Natural (Take), Causal => False);
+               else
+                  for P in 0 .. Take - 1 loop
+                     Whole (P * Width .. (P + 1) * Width - 1) :=
+                       Q (Q_At + (From + P) * Stride
+                          .. Q_At + (From + P) * Stride + Width - 1);
+                  end loop;
+                  Model_Runner.Backend.Device.Attend
+                    (Whole (0 .. Take * Width - 1),
+                     Natural (Heads), Natural (Head), Natural (Head), 1,
+                     0, Natural (Patches - 1),
+                     Natural (K_Base), Natural (V_Base),
+                     Natural (Width), Natural (Width),
+                     Scale, 0.0,
+                     Attended (From * Width .. (From + Take) * Width - 1), Ok,
+                     Positions => Natural (Take), Causal => False);
+               end if;
+               exit when not Ok;
+               From := From + Take;
+            end;
+         end loop;
+         Took := Ok and then From = Patches;
+      end;
+      T.Free (Whole);
+   end Attend_On_Device;
+
    procedure Attend
      (Work     : in out Workspace;
       Q, Kv, V : T.Real_Array_Access;
@@ -1141,7 +1282,19 @@ package body Model_Runner.Vision is
       Scale : constant Real :=
         Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
       Heads_Work : aliased Attention_Work;
+      Took : Boolean;
    begin
+      if E.Is_Error (Work.Status) then
+         return;
+      end if;
+
+      Attend_On_Device
+        (Work, Q, Kv, V, Q_At, K_At, V_At, Stride, Attended,
+         Width, Patches, Heads, Head, Took);
+      if Took then
+         return;
+      end if;
+
       for H in 0 .. Heads - 1 loop
          exit when E.Is_Error (Work.Status);
          for P in 0 .. Patches - 1 loop
@@ -1894,10 +2047,13 @@ package body Model_Runner.Vision is
             E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
          else
             --  Normed's rows are already the joined rows: Merge ** 2
-            --  consecutive patches of Width make one row of Joined.
+            --  consecutive patches of Width make one row of Joined. The
+            --  unit between the merger's steps is the exact one, which is
+            --  what the reference's merger applies where its blocks apply
+            --  the approximation.
             Multiply (Work, Normed, Windows, Item.Merge_In, Merged,
                       Item.Merge_In_Bias);
-            Rows_Through (Work, Gaussian, Merged, Windows, Joined);
+            Rows_Through (Work, Gaussian_Exact, Merged, Windows, Joined);
             Multiply (Work, Merged, Windows, Item.Merge_Out, Rows,
                       Item.Merge_Out_Bias);
          end if;

@@ -1,3 +1,4 @@
+with Ada.Numerics;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
@@ -1407,6 +1408,44 @@ package body Tests.Vision_Cases is
                      (0.797_884_560_802_865_4
                       * (Value + 0.044_715 * Value * Value * Value))));
 
+      --  The error function in binary64, by its series near zero and the
+      --  continued fraction of its complement further out -- not the
+      --  polynomial the kernel uses, so that the two are two computations.
+      function Erf (X : WR) return WR is
+         Z : constant WR := abs X;
+         Result : WR;
+      begin
+         if Z < 2.5 then
+            declare
+               Term : WR := Z;
+               Sum  : WR := Z;
+               Z2   : constant WR := Z * Z;
+            begin
+               for K in 1 .. 60 loop
+                  Term := -Term * Z2 / WR (K);
+                  Sum := Sum + Term / WR (2 * K + 1);
+               end loop;
+               Result := 2.0 / Wide_Math.Sqrt (Ada.Numerics.Pi) * Sum;
+            end;
+         else
+            --  erfc z = exp (-z^2) / sqrt (pi) / (z + 1/2 / (z + 1 / (z + 3/2 / (z + ...
+            declare
+               Fraction : WR := Z;
+            begin
+               for K in reverse 1 .. 60 loop
+                  Fraction := Z + WR (K) / 2.0 / Fraction;
+               end loop;
+               Result := 1.0 - Wide_Math.Exp (-Z * Z)
+                 / Wide_Math.Sqrt (Ada.Numerics.Pi) / Fraction;
+            end;
+         end if;
+         return (if X < 0.0 then -Result else Result);
+      end Erf;
+
+      --  The unit itself, which the merger applies.
+      function Exact_GELU (Value : WR) return WR
+      is (0.5 * Value * (1.0 + Erf (Value * 0.707_106_781_186_547_5)));
+
       procedure Layer_Norm
         (Source : Matrix; Gain, Bias : N.Real_Array; Target : out Matrix) is
       begin
@@ -1647,7 +1686,7 @@ package body Tests.Vision_Cases is
                   for C in 0 .. Joined_Q - 1 loop
                      Sum := Sum + Joined (C) * WR (W.MM0 (N.Element_Count (R * Joined_Q + C)));
                   end loop;
-                  Middle (R) := GELU (Sum);
+                  Middle (R) := Exact_GELU (Sum);
                end;
             end loop;
             for J in 0 .. Text_Q - 1 loop

@@ -685,9 +685,16 @@ vision-crossing/qwen35-0.8b.expect` records three rows the reference tower
 makes of the small picture beside it -- the first, the middle and the last
 of seventy-seven -- and `tests see --mmproj MMPROJ --image plaza.png --expect
 qwen35-0.8b.expect` compares this build's rows against them, each within a
-hundredth of its norm; they sit within three ten-thousandths. `record.py`
+hundredth of its norm; they sit within a few millionths on the host and
+within three thousandths with `--device`, the device's halves. `record.py`
 there writes the file afresh from the reference. A checkout with the
-projector file, and no Python, reruns that much of the crossing.
+projector file, and no Python, reruns that much of the crossing; without
+the projector file the command says `see: skipped (no projector at ...)`
+and exits well, as `tests external-model` does without its model, so a
+gate may name it on every machine and mean it on the ones that have the
+file. `gemma3-4b.expect` beside it records the same for Gemma 3's
+projector, from the vision tower and projector of google/gemma-3-4b-it
+alone.
 
 The pixels are the one place the two references part. The processor the
 model was trained through, and llama.cpp, resize with PIL: bicubic with

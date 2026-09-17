@@ -427,6 +427,15 @@ begin
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             return;
          end if;
+
+         --  A projector that is not there is a skip, as an external model
+         --  that is not there is: nothing is downloaded, and a gate on a
+         --  machine without the file may say this line and go on.
+         if not Ada.Directories.Exists (Projector) then
+            Ada.Text_IO.Put_Line ("see: skipped (no projector at " & Projector & ")");
+            return;
+         end if;
+
          Model_Runner.Images.Load (Image, Picture, Status);
          if Model_Runner.Errors.Is_Error (Status) then
             declare

@@ -258,6 +258,15 @@ package Model_Runner.Backend.Device is
    --  @return Bytes of key and value cache resident, or zero for none.
    function Cached_Bytes return Interfaces.Unsigned_64;
 
+   --  How many values that cache holds room for, keys and values
+   --  together: what Reserve_Cache was last asked for and met. Not the
+   --  bytes over four -- the bytes hold a half-precision copy past the
+   --  values as well -- so a caller placing something of its own past
+   --  what the sessions hold counts from this.
+   --
+   --  @return Values the cache holds room for, or zero for none.
+   function Cached_Elements return Model_Runner.Numerics.Element_Count;
+
    --  One matrix-vector product, on the device.
    --
    --  @param Weight Weight view; must be binary32.
