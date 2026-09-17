@@ -844,6 +844,48 @@ package Model_Runner.Platform.Device.Products is
       Residual_Step : Natural := 0;
       Kept          : Boolean := True);
 
+   --  Name a step that adds each expert's bias to what a gathered product
+   --  made of a position: the answer of every member with the slice of
+   --  the bias stack belonging to the expert that member is, as the host
+   --  adds a projection's bias before the gate and after the projection
+   --  down. Which expert each member is comes from the routing the
+   --  product was gathered by -- a token's routing step, or a batch's
+   --  inversion, whose slots the members lie in. The stack is Experts
+   --  slices of Each, resident as a norm's weight is, and the answers
+   --  written are laid out as the product's were, so what read the
+   --  product reads this instead.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the stack lies in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the stack begins.
+   --  @param Experts How many slices the stack holds.
+   --  @param Each Elements a slice holds, which is a member's answer.
+   --  @param Source_Step The gathered or listed product whose answers
+   --    the biases are added to.
+   --  @param Route_Step The routing step, or the inverting step, the
+   --    product was gathered by -- or zero for a bias that is no
+   --    expert's: one slice of Each, added to every row the source made,
+   --    which is what a projection's bias is. Experts is one then, and
+   --    the source a product of Each rows.
+   --  @param Added False when the sequence is full, when the source is
+   --    not a gathered product of Each a member, or when the routing
+   --    step is not one.
+   --  @param Key Identifies the stack so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Bias
+     (Steps       : in out Sequence;
+      Base        : System.Address;
+      Span        : Model_Runner.Bytes.Byte_Count;
+      At_Byte     : Model_Runner.Bytes.Byte_Count;
+      Experts     : Natural;
+      Each        : Natural;
+      Source_Step : Positive;
+      Route_Step  : Natural;
+      Added       : out Boolean;
+      Key         : System.Address := System.Null_Address;
+      Kept        : Boolean := True);
+
    --  Name one product that reads what the product before it produced.
    --
    --  This is the point of a sequence rather than a convenience on top of it.
@@ -2050,6 +2092,10 @@ private
       Router     : System.Address := System.Null_Address;
       Mixer      : System.Address := System.Null_Address;
 
+      --  And the one that adds each expert's bias to a gathered product's
+      --  answers, for the mixture that carries them.
+      Biaser     : System.Address := System.Null_Address;
+
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
       --  values placed in the cache -- which is six dispatches a layer as
@@ -2113,6 +2159,7 @@ private
       Place_Line  : System.Address := System.Null_Address;
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
+      Bias_Line   : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
@@ -2533,6 +2580,11 @@ private
       Inverts : Boolean := False;
       Listed  : Boolean := False;
       By_Slot : Boolean := False;
+
+      --  A biasing step, as Add_Bias describes it: the stack in Base,
+      --  Span, At_Byte and Key, Stack slices of Each, added to the
+      --  answers of the step in Reads by the routing in Reads_Two.
+      Biases  : Boolean := False;
 
       --  A product kept off the tile whatever the count: the row kernel
       --  reads its activations in binary32 where the tile's operand is

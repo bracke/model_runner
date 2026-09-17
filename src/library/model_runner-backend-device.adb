@@ -1859,7 +1859,14 @@ package body Model_Runner.Backend.Device is
       Unpacked       : Unpacking_Shape := Not_Unpacked;
       Sinks_At       : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0)
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias      : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias        : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias      : Model_Runner.Tensors.Real_Array_Access := null;
+      Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
+      Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1906,6 +1913,111 @@ package body Model_Runner.Backend.Device is
       begin
          Wanted := Wanted + Rows * Slots;
       end Step_Room;
+
+      --  A mixture's expert biases, where the architecture carries them:
+      --  one step a stack, each reading the routing for the expert every
+      --  member is, and each taking the room its source took. The two
+      --  arms' go after both arms, so the combination reads the biased
+      --  pair as the two steps before it; the projection down's goes
+      --  after the downs and becomes what the mix reads.
+      procedure Add_Biases
+        (Gate_Bias, Up_Bias : T.Real_Array_Access;
+         Each, Experts, Route : Natural;
+         Room  : Model_Runner.Numerics.Element_Count;
+         Added : out Boolean)
+      is
+         Gate_Step : constant Natural := Products.Length (Steps) - 1;
+         Up_Step   : constant Natural := Products.Length (Steps);
+      begin
+         Added := True;
+
+         if Gate_Bias = null and then Up_Bias = null then
+            return;
+         end if;
+
+         --  Both or neither: a combination reads the two steps before
+         --  it, and one arm biased and the other not would put an arm
+         --  two steps back.
+         if Gate_Bias = null or else Up_Bias = null then
+            Added := False;
+            return;
+         end if;
+
+         Products.Add_Bias
+           (Steps, Gate_Bias.all (Gate_Bias.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Gate_Bias.all'Length) * 4, 0,
+            Experts, Each, Gate_Step, Route, Added,
+            Key => Gate_Bias.all (Gate_Bias.all'First)'Address,
+            Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Room (Room);
+
+         Products.Add_Bias
+           (Steps, Up_Bias.all (Up_Bias.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Up_Bias.all'Length) * 4, 0,
+            Experts, Each, Up_Step, Route, Added,
+            Key => Up_Bias.all (Up_Bias.all'First)'Address,
+            Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Room (Room);
+      end Add_Biases;
+
+      --  A projection's bias, added to the step just named where the
+      --  layer carries one: the step's number then becomes the biased
+      --  step's, so what read the projection reads it biased.
+      procedure Add_Projection_Bias
+        (Bias  : T.Real_Array_Access;
+         Rows  : Model_Runner.Numerics.Element_Count;
+         Which : in out Natural;
+         Added : out Boolean;
+         Kept  : Boolean := False) is
+      begin
+         Added := True;
+
+         if Bias = null then
+            return;
+         end if;
+
+         Products.Add_Bias
+           (Steps, Bias.all (Bias.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4, 0,
+            1, Natural (Rows), Which, 0, Added,
+            Key => Bias.all (Bias.all'First)'Address, Kept => Kept);
+         if not Added then
+            return;
+         end if;
+         Which := Products.Length (Steps);
+         Step_Room (Rows);
+      end Add_Projection_Bias;
+
+      procedure Add_Down_Bias
+        (Down_Bias : T.Real_Array_Access;
+         Each, Experts, Route : Natural;
+         Room  : Model_Runner.Numerics.Element_Count;
+         Added : out Boolean) is
+      begin
+         Added := True;
+
+         if Down_Bias = null then
+            return;
+         end if;
+
+         Products.Add_Bias
+           (Steps, Down_Bias.all (Down_Bias.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Down_Bias.all'Length) * 4, 0,
+            Experts, Each, Step_Downs, Route, Added,
+            Key => Down_Bias.all (Down_Bias.all'First)'Address,
+            Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Downs := Products.Length (Steps);
+         Step_Room (Room);
+      end Add_Down_Bias;
    begin
       Ok := False;
 
@@ -2042,6 +2154,11 @@ package body Model_Runner.Backend.Device is
       Step_Q := Products.Length (Steps);
       Step_Room (Query.Rows);
 
+      Add_Projection_Bias (Query_Bias, Query.Rows, Step_Q, Added);
+      if not Added then
+         return;
+      end if;
+
       Products.Add_Chained_Product
         (Steps, Key.Base, Key.Span, Key.Offset, K_P,
          Natural (Key.Rows), Natural (Key.Columns), Added,
@@ -2053,17 +2170,36 @@ package body Model_Runner.Backend.Device is
       Step_K := Products.Length (Steps);
       Step_Room (Key.Rows);
 
+      Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added);
+      if not Added then
+         return;
+      end if;
+
       Products.Add_Chained_Product
         (Steps, Value.Base, Value.Span, Value.Offset, V_P,
          Natural (Value.Rows), Natural (Value.Columns), Added,
-         Key => At_Offset (Value.Base, Value.Offset), Kept => Mirror,
+         Key => At_Offset (Value.Base, Value.Offset),
+         Kept => Mirror and then Value_Bias = null,
          From_Step => Step_Norm_In);
       if not Added then
          return;
       end if;
       Step_V := Products.Length (Steps);
-      At_Values := Wanted;
+      if Value_Bias = null then
+         At_Values := Wanted;
+      end if;
       Step_Room (Value.Rows);
+
+      --  The values' bias; the host then reads the values back from the
+      --  biased step.
+      if Value_Bias /= null then
+         At_Values := Wanted;
+      end if;
+      Add_Projection_Bias (Value_Bias, Value.Rows, Step_V, Added,
+                           Kept => Mirror);
+      if not Added then
+         return;
+      end if;
 
       --  The heads made ready in two dispatches where the device has the
       --  kernel: the queries normalized and turned into their own room,
@@ -2318,6 +2454,12 @@ package body Model_Runner.Backend.Device is
       Step_Out := Products.Length (Steps);
       Step_Room (Weight.Rows);
 
+      --  The bias on the way out, before the join reads it.
+      Add_Projection_Bias (Out_Bias, Weight.Rows, Step_Out, Added);
+      if not Added then
+         return;
+      end if;
+
       Products.Add_Join (Steps, Added, From_Step => Step_Out, Kept => False);
       if not Added then
          return;
@@ -2423,6 +2565,17 @@ package body Model_Runner.Backend.Device is
                end if;
                Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
 
+               --  The two arms' biases, where the architecture carries
+               --  them, each read for the expert its slot belongs to;
+               --  the combination then reads the biased pair, which are
+               --  the two steps before it.
+               Add_Biases
+                 (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
+                  Model_Runner.Numerics.Element_Count (Padded * Feed), Added);
+               if not Added then
+                  return;
+               end if;
+
                Products.Add_Combination (Steps, Unit, Added, Kept => False,
                                         Alpha => Alpha, Limit => Limit);
                if not Added then
@@ -2441,6 +2594,13 @@ package body Model_Runner.Backend.Device is
                end if;
                Step_Downs := Products.Length (Steps);
                Step_Room (Model_Runner.Numerics.Element_Count (Padded) * Width);
+
+               Add_Down_Bias
+                 (Down_Bias, Natural (Width), Experts, Step_Route,
+                  Model_Runner.Numerics.Element_Count (Padded) * Width, Added);
+               if not Added then
+                  return;
+               end if;
             end;
          else
             Products.Add_Gathered_Product
@@ -2467,6 +2627,13 @@ package body Model_Runner.Backend.Device is
             end if;
             Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
+            Add_Biases
+              (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
+               Model_Runner.Numerics.Element_Count (Used * Feed), Added);
+            if not Added then
+               return;
+            end if;
+
             Products.Add_Combination (Steps, Unit, Added, Kept => False,
                                         Alpha => Alpha, Limit => Limit);
             if not Added then
@@ -2486,6 +2653,13 @@ package body Model_Runner.Backend.Device is
             end if;
             Step_Downs := Products.Length (Steps);
             Step_Room (Model_Runner.Numerics.Element_Count (Used) * Width);
+
+            Add_Down_Bias
+              (Down_Bias, Natural (Width), Experts, Step_Route,
+               Model_Runner.Numerics.Element_Count (Used) * Width, Added);
+            if not Added then
+               return;
+            end if;
          end if;
 
          Products.Add_Mix

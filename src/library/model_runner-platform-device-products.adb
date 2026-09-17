@@ -1878,6 +1878,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Route;
             Mixed  : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Mix;
+            Biased : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Bias;
          begin
             Request.Size := Interfaces.C.size_t (Routed'Length * 4);
             Request.Code := Routed'Address;
@@ -1895,6 +1897,15 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Mixer := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Biased'Length * 4);
+            Request.Code := Biased'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Biaser := Made;
             end if;
          end;
 
@@ -2557,6 +2568,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Mix_Line := Made;
+            end if;
+         end if;
+
+         if Item.Biaser /= Null_Handle then
+            Request.Stage.Module := Item.Biaser;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Bias_Line := Made;
             end if;
          end if;
 
@@ -3359,12 +3380,14 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
       Give_Back (Item.Route_Line, "vkDestroyPipeline");
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
+      Give_Back (Item.Bias_Line, "vkDestroyPipeline");
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
       Give_Back (Item.Router, "vkDestroyShaderModule");
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
+      Give_Back (Item.Biaser, "vkDestroyShaderModule");
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
@@ -6355,6 +6378,8 @@ package body Model_Runner.Platform.Device.Products is
             return "route " & Shape (This.Used, This.Columns, " of ");
          elsif This.Mixes then
             return "mix";
+         elsif This.Biases then
+            return "bias";
          elsif This.Inverts then
             return "invert";
          elsif This.Listed then
@@ -6733,6 +6758,77 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Mix;
 
+   --------------
+   -- Add_Bias --
+   --------------
+
+   procedure Add_Bias
+     (Steps       : in out Sequence;
+      Base        : System.Address;
+      Span        : Model_Runner.Bytes.Byte_Count;
+      At_Byte     : Model_Runner.Bytes.Byte_Count;
+      Experts     : Natural;
+      Each        : Natural;
+      Source_Step : Positive;
+      Route_Step  : Natural;
+      Added       : out Boolean;
+      Key         : System.Address := System.Null_Address;
+      Kept        : Boolean := True) is
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Experts = 0
+        or else Each = 0
+        or else Span < At_Byte + Model_Runner.Bytes.Byte_Count (Experts * Each) * 4
+        or else Source_Step > Steps.Held
+        or else Route_Step > Steps.Held
+        or else Steps.Items (Source_Step).Rows mod Each /= 0
+        --  A projection's bias: one slice, over a product of Each rows.
+        or else (Route_Step = 0
+                 and then (Experts /= 1
+                           or else Steps.Items (Source_Step).Rows /= Each))
+        --  An expert's: a gathered product of Each a member, and the
+        --  routing it was gathered by.
+        or else (Route_Step /= 0
+                 and then (Steps.Items (Source_Step).Gathers = 0
+                           or else Steps.Items (Source_Step).Each /= Each
+                           or else not (Steps.Items (Route_Step).Routes
+                                        or else Steps.Items (Route_Step).Inverts)
+                           or else Steps.Items (Source_Step).Listed
+                                   /= Steps.Items (Route_Step).Inverts
+                           or else (Steps.Items (Route_Step).Inverts
+                                    and then Steps.Items (Route_Step).Columns
+                                             /= Experts)))
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte,
+         Packing => Weight_Packing'First,
+         Rows => Steps.Items (Source_Step).Rows,
+         Columns => Steps.Items (Source_Step).Rows,
+         Key => Key,
+         Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
+         Kept => Kept, Biases => True,
+         Stack => Experts, Each => Each,
+         Used => (if Route_Step = 0 then 0
+                  else Steps.Items (Route_Step).Used),
+         Listed => Steps.Items (Source_Step).Listed,
+         --  The source's gather, so that what read the source -- the mix,
+         --  which asks how many members its downs hold -- reads this.
+         Gathers => Steps.Items (Source_Step).Gathers,
+         --  Kept off the tile whatever the count, as a norm is: this
+         --  is not a product, and its room is its source's.
+         Exact => True,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Bias;
+
    ---------------------
    -- Add_Combination --
    ---------------------
@@ -6809,6 +6905,10 @@ package body Model_Runner.Platform.Device.Products is
         and then not Steps.Items (Other).Attends
         and then not Steps.Items (Other).Places
         and then not Steps.Items (Other).Rotates
+        --  A biasing step is not a product either, and its kernel adds
+        --  no residual: a join folded into it was a join lost, which is
+        --  what the first gpt-oss layer over the device did.
+        and then not Steps.Items (Other).Biases
         and then not Steps.Items (Other).Folded;
    begin
       if not Room then
@@ -7457,6 +7557,22 @@ package body Model_Runner.Platform.Device.Products is
                --  a position is normalized as.
                Places (Index).Weight :=
                  Interfaces.Unsigned_64 (This.Rows / This.Groups) * 4;
+            elsif This.Biases then
+               --  A biasing step carries the bias stack, which the device
+               --  keeps the way it keeps a matrix, and reads a gathered
+               --  product and its routing.
+               if This.Rows = 0
+                 or else This.Base = System.Null_Address
+                 or else This.Reads = 0
+                 or else This.Reads > Steps.Held
+                 or else This.Reads_Two > Steps.Held
+                 or else Item.Bias_Line = Null_Handle
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight :=
+                 Interfaces.Unsigned_64 (This.Stack * This.Each) * 4;
             elsif This.Attends then
                --  An attention step carries no matrix either, and reads a
                --  cache rather than a weight. What it needs that the shape
@@ -7736,11 +7852,12 @@ package body Model_Runner.Platform.Device.Products is
             Acquire_Weights
               (Item, Held, This.At_Byte, This.Packing,
                (if This.Norms or else This.Rotates or else This.Routes
-                  or else This.Readies
+                  or else This.Readies or else This.Biases
                 then 1
                 elsif This.Gathers > 0 then This.Stack
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
+                elsif This.Biases then This.Stack * This.Each
                 elsif This.Routes then This.Columns
                 elsif This.Readies then This.Head_Size
                 elsif This.Rotates
@@ -8138,6 +8255,38 @@ package body Model_Runner.Platform.Device.Products is
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Biases then
+               --  The bias stack, the gathered answers it is added to,
+               --  its own room out, and the routing that says which
+               --  expert each answer is.
+               Told (1) :=
+                 (Buffer => Places (Index).Buffer, Offset => 0,
+                  Extent => Places (Index).Base + Places (Index).Weight);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (4) := Half_Descriptor (Item);
+               Told (5) :=
+                 (if Steps.Items (Index).Reads_Two /= 0
+                  then (Buffer => Item.Result_Buffer,
+                        Offset =>
+                          Places (Steps.Items (Index).Reads_Two).At_Byte,
+                        Extent =>
+                          Places (Steps.Items (Index).Reads_Two).Bytes)
+                  else Told (3));
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -9108,6 +9257,45 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned ((Whole + 255) / 256), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Biases then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Bias_Line);
+
+                  declare
+                     --  A workgroup a member: a position's rank, or a
+                     --  slot of the inversion's runs, which is every
+                     --  answer the source made.
+                     Members : constant Natural :=
+                       This.Rows * Count / This.Each;
+
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Each),
+                        Columns => C.unsigned (This.Used),
+                        Count   => C.unsigned (Count),
+                        First   =>
+                          (if This.Reads_Two /= 0
+                             and then Steps.Items (This.Reads_Two).Inverts
+                           then C.unsigned
+                                  (Steps.Items (This.Reads_Two).Columns)
+                           else 0),
+
+                        --  Where the stack begins in the buffer it shares
+                        --  with whatever else the device kept, in
+                        --  elements, as a norm's weight is found.
+                        Base    => C.unsigned (Places (Index).Base / 4),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Members), 1, 1);
                   end;
 
                   Bind_Pipeline

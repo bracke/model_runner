@@ -1,0 +1,114 @@
+#version 450
+
+//  An expert's bias added to what a gathered product made of a position.
+//
+//  gpt-oss carries a bias on each of an expert's three projections, which
+//  no other mixture here does. The host adds each to the member's answer
+//  before the gate and after the projection down; the device's gathered
+//  products add nothing, so a mixture with them went to the host. This is
+//  the step between: it reads a gathered product's answers, finds which
+//  expert each member is from the routing the product was gathered by,
+//  and writes the answers with that expert's slice of the bias stack added
+//  -- Each a slice, Experts slices, resident as a norm's weight is.
+//
+//  A token's routing is what route.comp wrote: for each position, Used
+//  expert numbers and then Used shares, and a member's answer lies at its
+//  position and rank. A batch's routing is what invert.comp laid out: a
+//  count an expert, where each expert's run begins, and the runs; a
+//  member's answer lies at its slot, and the expert whose run holds the
+//  slot is the one whose bias it takes. A padded slot names a real
+//  position and nothing reads it, so its bias is harmless.
+//
+//  And a bias that is nobody's expert's: the one slice added to every
+//  row a product made, which is what a projection's bias is. Used is
+//  zero then, and the routing is not read.
+//
+//  A workgroup a member -- a position and rank, or a slot -- its lanes
+//  over the slice.
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight  { float b[]; };
+layout(std430, binding = 1) readonly  buffer Source  { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target  { float y[]; };
+layout(std430, binding = 4) readonly  buffer Routing { uint  r[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements one member's answer holds, which is one slice of the bias.
+    uint each;
+
+    //  How many experts a position chose, or zero for a bias with one
+    //  slice that every row takes.
+    uint used;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  For a batch routed by its inversion: how many experts there are,
+    //  which says where the inversion's runs lie. Zero for a token's
+    //  routing, where a member is found by its position and rank.
+    uint experts;
+
+    uint unused_packing;
+
+    //  Where the stack begins in the buffer it shares with whatever else
+    //  the device kept, in elements.
+    uint base;
+} shape;
+
+shared uint chosen;
+
+void main() {
+    uint member = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (shape.used == 0u) {
+        uint at = member * shape.each;
+
+        for (uint c = lane; c < shape.each; c += LANES) {
+            y[at + c] = x[at + c] + b[shape.base + c];
+        }
+        return;
+    }
+
+    if (shape.experts == 0u) {
+        //  A token's: member m is position m / used at rank m mod used.
+        uint pos = member / shape.used;
+        uint k = member - pos * shape.used;
+        uint expert = r[pos * 2u * shape.used + k];
+        uint at = member * shape.each;
+
+        for (uint c = lane; c < shape.each; c += LANES) {
+            y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
+        }
+        return;
+    }
+
+    //  A batch's: member m is slot m, in the run of the expert whose run
+    //  begins at or before it and ends after. One lane finds the expert;
+    //  the runs are padded to whole tiles, so a slot past the last run
+    //  belongs to nobody and is left as it is.
+    if (lane == 0u) {
+        uint found = shape.experts;
+        for (uint e = 0u; e < shape.experts; e++) {
+            uint begins = r[shape.experts + e];
+            uint held = (r[e] + 15u) / 16u * 16u;
+            if (member >= begins && member < begins + held) {
+                found = e;
+            }
+        }
+        chosen = found;
+    }
+    barrier ();
+
+    uint expert = chosen;
+    uint at = member * shape.each;
+
+    for (uint c = lane; c < shape.each; c += LANES) {
+        y[at + c] = x[at + c]
+                    + (expert < shape.experts
+                       ? b[shape.base + expert * shape.each + c] : 0.0);
+    }
+}

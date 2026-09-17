@@ -154,9 +154,23 @@ Keep a Changelog and the project uses semantic versioning.
   sequence that combines takes it, and a mixture with a clamped gate
   no longer goes to the host for it. Held to the same rule worked out
   on the host, through a routed and gathered mixture on the device, at
-  a limit low enough to hold some of the arms. What still keeps gpt-oss's
-  mixture on the host is its expert biases -- on each expert's three
-  projections -- which the gathered products do not add.
+  a limit low enough to hold some of the arms.
+- **gpt-oss's biases on the device, and its layer over whole.** A bias
+  on each of an expert's three projections, which no other mixture here
+  carries, and one on the way out of attention, kept the architecture's
+  layer off the device's sequences. `bias.comp` is a step that adds a
+  bias stack to what a step before it made: an expert's slice to each
+  member of a gathered product, found through the routing the product
+  was gathered by -- a token's, or a batch's inversion, whose slots the
+  members lie in -- or one slice to every row of a projection. The
+  stack is resident as a norm's weight is. `Whole_Layer` puts one after
+  each arm and after the projection down, and after the query, key,
+  value and output projections where a file carries those, so gpt-oss
+  goes over whole, a token or a batch, exact or in bytes, with its
+  sinks, its clamped gate and its biases -- held to the independent
+  implementation on the device as on the host. Found on the way: a join
+  folded into the biasing step before it was a join lost, and the step
+  is one a join no longer folds into.
 - **`--kv-values q8|q4`: the values stored otherwise than the keys.**
   Attention reads a key through a dot product with the query, where a
   rounded element moves every score it enters, and a value through a

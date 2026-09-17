@@ -11695,9 +11695,11 @@ package body Model_Runner.Llama is
           and then T.Is_Present (L.Gate_Stack)
           and then T.Is_Present (L.Up_Stack)
           and then T.Is_Present (L.Down_Stack)
-          and then L.Expert_Gate_Bias = null
-          and then L.Expert_Down_Bias = null
-            and then Settings.Experts_Used
+          --  The expert biases go as steps of the sequence, the two
+          --  arms' together: one arm biased and the other not is a
+          --  shape no file has and the sequence does not take.
+          and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
+          and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
       function Whole_Layer_Fits (L : Layer) return Boolean
@@ -11716,14 +11718,17 @@ package body Model_Runner.Llama is
           and then L.Attention_Norm /= null
           and then L.Attention_Norm_Bias = null
           and then L.Feed_Norm /= null
-          and then L.Query_Bias = null
-          and then L.Key_Bias = null
+
+          --  The attention projections' biases go as steps of the
+          --  sequence, all three or none: an architecture states them
+          --  as one.
+          and then (L.Query_Bias = null) = (L.Key_Bias = null)
+          and then (L.Query_Bias = null) = (L.Value_Bias = null)
 
           --  A head normalization goes to the device, both or neither:
           --  the sequence normalizes the queries and the keys as a pair
           --  and an architecture states them as one.
           and then (L.Query_Norm = null) = (L.Key_Norm = null)
-          and then L.Out_Bias = null
           and then L.Up_Bias = null
           and then L.Down_Bias = null
           and then L.Feed_Norm_Bias = null
@@ -12236,7 +12241,17 @@ package body Model_Runner.Llama is
                         --  reads them.
                         Sinks_At    => Sinks_Ready (Current.Sinks),
                         Alpha => Settings.Gate_Alpha,
-                        Limit => Settings.Gate_Limit);
+                        Limit => Settings.Gate_Limit,
+
+                        --  And its experts' biases, where the layer
+                        --  carries them, as steps of the sequence.
+                        Gate_Bias   => Current.Expert_Gate_Bias,
+                        Up_Bias     => Current.Expert_Up_Bias,
+                        Down_Bias   => Current.Expert_Down_Bias,
+                        Query_Bias  => Current.Query_Bias,
+                        Key_Bias    => Current.Key_Bias,
+                        Value_Bias  => Current.Value_Bias,
+                        Out_Bias    => Current.Out_Bias);
                   end if;
                end if;
 
@@ -13057,9 +13072,11 @@ package body Model_Runner.Llama is
           and then T.Is_Present (L.Gate_Stack)
           and then T.Is_Present (L.Up_Stack)
           and then T.Is_Present (L.Down_Stack)
-          and then L.Expert_Gate_Bias = null
-          and then L.Expert_Down_Bias = null
-            and then Settings.Experts_Used
+          --  The expert biases go as steps of the sequence, the two
+          --  arms' together: one arm biased and the other not is a
+          --  shape no file has and the sequence does not take.
+          and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
+          and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
       function Whole_Layer_Fits (L : Layer) return Boolean
@@ -13070,13 +13087,17 @@ package body Model_Runner.Llama is
           --  time.
           and then not Hybrid (Settings.Kind)
           and then Sinks_Fit (L.Sinks)
-          and then L.Out_Bias = null
           and then L.Up_Bias = null
           and then L.Down_Bias = null
           and then L.Feed_Norm_Bias = null
           and then L.Post_Attention_Norm = null
           and then L.Post_Feed_Norm = null
-          and then L.Key_Bias = null
+
+          --  The attention projections' biases go as steps of the
+          --  sequence, all three or none, as the token's whole layer
+          --  takes them.
+          and then (L.Query_Bias = null) = (L.Key_Bias = null)
+          and then (L.Query_Bias = null) = (L.Value_Bias = null)
 
           --  A head normalization goes to the device, both or neither,
           --  as the token's whole layer takes them.
@@ -13869,13 +13890,13 @@ package body Model_Runner.Llama is
               and then Current.Attention_Norm /= null
               and then Current.Attention_Norm_Bias = null
               and then Current.Feed_Norm /= null
-              and then Current.Query_Bias = null
 
-              --  A head normalization is a step of the whole layer and
-              --  of nothing else here: a layer with one goes whole or
-              --  goes to the host, which is what the fallback below
-              --  keeps to.
-              and then (Current.Query_Norm = null
+              --  A head normalization, or a projection's bias, is a
+              --  step of the whole layer and of nothing else here: a
+              --  layer with one goes whole or goes to the host, which is
+              --  what the fallback below keeps to.
+              and then ((Current.Query_Norm = null
+                         and then Current.Query_Bias = null)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then not Rounding
                                  and then Whole_Layer_Fits (Current)
@@ -14113,7 +14134,17 @@ package body Model_Runner.Llama is
                                    + Count)),
                         Sinks_At    => Sinks_Ready (Current.Sinks),
                         Alpha => Settings.Gate_Alpha,
-                        Limit => Settings.Gate_Limit);
+                        Limit => Settings.Gate_Limit,
+
+                        --  And its experts' biases, where the layer
+                        --  carries them, as steps of the sequence.
+                        Gate_Bias   => Current.Expert_Gate_Bias,
+                        Up_Bias     => Current.Expert_Up_Bias,
+                        Down_Bias   => Current.Expert_Down_Bias,
+                        Query_Bias  => Current.Query_Bias,
+                        Key_Bias    => Current.Key_Bias,
+                        Value_Bias  => Current.Value_Bias,
+                        Out_Bias    => Current.Out_Bias);
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14130,7 +14161,12 @@ package body Model_Runner.Llama is
                      Rotated := True;
                      Fused := True;
                      Cached := True;
-                  elsif Current.Query_Norm = null then
+                  elsif Current.Query_Norm = null
+                    and then Current.Query_Bias = null
+                  then
+                     --  Not for a layer whose projections carry a bias:
+                     --  the host adds it before the turning, and this
+                     --  turns as it projects.
                      Model_Runner.Backend.Device.Normalize_And_Project
                        ([Current.Query, Current.Key, Current.Value],
                         Acts, Current.Attention_Norm.all, Settings.Epsilon,

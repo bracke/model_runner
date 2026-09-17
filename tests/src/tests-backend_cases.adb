@@ -3676,9 +3676,10 @@ package body Tests.Backend_Cases is
 
       --  Every step's room: the router's scores, the routing's words, the
       --  gathered gates and ups, the combination, the gathered downs, and
-      --  the mix.
+      --  the mix -- and, biased, the three biasing steps' answers too.
       Landing : N.Real_Array
-        (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
+        (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width
+              + 2 * Used * Feed + Used * Width - 1)
         := [others => 0.0];
 
       Wanted : N.Real_Array (0 .. Width - 1) := [others => 0.0];
@@ -3692,6 +3693,15 @@ package body Tests.Backend_Cases is
       Clamped : Boolean := False;
       Alpha   : constant N.Real := 1.702;
       Limit   : constant N.Real := 0.5;
+
+      --  And a third time with a bias an expert on each of the three
+      --  projections, as gpt-oss carries them: added to the gate arm and
+      --  the up arm before the gate and to the projection down after it,
+      --  each by the step that reads the routing for the expert.
+      Biased    : Boolean := False;
+      Gate_Bias : N.Real_Array (0 .. Experts * Feed - 1);
+      Up_Bias   : N.Real_Array (0 .. Experts * Feed - 1);
+      Down_Bias : N.Real_Array (0 .. Experts * Width - 1);
       Shares : array (0 .. Used - 1) of N.Real := [others => 0.0];
 
       Steps : Products.Sequence;
@@ -3765,6 +3775,13 @@ package body Tests.Backend_Cases is
                             * Input (N.Element_Count (Col));
                      end loop;
 
+                     if Biased then
+                        G_Sum := G_Sum
+                          + Gate_Bias (N.Element_Count (Which * Feed + Row));
+                        U_Sum := U_Sum
+                          + Up_Bias (N.Element_Count (Which * Feed + Row));
+                     end if;
+
                      if Clamped then
                         declare
                            X : constant N.Real := N.Real'Min (G_Sum, Limit);
@@ -3797,7 +3814,10 @@ package body Tests.Backend_Cases is
                           + Downs (At_Row + N.Element_Count (Col))
                             * Gated (N.Element_Count (Col));
                      end loop;
-                     Down (N.Element_Count (Row)) := Sum;
+                     Down (N.Element_Count (Row)) :=
+                       Sum + (if Biased
+                              then Down_Bias (N.Element_Count (Which * Width + Row))
+                              else 0.0);
                   end;
                end loop;
 
@@ -3846,9 +3866,17 @@ package body Tests.Backend_Cases is
       for Index in Input'Range loop
          Input (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
       end loop;
+      for Index in Gate_Bias'Range loop
+         Gate_Bias (Index) := N.Real (Index mod 3) / 3.0 - 0.3;
+         Up_Bias (Index) := N.Real ((Index * 5) mod 7) / 7.0 - 0.5;
+      end loop;
+      for Index in Down_Bias'Range loop
+         Down_Bias (Index) := N.Real ((Index * 3) mod 11) / 11.0 - 0.4;
+      end loop;
 
-      for Round in Boolean loop
-         Clamped := Round;
+      for Round in 1 .. 3 loop
+         Clamped := Round > 1;
+         Biased := Round = 3;
          Wanted := [others => 0.0];
          Host_Mixture;
 
@@ -3881,6 +3909,17 @@ package body Tests.Backend_Cases is
                Chained => False, Routed => 2);
             Assert (Added, "the gathered ups were refused");
 
+            if Biased then
+               Products.Add_Bias
+                 (Steps, Gate_Bias (Gate_Bias'First)'Address, Bytes_Of (Gate_Bias),
+                  0, Experts, Feed, 3, 2, Added, Kept => False);
+               Assert (Added, "the gate biases were refused");
+               Products.Add_Bias
+                 (Steps, Up_Bias (Up_Bias'First)'Address, Bytes_Of (Up_Bias),
+                  0, Experts, Feed, 4, 2, Added, Kept => False);
+               Assert (Added, "the up biases were refused");
+            end if;
+
             if Clamped then
                Products.Add_Combination
                  (Steps, 3, Added, Kept => False, Alpha => Alpha, Limit => Limit);
@@ -3896,9 +3935,18 @@ package body Tests.Backend_Cases is
                Chained => True, Apart => Feed, Routed => 2);
             Assert (Added, "the gathered downs were refused");
 
-            Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+            if Biased then
+               Products.Add_Bias
+                 (Steps, Down_Bias (Down_Bias'First)'Address, Bytes_Of (Down_Bias),
+                  0, Experts, Width, 8, 2, Added, Kept => False);
+               Assert (Added, "the down biases were refused");
+               Products.Add_Mix (Steps, Width, Used, 9, 2, Added);
+            else
+               Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+            end if;
             Assert (Added, "the mixing step was refused");
-            Assert (Products.Length (Steps) = 7, "seven steps were named");
+            Assert (Products.Length (Steps) = (if Biased then 10 else 7),
+                    "the steps were not all named");
          end;
 
          Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
@@ -3921,7 +3969,9 @@ package body Tests.Backend_Cases is
          declare
             At_Mix : constant N.Element_Count :=
               N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
-                               + Used * Width);
+                               + Used * Width
+                               + (if Biased then 2 * Used * Feed + Used * Width
+                                  else 0));
             Worst : N.Real := 0.0;
          begin
             for Row in 0 .. Width - 1 loop
@@ -3934,7 +3984,8 @@ package body Tests.Backend_Cases is
             Assert (Worst < 1.0E-4,
                     "the gathered mixture answers" & N.Real'Image (Worst)
                     & " away from the host's reading of the same layer"
-                    & (if Clamped then ", with the clamped gate" else ""));
+                    & (if Biased then ", with the clamped gate and the biases"
+                       elsif Clamped then ", with the clamped gate" else ""));
          end;
       end loop;
 
@@ -3942,6 +3993,109 @@ package body Tests.Backend_Cases is
       Devices.Close (Opened);
       Devices.Close (Held);
    end A_Gathered_Mixture_Says_What_The_Host_Says;
+
+   -----------------------------------------
+   -- A_Projection_Bias_Is_Added_Where_It_Lies --
+   -----------------------------------------
+
+   --  A bias that is no expert's -- one slice added to every row a
+   --  product made -- through the biasing step, after two products whose
+   --  weights sit before it in the buffer the device keeps them in, so a
+   --  step reading its stack from the buffer's start would read a weight.
+   procedure A_Projection_Bias_Is_Added_Where_It_Lies
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Width : constant := 64;
+      Batch : constant := 3;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Other    : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Bias     : N.Real_Array (0 .. Width - 1);
+      Input    : N.Real_Array (0 .. Width * Batch - 1);
+      Landing  : N.Real_Array (0 .. 3 * Width * Batch - 1) := [others => 0.0];
+      Steps    : Products.Sequence;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Row in 0 .. Width - 1 loop
+         Identity (N.Element_Count (Row * Width + Row)) := 1.0;
+         Other (N.Element_Count (Row * Width + Row)) := 2.0;
+      end loop;
+      for Index in Bias'Range loop
+         Bias (Index) := N.Real (Index mod 9) / 9.0 - 0.4;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real (Index mod 7) / 7.0 - 0.3;
+      end loop;
+
+      --  A product of another weight first, so the identity and the bias
+      --  land past it in the buffer the device keeps its weights in.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Other (Other'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Other'Length) * 4, 0,
+         Products.Values_F32, Width, Width, Added, Kept => False,
+         Key => Other (Other'First)'Address);
+      Assert (Added, "the first product was refused");
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Identity'Length) * 4, 0,
+         Products.Values_F32, Width, Width, Added, Kept => False,
+         Key => Identity (Identity'First)'Address);
+      Assert (Added, "the identity product was refused");
+      Products.Add_Bias
+        (Steps, Bias (Bias'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Bias'Length) * 4, 0,
+         1, Width, 2, 0, Added, Key => Bias (Bias'First)'Address);
+      Assert (Added, "the bias step was refused");
+
+      Products.Run (Engine, Steps, Input, Batch, Landing, Ok, Halted);
+      Assert (Ok, "the sequence with a bias was refused");
+
+      declare
+         Worst : N.Real := 0.0;
+         From  : constant N.Element_Count := 2 * Width * Batch;
+      begin
+         for Which in 0 .. Batch - 1 loop
+            for Index in 0 .. N.Element_Count (Width) - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Landing (From + N.Element_Count (Which * Width) + Index)
+                       - (Input (N.Element_Count (Which * Width) + Index)
+                          + Bias (Index))));
+            end loop;
+         end loop;
+         Assert (Worst <= 1.0e-6,
+                 "a projection's bias added on the device is" & N.Real'Image (Worst)
+                 & " away from the row plus the bias");
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Projection_Bias_Is_Added_Where_It_Lies;
 
    ----------------------------------------------
    -- The_Backend_Routes_And_Gathers_As_It_Slices --
@@ -7004,6 +7158,11 @@ package body Tests.Backend_Cases is
         (T, The_Count_Is_Not_What_Bounds_What_Stays_Resident'Access,
          "what the device keeps is bounded by bytes and not by the size of "
          & "the table it keeps them in");
+      Register_Routine
+        (T, A_Projection_Bias_Is_Added_Where_It_Lies'Access,
+         "a projection's bias, one slice for every row, is added by the "
+         & "biasing step out of the buffer where the device keeps it, past "
+         & "the weights kept before it");
       Register_Routine
         (T, The_Device_Packs_As_The_Host_Packs'Access,
          "rows packed into bytes and into nibbles by a placing step of a "

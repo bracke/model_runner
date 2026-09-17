@@ -905,6 +905,21 @@ package Model_Runner.Backend.Device is
    --    zero for none.
    --  @param Alpha The clamped gate's slope, where Unit is three.
    --  @param Limit The clamped gate's limit, where Unit is three.
+   --  @param Gate_Bias A mixture's bias on each expert's gate
+   --    projection, Experts slices of Feed, or null for none: added to
+   --    each member's gate arm before the gate, by a step that reads the
+   --    routing for the expert.
+   --  @param Up_Bias The same on the up projection, or null.
+   --  @param Down_Bias The same on the projection down, Experts slices
+   --    of the width, added after it and before the mix, or null.
+   --  @param Query_Bias The query projection's bias, added to every
+   --    position's queries before they are normalized or turned, or
+   --    null for none.
+   --  @param Key_Bias The same for the keys, or null.
+   --  @param Value_Bias The same for the values, or null; Values then
+   --    receives the biased values.
+   --  @param Out_Bias The bias on the way out of attention, added to the
+   --    projection before the residual join, or null.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -972,7 +987,14 @@ package Model_Runner.Backend.Device is
       Unpacked       : Unpacking_Shape := Not_Unpacked;
       Sinks_At       : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0);
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Gate_Bias      : Model_Runner.Tensors.Real_Array_Access := null;
+      Up_Bias        : Model_Runner.Tensors.Real_Array_Access := null;
+      Down_Bias      : Model_Runner.Tensors.Real_Array_Access := null;
+      Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
+      Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  A gated feed-forward block, whole, in one submission.
    --
