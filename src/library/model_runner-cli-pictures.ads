@@ -15,6 +15,17 @@
 --  hold yet, so that calling it again after a turn was added encodes only
 --  the new picture.
 --
+--  A video reaches the model the same way -- {"type": "video", "path":
+--  "DIR", "fps": 2} -- as a directory of frames, one picture a frame in
+--  the order their names sort, taken at fps frames a second, which is
+--  what the reference processor samples a video at unless told otherwise.
+--  The frames go through the projector in pairs, a video with an odd
+--  count pairing its last frame with itself, and each pair is a slot: a
+--  picture of its own to the text model, stood among the words that say
+--  when it was. Only a projector that reads video takes one; Gemma 3's
+--  refuses it by name. Reading a video file is not done here: the frames
+--  are taken from whatever wrote them out, ffmpeg -vf fps=2 or the like.
+--
 --  Pan-and-scan, when asked for, shows a wide or tall picture twice: whole,
 --  and then in two to four crops along its longer side, each encoded as a
 --  picture of its own and set in the prompt among the reference
@@ -34,8 +45,15 @@ with Model_Runner.Vision;
 
 package Model_Runner.CLI.Pictures is
 
-   --  Most pictures one conversation may show.
+   --  Most pictures and videos one conversation may show, and most slots
+   --  its videos may have between them -- the reference's most frames a
+   --  video, in pairs.
    Max_Pictures : constant := 16;
+   Max_Slots    : constant := 384;
+
+   --  The rate a video's frames are taken to have been sampled at where
+   --  the part names none: the reference processor's own.
+   Default_Fps : constant := 2.0;
 
    type Seer is limited private;
 
@@ -66,11 +84,11 @@ package Model_Runner.CLI.Pictures is
    --  @return True when pictures can be gathered.
    function Is_Open (Item : Seer) return Boolean;
 
-   --  Whether a list of parts names a picture: a part of type image or
-   --  image_url with a path or url.
+   --  Whether a list of parts names a picture or a video: a part of type
+   --  image or image_url with a path or url, or of type video with a path.
    --
    --  @param Parts The parts, as one JSON list.
-   --  @return True when at least one picture is named.
+   --  @return True when at least one is named.
    function Names_A_Picture (Parts : String) return Boolean;
 
    --  Encode every picture the conversation names beyond the ones the set
@@ -88,8 +106,10 @@ package Model_Runner.CLI.Pictures is
    --    @param Rows the rows it took, crops included, and
    --    @param Milliseconds the milliseconds it took.
    --  @param Status Success, IO_Open_Failed, IO_Image_Unreadable,
-   --    Memory_Allocation_Failed, Generation_Cancelled, or
-   --    CLI_Option_Out_Of_Range past Max_Pictures.
+   --    Memory_Allocation_Failed, Generation_Cancelled,
+   --    CLI_Option_Out_Of_Range past Max_Pictures or Max_Slots, or
+   --    Arch_Unsupported_Feature for a video shown to a projector that
+   --    reads none.
    procedure Gather
      (Item     : in out Seer;
       Messages : Model_Runner.Conversation.History;
@@ -118,6 +138,13 @@ private
       Marker_Text, Before, After : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
       Lead, Bridge, Gap : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
+
+      --  The video's marker and its text, and the opener and closer a
+      --  slot is set between, where the projector reads video.
+      Video_Marker : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Video_Text, Video_Open, Video_Close : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
    end record;
 

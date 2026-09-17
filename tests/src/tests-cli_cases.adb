@@ -7989,6 +7989,8 @@ package body Tests.CLI_Cases is
       Reads ("/load run.ckpt", I.Load_Conversation, "run.ckpt");
       Reads ("/image cat.png", I.Show_Picture, "cat.png");
       Reads ("/image", I.Show_Picture);
+      Reads ("/video frames/", I.Show_Video, "frames/");
+      Reads ("/video", I.Show_Video);
       Reads ("/load", I.Load_Conversation);
 
       --  What the empty argument then means, at the layer that acts on it.

@@ -64,6 +64,7 @@ package Model_Runner.CLI.Interactive is
       Save_Conversation,
       Load_Conversation,
       Show_Picture,
+      Show_Video,
       Unknown);
 
    --  The word a caller types for an interactive command.

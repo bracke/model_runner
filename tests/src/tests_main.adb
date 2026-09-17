@@ -7,7 +7,9 @@ with Ada.Calendar;
 pragma Unreserve_All_Interrupts;
 
 with Ada.Command_Line;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
+with Ada.Strings.Unbounded;
 with Interfaces;
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
@@ -408,6 +410,10 @@ begin
 
          Projector : constant String := Option ("--mmproj", "");
          Image     : constant String := Option ("--image", "");
+
+         --  Or a video: a directory of frames, which go through the
+         --  encoder in pairs, the rows of every pair laid end to end.
+         Frames    : constant String := Option ("--frames", "");
          Threads   : constant Natural :=
            Natural'Value (Option ("--threads", "0"));
          Dump      : constant String := Option ("--dump", "");
@@ -417,13 +423,116 @@ begin
          Picture   : Model_Runner.Images.Raster;
          Rows      : Model_Runner.Tensors.Real_Array_Access;
          Grid_Rows, Grid_Columns : Natural;
+         Slots     : Natural := 0;
          Status    : Model_Runner.Errors.Error_Info;
          Started   : Ada.Calendar.Time;
          use type Ada.Calendar.Time;
          use type Model_Runner.Numerics.Real;
+
+         --  The frames of a video, in their names' order, through the
+         --  encoder in pairs: what CLI.Pictures does for a video part,
+         --  done here on the encoder alone so the rows can be dumped and
+         --  set beside the reference's.
+         procedure See_Frames
+           (Pool : Model_Runner.Backend.CPU.Pool_Reference)
+         is
+            use Ada.Directories;
+            package Names is new Ada.Containers.Indefinite_Ordered_Sets (String);
+            Listed : Names.Set;
+            Search : Search_Type;
+            Found  : Directory_Entry_Type;
+            First, Second : Model_Runner.Images.Raster;
+            Fit_Width, Fit_Height : Positive;
+            Count : Natural;
+            use type Model_Runner.Numerics.Element_Count;
+            use type Model_Runner.Tensors.Real_Array_Access;
+         begin
+            Start_Search (Search, Frames, "",
+                          Filter => [Ordinary_File => True, others => False]);
+            while More_Entries (Search) loop
+               Get_Next_Entry (Search, Found);
+               Listed.Include (Full_Name (Found));
+            end loop;
+            End_Search (Search);
+            Count := Natural (Listed.Length);
+            if Count = 0 then
+               Status := Model_Runner.Errors.Make (Model_Runner.Errors.IO_Open_Failed);
+               return;
+            end if;
+
+            declare
+               Paths : array (1 .. Count) of Ada.Strings.Unbounded.Unbounded_String;
+               Which : Natural := 0;
+               At_Frame : Positive := 1;
+            begin
+               for Name of Listed loop
+                  Which := Which + 1;
+                  Paths (Which) := Ada.Strings.Unbounded.To_Unbounded_String (Name);
+               end loop;
+
+               Model_Runner.Images.Load
+                 (Ada.Strings.Unbounded.To_String (Paths (1)), First, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  return;
+               end if;
+               Ada.Text_IO.Put_Line
+                 ("frames:" & Count'Image & " of" & First.Width'Image & " x"
+                  & First.Height'Image);
+               Model_Runner.Vision.Frames_Fit
+                 (Eyes, First.Width, First.Height, Count, Fit_Width, Fit_Height,
+                  Status);
+               Model_Runner.Images.Free (First);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  return;
+               end if;
+               Ada.Text_IO.Put_Line
+                 ("fit:" & Fit_Width'Image & " x" & Fit_Height'Image);
+
+               while At_Frame <= Count loop
+                  declare
+                     Next : constant Positive := Positive'Min (At_Frame + 1, Count);
+                     Pair : Model_Runner.Tensors.Real_Array_Access;
+                  begin
+                     Model_Runner.Images.Load
+                       (Ada.Strings.Unbounded.To_String (Paths (At_Frame)), First,
+                        Status);
+                     exit when Model_Runner.Errors.Is_Error (Status);
+                     Model_Runner.Images.Load
+                       (Ada.Strings.Unbounded.To_String (Paths (Next)), Second,
+                        Status);
+                     if Model_Runner.Errors.Is_Ok (Status) then
+                        Model_Runner.Vision.Encode_Frames
+                          (Eyes, First, Second, Fit_Width, Fit_Height, Pool, Pair,
+                           Grid_Rows, Grid_Columns, Status => Status);
+                     end if;
+                     Model_Runner.Images.Free (First);
+                     Model_Runner.Images.Free (Second);
+                     exit when Model_Runner.Errors.Is_Error (Status);
+
+                     declare
+                        Was : constant Model_Runner.Numerics.Element_Count :=
+                          (if Rows = null then 0 else Rows.all'Length);
+                        Grown : Model_Runner.Tensors.Real_Array_Access;
+                     begin
+                        Model_Runner.Tensors.Allocate (Was + Pair.all'Length, Grown);
+                        if Was > 0 then
+                           Grown (0 .. Was - 1) := Rows.all;
+                        end if;
+                        Grown (Was .. Was + Pair.all'Length - 1) := Pair.all;
+                        Model_Runner.Tensors.Free (Rows);
+                        Model_Runner.Tensors.Free (Pair);
+                        Rows := Grown;
+                     end;
+                     Slots := Slots + 1;
+                     At_Frame := At_Frame + 2;
+                  end;
+               end loop;
+            end;
+         end See_Frames;
       begin
-         if Projector = "" or else Image = "" then
-            Ada.Text_IO.Put_Line ("see: --mmproj PATH and --image FILE are required");
+         if Projector = "" or else (Image = "" and then Frames = "") then
+            Ada.Text_IO.Put_Line
+              ("see: --mmproj PATH and --image FILE or --frames DIR are required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             return;
          end if;
@@ -436,24 +545,26 @@ begin
             return;
          end if;
 
-         Model_Runner.Images.Load (Image, Picture, Status);
-         if Model_Runner.Errors.Is_Error (Status) then
-            declare
-               Found : Boolean;
-               Held  : Model_Runner.Errors.Parameter;
-            begin
-               Model_Runner.Errors.Find_Parameter (Status, "detail", Found, Held);
-               Ada.Text_IO.Put_Line
-                 ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code)
-                  & (if Found
-                     then " " & Model_Runner.Text.To_String (Held.Text_Value)
-                     else ""));
-            end;
-            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-            return;
+         if Image /= "" then
+            Model_Runner.Images.Load (Image, Picture, Status);
+            if Model_Runner.Errors.Is_Error (Status) then
+               declare
+                  Found : Boolean;
+                  Held  : Model_Runner.Errors.Parameter;
+               begin
+                  Model_Runner.Errors.Find_Parameter (Status, "detail", Found, Held);
+                  Ada.Text_IO.Put_Line
+                    ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code)
+                     & (if Found
+                        then " " & Model_Runner.Text.To_String (Held.Text_Value)
+                        else ""));
+               end;
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+            Ada.Text_IO.Put_Line
+              ("picture:" & Picture.Width'Image & " x" & Picture.Height'Image);
          end if;
-         Ada.Text_IO.Put_Line
-           ("picture:" & Picture.Width'Image & " x" & Picture.Height'Image);
          Model_Runner.Vision.Open (Eyes, Projector, Status);
          if Model_Runner.Errors.Is_Error (Status) then
             Ada.Text_IO.Put_Line
@@ -486,15 +597,20 @@ begin
                                Model_Runner.Backend.CPU.Max_Workers)));
          begin
             Model_Runner.Backend.CPU.Open (Pool);
-            Model_Runner.Vision.Encode
-              (Eyes, Picture, Pool'Unchecked_Access, Rows, Grid_Rows,
-               Grid_Columns, Status => Status);
+            if Image /= "" then
+               Model_Runner.Vision.Encode
+                 (Eyes, Picture, Pool'Unchecked_Access, Rows, Grid_Rows,
+                  Grid_Columns, Status => Status);
+            else
+               See_Frames (Pool'Unchecked_Access);
+            end if;
             Model_Runner.Backend.CPU.Close (Pool);
          end;
          Ada.Text_IO.Put_Line
            ("encoded in" & Duration'Image (Ada.Calendar.Clock - Started) & " s"
             & " as a grid of" & Natural'Image (Grid_Rows) & " by"
-            & Natural'Image (Grid_Columns));
+            & Natural'Image (Grid_Columns)
+            & (if Slots > 0 then "," & Slots'Image & " slots" else ""));
          if Model_Runner.Errors.Is_Error (Status) then
             Ada.Text_IO.Put_Line
               ("see: " & Model_Runner.Errors.Error_Code'Image (Status.Code));
@@ -589,6 +705,11 @@ begin
                                  Fail ("the grid is" & Grid_Rows'Image & " by"
                                        & Grid_Columns'Image & ", not "
                                        & Word (Line, 2) & " by " & Word (Line, 3));
+                              end if;
+                           elsif Key = "slots" then
+                              if Natural'Value (Word (Line, 2)) /= Slots then
+                                 Fail ("the slots are" & Slots'Image
+                                       & ", not " & Word (Line, 2));
                               end if;
                            elsif Key = "rows" then
                               if Model_Runner.Numerics.Element_Count'Value (Word (Line, 2))

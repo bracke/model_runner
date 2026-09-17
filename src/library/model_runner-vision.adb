@@ -192,6 +192,14 @@ package body Model_Runner.Vision is
             Status := E.Make (E.Memory_Allocation_Failed);
             return;
          end if;
+         --  And the two side by side, a row the first frame's then the
+         --  second's, for a pair of frames of a video.
+         T.Allocate (Width * 2 * Patch_Elements, Item.Patch_Pair_Rows);
+         if Item.Patch_Pair_Rows = null then
+            T.Free (Row);
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
          for Source_Row in 0 .. Width - 1 loop
             T.Dequantize_Row
               (First, Source_Row,
@@ -199,8 +207,16 @@ package body Model_Runner.Vision is
                                .. (Source_Row + 1) * Patch_Elements - 1),
                Status);
             exit when E.Is_Error (Status);
+            Item.Patch_Pair_Rows
+              (Source_Row * 2 * Patch_Elements
+               .. Source_Row * 2 * Patch_Elements + Patch_Elements - 1) :=
+              Item.Patch_Sum (Source_Row * Patch_Elements
+                              .. (Source_Row + 1) * Patch_Elements - 1);
             T.Dequantize_Row (Second, Source_Row, Row.all, Status);
             exit when E.Is_Error (Status);
+            Item.Patch_Pair_Rows
+              (Source_Row * 2 * Patch_Elements + Patch_Elements
+               .. (Source_Row + 1) * 2 * Patch_Elements - 1) := Row.all;
             K.Add
               (Item.Patch_Sum (Source_Row * Patch_Elements
                                .. (Source_Row + 1) * Patch_Elements - 1),
@@ -218,6 +234,18 @@ package body Model_Runner.Vision is
             Span    => B.Byte_Count (Item.Patch_Sum.all'Length) * 4,
             Offset  => 0,
             Result  => Item.Patch_Both,
+            Status  => Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         T.Make
+           (Format  => Model_Runner.GGUF.Type_F32,
+            Rows    => Width,
+            Columns => 2 * Patch_Elements,
+            Base    => Item.Patch_Pair_Rows.all'Address,
+            Span    => B.Byte_Count (Item.Patch_Pair_Rows.all'Length) * 4,
+            Offset  => 0,
+            Result  => Item.Patch_Pair,
             Status  => Status);
          if E.Is_Error (Status) then
             return;
@@ -775,10 +803,12 @@ package body Model_Runner.Vision is
       T.Free (Item.Soft_Norm);
       T.Free (Item.Projection_Rows);
       T.Free (Item.Patch_Sum);
+      T.Free (Item.Patch_Pair_Rows);
       T.Free (Item.Merge_In_Bias);
       T.Free (Item.Merge_Out_Bias);
       Item.Patch_Weights := T.Empty_View;
       Item.Patch_Both := T.Empty_View;
+      Item.Patch_Pair := T.Empty_View;
       Item.Merge_In := T.Empty_View;
       Item.Merge_Out := T.Empty_View;
       Item.Positions := T.Empty_View;
@@ -1660,6 +1690,22 @@ package body Model_Runner.Vision is
    --  hold within the most rows allowed or up to reach the least, by the
    --  square root of the ratio, and rounded down or up to the multiple
    --  again. Never below one window a side.
+   --  Rounding to the nearest whole number with a half going to the even
+   --  one, which is what the reference's round does and what a side of
+   --  sixteen past a multiple of the window turns on: eighty pixels are
+   --  two windows and a half, and the reference makes them two.
+   function Half_Even (X : N.Wide_Real) return Natural is
+      Floor : constant N.Wide_Real := N.Wide_Real'Floor (X);
+      Rest  : constant N.Wide_Real := X - Floor;
+   begin
+      if Rest > 0.5 or else (Rest = 0.5 and then Natural (Floor) mod 2 = 1)
+      then
+         return Natural (Floor) + 1;
+      else
+         return Natural (Floor);
+      end if;
+   end Half_Even;
+
    procedure Fitted
      (Item   : Encoder;
       Width, Height : Positive;
@@ -1673,8 +1719,7 @@ package body Model_Runner.Vision is
 
       function Rounded (X : N.Wide_Real) return Positive
       is (Positive'Max (Factor,
-            Positive (N.Wide_Real'Rounding (X / N.Wide_Real (Factor)))
-            * Factor));
+            Positive (Half_Even (X / N.Wide_Real (Factor))) * Factor));
       function Floored (X : N.Wide_Real) return Positive
       is (Positive'Max (Factor,
             Positive (N.Wide_Real'Floor (X / N.Wide_Real (Factor)))
@@ -1712,6 +1757,12 @@ package body Model_Runner.Vision is
       Fit_Height := H;
    end Fitted;
 
+   --  The Qwen encoder over one picture, or over one pair of frames of a
+   --  video: Picture is the still, or the pair's first frame, and Second
+   --  the pair's second where Paired. A still is patched from the one
+   --  frame through the summed patch weights; a pair from both frames'
+   --  pixels, the first's then the second's, through the two weights
+   --  side by side. Everything past the patch embedding is the same.
    procedure Encode_Qwen
      (Item    : in out Encoder;
       Picture : Model_Runner.Images.Raster;
@@ -1720,7 +1771,10 @@ package body Model_Runner.Vision is
       Grid_Rows    : out Natural;
       Grid_Columns : out Natural;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Paired  : Boolean := False;
+      Second  : Model_Runner.Images.Raster := (others => <>);
+      Pair_Width, Pair_Height : Natural := 0)
    is
       Width    : constant Element_Count := Element_Count (Item.Width);
       Feed     : constant Element_Count := Element_Count (Item.Feed);
@@ -1729,6 +1783,10 @@ package body Model_Runner.Vision is
       Merge    : constant Element_Count := Element_Count (Item.Merge);
       Patch    : constant Element_Count := Element_Count (Item.Patch);
       Patch_Elements : constant Element_Count := 3 * Patch ** 2;
+
+      --  What a patch is to the embedding: one frame's pixels, or two.
+      Patch_In : constant Element_Count :=
+        (if Paired then 2 * Patch_Elements else Patch_Elements);
       Joined   : constant Element_Count := Width * Merge ** 2;
       Text_Width : constant Element_Count := Element_Count (Item.Text_Width);
       Grid     : constant Element_Count := Element_Count (Item.Grid);
@@ -1752,7 +1810,7 @@ package body Model_Runner.Vision is
         (Patch_Place_Array, Patch_Place_Access);
       Places : Patch_Place_Access := null;
 
-      Resampled : Model_Runner.Images.Raster;
+      Resampled, Resampled_2 : Model_Runner.Images.Raster;
       Work : Workspace;
 
       procedure Release is
@@ -1771,6 +1829,7 @@ package body Model_Runner.Vision is
          Free (Places);
          Clear (Work);
          Model_Runner.Images.Free (Resampled);
+         Model_Runner.Images.Free (Resampled_2);
       end Release;
 
       --  The two-part rotation of the queries and keys in Fused, in
@@ -1873,12 +1932,20 @@ package body Model_Runner.Vision is
          return;
       end if;
 
-      if Picture.Pixels = null then
+      if Picture.Pixels = null or else (Paired and then Second.Pixels = null)
+      then
          Status := E.Make (E.Generation_Empty_Prompt);
          return;
       end if;
 
-      Fitted (Item, Picture.Width, Picture.Height, Fit_Width, Fit_Height);
+      --  A still is fitted here; a pair of frames was fitted with its
+      --  video, every frame the same.
+      if Paired then
+         Fit_Width := Pair_Width;
+         Fit_Height := Pair_Height;
+      else
+         Fitted (Item, Picture.Width, Picture.Height, Fit_Width, Fit_Height);
+      end if;
       Side_X := Element_Count (Fit_Width) / Patch;
       Side_Y := Element_Count (Fit_Height) / Patch;
       Patches := Side_X * Side_Y;
@@ -1894,7 +1961,7 @@ package body Model_Runner.Vision is
       T.Allocate (Patches * Width, Normed);
       T.Allocate (Patches * 3 * Width, Fused);
       T.Allocate (Patches * Width, Attended);
-      T.Allocate (Patches * Element_Count'Max (Feed, Patch_Elements), Hidden);
+      T.Allocate (Patches * Element_Count'Max (Feed, Patch_In), Hidden);
       T.Allocate (Patches * Head, K_Head);
       T.Allocate (Patches * Head, Q_Head);
       T.Allocate (Patches * Head, V_Head_T);
@@ -1905,8 +1972,8 @@ package body Model_Runner.Vision is
         (Work,
          Element_Count'Max (Joined * Joined,
                             Element_Count'Max (Feed * Width,
-                                               Width * Patch_Elements)),
-         Element_Count'Max (Joined, Element_Count'Max (Feed, Patch_Elements)),
+                                               Width * Patch_In)),
+         Element_Count'Max (Joined, Element_Count'Max (Feed, Patch_In)),
          Element_Count'Max (Joined, Element_Count'Max (3 * Width, Feed)));
       Places := new Patch_Place_Array (0 .. Patches - 1);
 
@@ -1931,7 +1998,14 @@ package body Model_Runner.Vision is
       --  the patch, scaled as the encoder was trained on.
       Model_Runner.Images.Resample
         (Picture, Fit_Width, Fit_Height, Resampled, Model_Runner.Images.Cubic);
-      if Resampled.Pixels = null then
+      if Paired and then Resampled.Pixels /= null then
+         Model_Runner.Images.Resample
+           (Second, Fit_Width, Fit_Height, Resampled_2,
+            Model_Runner.Images.Cubic);
+      end if;
+      if Resampled.Pixels = null
+        or else (Paired and then Resampled_2.Pixels = null)
+      then
          Release;
          Status := E.Make (E.Memory_Allocation_Failed);
          E.Add_Text (Status, "category", "vision", E.Param_Identifier);
@@ -1941,6 +2015,36 @@ package body Model_Runner.Vision is
       declare
          P : Element_Count := 0;
          Row_Bytes : constant B.Byte_Count := B.Byte_Count (Fit_Width);
+
+         --  One frame's pixels of the patch at (PY, PX) into Hidden from
+         --  Into, a channel at a time, scaled as the encoder was trained on.
+         procedure Cut
+           (From   : Model_Runner.Images.Raster;
+            PY, PX : Element_Count;
+            Into   : Element_Count) is
+         begin
+            for C in Element_Count range 0 .. 2 loop
+               for KY in 0 .. Patch - 1 loop
+                  for KX in 0 .. Patch - 1 loop
+                     declare
+                        Y : constant B.Byte_Count :=
+                          B.Byte_Count (PY * Patch + KY);
+                        Xp : constant B.Byte_Count :=
+                          B.Byte_Count (PX * Patch + KX);
+                        Value : constant Real :=
+                          Real (From.Pixels
+                                  (3 * (Y * Row_Bytes + Xp)
+                                   + B.Byte_Count (C)))
+                          / 255.0;
+                     begin
+                        Hidden (Into + C * Patch * Patch + KY * Patch + KX) :=
+                          (Value - Item.Mean (Positive (C + 1)))
+                          / Item.Deviation (Positive (C + 1));
+                     end;
+                  end loop;
+               end loop;
+            end loop;
+         end Cut;
       begin
          for WY in 0 .. Windows_Y - 1 loop
             for WX in 0 .. Windows_X - 1 loop
@@ -1949,31 +2053,13 @@ package body Model_Runner.Vision is
                      declare
                         PY : constant Element_Count := WY * Merge + DY;
                         PX : constant Element_Count := WX * Merge + DX;
-                        At_Patch : constant Element_Count := P * Patch_Elements;
+                        At_Patch : constant Element_Count := P * Patch_In;
                      begin
                         Places (P) := (Row => PY, Column => PX);
-                        for C in Element_Count range 0 .. 2 loop
-                           for KY in 0 .. Patch - 1 loop
-                              for KX in 0 .. Patch - 1 loop
-                                 declare
-                                    Y : constant B.Byte_Count :=
-                                      B.Byte_Count (PY * Patch + KY);
-                                    Xp : constant B.Byte_Count :=
-                                      B.Byte_Count (PX * Patch + KX);
-                                    Value : constant Real :=
-                                      Real (Resampled.Pixels
-                                              (3 * (Y * Row_Bytes + Xp)
-                                               + B.Byte_Count (C)))
-                                      / 255.0;
-                                 begin
-                                    Hidden (At_Patch + C * Patch * Patch
-                                            + KY * Patch + KX) :=
-                                      (Value - Item.Mean (Positive (C + 1)))
-                                      / Item.Deviation (Positive (C + 1));
-                                 end;
-                              end loop;
-                           end loop;
-                        end loop;
+                        Cut (Resampled, PY, PX, At_Patch);
+                        if Paired then
+                           Cut (Resampled_2, PY, PX, At_Patch + Patch_Elements);
+                        end if;
                         P := P + 1;
                      end;
                   end loop;
@@ -1982,11 +2068,15 @@ package body Model_Runner.Vision is
          end loop;
       end;
       Model_Runner.Images.Free (Resampled);
+      Model_Runner.Images.Free (Resampled_2);
 
-      --  Patch embedding -- both temporal frames' weights, summed once --
-      --  then where each patch is, from the grid interpolated to the
-      --  picture's patches.
-      Multiply (Work, Hidden, Patches, Item.Patch_Both, X, Item.Patch_Bias);
+      --  Patch embedding -- both temporal frames' weights, summed once,
+      --  over the one frame of a still; the two side by side over the
+      --  two frames of a pair -- then where each patch is, from the grid
+      --  interpolated to the picture's patches.
+      Multiply (Work, Hidden, Patches,
+                (if Paired then Item.Patch_Pair else Item.Patch_Both),
+                X, Item.Patch_Bias);
       Status := Work.Status;
       if E.Is_Ok (Status) then
          for P in 0 .. Patches - 1 loop
@@ -2078,6 +2168,153 @@ package body Model_Runner.Vision is
          Grid_Columns := 0;
       end if;
    end Encode_Qwen;
+
+   -----------------
+   -- Reads_Video --
+   -----------------
+
+   function Reads_Video (Item : Encoder) return Boolean
+   is (Item.Ready and then Is_Qwen (Item));
+
+   ----------------
+   -- Frames_Fit --
+   ----------------
+
+   procedure Frames_Fit
+     (Item   : Encoder;
+      Width, Height : Positive;
+      Frames : Positive;
+      Fit_Width, Fit_Height : out Positive;
+      Status : out E.Error_Info)
+   is
+      Factor : constant Positive := Item.Patch * Item.Merge;
+
+      --  The pixel budget over the video: the most a frame may have --
+      --  the token ceiling's worth, or the whole budget's even share a
+      --  frame where that is less, and never under the least a video
+      --  plus a twentieth -- times the frames.
+      Least_Pixels : constant Long_Long_Integer := Video_Least_Pixels;
+      Frame_Cap : constant Long_Long_Integer :=
+        Long_Long_Integer (Video_Frame_Rows) * Long_Long_Integer (Factor) ** 2;
+      Per_Frame : constant Long_Long_Integer :=
+        Long_Long_Integer'Max
+          (Long_Long_Integer'Min
+             (Frame_Cap, Video_Most_Pixels / Long_Long_Integer (Frames)),
+           Long_Long_Integer
+             (N.Wide_Real'Floor (N.Wide_Real (Least_Pixels) * 1.05)));
+      Most  : constant Long_Long_Integer :=
+        Per_Frame * Long_Long_Integer (Frames);
+      Least : constant Long_Long_Integer := Video_Least_Pixels;
+
+      --  The frames' sides, a side under the window scaled up to it
+      --  first, both by the same factor and cut to whole pixels.
+      H : N.Wide_Real := N.Wide_Real (Height);
+      W : N.Wide_Real := N.Wide_Real (Width);
+
+      function Rounded (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (Half_Even (X / N.Wide_Real (Factor))) * Factor));
+      function Floored (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (N.Wide_Real'Floor (X / N.Wide_Real (Factor))) * Factor));
+      function Ceiled (X : N.Wide_Real) return Positive
+      is (Positive'Max (Factor,
+            Positive (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor))) * Factor));
+
+      --  The frames' count rounded to whole pairs, which is what the
+      --  budget is checked against; the scaling is by the count itself.
+      Pairs_Worth : constant Long_Long_Integer :=
+        Long_Long_Integer (Half_Even (N.Wide_Real (Frames) / 2.0)) * 2;
+
+      H_Bar, W_Bar : Positive;
+   begin
+      Fit_Width := Factor;
+      Fit_Height := Factor;
+      Status := E.Success;
+
+      if not Reads_Video (Item) then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "video", E.Param_Identifier);
+         return;
+      end if;
+
+      if Height < Factor or else Width < Factor then
+         declare
+            Scale : constant N.Wide_Real :=
+              N.Wide_Real'Max (N.Wide_Real (Factor) / H,
+                               N.Wide_Real (Factor) / W);
+         begin
+            H := N.Wide_Real'Floor (H * Scale);
+            W := N.Wide_Real'Floor (W * Scale);
+         end;
+      end if;
+
+      if N.Wide_Real'Max (H, W) / N.Wide_Real'Min (H, W) > 200.0 then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "video aspect", E.Param_Identifier);
+         return;
+      end if;
+
+      H_Bar := Rounded (H);
+      W_Bar := Rounded (W);
+
+      if Pairs_Worth * Long_Long_Integer (H_Bar) * Long_Long_Integer (W_Bar)
+           > Most
+      then
+         declare
+            Beta : constant N.Wide_Real :=
+              Elementary.Sqrt
+                (N.Wide_Real (Frames) * H * W / N.Wide_Real (Most));
+         begin
+            H_Bar := Floored (H / Beta);
+            W_Bar := Floored (W / Beta);
+         end;
+      elsif Pairs_Worth * Long_Long_Integer (H_Bar) * Long_Long_Integer (W_Bar)
+              < Least
+      then
+         declare
+            Beta : constant N.Wide_Real :=
+              Elementary.Sqrt
+                (N.Wide_Real (Least) / (N.Wide_Real (Frames) * H * W));
+         begin
+            H_Bar := Ceiled (H * Beta);
+            W_Bar := Ceiled (W * Beta);
+         end;
+      end if;
+
+      Fit_Width := W_Bar;
+      Fit_Height := H_Bar;
+   end Frames_Fit;
+
+   -------------------
+   -- Encode_Frames --
+   -------------------
+
+   procedure Encode_Frames
+     (Item    : in out Encoder;
+      First, Second : Model_Runner.Images.Raster;
+      Fit_Width, Fit_Height : Positive;
+      Team    : CPU.Pool_Reference;
+      Rows    : out T.Real_Array_Access;
+      Grid_Rows    : out Natural;
+      Grid_Columns : out Natural;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out E.Error_Info) is
+   begin
+      if not Reads_Video (Item) then
+         Rows := null;
+         Grid_Rows := 0;
+         Grid_Columns := 0;
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "video", E.Param_Identifier);
+         return;
+      end if;
+
+      Encode_Qwen
+        (Item, First, Team, Rows, Grid_Rows, Grid_Columns, Cancel, Status,
+         Paired => True, Second => Second,
+         Pair_Width => Fit_Width, Pair_Height => Fit_Height);
+   end Encode_Frames;
 
    ------------
    -- Encode --

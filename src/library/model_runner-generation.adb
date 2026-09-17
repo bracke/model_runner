@@ -1,4 +1,5 @@
 with Ada.Exceptions;
+with Ada.Long_Float_Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
@@ -30,6 +31,58 @@ package body Model_Runner.Generation is
 
    use type N.Element_Count;
    package Vocab renames Model_Runner.Tokenizer;
+
+   ------------------
+   -- Seconds_Text --
+   ------------------
+
+   function Seconds_Text (Seconds : Long_Float) return String is
+      --  The exact decimal expansion, which is what the reference rounds
+      --  from: a quarter is a tie and goes to the even digit, and a
+      --  number that only looks like a tie in short -- 0.35, which is a
+      --  hair under -- is not one and goes down.
+      Whole : String (1 .. 64);
+      Point : Natural;
+      Cut   : Natural;
+   begin
+      Ada.Long_Float_Text_IO.Put (Whole, Seconds, Aft => 30, Exp => 0);
+      Point := Ada.Strings.Fixed.Index (Whole, ".");
+
+      --  The first decimal stays or goes up by one: up where what follows
+      --  is past a half, or is a half exactly and the digit is odd.
+      Cut := Point + 1;
+      declare
+         Head : String := Ada.Strings.Fixed.Trim (Whole (1 .. Cut), Ada.Strings.Left);
+         Rest : constant String := Whole (Cut + 1 .. Whole'Last);
+         Up   : Boolean := False;
+         Tie  : constant Boolean := Rest (Rest'First) = '5'
+           and then (for all C of Rest (Rest'First + 1 .. Rest'Last) => C = '0');
+      begin
+         if Rest (Rest'First) > '5' then
+            Up := True;
+         elsif Tie then
+            Up := (Character'Pos (Head (Head'Last)) - Character'Pos ('0')) mod 2 = 1;
+         elsif Rest (Rest'First) = '5' then
+            Up := True;
+         end if;
+
+         if Up then
+            --  Carry through the digits, the point stepped over.
+            for Index in reverse Head'Range loop
+               if Head (Index) = '.' then
+                  null;
+               elsif Head (Index) = '9' then
+                  Head (Index) := '0';
+               else
+                  Head (Index) := Character'Succ (Head (Index));
+                  return Head;
+               end if;
+            end loop;
+            return "1" & Head;
+         end if;
+         return Head;
+      end;
+   end Seconds_Text;
 
    --  Room kept in the pending buffer beyond the longest stop string. One
    --  decoded token cannot contribute more bytes than this, so a fragment
@@ -130,6 +183,62 @@ package body Model_Runner.Generation is
       --  of markers in the prompt can be checked against the pictures.
       Crops_Written : Natural := 0;
 
+      --  The videos' markers, each opened out into its slots as the
+      --  reference processor writes them: the seconds, the opener, the
+      --  marker and the closer a slot, the k-th marker taking the k-th
+      --  video's slots. A marker past the videos given is left as it
+      --  stands for the count check to refuse.
+      function Videos_Written (Text : String) return String is
+         Marker : constant String :=
+           Model_Runner.Text.To_String (Pictures.Video_Marker_Text);
+         Result : Ada.Strings.Unbounded.Unbounded_String;
+         From   : Positive := Text'First;
+         Which  : Natural := 0;
+         Slot   : Natural := 0;
+      begin
+         if Marker = "" or else Pictures.Video_Slots = null then
+            return Text;
+         end if;
+
+         while From <= Text'Last loop
+            declare
+               At_Marker : constant Natural :=
+                 Ada.Strings.Fixed.Index (Text (From .. Text'Last), Marker);
+            begin
+               if At_Marker = 0 then
+                  Ada.Strings.Unbounded.Append (Result, Text (From .. Text'Last));
+                  exit;
+               end if;
+
+               Ada.Strings.Unbounded.Append (Result, Text (From .. At_Marker - 1));
+               Which := Which + 1;
+
+               if Which in Pictures.Video_Slots.all'Range then
+                  for Count in 1 .. Pictures.Video_Slots.all (Which) loop
+                     Slot := Slot + 1;
+                     Ada.Strings.Unbounded.Append
+                       (Result,
+                        "<"
+                        & (if Pictures.Times /= null
+                              and then Slot in Pictures.Times.all'Range
+                           then Seconds_Text (Pictures.Times.all (Slot))
+                           else "0.0")
+                        & " seconds>"
+                        & Model_Runner.Text.To_String (Pictures.Video_Open)
+                        & Marker
+                        & Model_Runner.Text.To_String (Pictures.Video_Close));
+                  end loop;
+               else
+                  Ada.Strings.Unbounded.Append (Result, Marker);
+               end if;
+
+               From := At_Marker + Marker'Length;
+            end;
+         end loop;
+
+         return Ada.Strings.Unbounded.To_String (Result);
+      end Videos_Written;
+
       --  The prompt as the reference processor rewrites it before
       --  tokenizing: each marker's text set between the frame's two
       --  halves, and a picture with crops among the processor's words,
@@ -148,7 +257,7 @@ package body Model_Runner.Generation is
          Which  : Natural := 0;
       begin
          if Marker = "" then
-            return Prompt;
+            return Videos_Written (Prompt);
          end if;
 
          while From <= Prompt'Last loop
@@ -196,8 +305,19 @@ package body Model_Runner.Generation is
             end;
          end loop;
 
-         return Ada.Strings.Unbounded.To_String (Result);
+         return Videos_Written (Ada.Strings.Unbounded.To_String (Result));
       end Written;
+
+      --  Whether a token is a marker of either kind, and whether one is a
+      --  soft token of either kind.
+      function Is_Marker (Token : Vocab.Token_Id) return Boolean
+      is (Token = Pictures.Marker
+          or else (Pictures.Video_Marker /= Vocab.No_Token
+                   and then Token = Pictures.Video_Marker));
+      function Is_Soft (Token : Vocab.Token_Id) return Boolean
+      is (Token = Pictures.Soft
+          or else (Pictures.Video_Marker /= Vocab.No_Token
+                   and then Token = Pictures.Video_Marker));
 
       Shown : constant String := Written;
 
@@ -652,17 +772,36 @@ package body Model_Runner.Generation is
       if Pictures.Marker /= Vocab.No_Token then
          declare
             Marked : Natural := 0;
+
+            --  Whether the k-th marker is of the kind the k-th entry is:
+            --  a picture's marker for a still, a video's for a slot. A
+            --  marker past the entries is counted and refused below.
+            function Fits (Which : Positive; Token : Vocab.Token_Id)
+              return Boolean
+            is (Pictures.Kinds = null
+                or else Which not in Pictures.Kinds.all'Range
+                or else (Pictures.Kinds.all (Which) = Slot)
+                        = (Token = Pictures.Video_Marker
+                           and then Pictures.Video_Marker /= Vocab.No_Token));
+
+            Misfit : Boolean := False;
          begin
             for Index in 1 .. Prompt_Count loop
-               if Tokens.all (Index) = Pictures.Marker then
+               if Is_Marker (Tokens.all (Index)) then
                   Marked := Marked + 1;
+                  if not Fits (Marked, Tokens.all (Index)) then
+                     Misfit := True;
+                  end if;
                end if;
             end loop;
 
             --  Every crop stands behind a marker of its own, written by
             --  the rewrite above; what the prompt must have marked is the
-            --  pictures.
+            --  pictures. A crop is a still's, and a set with crops names
+            --  no kinds, so the kinds are asked where every marker is an
+            --  entry's.
             if Marked /= Pictures.Count + Crops_Written
+              or else Misfit
               or else (Marked > 0
                        and then (Pictures.Rows = null
                                  or else Pictures.Soft = Vocab.No_Token))
@@ -703,7 +842,7 @@ package body Model_Runner.Generation is
                                          Prompt_Count + Extra));
 
                   for Index in 1 .. Prompt_Count loop
-                     if Tokens.all (Index) /= Pictures.Marker then
+                     if not Is_Marker (Tokens.all (Index)) then
                         Filled := Filled + 1;
                         Opened.all (Filled) := Tokens.all (Index);
                      else
@@ -712,9 +851,13 @@ package body Model_Runner.Generation is
                            Filled := Filled + 1;
                            Opened.all (Filled) := Tokens.all (Index);
                         end if;
+                        --  A slot's rows stand behind the video's own
+                        --  marker, a still's behind the soft token.
                         for Row in 1 .. Rows_Of (Which) loop
                            Filled := Filled + 1;
-                           Opened.all (Filled) := Pictures.Soft;
+                           Opened.all (Filled) :=
+                             (if Tokens.all (Index) = Pictures.Marker
+                              then Pictures.Soft else Pictures.Video_Marker);
                         end loop;
                         if Pictures.Closer /= Vocab.No_Token then
                            Filled := Filled + 1;
@@ -855,11 +998,12 @@ package body Model_Runner.Generation is
                return L.No_Given_Rows;
             end if;
             for Step in 1 .. From - 1 loop
-               if Tokens.all (Step) = Pictures.Soft then
+               if Is_Soft (Tokens.all (Step)) then
                   Before := Before + 1;
                end if;
             end loop;
-            return (Token => Pictures.Soft, Rows => Pictures.Rows,
+            return (Token => Pictures.Soft, Second => Pictures.Video_Marker,
+                    Rows => Pictures.Rows,
                     First => Before, Places => Pictures.Places,
                     Causal => Pictures.Causal_Rows);
          end Given_Before;
@@ -881,8 +1025,8 @@ package body Model_Runner.Generation is
                   Last : constant Natural := Natural'Min (Index + Span - 1, Prompt_Count);
                begin
                   if Pictures.Soft = Vocab.No_Token or else Last >= Prompt_Count
-                    or else Tokens.all (Last) /= Pictures.Soft
-                    or else Tokens.all (Last + 1) /= Pictures.Soft
+                    or else not Is_Soft (Tokens.all (Last))
+                    or else not Is_Soft (Tokens.all (Last + 1))
                   then
                      return Last;
                   end if;
@@ -891,12 +1035,12 @@ package body Model_Runner.Generation is
                      Run_End   : Natural := Last;
                   begin
                      while Run_Start > Index
-                       and then Tokens.all (Run_Start - 1) = Pictures.Soft
+                       and then Is_Soft (Tokens.all (Run_Start - 1))
                      loop
                         Run_Start := Run_Start - 1;
                      end loop;
                      while Run_End < Prompt_Count
-                       and then Tokens.all (Run_End + 1) = Pictures.Soft
+                       and then Is_Soft (Tokens.all (Run_End + 1))
                      loop
                         Run_End := Run_End + 1;
                      end loop;

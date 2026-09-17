@@ -12107,6 +12107,14 @@ package body Model_Runner.Llama is
           then Item'Unchecked_Access
           else Beside (Beside'First + Natural (Row_Owner (Which)) - 1));
 
+      --  Whether a token is one the given rows stand behind: the set's
+      --  token, or its second where it has one.
+      function Stands_Behind
+        (Token : Token_Id; Mine : Given_Rows) return Boolean
+      is (Token = Mine.Token
+          or else (Mine.Second /= Model_Runner.Tokenizer.No_Token
+                   and then Token = Mine.Second));
+
       --  The rows given for row Which's member: the round's set for that
       --  member where sets were given a member -- a round of one member
       --  is a batch, whose every row is the first set's -- else the one
@@ -12522,7 +12530,8 @@ package body Model_Runner.Llama is
                if Mine.Rows /= null
                  and then not Mine.Causal
                  and then Mine.Token /= Model_Runner.Tokenizer.No_Token
-                 and then Tokens (Tokens'First + Natural (Which)) = Mine.Token
+                 and then Stands_Behind
+                            (Tokens (Tokens'First + Natural (Which)), Mine)
                then
                   declare
                      Ends : Element_Count := Which;
@@ -12531,8 +12540,9 @@ package body Model_Runner.Llama is
                      --  pictures side by side in a round are two runs.
                      while Ends + 1 < Count
                        and then Row_Owner (Ends + 1) = Row_Owner (Which)
-                       and then Tokens (Tokens'First + Natural (Ends + 1))
-                                = Mine.Token
+                       and then Stands_Behind
+                                  (Tokens (Tokens'First + Natural (Ends + 1)),
+                                   Mine)
                      loop
                         Ends := Ends + 1;
                      end loop;
@@ -12559,7 +12569,7 @@ package body Model_Runner.Llama is
               Tokens (Tokens'First + Natural (Which));
          begin
             if Given_Of (Which).Rows /= null
-              and then Token = Given_Of (Which).Token
+              and then Stands_Behind (Token, Given_Of (Which))
             then
                declare
                   Mine   : constant Given_Rows := Given_Of (Which);

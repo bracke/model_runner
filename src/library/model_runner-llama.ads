@@ -1293,6 +1293,11 @@ package Model_Runner.Llama is
    --  are; null leaves every row at its own position in the sequence.
    type Given_Rows is record
       Token  : Model_Runner.Tokenizer.Token_Id := Model_Runner.Tokenizer.No_Token;
+
+      --  A second token the same rows stand behind, taken in the same
+      --  order: a video's, where a picture's is the first. No_Token for
+      --  none.
+      Second : Model_Runner.Tokenizer.Token_Id := Model_Runner.Tokenizer.No_Token;
       Rows   : Model_Runner.Tensors.Real_Array_Access := null;
       First  : Model_Runner.Numerics.Element_Count := 0;
       Places : Row_Places_Access := null;

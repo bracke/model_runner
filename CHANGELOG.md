@@ -55,6 +55,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A Qwen3.5 picture's side sixteen past a multiple of thirty-two rounds
+  as the reference rounds it.** The reference's smart_resize rounds a
+  side to the nearest window with a half going to the even one -- eighty
+  pixels are two windows and a half, and it makes them two -- and this
+  build rounded the half up, so a picture eighty, a hundred and forty-four
+  or two hundred and eight pixels a side became one window more than the
+  reference's and as many rows more. The picture's fit rounds to even now,
+  as the video's does.
 - **Gemma 3 27B scales its attention scores by the width its embedding
   implies.** The 27B's heads are 128 wide and its embedding over its head
   count is 168, and the reference scales scores by the root of the latter,
@@ -132,6 +140,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Qwen3.5 sees video.** `{"type": "video", "path": "DIR", "fps": 2}`
+  in `--prompt-parts`, or `/video DIR` in interactive mode, shows the
+  model a video given as a directory of frames -- one picture a frame in
+  their names' order, taken at fps a second, which is the rate the
+  reference processor samples a video at -- and a conversation read back
+  from a checkpoint shows it again. No video file is read: the frames are
+  what ffmpeg wrote out. Every frame is resampled to the one size the
+  reference video processor's rule picks over the whole video, with the
+  per-frame cap the reference implementation applies; the frames go
+  through the encoder in pairs, each frame through its own temporal patch
+  weights where a still is one frame through their sum, the last paired
+  with itself when the count is odd; and each pair is a slot, a picture of
+  its own to the text model, stood among the words the reference
+  processor writes for it -- the seconds it stands at, to one decimal with
+  a half going to the even digit, then `<|vision_start|>`, its rows and
+  `<|vision_end|>`, inside the pair the template wrote round the video. A
+  video's slots and a conversation's pictures stand in one set in the
+  conversation's order, each behind its own marker, and markers of the
+  wrong kinds are refused as a count mismatch. Crossed with the reference
+  three ways: a pair of frames against a plain binary64 computation of
+  the small projector, a frame paired with itself being the still; five
+  frames of the plaza picture against the reference tower, to a millionth
+  of a row's norm, recorded for `tests see --frames --expect`; and the
+  prompt, the reference's token for token, with the reference's greedy
+  answer beside this build's in `docs/reference-runtime.md`. Gemma 3 has
+  no video and refuses one by name.
 - **The code variant of jina-bert-v2 is read.** jina-embeddings-v2-base-code
   carries six tensors a block the text variant does not -- a centred
   normalization over the whole of the queries and another over the whole

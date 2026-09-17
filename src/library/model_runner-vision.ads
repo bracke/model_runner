@@ -144,6 +144,79 @@ package Model_Runner.Vision is
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Whether the encoder reads a video: Qwen3.5's does, whose patch
+   --  embedding is over two frames at once -- a still picture being the
+   --  same frame twice -- and whose text model reads each pair of frames
+   --  as a picture of its own, stood among the words that say when it
+   --  was. Gemma 3's does not.
+   --
+   --  @param Item Open encoder.
+   --  @return True when Frames_Fit and Encode_Frames may be called.
+   function Reads_Video (Item : Encoder) return Boolean;
+
+   --  The size every frame of a video is resampled to, by the reference
+   --  video processor's rule: the sides rounded to multiples of the
+   --  window, held between the video's pixel bounds over all its frames
+   --  -- the least a video, and the most a frame times the frames, each
+   --  frame capped at the reference's token ceiling -- and a side under
+   --  the window scaled up to it first.
+   --
+   --  @param Item Open encoder that reads video.
+   --  @param Width The frames' width, in pixels; every frame the same.
+   --  @param Height The frames' height.
+   --  @param Frames How many frames the video has, before any padding to
+   --    a whole number of pairs.
+   --  @param Fit_Width Receives the width to resample to.
+   --  @param Fit_Height Receives the height.
+   --  @param Status Success, or Arch_Unsupported_Feature where the frames'
+   --    sides are more than two hundred to one, which the reference refuses.
+   procedure Frames_Fit
+     (Item   : Encoder;
+      Width, Height : Positive;
+      Frames : Positive;
+      Fit_Width, Fit_Height : out Positive;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Encode one pair of frames of a video: the rows the text model reads
+   --  the pair as, laid out as Encode lays a picture's -- Grid_Rows by
+   --  Grid_Columns of them. The two frames are resampled to the fit
+   --  Frames_Fit chose for the video, and each patch is the two frames'
+   --  pixels through the patch weights of each temporal frame in turn,
+   --  where a still picture's is the one frame through their sum. A video
+   --  with an odd number of frames pairs its last with itself, as the
+   --  reference pads it; the caller passes the same frame twice.
+   --
+   --  @param Item Open encoder that reads video.
+   --  @param First The pair's first frame, any size.
+   --  @param Second Its second, any size.
+   --  @param Fit_Width The width Frames_Fit chose for the video.
+   --  @param Fit_Height The height.
+   --  @param Team As for Encode.
+   --  @param Rows Receives the rows, or null on failure.
+   --  @param Grid_Rows Receives how many rows of rows the pair became.
+   --  @param Grid_Columns Receives how many rows each has.
+   --  @param Cancel Stop request, or null.
+   --  @param Status As for Encode, or Arch_Unsupported_Feature on an
+   --    encoder that does not read video.
+   procedure Encode_Frames
+     (Item    : in out Encoder;
+      First, Second : Model_Runner.Images.Raster;
+      Fit_Width, Fit_Height : Positive;
+      Team    : Model_Runner.Backend.CPU.Pool_Reference;
+      Rows    : out Model_Runner.Tensors.Real_Array_Access;
+      Grid_Rows    : out Natural;
+      Grid_Columns : out Natural;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  The reference video processor's bounds, which no projector file
+   --  states: the fewest pixels a video may have over its frames, the
+   --  most, and the most rows one frame may become, at which its pixels
+   --  are capped when the budget's even share a frame is more.
+   Video_Least_Pixels : constant := 4096;
+   Video_Most_Pixels  : constant := 25_165_824;
+   Video_Frame_Rows   : constant := 768;
+
 private
 
    package T renames Model_Runner.Tensors;
@@ -216,6 +289,12 @@ private
       Grid          : Positive := 48;
       Patch_Sum     : T.Real_Array_Access := null;
       Patch_Both    : T.View := T.Empty_View;
+
+      --  And the two temporal frames' patch weights side by side, a row
+      --  the first frame's then the second's, for a pair of frames of a
+      --  video whose patch is the two frames' pixels laid the same way.
+      Patch_Pair_Rows : T.Real_Array_Access := null;
+      Patch_Pair      : T.View := T.Empty_View;
       Merge_In, Merge_Out : T.View := T.Empty_View;
       Merge_In_Bias, Merge_Out_Bias : T.Real_Array_Access := null;
       Least_Rows    : Positive := 64;

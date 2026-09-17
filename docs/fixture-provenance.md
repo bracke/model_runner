@@ -225,7 +225,11 @@ vision-crossing/qwen35-0.8b.expect` records three rows the reference makes
 of `plaza.png` beside it, which `tests see --expect` compares this build's
 against, and `record.py` there writes it afresh. The picture is a drawing
 of three shapes on a gradient, 256 by 160, made by a few lines of Pillow
-so that nobody's photograph need be committed.
+so that nobody's photograph need be committed. The five frames under
+`plaza-frames/` are a window of 208 by 128 sliding across it, twelve
+pixels a frame and darkening a little, made the same way; `qwen35-0.8b-
+frames.expect` records three rows the reference makes of them as a video,
+and `record_frames.py` writes it afresh.
 
 ### jina-embeddings-v2-base-en, F16 and Q8_0
 

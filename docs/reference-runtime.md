@@ -683,6 +683,23 @@ photograph's prompt: the reference's five likeliest are ` A` -0.56, ` a`
 -1.54, `A` -2.81, ` An` -3.73, ` It` -3.73; this build's, on the Q8_0 text
 weights, ` A` -0.61, ` a` -1.36, `A` -3.11, ` It` -3.67, ` An` -3.88.
 
+`qwen35_frames.py` does the same for a video, given as frames: the five
+frames under `plaza-frames/`, a window sliding across the plaza picture,
+as one video at two frames a second. The prompt: the reference processor
+opens the template's one `<|video_pad|>` into, for every pair of frames,
+the seconds the pair stands at, `<|vision_start|>`, one `<|video_pad|>` a
+row and `<|vision_end|>`, inside the pair the template wrote round the
+video -- 121 tokens for the five frames and a question, as this build
+counts. The encoder: on the same pixels, every frame resized to the size
+the reference's video smart_resize picks with the per-frame cap the
+reference implementation applies, the reference tower's rows and the rows
+`tests see --frames --dump` wrote agree to a cosine of 0.9999999 over the
+three pairs' 72 rows, the worst row apart by a ten-thousandth of the
+median norm. And the reference's greedy answer, "A red circle, a yellow
+triangle, and a blue square are shown in a colorful background", beside
+this build's on the Q8_0 text weights, "A red circle, a yellow triangle
+and blue square are shown on the screen".
+
 What the scripts found is also held without them: `tests/fixtures/
 vision-crossing/qwen35-0.8b.expect` records three rows the reference tower
 makes of the small picture beside it -- the first, the middle and the last
@@ -696,7 +713,11 @@ projector file, and no Python, reruns that much of the crossing; without
 the projector file the command says `see: skipped (no projector at ...)`
 and exits well, as `tests external-model` does without its model, so a
 gate may name it on every machine and mean it on the ones that have the
-file. `gemma3-4b.expect` beside it records the same for Gemma 3's
+file. `qwen35-0.8b-frames.expect` records the same for the five frames as
+a video -- the first, the middle and the last of 72 rows, in three
+different pairs -- which `tests see --frames plaza-frames --expect` compares
+against, and `record_frames.py` writes afresh; the rows sit within two
+millionths on the host and on the device. `gemma3-4b.expect` beside it records the same for Gemma 3's
 projector, from the vision tower and projector of google/gemma-3-4b-it
 alone.
 

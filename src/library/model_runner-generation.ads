@@ -320,8 +320,36 @@ package Model_Runner.Generation is
    --  whole picture's frame, Crop_Bridge, and then each crop's frame with
    --  Crop_Gap between two -- the words being the processor's own, which
    --  the model was trained to see -- and the frames opened out as above.
+   --  A video is shown as the reference processor shows one: its frames
+   --  in pairs, each pair encoded as a picture of its own -- a slot --
+   --  and stood in the prompt among the words that say when it was. The
+   --  template writes one video marker for the video; the rewrite makes
+   --  of it, for every slot, the seconds the slot stands at, the opener,
+   --  the marker and the closer -- "<0.2 seconds><|vision_start|>
+   --  <|video_pad|><|vision_end|>" -- and each slot's marker then opens
+   --  out to its rows as a picture's does, behind the video marker as its
+   --  own soft token. The slots take their places among the pictures in
+   --  the order the markers stand: Kinds says, entry by entry, which is
+   --  which, Video_Slots how many slots each video has, and Slot_Times
+   --  the seconds of every slot in order.
    type Crop_Counts is array (Positive range <>) of Natural;
    type Crop_Counts_Access is access Crop_Counts;
+
+   type Entry_Kind is (Still, Slot);
+   type Entry_Kinds is array (Positive range <>) of Entry_Kind;
+   type Entry_Kinds_Access is access Entry_Kinds;
+
+   type Slot_Times is array (Positive range <>) of Long_Float;
+   type Slot_Times_Access is access Slot_Times;
+
+   --  The seconds a slot stands at, written as the reference processor
+   --  writes them: to one decimal, a half going to the even digit, which
+   --  is what a slot a quarter second in -- the first of a video sampled
+   --  at two frames a second -- turns on: "0.2", not "0.3".
+   --
+   --  @param Seconds The time.
+   --  @return The text, without its angle brackets or the word.
+   function Seconds_Text (Seconds : Long_Float) return String;
 
    type Picture_Set is record
       Marker      : Model_Runner.Tokenizer.Token_Id :=
@@ -331,7 +359,13 @@ package Model_Runner.Generation is
       Closer      : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Per_Picture : Natural := 0;
+
+      --  How many entries the set holds -- a still, or a slot of a video,
+      --  each with rows of its own -- and how many parts of the
+      --  conversation they came from, a video being one part of as many
+      --  entries as it has slots.
       Count       : Natural := 0;
+      Parts       : Natural := 0;
       Rows        : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  How many rows each picture has, where the count is the picture's
@@ -360,6 +394,20 @@ package Model_Runner.Generation is
       Crop_Lead   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crop_Bridge : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crop_Gap    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
+      --  The videos, as described above: their marker, which is their
+      --  soft token too; its text and the opener and closer the rewrite
+      --  sets a slot between; which entries are slots, how many slots
+      --  each video has, and when each slot is. Null and No_Token where
+      --  the model reads no video, or none was shown.
+      Video_Marker : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Video_Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Video_Open  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Video_Close : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Kinds       : Entry_Kinds_Access := null;
+      Video_Slots : Crop_Counts_Access := null;
+      Times       : Slot_Times_Access := null;
    end record;
 
    No_Pictures : constant Picture_Set := (others => <>);

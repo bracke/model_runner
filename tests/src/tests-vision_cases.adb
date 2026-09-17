@@ -8,6 +8,7 @@ with Interfaces;
 with Fixtures;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
+with Model_Runner.CLI.Pictures;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
@@ -1194,6 +1195,243 @@ package body Tests.Vision_Cases is
       B.Free (Image);
    end Pictures_Stand_Behind_Their_Markers;
 
+   --  A video's slots stand among their seconds.
+   --
+   --  The template writes one marker for a video; the reference
+   --  processor makes of it, for every pair of frames, the seconds the
+   --  pair stands at and the pair's own marker between an opener and a
+   --  closer, and each marker then opens out to the pair's rows as a
+   --  picture's does. Here the tiny vocabulary's "a" is the picture
+   --  marker and its own soft token, as Qwen's is, "b" the video's, and
+   --  a line break the opener and closer: the prompt "ba" shows a video
+   --  of two slots and then a picture -- that way round because "ab" is
+   --  a piece of the vocabulary and "a" at the front takes the piece
+   --  with the word boundary -- and the tokens committed are those of
+   --  the rewritten text with every marker opened out, each slot's rows
+   --  behind "b"s and the picture's behind "a"s, in the set's order. The
+   --  seconds are written to one decimal with a half going to the even
+   --  digit, which the first slot of a video at two frames a second turns
+   --  on; and a prompt whose markers are not the set's kinds is refused.
+   procedure A_Videos_Slots_Stand_Among_Their_Seconds
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      Assert (Gen.Seconds_Text (0.25) = "0.2"
+              and then Gen.Seconds_Text (1.25) = "1.2"
+              and then Gen.Seconds_Text (0.35) = "0.3"
+              and then Gen.Seconds_Text (2.0) = "2.0"
+              and then Gen.Seconds_Text (0.75) = "0.8"
+              and then Gen.Seconds_Text (9.95) = "9.9"
+              and then Gen.Seconds_Text (0.95) = "0.9"
+              and then Gen.Seconds_Text (0.05) = "0.1"
+              and then Gen.Seconds_Text (12.25) = "12.2"
+              and then Gen.Seconds_Text (0.96) = "1.0"
+              and then Gen.Seconds_Text (9.96) = "10.0"
+              and then Gen.Seconds_Text (2.5) = "2.5"
+              and then Gen.Seconds_Text (0.0) = "0.0"
+              and then Gen.Seconds_Text (100.15) = "100.2",
+              "the seconds are not written as the reference writes them: "
+              & Gen.Seconds_Text (0.25) & " " & Gen.Seconds_Text (0.35) & " "
+              & Gen.Seconds_Text (0.75) & " " & Gen.Seconds_Text (9.96) & " "
+              & Gen.Seconds_Text (100.15));
+
+      --  A video part is named as a picture is, by its type and path; a
+      --  part of another type, or one with no path, names nothing.
+      Assert (Model_Runner.CLI.Pictures.Names_A_Picture
+                ("[{""type"": ""video"", ""path"": ""frames"", ""fps"": 2}, "
+                 & "{""type"": ""text"", ""text"": ""?""}]"),
+              "a video part was not seen as one");
+      Assert (not Model_Runner.CLI.Pictures.Names_A_Picture
+                ("[{""type"": ""video"", ""fps"": 2}, "
+                 & "{""type"": ""audio"", ""path"": ""x""}]"),
+              "a part with no path, or of another type, was taken for a video");
+
+      Tiny_Model.Build (Image, Room => 128);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Model_Runner.GGUF.Containers.Container;
+         Ready  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Words  : access constant Vocab.Vocabulary;
+         Pictures : Gen.Picture_Set;
+         Request  : Gen.Request;
+         Stop     : Model_Runner.Stops.Set;
+         Outcome  : Gen.Result;
+         Width    : constant N.Element_Count := Tiny_Model.Embedding;
+         Per      : constant := 3;
+
+         Expected : Vocab.Token_Array (1 .. 256);
+         Count    : Natural := 0;
+
+         --  The tokens of a text with every marker opened out: "a" to
+         --  Per of itself, the k-th "b" to its slot's rows of itself.
+         procedure Expect (Text : String) is
+            Raw  : Vocab.Token_Array (1 .. 256);
+            Read : Natural;
+            Slot : Natural := 0;
+         begin
+            Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+            Assert (E.Is_Ok (Status), "the expected text did not tokenize: "
+                    & E.Error_Code'Image (Status.Code));
+            Count := 0;
+            for Index in 1 .. Read loop
+               if Raw (Index) = Pictures.Marker then
+                  for Row in 1 .. Per loop
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Soft;
+                  end loop;
+               elsif Raw (Index) = Pictures.Video_Marker then
+                  Slot := Slot + 1;
+                  for Row in 1 .. Pictures.Counts.all (Slot) loop
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Video_Marker;
+                  end loop;
+               else
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+               end if;
+            end loop;
+         end Expect;
+
+         procedure Check (What : String) is
+         begin
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run with " & What & " failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the prompt with " & What & " is"
+                    & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
+                    & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the prompt with " & What & " is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+         end Check;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not parse");
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         Words := L.Vocabulary (Ready);
+
+         Pictures.Marker := Vocab.Find (Words.all, "a");
+         Pictures.Soft := Pictures.Marker;
+         Pictures.Closer := Vocab.No_Token;
+         Pictures.Keep_Marker := False;
+         Pictures.Causal_Rows := True;
+         Pictures.Video_Marker := Vocab.Find (Words.all, "b");
+         Pictures.Video_Marker_Text := Model_Runner.Text.To_Bounded ("b");
+         --  A line break either side rather than a letter: "b" beside a
+         --  "c" would vanish into the piece "bc".
+         Pictures.Video_Open := Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+         Pictures.Video_Close := Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+         Assert (Pictures.Marker /= Vocab.No_Token
+                 and then Pictures.Video_Marker /= Vocab.No_Token,
+                 "the tiny vocabulary lacks the pieces this test needs");
+
+         --  A video of two slots, of two and three rows, a quarter second
+         --  and a second and a quarter in, then one still of Per rows.
+         Pictures.Per_Picture := Per;
+         Pictures.Count := 3;
+         Pictures.Parts := 2;
+         Pictures.Counts := new Gen.Crop_Counts'(2, 3, Per);
+         Pictures.Kinds := new Gen.Entry_Kinds'(Gen.Slot, Gen.Slot, Gen.Still);
+         Pictures.Video_Slots := new Gen.Crop_Counts'(1 => 2);
+         Pictures.Times := new Gen.Slot_Times'(0.25, 1.25);
+         T.Allocate ((Per + 5) * Width, Pictures.Rows);
+         Seed := 777;
+         for Value of Pictures.Rows.all loop
+            Value := Next;
+         end loop;
+
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 4;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+
+         L.Open (Live, Ready, 128, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         --  "ba": the video opened out slot by slot, then the picture.
+         Expect ("<0.2 seconds>" & ASCII.LF & "b" & ASCII.LF
+                 & "<1.2 seconds>" & ASCII.LF & "b" & ASCII.LF & "a");
+         Gen.Generate
+           (Ready, Live, "ba", Request, Stop, null, null, null, null, null,
+            null, Pictures => Pictures, Outcome => Outcome);
+         Check ("a video and a picture");
+
+         --  The same prompt with the same rows answers the same, and
+         --  with other rows for the slots commits the same tokens: the
+         --  rows are the slots' own and the words are not theirs.
+         declare
+            First_Text : constant String := Gen.Generated_Text (Outcome);
+         begin
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "ba", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (Gen.Generated_Text (Outcome) = First_Text,
+                    "the same video twice answered differently");
+
+            for Value of Pictures.Rows.all (0 .. 5 * Width - 1) loop
+               Value := Next * 8.0;
+            end loop;
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "ba", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Check ("other rows for the video");
+         end;
+
+         --  The set the other way round -- the still first, then the
+         --  slots -- under the same prompt: the video's marker where the
+         --  picture's should be, refused, since the set's rows would
+         --  stand behind the wrong words.
+         Pictures.Kinds.all := [Gen.Still, Gen.Slot, Gen.Slot];
+         L.Reset (Live);
+         Gen.Release (Outcome);
+         Gen.Generate
+           (Ready, Live, "ba", Request, Stop, null, null, null, null, null,
+            null, Pictures => Pictures, Outcome => Outcome);
+         Assert (Gen."=" (Outcome.Reason, Gen.Runtime_Error)
+                 and then Outcome.Error.Code = E.Generation_Picture_Count_Mismatch,
+                 "markers of the wrong kinds were not refused: "
+                 & E.Error_Code'Image (Outcome.Error.Code));
+         Pictures.Kinds.all := [Gen.Slot, Gen.Slot, Gen.Still];
+
+         --  And "b" alone: a picture given and none marked.
+         L.Reset (Live);
+         Gen.Release (Outcome);
+         Gen.Generate
+           (Ready, Live, "b", Request, Stop, null, null, null, null, null,
+            null, Pictures => Pictures, Outcome => Outcome);
+         Assert (Gen."=" (Outcome.Reason, Gen.Runtime_Error)
+                 and then Outcome.Error.Code = E.Generation_Picture_Count_Mismatch,
+                 "a picture with no marker beside a video was not refused");
+
+         Gen.Release (Outcome);
+         Model_Runner.Stops.Close (Stop);
+         Model_Runner.CLI.Pictures.Release (Pictures);
+         L.Close (Live);
+         L.Close (Ready, Status);
+         Model_Runner.GGUF.Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end A_Videos_Slots_Stand_Among_Their_Seconds;
+
    ------------------------------------------------
    -- The_Qwen_Projector_Encodes_As_The_Reference --
    ------------------------------------------------
@@ -1390,10 +1628,15 @@ package body Tests.Vision_Cases is
    --  weights and placed by the grid interpolated with its corners
    --  aligned; the blocks, with the queries and keys turned by row and
    --  column; the post norm; and a window's four rows joined, through
-   --  the merger's two steps.
+   --  the merger's two steps. Given a Second frame, the rows of the pair
+   --  the two make in a video: the first frame's pixels through the
+   --  first temporal weights and the second's through the second, where
+   --  a still is one frame through both.
    procedure Qwen_Reference_Rows
-     (W : Qwen_Weights; Picture : Images.Raster; Rows : out N.Wide_Real_Array)
+     (W : Qwen_Weights; Picture : Images.Raster; Rows : out N.Wide_Real_Array;
+      Second : Images.Raster := (others => <>))
    is
+      Paired : constant Boolean := Second.Pixels /= null;
       subtype WR is N.Wide_Real;
       type Matrix is array (0 .. Patches_Q - 1, 0 .. Width_Q - 1) of WR;
       type Wide_Matrix is array (0 .. Patches_Q - 1, 0 .. 3 * Width_Q - 1) of WR;
@@ -1522,13 +1765,19 @@ package body Tests.Vision_Cases is
                              (WR (Pixel (Picture, Column_Of (P) * Patch_Q + KX,
                                          Row_Of (P) * Patch_Q + KY, C)) / 255.0
                               - 0.5) / 0.5;
+                           Other : constant WR :=
+                             (if Paired
+                              then (WR (Pixel (Second, Column_Of (P) * Patch_Q + KX,
+                                                Row_Of (P) * Patch_Q + KY, C))
+                                    / 255.0 - 0.5) / 0.5
+                              else Value);
                            Index : constant N.Element_Count :=
                              N.Element_Count
                                (R * Elements_Q + C * Patch_Q * Patch_Q
                                 + KY * Patch_Q + KX);
                         begin
-                           Sum := Sum + Value
-                             * (WR (W.Patch_0 (Index)) + WR (W.Patch_1 (Index)));
+                           Sum := Sum + Value * WR (W.Patch_0 (Index))
+                             + Other * WR (W.Patch_1 (Index));
                         end;
                      end loop;
                   end loop;
@@ -1816,6 +2065,169 @@ package body Tests.Vision_Cases is
       Images.Free (Picture);
    end The_Qwen_Projector_Encodes_As_The_Reference;
 
+   --  A pair of frames encodes as the reference: the first frame through
+   --  the first temporal weights and the second through the second, where
+   --  a still is one frame through both -- so a frame paired with itself
+   --  is the still, to the rounding, and paired with another is not.
+   --  And the fit a video's frames are resampled to follows the reference
+   --  video processor's rule: the sides to multiples of the window, the
+   --  pixels over the frames held between the least and the most with
+   --  each frame capped, a side under the window scaled up first, and
+   --  sides two hundred to one refused. Gemma 3's projector reads no
+   --  video and says so by name.
+   procedure A_Pair_Of_Frames_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      First, Second : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Still, Pair, Same : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Fit_Width, Fit_Height : Positive;
+      Eyes    : Vision.Encoder;
+
+      --  Two frames: a gradient with a bright block, and the same with
+      --  the block moved.
+      procedure Draw (Into : out Images.Raster; Shift : Natural) is
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for Y in 0 .. Tall_Q - 1 loop
+            for X in 0 .. Wide_Q - 1 loop
+               declare
+                  At_Pixel : constant B.Byte_Count :=
+                    B.Byte_Count (3 * (Y * Wide_Q + X)) + 1;
+               begin
+                  Data (At_Pixel) := B.Byte (X * 3);
+                  Data (At_Pixel + 1) := B.Byte (Y * 3);
+                  Data (At_Pixel + 2) :=
+                    (if X in 20 + Shift .. 44 + Shift and then Y in 24 .. 56
+                     then 240 else 30);
+               end;
+            end loop;
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6 64 80 255 ") & Data, "test", Into, Status);
+         Assert (E.Is_Ok (Status), "the test frame was refused");
+      end Draw;
+
+      --  The fit the encoder picks for frames of a size, against the
+      --  reference's rule worked by hand at this projector's window of
+      --  eight pixels.
+      procedure Fits
+        (Width, Height, Frames : Positive; Want_Width, Want_Height : Positive)
+      is
+         Got_Width, Got_Height : Positive;
+         Local : E.Error_Info;
+      begin
+         Vision.Frames_Fit
+           (Eyes, Width, Height, Frames, Got_Width, Got_Height, Local);
+         Assert (E.Is_Ok (Local), "the fit of" & Width'Image & " x"
+                 & Height'Image & " over" & Frames'Image & " frames was refused");
+         Assert (Got_Width = Want_Width and then Got_Height = Want_Height,
+                 "the fit of" & Width'Image & " x" & Height'Image & " over"
+                 & Frames'Image & " frames is" & Got_Width'Image & " x"
+                 & Got_Height'Image & ", not" & Want_Width'Image & " x"
+                 & Want_Height'Image);
+      end Fits;
+   begin
+      Draw (First, 0);
+      Draw (Second, 12);
+
+      Write_Qwen_Projector ("obj/vision-qwen.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen projector did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Reads_Video (Eyes), "the Qwen projector reads no video");
+
+      --  The rule, at the window of eight: sixty-four by eighty over two
+      --  frames stands; twenty by thirty over one is scaled up to the
+      --  least pixels; five by five is scaled to the window first and
+      --  then up; a thousand by twenty rounds to sixteen tall and stands
+      --  as fifty to one; six hundred and forty by four hundred and eighty
+      --  over forty frames is cut to the frames' cap; and two thousand
+      --  by nine is refused as past two hundred to one.
+      Fits (64, 80, 2, 64, 80);
+      Fits (20, 30, 1, 56, 80);
+      Fits (5, 5, 3, 40, 40);
+      Fits (1000, 20, 2, 1000, 16);
+      Fits (640, 480, 40, 256, 192);
+      Vision.Frames_Fit (Eyes, 2000, 9, 2, Fit_Width, Fit_Height, Status);
+      Assert (Status.Code = E.Arch_Unsupported_Feature,
+              "frames two hundred to one were not refused");
+
+      Vision.Frames_Fit (Eyes, Wide_Q, Tall_Q, 2, Fit_Width, Fit_Height, Status);
+      Assert (E.Is_Ok (Status) and then Fit_Width = Wide_Q
+              and then Fit_Height = Tall_Q, "the test frames' fit moved");
+
+      --  The pair against the reference.
+      Qwen_Reference_Rows (W.all, First, Wanted, Second);
+      Vision.Encode_Frames
+        (Eyes, First, Second, Fit_Width, Fit_Height, null, Pair, Grid_Rows,
+         Grid_Columns, Status => Status);
+      Assert (E.Is_Ok (Status), "the pair did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Grid_Rows = Windows_Y_Q and then Grid_Columns = Windows_X_Q,
+              "the pair's grid is" & Natural'Image (Grid_Rows) & " by"
+              & Natural'Image (Grid_Columns));
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Assert (abs (N.Wide_Real (Pair (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "pair element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Pair (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+
+      --  A frame paired with itself is the still; paired with the other,
+      --  it is not.
+      Vision.Encode (Eyes, First, null, Still, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the still did not encode");
+      Vision.Encode_Frames
+        (Eyes, First, First, Fit_Width, Fit_Height, null, Same, Grid_Rows,
+         Grid_Columns, Status => Status);
+      Assert (E.Is_Ok (Status), "the frame paired with itself did not encode");
+      declare
+         Apart_Same, Apart_Pair : N.Wide_Real := 0.0;
+      begin
+         for J in Still.all'Range loop
+            Apart_Same := N.Wide_Real'Max
+              (Apart_Same, abs (N.Wide_Real (Still (J)) - N.Wide_Real (Same (J))));
+            Apart_Pair := N.Wide_Real'Max
+              (Apart_Pair, abs (N.Wide_Real (Still (J)) - N.Wide_Real (Pair (J))));
+         end loop;
+         Assert (Apart_Same <= 1.0e-4,
+                 "a frame paired with itself is" & N.Wide_Real'Image (Apart_Same)
+                 & " from the still");
+         Assert (Apart_Pair > 1.0e-2,
+                 "a frame paired with another is only"
+                 & N.Wide_Real'Image (Apart_Pair) & " from the still");
+      end;
+
+      T.Free (Still);
+      T.Free (Pair);
+      T.Free (Same);
+      Vision.Close (Eyes);
+      Images.Free (First);
+      Images.Free (Second);
+
+      --  And Gemma 3's projector, which reads no video.
+      declare
+         Gemma : Vision.Encoder;
+         G : constant Projector_Weights_Access := Fresh_Weights;
+      begin
+         Write_Projector ("obj/vision-small.gguf", G.all, False);
+         Vision.Open (Gemma, "obj/vision-small.gguf", Status);
+         Assert (E.Is_Ok (Status), "the small Gemma projector did not open");
+         Assert (not Vision.Reads_Video (Gemma), "Gemma's projector reads video");
+         Vision.Frames_Fit (Gemma, 64, 80, 2, Fit_Width, Fit_Height, Status);
+         Assert (Status.Code = E.Arch_Unsupported_Feature,
+                 "a video's fit on Gemma's projector was not refused by name");
+         Vision.Close (Gemma);
+      end;
+   end A_Pair_Of_Frames_Encodes_As_The_Reference;
+
    ---------------------------------------
    -- Placed_Rows_Turn_By_Row_And_Column --
    ---------------------------------------
@@ -1905,7 +2317,7 @@ package body Tests.Vision_Cases is
             L.Evaluate_Batch
               (Live, Ready, Tokens, Placed,
                Given => (Token => Soft, Rows => Rows, First => 0,
-                         Places => Places, Causal => True),
+                         Places => Places, Causal => True, others => <>),
                Status => Status);
             Assert (E.Is_Ok (Status), "the placed batch failed: "
                     & E.Error_Code'Image (Status.Code));
@@ -1977,7 +2389,7 @@ package body Tests.Vision_Cases is
             L.Evaluate_Batch
               (Live, Ready, Tokens, Unplaced,
                Given => (Token => Soft, Rows => Rows, First => 0,
-                         Places => null, Causal => True),
+                         Places => null, Causal => True, others => <>),
                Status => Status);
             Assert (E.Is_Ok (Status), "the unplaced batch failed");
             Expect (4, 4, 4, 4, "unplaced");
@@ -2172,6 +2584,18 @@ package body Tests.Vision_Cases is
          "a picture's rows take the positions its marker opens in the "
          & "prompt, and a prompt marking more or fewer pictures than were "
          & "given is refused");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Pair_Of_Frames_Encodes_As_The_Reference'Access,
+         "a pair of frames encodes to the rows the plain computation "
+         & "gives with each frame through its own temporal weights, a "
+         & "frame paired with itself is the still, the fit follows the "
+         & "reference video processor's rule, and Gemma 3's projector "
+         & "refuses a video by name");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Videos_Slots_Stand_Among_Their_Seconds'Access,
+         "a video's marker opens out to its slots, each among the seconds "
+         & "it stands at as the reference processor writes them and each "
+         & "behind its own rows, and markers of the wrong kinds are refused");
    end Register_Tests;
 
 end Tests.Vision_Cases;

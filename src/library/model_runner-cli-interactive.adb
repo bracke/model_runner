@@ -35,7 +35,8 @@ package body Model_Runner.CLI.Interactive is
          when Tool_Result => "/tool",
          when Save_Conversation => "/save",
          when Load_Conversation => "/load",
-         when Show_Picture => "/image");
+         when Show_Picture => "/image",
+         when Show_Video   => "/video");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -199,7 +200,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture
+                            | Show_Picture | Show_Video
                then
                   return (Kind, First, Last);
                else
@@ -248,6 +249,10 @@ package body Model_Runner.CLI.Interactive is
       Pictures     : Gen.Picture_Set;
       Seer         : Model_Runner.CLI.Pictures.Seer;
       Next_Picture : Text_Access := null;
+
+      --  Whether what is named for the next turn is a video's frames
+      --  rather than a picture.
+      Next_Is_Video : Boolean := False;
 
       --  Encode what the conversation names and Pictures does not hold.
       procedure Gather_Pictures (Outcome : out E.Error_Info) is
@@ -511,9 +516,9 @@ package body Model_Runner.CLI.Interactive is
                end;
             end if;
 
-         elsif Asked.Kind = Show_Picture then
-            --  A picture for the next turn: named now, shown when the
-            --  words that go with it are typed.
+         elsif Asked.Kind in Show_Picture | Show_Video then
+            --  A picture, or a video's frames, for the next turn: named
+            --  now, shown when the words that go with it are typed.
             if Asked.First = 0 then
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
             elsif T.Is_Empty (Item.Projector_Path) then
@@ -521,6 +526,7 @@ package body Model_Runner.CLI.Interactive is
             else
                Free_Text (Next_Picture);
                Next_Picture := new String'(Line (Asked.First .. Asked.Last));
+               Next_Is_Video := Asked.Kind = Show_Video;
                Pres.Put_Note
                  (Screen, "cli.interactive.picture_pending",
                   [Loc.Named ("detail", Next_Picture.all)]);
@@ -548,7 +554,9 @@ package body Model_Runner.CLI.Interactive is
             --  parts, the path quoted as JSON quotes it.
             Conv.Append_Parts
               (Messages, Sender,
-               "[{""type"": ""image"", ""path"": "
+               "[{""type"": """
+               & (if Next_Is_Video then "video" else "image")
+               & """, ""path"": "
                & Model_Runner.Text.JSON_Quoted (Next_Picture.all)
                & "}, {""type"": ""text"", ""text"": "
                & Model_Runner.Text.JSON_Quoted (Prompt) & "}]",
