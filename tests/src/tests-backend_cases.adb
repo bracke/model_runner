@@ -4728,6 +4728,32 @@ package body Tests.Backend_Cases is
                     & N.Real'Image (Halved (Index)));
          end loop;
 
+         --  And a batch told to stay off the matrix instruction: the
+         --  first query's blend over the cache proper, as it was one at a
+         --  time, and the preference read back both ways.
+         Products.Prefer_Exact_Attention (Engine, True);
+         Assert (Products.Prefers_Exact_Attention (Engine),
+                 "the engine would not keep a batch off the matrix "
+                 & "instruction when told to");
+         Products.Attend_Resident
+           (Engine, Query (0 .. Span - 1),
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Natural (Room),
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.125, Cap => 0.0, Target => Halved, Ok => Ok);
+         Assert (Ok, "attention off the matrix instruction was refused");
+         for Index in 0 .. Span - 1 loop
+            Assert (abs (Exact (Index) - Halved (Index)) <= Near,
+                    "attention off the matrix instruction answers away "
+                    & "from the cache proper at component"
+                    & N.Element_Count'Image (Index));
+         end loop;
+         Products.Prefer_Exact_Attention (Engine, False);
+         Assert (not Products.Prefers_Exact_Attention (Engine),
+                 "the engine kept a batch off the matrix instruction "
+                 & "after being told not to");
+
          Assert (Worst > 0.0,
                  "the copy answered to the bit, which the cache proper "
                  & "does not: it was not read");

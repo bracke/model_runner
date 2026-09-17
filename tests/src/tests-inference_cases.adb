@@ -458,6 +458,20 @@ package body Tests.Inference_Cases is
          Assert (Model_Runner.Backend.Device.Attends_In_Halves,
                  "the device would not read its copy when told to directly");
 
+         --  And a batch held off the matrix instruction, told for the
+         --  process the same way, and set back.
+         Assert (not Model_Runner.Backend.Device.Attends_Exactly,
+                 "the device keeps a batch off the matrix instruction "
+                 & "before being told to");
+         Model_Runner.Backend.Device.Attend_Exactly (True);
+         Assert (Model_Runner.Backend.Device.Attends_Exactly,
+                 "the device would not keep a batch off the matrix "
+                 & "instruction when told to");
+         Model_Runner.Backend.Device.Attend_Exactly (False);
+         Assert (not Model_Runner.Backend.Device.Attends_Exactly,
+                 "the device kept a batch off the matrix instruction "
+                 & "after being told not to");
+
          --  And an exact session opened after takes the device back.
          L.Open (Live, Under.Ready, Status => Status);
          Assert (E.Is_Ok (Status), "the last exact session did not open");
