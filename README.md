@@ -18428,9 +18428,9 @@ be read as such; this bench is the direct reading.
 the rest of the 1.07 is overhead this engine carries around its products and
 llama.cpp does not** -- 0.87 milliseconds of it, of which 0.12 is attending,
 0.14 is the cache copied back to the host, 0.06 is the one call a token
-waits on, and **0.55 is not yet located**. That is the next thing, and it is
-a smaller and better-posed question than any of the three the sections above
-went after.
+waits on, and **0.55 is not yet located** -- as this section stood when it
+was written; the next one locates it. It is a smaller and better-posed
+question than any of the three the sections above went after.
 
 **One more thing the curve shows.** Past about seventy megabytes a matrix
 drifts off the line: 139 MB reads 2.9 per cent slow, 209 MB 12.9, and 418 MB
