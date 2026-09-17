@@ -461,6 +461,25 @@ package Model_Runner.Platform.Device.Products is
    --    kernels for it.
    function Prefers_Halves (Item : Engine) return Boolean;
 
+   --  Keep a batch's attention off the matrix instruction, whose operand
+   --  is half precision: every batch then attends through the kernel that
+   --  reads the cache proper, in binary32, as a head the instruction cannot
+   --  take does anyway. For a caller whose blends go through many blocks
+   --  in a row, where the halves compound -- a picture encoder, where the
+   --  matrix kernel's halves moved a row by a thousandth of its norm and
+   --  the cache proper by a millionth. What it costs is the instruction's
+   --  speed on that batch.
+   --
+   --  @param Item Ready engine.
+   --  @param On True to attend in binary32, False as the device prefers.
+   procedure Prefer_Exact_Attention (Item : in out Engine; On : Boolean);
+
+   --  Whether a batch's attention is kept off the matrix instruction.
+   --
+   --  @param Item Engine to ask.
+   --  @return True after Prefer_Exact_Attention said so.
+   function Prefers_Exact_Attention (Item : Engine) return Boolean;
+
    --  Whether steps are being stamped.
    --
    --  @param Item Engine to ask.
@@ -536,6 +555,9 @@ package Model_Runner.Platform.Device.Products is
    --    their matrix, and a sequence has one activation. Laid end to end in
    --    that one activation each product reads its own stretch, and the
    --    eight go over as one submission.
+   --  @param Exact True keeps the product off the tile kernel: its
+   --    activations are read in binary32 by the row kernel, at the row
+   --    kernel's cost.
    procedure Add_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -547,7 +569,8 @@ package Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
-      At_Vector : Natural := 0);
+      At_Vector : Natural := 0;
+      Exact   : Boolean := False);
 
    --  Name one product over a few slices of a stack of matrices.
    --
@@ -1809,6 +1832,10 @@ private
       --  out of the copy, and whether a token does.
       Eight_Halved_Line : System.Address := System.Null_Address;
       Halves : Boolean := False;
+
+      --  And whether a batch is kept off the matrix instruction, as
+      --  Prefer_Exact_Attention says.
+      Exact_Attention : Boolean := False;
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
 
@@ -2237,6 +2264,14 @@ private
       Inverts : Boolean := False;
       Listed  : Boolean := False;
       By_Slot : Boolean := False;
+
+      --  A product kept off the tile whatever the count: the row kernel
+      --  reads its activations in binary32 where the tile's operand is
+      --  half precision, and a caller whose activations go through many
+      --  products in a row -- a picture encoder's, through four a block
+      --  over twenty-seven blocks -- asks for the row kernel and pays its
+      --  reading of the weights once a group of vectors.
+      Exact   : Boolean := False;
 
       --  A heads step rather than a product, as Add_Heads describes it:
       --  the queries or keys in Reads, Heads of Head_Size, each head

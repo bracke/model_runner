@@ -1073,7 +1073,7 @@ package body Model_Runner.Vision is
                     Source (From * Columns .. (From + Take) * Columns - 1);
                   Model_Runner.Backend.Device.Dispatch_Batch
                     (Weight, Work.In_Chunk, Take, Work.Out_Chunk, Work.Status,
-                     Work.Cancel);
+                     Work.Cancel, Exact => True);
                   exit when E.Is_Error (Work.Status);
                   Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
                     Work.Out_Chunk (0 .. Take * Rows_Out - 1);
@@ -1226,10 +1226,17 @@ package body Model_Runner.Vision is
       end if;
 
       --  The queries, a batch at a time, gathered contiguous where they
-      --  lie Stride apart; the blends land in Attended as they are.
+      --  lie Stride apart; the blends land in Attended as they are. In
+      --  binary32, off the matrix instruction: its halves moved a row of
+      --  the picture by a thousandth of its norm over the blocks, and the
+      --  kernel that reads the cache proper by a millionth; the products
+      --  are held to binary32 the same way.
       declare
          From : Element_Count := 0;
+         Was_Exact : constant Boolean :=
+           Model_Runner.Backend.Device.Attends_Exactly;
       begin
+         Model_Runner.Backend.Device.Attend_Exactly (True);
          while From < Patches loop
             declare
                Take : constant Element_Count :=
@@ -1266,6 +1273,7 @@ package body Model_Runner.Vision is
             end;
          end loop;
          Took := Ok and then From = Patches;
+         Model_Runner.Backend.Device.Attend_Exactly (Was_Exact);
       end;
       T.Free (Whole);
    end Attend_On_Device;

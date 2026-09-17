@@ -131,15 +131,23 @@ Keep a Changelog and the project uses semantic versioning.
   cache's bytes over four, which is half again the values -- the bytes
   hold a half-precision copy past them -- and a base that moved by half
   the cache a block grew the cache by half twenty-seven times, which is
-  what took the machine's memory. The rows agree with the recorded
-  reference within a hundredth of their norm on the device and within a
-  hundred-thousandth on the host. On the device the rows sit a
-  thousandth to a hundredth apart, and nearly all of that is the linear
-  products, which were there before: the matrix kernel's operand is half
-  precision, so every block's activations go through its four products
-  rounded to halves. Measured apart, the attention's halves -- the keys,
-  values and queries of all twenty-seven blocks -- move a row by three
-  ten-thousandths.
+  what took the machine's memory.
+- **The encoder's products and attention on the device are in binary32.**
+  The matrix instruction's operand is half precision, and a picture's
+  activations went through it four products a block for twenty-seven
+  blocks: the rows came out a thousandth to a hundredth of their norm
+  from the recorded reference, one in three past the fixture's tolerance,
+  and the attention's halves added a thousandth on Qwen3.5's encoder,
+  whose head the instruction takes -- Gemma 3's 72-wide head it never
+  could. `Dispatch_Batch (Exact => True)` keeps a batch on the row
+  kernel, which reads its vectors in binary32, and
+  `Attend_Exactly (True)` keeps a batch's attention on the kernel that
+  reads the cache proper; the encoder asks for both. The rows now agree
+  with the reference as the host's do -- two hundred-thousandths on
+  Gemma 3, two millionths on Qwen3.5 -- and the picture is faster as
+  well: 22.4 s against 24.6 for Gemma 3, 0.7 s against 1.3 for Qwen3.5,
+  since the tile is shaped for a token's worth of rows rather than four
+  thousand, and the row kernel reads the weights once a group.
 - **`tests see` skips without its projector, and Gemma 3's rows are
   recorded too.** A missing projector file is `see: skipped (no projector
   at PATH)` and a clean exit, as an external model that is not there is,

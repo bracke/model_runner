@@ -214,6 +214,23 @@ package Model_Runner.Backend.Device is
    --    the kernels for it.
    function Attends_In_Halves return Boolean;
 
+   --  Whether a batch attends in binary32, off the matrix instruction
+   --  whose operand is half precision: through the kernel that reads the
+   --  cache proper, as a head the instruction cannot take does anyway.
+   --  For a caller whose blends go through many blocks in a row, where
+   --  the halves compound. Costs the instruction's speed on the batch.
+   --
+   --  Task safety: run from one task, around the calls it should govern,
+   --  and set back after them: a session's prompt wants the instruction.
+   --
+   --  @param On True to attend in binary32.
+   procedure Attend_Exactly (On : Boolean);
+
+   --  Whether a batch attends off the matrix instruction.
+   --
+   --  @return True after Attend_Exactly said so and a device is open.
+   function Attends_Exactly return Boolean;
+
    --  Keep a timeline of every sequence the device runs, or stop.
    --
    --  Every sequence from then on is stamped by the device's own clock,
@@ -845,13 +862,19 @@ package Model_Runner.Backend.Device is
    --  @param Target Receives Count results of Weight's row count.
    --  @param Cancel Stop request to watch, or null for none, as in Dispatch.
    --  @param Status Success, or what one product would have said.
+   --  @param Exact True reads the vectors in binary32 whatever their count:
+   --    the row kernel rather than the matrix tile, whose operand is half
+   --    precision. For a caller whose vectors go through many products in
+   --    a row, where the halves compound; slower, since the row kernel
+   --    reads the weights once a group of vectors.
    procedure Dispatch_Batch
      (Weight  : Model_Runner.Tensors.View;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Exact   : Boolean := False);
 
    --  How many experts one gathered mixture may read at once.
    Max_Members : constant := 16;

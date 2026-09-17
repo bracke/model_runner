@@ -372,7 +372,8 @@ package body Model_Runner.Platform.Device.Products is
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural) return Address
-   is (if Positions < Matrix_Queries
+   is (if Item.Exact_Attention
+         or else Positions < Matrix_Queries
          or else Head_Size mod 16 /= 0
          or else Value_Size mod 16 /= 0
        then Null_Handle
@@ -3256,6 +3257,14 @@ package body Model_Runner.Platform.Device.Products is
 
    function Prefers_Halves (Item : Engine) return Boolean is (Item.Halves);
 
+   procedure Prefer_Exact_Attention (Item : in out Engine; On : Boolean) is
+   begin
+      Item.Exact_Attention := On;
+   end Prefer_Exact_Attention;
+
+   function Prefers_Exact_Attention (Item : Engine) return Boolean
+   is (Item.Exact_Attention);
+
    function Last_Timeline (Item : Engine) return Timeline is (Item.Line);
 
    procedure Time_Steps (Item : in out Engine; On : Boolean; Ok : out Boolean)
@@ -5819,7 +5828,8 @@ package body Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
-      At_Vector : Natural := 0)
+      At_Vector : Natural := 0;
+      Exact   : Boolean := False)
    is
    begin
       if Steps.Held = Sequence_Limit or else Base = System.Null_Address then
@@ -5832,7 +5842,7 @@ package body Model_Runner.Platform.Device.Products is
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
          Kept => Kept, At_Vector => At_Vector,
-         Blends => False, Unit => 0, Attends => False,
+         Blends => False, Unit => 0, Attends => False, Exact => Exact,
          others => <>);
       Added := True;
    end Add_Product;
@@ -6654,6 +6664,7 @@ package body Model_Runner.Platform.Device.Products is
       function Tiled (Which : Positive) return Boolean
       is (Steps.Items (Which).Gathers <= 1
           and then not Steps.Items (Which).Listed
+          and then not Steps.Items (Which).Exact
           and then Uses_Matrix
                      (Item, Steps.Items (Which).Packing,
                       Steps.Items (Which).Rows,

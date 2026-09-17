@@ -4843,7 +4843,8 @@ package body Tests.Backend_Cases is
       Ready : Boolean;
       Ok    : Boolean;
 
-      Near : constant N.Real := 4.0e-3;
+      Near  : constant N.Real := 4.0e-3;
+      Exact : constant N.Real := 1.0e-4;
 
       procedure Compare (Head_Size : Positive) is
          Span    : constant N.Element_Count :=
@@ -4916,6 +4917,36 @@ package body Tests.Backend_Cases is
                  "a batch with heads" & Positive'Image (Head_Size)
                  & " wide answers" & N.Real'Image (Worst)
                  & " away from the queries one at a time");
+
+         --  And the same batch held off the instruction: through the
+         --  kernel that reads the cache proper it says what the queries
+         --  one at a time say to binary32's rounding rather than the
+         --  copy's, which is what a picture encoder asks for. Forty
+         --  times tighter than the copy's tolerance, so a batch that
+         --  went to the instruction after all would be seen.
+         Products.Prefer_Exact_Attention (Engine, True);
+         Assert (Products.Prefers_Exact_Attention (Engine),
+                 "the engine would not keep a batch off the instruction");
+
+         Batched := [others => 0.0];
+         Worst := 0.0;
+         Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
+         Assert (Ok, "the batch held off the instruction was refused");
+
+         for Index in Batched'Range loop
+            Worst := N.Real'Max (Worst, abs (Alone (Index) - Batched (Index)));
+         end loop;
+
+         Assert (Worst <= Exact,
+                 "a batch with heads" & Positive'Image (Head_Size)
+                 & " wide, held off the instruction, answers"
+                 & N.Real'Image (Worst)
+                 & " away from the queries one at a time");
+
+         Products.Prefer_Exact_Attention (Engine, False);
+         Assert (not Products.Prefers_Exact_Attention (Engine),
+                 "the engine kept a batch off the instruction after being "
+                 & "told not to");
       end Compare;
    begin
       Devices.Open (Held, Found);
@@ -4940,6 +4971,10 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
+      Assert (not Products.Prefers_Exact_Attention (Engine),
+              "an engine just opened already kept batches off the "
+              & "instruction");
+
       Compare (Head_Size => 64);
       Compare (Head_Size => 128);
 
@@ -4947,6 +4982,122 @@ package body Tests.Backend_Cases is
       Devices.Close (Opened);
       Devices.Close (Held);
    end A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One;
+
+   ----------------------------------------------
+   -- An_Exact_Batch_Reads_Its_Vectors_As_They_Are --
+   ----------------------------------------------
+
+   --  A batch of vectors long enough for the tile, Exact, against the
+   --  processor in binary32: the vectors are set a quarter of a
+   --  half-precision step above one, which the tile's operand rounds
+   --  away on every one of them and the row kernel reads as it is. On a
+   --  device with the tile the plain batch is off by the sum of those
+   --  roundings, a hundredth of the answer; the exact batch is held to
+   --  binary32's own bound on every device, which is what the flag is
+   --  for. Holds Dispatch_Batch's Exact on the backend, and the backend's
+   --  Attend_Exactly against Attends_Exactly.
+   procedure An_Exact_Batch_Reads_Its_Vectors_As_They_Are
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Rows    : constant N.Element_Count := 32;
+      Columns : constant N.Element_Count := 256;
+      Batch   : constant N.Element_Count := 24;
+
+      --  One and a quarter of a half's step at one: 1 + 2**-12, where the
+      --  half's step there is 2**-10.
+      Above : constant N.Real := 1.0 + 2.0 ** (-12);
+
+      Values  : constant N.Real_Array :=
+        Fixtures.Sequence (Rows * Columns, 4423, 0.25);
+      Bytes   : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Values);
+      Storage : B.Byte_Array_Access;
+      Weight  : T.View;
+      Status  : E.Error_Info;
+
+      Vectors : T.Real_Array_Access;
+      Here    : T.Real_Array_Access;
+      There   : T.Real_Array_Access;
+
+      Ready : Boolean;
+      Worst : N.Real := 0.0;
+
+      Was_Open : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
+
+      --  The processor side multiplies in binary32 here, as the device
+      --  does, and reads the vectors as they are rather than rounding them
+      --  to bytes, which would lose the quarter step the same way.
+      Held : constant Boolean := CPU.Integer_Activations;
+   begin
+      --  Closed, whatever the machine has, and asked for on nothing: the
+      --  switch is refused as no switch rather than remembered.
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Attend_Exactly (True);
+      Assert (not Model_Runner.Backend.Device.Attends_Exactly,
+              "a closed backend says it attends exactly");
+
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Assert (not Model_Runner.Backend.Device.Attends_Exactly,
+              "a backend just opened already attends exactly");
+      Model_Runner.Backend.Device.Attend_Exactly (True);
+      Assert (Model_Runner.Backend.Device.Attends_Exactly,
+              "the backend would not attend exactly when told to");
+      Model_Runner.Backend.Device.Attend_Exactly (False);
+      Assert (not Model_Runner.Backend.Device.Attends_Exactly,
+              "the backend went on attending exactly after being told "
+              & "not to");
+
+      CPU.Use_Integer_Activations (False);
+
+      B.Allocate (Bytes'Length, Storage);
+      Storage.all := Bytes;
+      T.Make (G.Type_Q8_0, Rows, Columns, Storage, 0, Weight, Status);
+      Assert (E.Is_Ok (Status), "the weight view could not be built");
+
+      T.Allocate (Columns * Batch, Vectors);
+      T.Allocate (Rows * Batch, Here);
+      T.Allocate (Rows * Batch, There);
+      Vectors.all := [others => Above];
+      Here.all := [others => 0.0];
+      There.all := [others => 0.0];
+
+      CPU.Dispatch_Batch (null, Weight, Vectors, Batch, Here, Status);
+      Assert (E.Is_Ok (Status), "the processor refused the product");
+
+      Model_Runner.Backend.Device.Dispatch_Batch
+        (Weight, Vectors, Batch, There, Status, Exact => True);
+      Assert (E.Is_Ok (Status),
+              "an exact batch was refused: "
+              & E.Error_Code'Image (Status.Code));
+
+      for Index in 0 .. Rows * Batch - 1 loop
+         Worst := N.Real'Max
+           (Worst, abs (Here.all (Here.all'First + Index)
+                        - There.all (There.all'First + Index)));
+      end loop;
+
+      --  Binary32 against binary64 over 256 terms of a quarter: a
+      --  hundredth of what the tile's roundings would add up to.
+      Assert (Worst <= 1.0E-4,
+              "an exact batch answers" & N.Real'Image (Worst)
+              & " away from the processor, which is past binary32");
+
+      T.Free (Vectors);
+      T.Free (Here);
+      T.Free (There);
+      B.Free (Storage);
+      CPU.Use_Integer_Activations (Held);
+
+      if not Was_Open then
+         Model_Runner.Backend.Device.Close;
+      end if;
+   end An_Exact_Batch_Reads_Its_Vectors_As_They_Are;
 
    ---------------------------------
    -- The_Device_Stamps_Its_Steps --
@@ -5716,6 +5867,12 @@ package body Tests.Backend_Cases is
          "a batch with heads a hundred and twenty-eight wide attends "
          & "through the matrix instruction and says what the queries one "
          & "at a time say, as a head of sixty-four does");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, An_Exact_Batch_Reads_Its_Vectors_As_They_Are'Access,
+         "a batch long enough for the tile, asked for exactly, reads its "
+         & "vectors in binary32 on the row kernel and says what the "
+         & "processor says to binary32's bound, and the backend's "
+         & "Attend_Exactly is remembered only while a device is open");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Device_Stamps_Its_Steps'Access,
          "a timed sequence comes back with an interval a step from the "

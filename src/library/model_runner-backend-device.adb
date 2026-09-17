@@ -211,6 +211,16 @@ package body Model_Runner.Backend.Device is
    function Attends_In_Halves return Boolean
    is (Ready_Now and then Products.Prefers_Halves (Engine));
 
+   procedure Attend_Exactly (On : Boolean) is
+   begin
+      if Ready_Now then
+         Products.Prefer_Exact_Attention (Engine, On);
+      end if;
+   end Attend_Exactly;
+
+   function Attends_Exactly return Boolean
+   is (Ready_Now and then Products.Prefers_Exact_Attention (Engine));
+
    procedure Keep_Timeline (On : Boolean) is
       Ok : Boolean := True;
    begin
@@ -671,7 +681,8 @@ package body Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Exact   : Boolean := False)
    is
       Packing   : Products.Weight_Packing;
       Known     : Boolean;
@@ -771,7 +782,8 @@ package body Model_Runner.Backend.Device is
             Products.Add_Product
               (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
                Natural (Weight.Rows), Natural (Weight.Columns), Added,
-               Key => Storage (Storage'First + Weight.Offset)'Address);
+               Key => Storage (Storage'First + Weight.Offset)'Address,
+               Exact => Exact);
 
             if not Added then
                Declined (Status, Asked);
@@ -2545,9 +2557,10 @@ package body Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null) is
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Exact   : Boolean := False) is
    begin
-      Compute (Weight, Vectors, Count, Target, Status, Cancel);
+      Compute (Weight, Vectors, Count, Target, Status, Cancel, Exact);
    end Dispatch_Batch;
 
    --  What a stack's format, shape and storage have to be before a step
