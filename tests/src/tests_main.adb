@@ -7,9 +7,7 @@ with Ada.Calendar;
 pragma Unreserve_All_Interrupts;
 
 with Ada.Command_Line;
-with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
-with Ada.Strings.Unbounded;
 with Interfaces;
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
@@ -53,6 +51,7 @@ with Model_Runner.Generation;
 with Model_Runner.Schema;
 with Model_Runner.Tools;
 with Model_Runner.Images;
+with Model_Runner.Video;
 with Model_Runner.Vision;
 with Model_Runner.Tensors;
 with Model_Runner.Platform;
@@ -411,9 +410,12 @@ begin
          Projector : constant String := Option ("--mmproj", "");
          Image     : constant String := Option ("--image", "");
 
-         --  Or a video: a directory of frames, which go through the
-         --  encoder in pairs, the rows of every pair laid end to end.
+         --  Or a video: a directory of frames, or a file, whose frames go
+         --  through the encoder in pairs, the rows of every pair laid end
+         --  to end; and the frames a second, the directory's own or the
+         --  rate to sample a file at.
          Frames    : constant String := Option ("--frames", "");
+         Fps       : constant String := Option ("--fps", "2");
          Threads   : constant Natural :=
            Natural'Value (Option ("--threads", "0"));
          Dump      : constant String := Option ("--dump", "");
@@ -429,86 +431,47 @@ begin
          use type Ada.Calendar.Time;
          use type Model_Runner.Numerics.Real;
 
-         --  The frames of a video, in their names' order, through the
-         --  encoder in pairs: what CLI.Pictures does for a video part,
-         --  done here on the encoder alone so the rows can be dumped and
-         --  set beside the reference's.
+         --  The frames of a video -- a directory of pictures, or a file
+         --  decoded and sampled -- through the encoder in pairs: what
+         --  CLI.Pictures does for a video part, done here on the encoder
+         --  alone so the rows can be dumped and set beside the reference's.
          procedure See_Frames
            (Pool : Model_Runner.Backend.CPU.Pool_Reference)
          is
-            use Ada.Directories;
-            package Names is new Ada.Containers.Indefinite_Ordered_Sets (String);
-            Listed : Names.Set;
-            Search : Search_Type;
-            Found  : Directory_Entry_Type;
-            First, Second : Model_Runner.Images.Raster;
+            Kept  : Model_Runner.Video.Raster_List_Access;
+            Times : Model_Runner.Video.Seconds_List_Access;
             Fit_Width, Fit_Height : Positive;
-            Count : Natural;
             use type Model_Runner.Numerics.Element_Count;
             use type Model_Runner.Tensors.Real_Array_Access;
          begin
-            Start_Search (Search, Frames, "",
-                          Filter => [Ordinary_File => True, others => False]);
-            while More_Entries (Search) loop
-               Get_Next_Entry (Search, Found);
-               Listed.Include (Full_Name (Found));
-            end loop;
-            End_Search (Search);
-            Count := Natural (Listed.Length);
-            if Count = 0 then
-               Status := Model_Runner.Errors.Make (Model_Runner.Errors.IO_Open_Failed);
+            Model_Runner.Video.Fetch
+              (Frames, Long_Float'Value (Fps), Eyes, Kept, Times, Fit_Width,
+               Fit_Height, Status);
+            if Model_Runner.Errors.Is_Error (Status) then
                return;
             end if;
-
+            Ada.Text_IO.Put_Line
+              ("frames:" & Kept.all'Length'Image & ", fit:" & Fit_Width'Image
+               & " x" & Fit_Height'Image);
             declare
-               Paths : array (1 .. Count) of Ada.Strings.Unbounded.Unbounded_String;
-               Which : Natural := 0;
+               Count : constant Natural := Kept.all'Length;
                At_Frame : Positive := 1;
             begin
-               for Name of Listed loop
-                  Which := Which + 1;
-                  Paths (Which) := Ada.Strings.Unbounded.To_Unbounded_String (Name);
-               end loop;
-
-               Model_Runner.Images.Load
-                 (Ada.Strings.Unbounded.To_String (Paths (1)), First, Status);
-               if Model_Runner.Errors.Is_Error (Status) then
-                  return;
-               end if;
-               Ada.Text_IO.Put_Line
-                 ("frames:" & Count'Image & " of" & First.Width'Image & " x"
-                  & First.Height'Image);
-               Model_Runner.Vision.Frames_Fit
-                 (Eyes, First.Width, First.Height, Count, Fit_Width, Fit_Height,
-                  Status);
-               Model_Runner.Images.Free (First);
-               if Model_Runner.Errors.Is_Error (Status) then
-                  return;
-               end if;
-               Ada.Text_IO.Put_Line
-                 ("fit:" & Fit_Width'Image & " x" & Fit_Height'Image);
-
                while At_Frame <= Count loop
                   declare
                      Next : constant Positive := Positive'Min (At_Frame + 1, Count);
                      Pair : Model_Runner.Tensors.Real_Array_Access;
                   begin
-                     Model_Runner.Images.Load
-                       (Ada.Strings.Unbounded.To_String (Paths (At_Frame)), First,
-                        Status);
+                     Model_Runner.Vision.Encode_Frames
+                       (Eyes, Kept.all (At_Frame), Kept.all (Next), Fit_Width,
+                        Fit_Height, Pool, Pair, Grid_Rows, Grid_Columns,
+                        Status => Status);
                      exit when Model_Runner.Errors.Is_Error (Status);
-                     Model_Runner.Images.Load
-                       (Ada.Strings.Unbounded.To_String (Paths (Next)), Second,
-                        Status);
-                     if Model_Runner.Errors.Is_Ok (Status) then
-                        Model_Runner.Vision.Encode_Frames
-                          (Eyes, First, Second, Fit_Width, Fit_Height, Pool, Pair,
-                           Grid_Rows, Grid_Columns, Status => Status);
-                     end if;
-                     Model_Runner.Images.Free (First);
-                     Model_Runner.Images.Free (Second);
-                     exit when Model_Runner.Errors.Is_Error (Status);
-
+                     Ada.Text_IO.Put_Line
+                       ("slot" & Natural'Image (Slots) & " at "
+                        & Model_Runner.Generation.Seconds_Text
+                            ((Times.all (At_Frame) + Times.all (Next)) / 2.0)
+                        & " seconds");
                      declare
                         Was : constant Model_Runner.Numerics.Element_Count :=
                           (if Rows = null then 0 else Rows.all'Length);
@@ -528,6 +491,7 @@ begin
                   end;
                end loop;
             end;
+            Model_Runner.Video.Release (Kept, Times);
          end See_Frames;
       begin
          if Projector = "" or else (Image = "" and then Frames = "") then

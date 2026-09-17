@@ -217,10 +217,10 @@ package body Tool_Commands is
      "run a picture, or a video's frames, through a vision projector and "
      & "report its rows";
    Takes_See : aliased constant String :=
-     "--mmproj PATH (--image FILE | --frames DIR) [--threads N] [--device] "
-     & "[--dump FILE] [--expect FILE]";
+     "--mmproj PATH (--image FILE | --frames DIR-OR-FILE [--fps X]) "
+     & "[--threads N] [--device] [--dump FILE] [--expect FILE]";
    Opts_See  : aliased constant String :=
-     " --mmproj --image --frames --threads --device --dump --expect ";
+     " --mmproj --image --frames --fps --threads --device --dump --expect ";
 
    Held : constant array (1 .. 28) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

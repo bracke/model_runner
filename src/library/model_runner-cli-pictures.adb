@@ -1,6 +1,4 @@
 with Ada.Calendar;
-with Ada.Containers.Indefinite_Ordered_Sets;
-with Ada.Directories;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
@@ -8,6 +6,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Images;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
+with Model_Runner.Video;
 
 package body Model_Runner.CLI.Pictures is
 
@@ -27,8 +26,6 @@ package body Model_Runner.CLI.Pictures is
      (Gen.Entry_Kinds, Gen.Entry_Kinds_Access);
    procedure Free is new Ada.Unchecked_Deallocation
      (Gen.Slot_Times, Gen.Slot_Times_Access);
-
-   package Name_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
 
    use type Ada.Calendar.Time;
    use type N.Element_Count;
@@ -157,43 +154,6 @@ package body Model_Runner.CLI.Pictures is
          end case;
       end loop;
    end Named_Pictures;
-
-   --  The frames a directory holds, in the order their names sort: every
-   --  ordinary file in it. What is not a picture is refused when it is
-   --  read, by name.
-   procedure Frames_Of
-     (Directory : String;
-      Names     : out Name_Sets.Set;
-      Status    : out E.Error_Info)
-   is
-      use Ada.Directories;
-      Search : Search_Type;
-      Found  : Directory_Entry_Type;
-   begin
-      Status := E.Success;
-      Names.Clear;
-      if not Exists (Directory) or else Kind (Directory) /= Ada.Directories.Directory
-      then
-         Status := E.Make (E.IO_Open_Failed);
-         E.Add_Text (Status, "path", Directory, E.Param_Path);
-         return;
-      end if;
-      Start_Search (Search, Directory, "",
-                    Filter => [Ordinary_File => True, others => False]);
-      while More_Entries (Search) loop
-         Get_Next_Entry (Search, Found);
-         Names.Include (Full_Name (Found));
-      end loop;
-      End_Search (Search);
-      if Names.Is_Empty then
-         Status := E.Make (E.IO_Image_Unreadable);
-         E.Add_Text (Status, "path", Directory, E.Param_Path);
-      end if;
-   exception
-      when Name_Error | Use_Error =>
-         Status := E.Make (E.IO_Open_Failed);
-         E.Add_Text (Status, "path", Directory, E.Param_Path);
-   end Frames_Of;
 
    ----------
    -- Open --
@@ -540,30 +500,22 @@ package body Model_Runner.CLI.Pictures is
                end if;
             end Encode_One;
 
-            --  A video: its frames listed, fitted together, and encoded
-            --  in pairs, each pair an entry of its own with the seconds
-            --  it stands at -- the mean of its two frames' -- kept for
-            --  the prompt.
-            procedure Encode_Video (Directory : String; Fps : Long_Float) is
-               Names : Name_Sets.Set;
-               Frames : Natural;
+            --  A video: its frames fetched and fitted -- from a directory
+            --  of pictures, or decoded from a file and sampled as the
+            --  reference samples -- and encoded in pairs, each pair an
+            --  entry of its own with the seconds it stands at, the mean of
+            --  its two frames', kept for the prompt.
+            procedure Encode_Video (Path : String; Fps : Long_Float) is
+               Kept  : Model_Runner.Video.Raster_List_Access;
+               Times : Model_Runner.Video.Seconds_List_Access;
                Fit_Width, Fit_Height : Positive;
                Slots : Natural := 0;
-               First, Second : Model_Runner.Images.Raster;
                Rows  : T.Real_Array_Access;
                Slots_Before : constant Natural :=
                  (if Into.Times = null then 0 else Into.Times.all'Length);
                Videos_Before : constant Natural :=
                  (if Into.Video_Slots = null then 0
                   else Into.Video_Slots.all'Length);
-
-               --  The frames' paths in their names' order, so a pair can
-               --  be reached by number.
-               type Path_List is array (Positive range <>) of US.Unbounded_String;
-               type Path_List_Access is access Path_List;
-               procedure Free is new Ada.Unchecked_Deallocation
-                 (Path_List, Path_List_Access);
-               Listed : Path_List_Access;
 
                procedure Note_Slot (Seconds : Long_Float) is
                   Held  : constant Natural :=
@@ -579,46 +531,24 @@ package body Model_Runner.CLI.Pictures is
                   Into.Times := Grown;
                end Note_Slot;
             begin
-               if not Model_Runner.Vision.Reads_Video (Item.Eyes) then
-                  Status := E.Make (E.Arch_Unsupported_Feature);
-                  E.Add_Text (Status, "feature", "video", E.Param_Identifier);
-                  return;
-               end if;
-
-               Frames_Of (Directory, Names, Status);
+               Model_Runner.Video.Fetch
+                 (Path, Fps, Item.Eyes, Kept, Times, Fit_Width, Fit_Height,
+                  Status);
                if E.Is_Error (Status) then
                   return;
                end if;
-               Frames := Natural (Names.Length);
-               if Slots_Before + (Frames + 1) / 2 > Max_Slots then
+               if Slots_Before + (Kept.all'Length + 1) / 2 > Max_Slots then
                   Status := E.Make (E.CLI_Option_Out_Of_Range);
                   E.Add_Text
                     (Status, "option", "--prompt-parts", E.Param_Identifier);
+                  Model_Runner.Video.Release (Kept, Times);
                   return;
                end if;
 
-               Listed := new Path_List (1 .. Frames);
+               --  The pairs, the last frame paired with itself where the
+               --  count is odd.
                declare
-                  Which : Natural := 0;
-               begin
-                  for Name of Names loop
-                     Which := Which + 1;
-                     Listed.all (Which) := US.To_Unbounded_String (Name);
-                  end loop;
-               end;
-
-               --  The fit is the video's, from its first frame's shape:
-               --  the reference stacks a video's frames as one shape.
-               Model_Runner.Images.Load
-                 (US.To_String (Listed.all (1)), First, Status);
-               if E.Is_Ok (Status) then
-                  Model_Runner.Vision.Frames_Fit
-                    (Item.Eyes, First.Width, First.Height, Frames,
-                     Fit_Width, Fit_Height, Status);
-               end if;
-               Model_Runner.Images.Free (First);
-
-               declare
+                  Frames   : constant Natural := Kept.all'Length;
                   At_Frame : Positive := 1;
                begin
                   while E.Is_Ok (Status) and then At_Frame <= Frames loop
@@ -626,25 +556,15 @@ package body Model_Runner.CLI.Pictures is
                         Next : constant Positive :=
                           Positive'Min (At_Frame + 1, Frames);
                      begin
-                        Model_Runner.Images.Load
-                          (US.To_String (Listed.all (At_Frame)), First, Status);
-                        exit when E.Is_Error (Status);
-                        Model_Runner.Images.Load
-                          (US.To_String (Listed.all (Next)), Second, Status);
-                        if E.Is_Ok (Status) then
-                           Model_Runner.Vision.Encode_Frames
-                             (Item.Eyes, First, Second, Fit_Width, Fit_Height,
-                              Team, Rows, Grid_Rows, Grid_Columns, Cancel,
-                              Status);
-                        end if;
-                        Model_Runner.Images.Free (First);
-                        Model_Runner.Images.Free (Second);
+                        Model_Runner.Vision.Encode_Frames
+                          (Item.Eyes, Kept.all (At_Frame), Kept.all (Next),
+                           Fit_Width, Fit_Height, Team, Rows, Grid_Rows,
+                           Grid_Columns, Cancel, Status);
                         exit when E.Is_Error (Status);
 
                         Slots := Slots + 1;
                         Note_Slot
-                          ((Long_Float (At_Frame - 1) + Long_Float (Next - 1))
-                           / (2.0 * Fps));
+                          ((Times.all (At_Frame) + Times.all (Next)) / 2.0);
                         declare
                            Count : constant Natural :=
                              Natural (Rows.all'Length / Width);
@@ -657,7 +577,7 @@ package body Model_Runner.CLI.Pictures is
                      end;
                   end loop;
                end;
-               Free (Listed);
+               Model_Runner.Video.Release (Kept, Times);
 
                if E.Is_Ok (Status) then
                   declare

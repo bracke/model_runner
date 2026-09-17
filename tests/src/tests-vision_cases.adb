@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Numerics;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Streams.Stream_IO;
@@ -9,6 +10,8 @@ with Fixtures;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Pictures;
+with Model_Runner.Platform.Video;
+with Model_Runner.Video;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
@@ -2228,6 +2231,180 @@ package body Tests.Vision_Cases is
       end;
    end A_Pair_Of_Frames_Encodes_As_The_Reference;
 
+   --  A video's frames are fetched as the reference takes them.
+   --
+   --  The sampling rule, worked against numpy's linspace and round: a
+   --  video's length times the rate, cut to whole frames, held between
+   --  four and seven hundred and sixty-eight and never above the frames
+   --  there are, spread evenly from the first frame to the last with a
+   --  half going to the even one. Then Fetch: a directory of three
+   --  pictures comes back as three frames at the fit, at nought, a half
+   --  and one second at two a second; and, where the host has the
+   --  libraries, a four-frame video written as YUV4MPEG -- which
+   --  libavformat reads without any codec -- is decoded to four frames
+   --  whose grey rises frame by frame, counted from its packets since the
+   --  container states no count, at its own rate of two a second, and
+   --  sampled to all four; a file that is not a video is refused by name,
+   --  and one that is not there as not there. Without the libraries the
+   --  file is refused by name and the rest is not asked.
+   procedure A_Videos_Frames_Are_Fetched_As_The_Reference_Takes_Them
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Video.Frame_Indices;
+      use type Model_Runner.Video.Raster_List_Access;
+      use type Model_Runner.Video.Seconds_List_Access;
+
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Eyes   : Vision.Encoder;
+      Status : E.Error_Info;
+      Kept   : Model_Runner.Video.Raster_List_Access;
+      Times  : Model_Runner.Video.Seconds_List_Access;
+      Fit_Width, Fit_Height : Positive;
+
+      --  A file of bytes, written whole.
+      procedure Write_File (Path : String; Data : B.Byte_Array) is
+         use Ada.Streams.Stream_IO;
+         Handle : File_Type;
+      begin
+         Create (Handle, Out_File, Path);
+         B.Byte_Array'Write (Stream (Handle), Data);
+         Close (Handle);
+      end Write_File;
+   begin
+      --  The count, and the frames.
+      Assert (Model_Runner.Video.Sampled_Count (75, 25.0, 2.0) = 6
+              and then Model_Runner.Video.Sampled_Count (3, 25.0, 2.0) = 3
+              and then Model_Runner.Video.Sampled_Count (10, 1.0, 2.0) = 10
+              and then Model_Runner.Video.Sampled_Count (5, 25.0, 2.0) = 4
+              and then Model_Runner.Video.Sampled_Count (100, 100.0, 2.0) = 4
+              and then Model_Runner.Video.Sampled_Count (2000, 25.0, 2.0) = 160
+              and then Model_Runner.Video.Sampled_Count (100_000, 25.0, 2.0)
+                       = 768,
+              "the frames taken of a video are not the reference's count");
+      Assert (Model_Runner.Video.Sampled (75, 6) = [0, 15, 30, 44, 59, 74]
+              and then Model_Runner.Video.Sampled (3, 3) = [0, 1, 2]
+              and then Model_Runner.Video.Sampled (5, 4) = [0, 1, 3, 4]
+              and then Model_Runner.Video.Sampled (100, 4) = [0, 33, 66, 99]
+              and then Model_Runner.Video.Sampled (6, 3) = [0, 2, 5]
+              and then Model_Runner.Video.Sampled (1, 1) = [1 => 0]
+              and then Model_Runner.Video.Sampled (2, 4) = [0, 0, 1, 1],
+              "the frames taken of a video are not the reference's frames");
+      declare
+         Long : constant Model_Runner.Video.Frame_Indices :=
+           Model_Runner.Video.Sampled (2000, 160);
+      begin
+         Assert (Long (1 .. 8) = [0, 13, 25, 38, 50, 63, 75, 88]
+                 and then Long (158 .. 160) = [1974, 1986, 1999],
+                 "a long video's frames are not the reference's");
+      end;
+
+      Write_Qwen_Projector ("obj/vision-qwen.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen projector did not open");
+
+      --  A directory of three pictures, twenty by thirty, at two a second.
+      Ada.Directories.Create_Path ("obj/video-frames");
+      for Which in 1 .. 3 loop
+         declare
+            Data : constant B.Byte_Array (1 .. 3 * 20 * 30) :=
+              [others => B.Byte (40 * Which)];
+         begin
+            Write_File
+              ("obj/video-frames/f" & Character'Val (Character'Pos ('0') + Which)
+               & ".ppm",
+               Bytes_Of ("P6 20 30 255 ") & Data);
+         end;
+      end loop;
+      Model_Runner.Video.Fetch
+        ("obj/video-frames", 2.0, Eyes, Kept, Times, Fit_Width, Fit_Height,
+         Status);
+      Assert (E.Is_Ok (Status), "the frames were not fetched: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Kept /= null and then Kept.all'Length = 3
+              and then Times /= null
+              and then Times.all (1) = 0.0 and then Times.all (2) = 0.5
+              and then Times.all (3) = 1.0,
+              "three frames at two a second are not three at nought, a "
+              & "half and one");
+      Assert (Fit_Width = 32 and then Fit_Height = 48
+              and then Kept.all (1).Width = 32 and then Kept.all (1).Height = 48
+              and then Kept.all (3).Width = 32,
+              "the frames were not fitted together:" & Fit_Width'Image
+              & " x" & Fit_Height'Image);
+      Model_Runner.Video.Release (Kept, Times);
+
+      --  A file that is not there, and one that is not a video.
+      Model_Runner.Video.Fetch
+        ("obj/no-such-video.mp4", 2.0, Eyes, Kept, Times, Fit_Width,
+         Fit_Height, Status);
+      Assert (Status.Code = E.IO_Open_Failed,
+              "a video that is not there was not refused as not there: "
+              & E.Error_Code'Image (Status.Code));
+      Model_Runner.Video.Fetch
+        ("obj/vision-qwen.gguf", 2.0, Eyes, Kept, Times, Fit_Width, Fit_Height,
+         Status);
+      Assert (Status.Code = E.IO_Video_Unreadable,
+              "a file that is not a video was not refused by name: "
+              & E.Error_Code'Image (Status.Code));
+
+      if Model_Runner.Platform.Video.Is_Supported then
+         --  Four frames of sixteen by sixteen, the grey rising: YUV4MPEG,
+         --  the header, then each frame's luma, and its two chroma planes
+         --  at half the size, all at the middle.
+         declare
+            Header : constant String :=
+              "YUV4MPEG2 W16 H16 F2:1 Ip A1:1 C420jpeg" & ASCII.LF;
+            Frame_Header : constant String := "FRAME" & ASCII.LF;
+            Video : B.Byte_Array
+              (1 .. B.Byte_Count (Header'Length
+                                  + 4 * (Frame_Header'Length + 256 + 64 + 64)));
+            Here : B.Byte_Count := 1;
+
+            procedure Put (Data : B.Byte_Array) is
+            begin
+               Video (Here .. Here + Data'Length - 1) := Data;
+               Here := Here + Data'Length;
+            end Put;
+         begin
+            Put (Bytes_Of (Header));
+            for Which in 0 .. 3 loop
+               Put (Bytes_Of (Frame_Header));
+               Put ([1 .. 256 => B.Byte (40 + 50 * Which)]);
+               Put ([1 .. 128 => 128]);
+            end loop;
+            Write_File ("obj/video-tiny.y4m", Video);
+         end;
+
+         Model_Runner.Video.Fetch
+           ("obj/video-tiny.y4m", 2.0, Eyes, Kept, Times, Fit_Width, Fit_Height,
+            Status);
+         Assert (E.Is_Ok (Status), "the video file was not fetched: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Kept /= null and then Kept.all'Length = 4,
+                 "four frames at two a second, sampled at two a second, are"
+                 & " not four");
+         Assert (Times.all (1) = 0.0 and then Times.all (2) = 0.5
+                 and then Times.all (4) = 1.5,
+                 "the decoded frames' seconds are not their numbers over the"
+                 & " rate");
+         --  Sixteen by sixteen, over four frames, is under the least
+         --  pixels and scaled up by the rule; and the grey of each frame
+         --  is above the one before.
+         Assert (Fit_Width = 32 and then Fit_Height = 32,
+                 "the decoded frames' fit is" & Fit_Width'Image & " x"
+                 & Fit_Height'Image & ", not 32 x 32");
+         for Which in 1 .. 3 loop
+            Assert (Pixel (Kept.all (Which + 1), 8, 8, 0)
+                    > Pixel (Kept.all (Which), 8, 8, 0) + 20,
+                    "frame" & Which'Image & " is not darker than the next");
+         end loop;
+         Model_Runner.Video.Release (Kept, Times);
+      end if;
+
+      Vision.Close (Eyes);
+   end A_Videos_Frames_Are_Fetched_As_The_Reference_Takes_Them;
+
    ---------------------------------------
    -- Placed_Rows_Turn_By_Row_And_Column --
    ---------------------------------------
@@ -2591,6 +2768,11 @@ package body Tests.Vision_Cases is
          & "frame paired with itself is the still, the fit follows the "
          & "reference video processor's rule, and Gemma 3's projector "
          & "refuses a video by name");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Videos_Frames_Are_Fetched_As_The_Reference_Takes_Them'Access,
+         "a video's frames are sampled as the reference samples, a "
+         & "directory of pictures is fetched at the fit, and a video file "
+         & "is decoded through the host's libraries where it has them");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Videos_Slots_Stand_Among_Their_Seconds'Access,
          "a video's marker opens out to its slots, each among the seconds "

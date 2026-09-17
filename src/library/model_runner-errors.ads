@@ -112,6 +112,11 @@ package Model_Runner.Errors is
       --  here does not read.
       IO_Image_Unreadable,
 
+      --  A file given as a video is not one this build reads: the
+      --  libraries a video is decoded through are not there, or not of a
+      --  version this build reads, or the file is not a video they read.
+      IO_Video_Unreadable,
+
       --  GGUF container.
       GGUF_Truncated,
       GGUF_Invalid_Magic,

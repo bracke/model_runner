@@ -700,6 +700,19 @@ triangle, and a blue square are shown in a colorful background", beside
 this build's on the Q8_0 text weights, "A red circle, a yellow triangle
 and blue square are shown on the screen".
 
+`qwen35_video.py` does the same for a video file, each side decoding for
+itself: the reference through torchcodec, its default decoder, this build
+through the host's FFmpeg libraries. On a three-second test pattern of 75
+frames at 25 a second both take frames 0, 15, 30, 44, 59 and 74, fit them
+to 320 by 256, and make 289 tokens of the prompt; the rows agree to a
+cosine of 0.999996, the worst row two thousandths of the median norm
+apart, which is the two decoders' colour conversion and the two
+resamplers -- the reference resizes with torchvision's bicubic and this
+build as PIL does, as the note above says. The reference's greedy answer
+is "A video game is playing on a screen with a colorful background", this
+build's on the Q8_0 text weights "A colorful test pattern with a timer and
+various colored blocks moving across the screen".
+
 What the scripts found is also held without them: `tests/fixtures/
 vision-crossing/qwen35-0.8b.expect` records three rows the reference tower
 makes of the small picture beside it -- the first, the middle and the last

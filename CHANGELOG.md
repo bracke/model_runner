@@ -140,13 +140,29 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A video file is read, through the host's FFmpeg libraries.** A video
+  part may name a file as well as a directory of frames: libavformat,
+  libavcodec, libavutil and libswscale are opened by name at first use, as
+  the device's loader is and never linked, at any of FFmpeg 6.0 to 8.0 --
+  the few fields read sit at the same offsets in all three majors, which
+  was checked against each version's headers -- and a machine without
+  them, or with another version, refuses a video file by name,
+  `MR-IO-0011`, and says a directory of frames will do. The frames are
+  sampled as the reference processor samples: fps a second of the video's
+  own rate, the count held between four and 768 and never above the
+  frames there are, spread evenly with a half going to the even one; the
+  count is the container's where it states one and its packets counted
+  where it does not. Crossed with the reference on a three-second test
+  pattern, each side decoding for itself: the same six frames, the same
+  289 tokens, the rows to a cosine of 0.999996. The suite decodes a
+  four-frame video it writes as YUV4MPEG where the host has the
+  libraries. `tests see --frames` takes a file too, with `--fps`.
 - **Qwen3.5 sees video.** `{"type": "video", "path": "DIR", "fps": 2}`
   in `--prompt-parts`, or `/video DIR` in interactive mode, shows the
   model a video given as a directory of frames -- one picture a frame in
   their names' order, taken at fps a second, which is the rate the
   reference processor samples a video at -- and a conversation read back
-  from a checkpoint shows it again. No video file is read: the frames are
-  what ffmpeg wrote out. Every frame is resampled to the one size the
+  from a checkpoint shows it again. Every frame is resampled to the one size the
   reference video processor's rule picks over the whole video, with the
   per-frame cap the reference implementation applies; the frames go
   through the encoder in pairs, each frame through its own temporal patch
@@ -15282,7 +15298,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 186 diagnostic
+- Localization through `messages`, with a catalog entry for all 187 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.
