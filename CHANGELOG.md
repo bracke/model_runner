@@ -146,6 +146,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The clamped gate on the device.** The gate gpt-oss states -- both
+  arms held at a limit, the gate through the logistic at a steeper
+  slope, one added to the other arm, the two multiplied -- is the third
+  unit of `combine.comp`, the kernel that combines a gated feed-forward's
+  two arms, with the slope and the limit pushed beside the unit; every
+  sequence that combines takes it, and a mixture with a clamped gate
+  no longer goes to the host for it. Held to the same rule worked out
+  on the host, through a routed and gathered mixture on the device, at
+  a limit low enough to hold some of the arms. What still keeps gpt-oss's
+  mixture on the host is its expert biases -- on each expert's three
+  projections -- which the gathered products do not add.
 - **`--kv-values q8|q4`: the values stored otherwise than the keys.**
   Attention reads a key through a dot product with the query, where a
   rounded element moves every score it enters, and a value through a
@@ -198,7 +209,7 @@ Keep a Changelog and the project uses semantic versioning.
   first position, a weight of one and no value: gpt-oss's token is
   attended and projected in one submission with them, exact or in
   bytes, held to the independent implementation; its batch's attention
-  stays on the host, since the clamped gate keeps the layer from going
+  stays on the host, since its expert biases keep the mixture from going
   over whole. A value head wider than 128 and a device without subgroup
   arithmetic attend on the host as before. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read

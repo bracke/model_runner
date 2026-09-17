@@ -1942,9 +1942,10 @@ package body Model_Runner.Llama is
    --  @param Item Model whose architecture decides.
    --  @return Zero for the sigmoid-weighted unit, one for the Gaussian one.
    function Gate_Unit (Item : Model'Class) return Natural
-   is (if Item.Settings.Kind
-          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-             | Jina_Bert_V2
+   is (if Item.Settings.Gate_Alpha > 0.0 then 3
+       elsif Item.Settings.Kind
+             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+                | Jina_Bert_V2
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
@@ -6413,7 +6414,6 @@ package body Model_Runner.Llama is
         Item.Owner.all.Stacked
         and then Current.Expert_Gate_Bias = null
         and then Current.Expert_Down_Bias = null
-        and then not (Settings.Gate_Alpha > 0.0)
         and then Used <= Model_Runner.Backend.Device.Max_Members
         and then T.Is_Present (Current.Gate_Stack)
         and then T.Is_Present (Current.Up_Stack)
@@ -6603,7 +6603,9 @@ package body Model_Runner.Llama is
             Model_Runner.Backend.Device.Dispatch_Mixture
               (Current.Gate_Stack, Current.Up_Stack, Current.Down_Stack,
                Feed, Width, Members, Used, Gate_Unit (Item.Owner.all),
-               Input, Item.Mixed, Status, Item.Stopping);
+               Input, Item.Mixed, Status, Item.Stopping,
+                        Alpha => Item.Owner.all.Settings.Gate_Alpha,
+                        Limit => Item.Owner.all.Settings.Gate_Limit);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -7809,8 +7811,7 @@ package body Model_Runner.Llama is
                if Item.Owner.all.Stacked
                  and then Current.Expert_Gate_Bias = null
                  and then Current.Expert_Down_Bias = null
-                 and then not (Settings.Gate_Alpha > 0.0)
-                 and then Model_Runner.Backend."="
+                          and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
                  and then T.Is_Present (Current.Gate_Stack)
@@ -7849,7 +7850,9 @@ package body Model_Runner.Llama is
                     (Current.Gate_Stack, Current.Up_Stack,
                      Current.Down_Stack, Feed, Width, Which,
                      Gate_Unit (Item.Owner.all), Item.Gather_In, Held,
-                     Item.Gather_Out, Status, Item.Stopping);
+                     Item.Gather_Out, Status, Item.Stopping,
+                        Alpha => Item.Owner.all.Settings.Gate_Alpha,
+                        Limit => Item.Owner.all.Settings.Gate_Limit);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -11682,8 +11685,9 @@ package body Model_Runner.Llama is
       --  carrying does not write.
       --  A mixture layer goes whole where the device holds its expert
       --  stacks and the architecture puts nothing between the router and
-      --  the experts that the device does not do: no expert biases and no
-      --  clamped gate. The routing then happens where the router ran.
+      --  the experts that the device does not do: no expert biases. The
+      --  clamped gate is a unit of the combining kernel now. The routing
+      --  then happens where the router ran.
       function Mixture_Whole (L : Layer) return Boolean
       is (Source.Stacked
           and then L.Experts /= null
@@ -11693,8 +11697,7 @@ package body Model_Runner.Llama is
           and then T.Is_Present (L.Down_Stack)
           and then L.Expert_Gate_Bias = null
           and then L.Expert_Down_Bias = null
-          and then not (Settings.Gate_Alpha > 0.0)
-          and then Settings.Experts_Used
+            and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
       function Whole_Layer_Fits (L : Layer) return Boolean
@@ -12231,7 +12234,9 @@ package body Model_Runner.Llama is
 
                         --  The layer's sinks, put where the attention
                         --  reads them.
-                        Sinks_At    => Sinks_Ready (Current.Sinks));
+                        Sinks_At    => Sinks_Ready (Current.Sinks),
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
                   end if;
                end if;
 
@@ -12486,7 +12491,9 @@ package body Model_Runner.Llama is
                         Max_Bias => Settings.Max_Bias,
                         Packed => Packed_Shape (Item, Base, V_Base,
                                                 KV_Width, V_Width),
-                        Sinks_At => Sinks_Ready (Current.Sinks));
+                        Sinks_At => Sinks_Ready (Current.Sinks),
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
 
                      if Fused then
                         Usable := True;
@@ -12649,7 +12656,9 @@ package body Model_Runner.Llama is
                         Model_Runner.Backend.Device.Dispatch_Gated
                           (Current.Gate, Current.Up, Current.Down,
                            Item.Normalized, 1, Gate_Unit (Source),
-                           Item.Normalized, Status, Item.Stopping);
+                           Item.Normalized, Status, Item.Stopping,
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
                         exit when E.Is_Error (Status);
                         Whole_Block := True;
                      else
@@ -13050,8 +13059,7 @@ package body Model_Runner.Llama is
           and then T.Is_Present (L.Down_Stack)
           and then L.Expert_Gate_Bias = null
           and then L.Expert_Down_Bias = null
-          and then not (Settings.Gate_Alpha > 0.0)
-          and then Settings.Experts_Used
+            and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
       function Whole_Layer_Fits (L : Layer) return Boolean
@@ -14103,7 +14111,9 @@ package body Model_Runner.Llama is
                                   (Item, Base, V_Base, KV_Width, V_Width,
                                    Cell_Of (Item, Natural (Index), Reserved)
                                    + Count)),
-                        Sinks_At    => Sinks_Ready (Current.Sinks));
+                        Sinks_At    => Sinks_Ready (Current.Sinks),
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14542,7 +14552,9 @@ package body Model_Runner.Llama is
                            Packed    => Packed_Shape (Item, Base, V_Base,
                                                       KV_Width, V_Width,
                                                       Seated => Rounding),
-                           Sinks_At  => Sinks_Ready (Current.Sinks));
+                           Sinks_At  => Sinks_Ready (Current.Sinks),
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
                      end if;
 
                      --  A packed round the device would not take as one
@@ -14861,7 +14873,9 @@ package body Model_Runner.Llama is
                      Model_Runner.Backend.Device.Dispatch_Gated
                        (Current.Gate, Current.Up, Current.Down,
                         Norm, Count, Gate_Unit (Source), Norm, Status,
-                        Item.Stopping);
+                        Item.Stopping,
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit);
                      exit when E.Is_Error (Status);
                      Whole_Block := True;
                   else

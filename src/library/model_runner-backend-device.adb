@@ -1195,7 +1195,9 @@ package body Model_Runner.Backend.Device is
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0;
       Packed      : Packed_Cache := Not_Packed;
-      Sinks_At    : Natural := 0)
+      Sinks_At    : Natural := 0;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1339,7 +1341,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Add_Combination (Steps, Unit, Added, Kept => False);
+      Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
       if not Added then
          return;
       end if;
@@ -1854,7 +1857,9 @@ package body Model_Runner.Backend.Device is
       Pack_Keys      : Packing_Shape := Not_Packing;
       Pack_Values    : Packing_Shape := Not_Packing;
       Unpacked       : Unpacking_Shape := Not_Unpacked;
-      Sinks_At       : Natural := 0)
+      Sinks_At       : Natural := 0;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -2418,7 +2423,8 @@ package body Model_Runner.Backend.Device is
                end if;
                Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
 
-               Products.Add_Combination (Steps, Unit, Added, Kept => False);
+               Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
                if not Added then
                   return;
                end if;
@@ -2461,7 +2467,8 @@ package body Model_Runner.Backend.Device is
             end if;
             Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-            Products.Add_Combination (Steps, Unit, Added, Kept => False);
+            Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
             if not Added then
                return;
             end if;
@@ -2510,7 +2517,8 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Room (Up.Rows);
 
-         Products.Add_Combination (Steps, Unit, Added, Kept => False);
+         Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
          if not Added then
             return;
          end if;
@@ -2613,7 +2621,9 @@ package body Model_Runner.Backend.Device is
       Unit   : Natural;
       Into   : T.Real_Array_Access;
       Status : out E.Error_Info;
-      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0)
    is
       Arms : constant array (1 .. 3) of T.View := [Gate, Up, Down];
 
@@ -2677,7 +2687,8 @@ package body Model_Runner.Backend.Device is
             --  twenty-eight that is nine megabytes a layer not copied to
             --  the host to be stepped over.
             if Index = 3 then
-               Products.Add_Combination (Steps, Unit, Added, Kept => False);
+               Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
                if not Added then
                   Status := E.Make (E.Tensor_Shape_Mismatch);
                   return;
@@ -2925,7 +2936,9 @@ package body Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0)
    is
       Steps : Products.Sequence;
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
@@ -2991,7 +3004,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Add_Combination (Steps, Unit, Added, Kept => False);
+      Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -3211,7 +3225,9 @@ package body Model_Runner.Backend.Device is
       Vector  : T.Real_Array_Access;
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0)
    is
       Steps : Products.Sequence;
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
@@ -3311,7 +3327,8 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Add_Combination (Steps, Unit, Added, Kept => False);
+      Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                        Alpha => Alpha, Limit => Limit);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;

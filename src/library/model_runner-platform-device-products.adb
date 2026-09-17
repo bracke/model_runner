@@ -804,6 +804,10 @@ package body Model_Runner.Platform.Device.Products is
    --  them rather than written again.
    Attention_Bytes : constant := 72;
 
+   --  A binary32 by its bits, for a push word that carries one.
+   function Float_Bits is new Ada.Unchecked_Conversion
+     (C.C_float, C.unsigned);
+
    --  And the packed kernel's, which has the bases twice over -- the
    --  rows' in bytes and the scales' in floats -- the bits an element of
    --  each side, how many heads and positions a workgroup answers, a
@@ -6737,12 +6741,18 @@ package body Model_Runner.Platform.Device.Products is
      (Steps : in out Sequence;
       Unit  : Natural;
       Added : out Boolean;
-      Kept  : Boolean := True) is
+      Kept  : Boolean := True;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0) is
    begin
       if Steps.Held < 2
         or else Steps.Held = Sequence_Limit
         or else Steps.Items (Steps.Held).Rows
                   /= Steps.Items (Steps.Held - 1).Rows
+        or else Unit > 3
+        or else (Unit = 3
+                 and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
+                           or else Model_Runner.Numerics."<=" (Limit, 0.0)))
       then
          Added := False;
          return;
@@ -6755,7 +6765,8 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Steps.Items (Steps.Held - 1).Rows,
          Columns => Steps.Items (Steps.Held - 1).Rows,
          Key => System.Null_Address, Chained => True, Kept => Kept,
-         Blends => True, Unit => Unit, Attends => False,
+         Blends => True, Unit => Unit, Alpha => Alpha, Limit => Limit,
+         Attends => False,
          others => <>);
       Added := True;
    end Add_Combination;
@@ -9218,6 +9229,11 @@ package body Model_Runner.Platform.Device.Products is
                         Packing =>
                           (if Arms then C.unsigned (Sits (Up_Step))
                            else 0),
+
+                        --  The clamped gate's slope and limit, by their
+                        --  bits, in the two words after the base.
+                        Joins   => Float_Bits (C.C_float (This.Alpha)),
+                        Table   => Float_Bits (C.C_float (This.Limit)),
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,

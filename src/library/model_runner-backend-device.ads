@@ -655,6 +655,8 @@ package Model_Runner.Backend.Device is
    --    V_Base go unread.
    --  @param Sinks_At Where the heads' sinks begin in the cache, in
    --    elements, for a layer that has them; zero for none.
+   --  @param Alpha The clamped gate's slope, where Unit is three.
+   --  @param Limit The clamped gate's limit, where Unit is three.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -685,7 +687,9 @@ package Model_Runner.Backend.Device is
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0;
       Packed      : Packed_Cache := Not_Packed;
-      Sinks_At    : Natural := 0);
+      Sinks_At    : Natural := 0;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  Several products of the same activation, in one submission.
    --
@@ -899,6 +903,8 @@ package Model_Runner.Backend.Device is
    --  @param Sinks_At Where the heads' sinks begin in the cache, in
    --    elements, for a layer that has them, which the caller put there;
    --    zero for none.
+   --  @param Alpha The clamped gate's slope, where Unit is three.
+   --  @param Limit The clamped gate's limit, where Unit is three.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -964,7 +970,9 @@ package Model_Runner.Backend.Device is
       Pack_Keys      : Packing_Shape := Not_Packing;
       Pack_Values    : Packing_Shape := Not_Packing;
       Unpacked       : Unpacking_Shape := Not_Unpacked;
-      Sinks_At       : Natural := 0);
+      Sinks_At       : Natural := 0;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  A gated feed-forward block, whole, in one submission.
    --
@@ -990,6 +998,8 @@ package Model_Runner.Backend.Device is
    --  @param Into Receives what the down projection produced.
    --  @param Status Success, or why not.
    --  @param Cancel Token a caller may set to ask for a stop.
+   --  @param Alpha The clamped gate's slope, where Unit is three.
+   --  @param Limit The clamped gate's limit, where Unit is three.
    procedure Dispatch_Gated
      (Gate   : Model_Runner.Tensors.View;
       Up     : Model_Runner.Tensors.View;
@@ -999,7 +1009,9 @@ package Model_Runner.Backend.Device is
       Unit   : Natural;
       Into   : Model_Runner.Tensors.Real_Array_Access;
       Status : out Model_Runner.Errors.Error_Info;
-      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  The same product for each vector of a batch.
    --
@@ -1088,6 +1100,8 @@ package Model_Runner.Backend.Device is
    --  @param Target Receives Count vectors of Width.
    --  @param Status Success, or the first refusal.
    --  @param Cancel Stop request to watch, or null for none.
+   --  @param Alpha The clamped gate's slope, where Unit is three.
+   --  @param Limit The clamped gate's limit, where Unit is three.
    procedure Dispatch_Mixture
      (Gates   : Model_Runner.Tensors.View;
       Ups     : Model_Runner.Tensors.View;
@@ -1100,7 +1114,9 @@ package Model_Runner.Backend.Device is
       Vector  : Model_Runner.Tensors.Real_Array_Access;
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  One expert's whole feed-forward over a batch, as one submission:
    --  its gate and up slices over every vector, the unit and the multiply
@@ -1121,6 +1137,8 @@ package Model_Runner.Backend.Device is
    --  @param Target Receives Count vectors of Width.
    --  @param Status Success, or the first refusal.
    --  @param Cancel Stop request to watch, or null for none.
+   --  @param Alpha The clamped gate's slope, where Unit is three.
+   --  @param Limit The clamped gate's limit, where Unit is three.
    procedure Dispatch_Expert
      (Gates   : Model_Runner.Tensors.View;
       Ups     : Model_Runner.Tensors.View;
@@ -1133,7 +1151,9 @@ package Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  A batch's routing, decided on the device: the router's product over
    --  every position and the choosing after it, as one submission, with

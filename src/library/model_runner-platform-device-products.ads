@@ -908,17 +908,25 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Steps Sequence to add to.
    --  @param Unit Which unit to apply to the first arm: zero for the
-   --    sigmoid-weighted one, one for the Gaussian one in its tanh form.
+   --    sigmoid-weighted one, one for the Gaussian one in its tanh form,
+   --    three for the clamped gate that reaches the second arm too -- the
+   --    first held at Limit and passed through the logistic at a slope of
+   --    Alpha, the second held at the limit either side and raised by one,
+   --    the two multiplied.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
+   --  @param Alpha The clamped gate's slope; unread by the other units.
+   --  @param Limit The clamped gate's limit; unread by the other units.
    procedure Add_Combination
      (Steps : in out Sequence;
       Unit  : Natural;
       Added : out Boolean;
-      Kept  : Boolean := True);
+      Kept  : Boolean := True;
+      Alpha : Model_Runner.Numerics.Real := 0.0;
+      Limit : Model_Runner.Numerics.Real := 0.0);
 
    --  Name a residual join for a sequence to perform.
    --
@@ -2437,8 +2445,11 @@ private
       --  before it, puts a unit on the first and multiplies by the second.
       Blends  : Boolean := False;
 
-      --  Which unit a combining step applies. Meaningless otherwise.
+      --  Which unit a combining step applies, and the clamped gate's
+      --  slope and limit where it is that one. Meaningless otherwise.
       Unit    : Natural := 0;
+      Alpha   : Model_Runner.Numerics.Real := 0.0;
+      Limit   : Model_Runner.Numerics.Real := 0.0;
 
       --  An attention step rather than a product: it reads the queries the
       --  caller supplied and the cache the device holds, and writes a blend

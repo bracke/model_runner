@@ -3683,6 +3683,15 @@ package body Tests.Backend_Cases is
 
       Wanted : N.Real_Array (0 .. Width - 1) := [others => 0.0];
       Chosen : array (0 .. Used - 1) of Natural := [others => 0];
+
+      --  Twice: with the sigmoid-weighted gate, and with the clamped gate
+      --  gpt-oss states -- both arms held at a limit low enough to hold
+      --  some of these, the gate through the logistic at its slope, the
+      --  other arm raised by one -- which is the combining kernel's third
+      --  unit, held to the same rule worked out here.
+      Clamped : Boolean := False;
+      Alpha   : constant N.Real := 1.702;
+      Limit   : constant N.Real := 0.5;
       Shares : array (0 .. Used - 1) of N.Real := [others => 0.0];
 
       Steps : Products.Sequence;
@@ -3756,11 +3765,24 @@ package body Tests.Backend_Cases is
                             * Input (N.Element_Count (Col));
                      end loop;
 
-                     Gated (N.Element_Count (Row)) :=
-                       G_Sum
-                       / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
-                                          (Float (-G_Sum))))
-                       * U_Sum;
+                     if Clamped then
+                        declare
+                           X : constant N.Real := N.Real'Min (G_Sum, Limit);
+                           Y : constant N.Real :=
+                             N.Real'Max (-Limit, N.Real'Min (U_Sum, Limit));
+                        begin
+                           Gated (N.Element_Count (Row)) :=
+                             X / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                                 (Float (-Alpha * X))))
+                             * (Y + 1.0);
+                        end;
+                     else
+                        Gated (N.Element_Count (Row)) :=
+                          G_Sum
+                          / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                             (Float (-G_Sum))))
+                          * U_Sum;
+                     end if;
                   end;
                end loop;
 
@@ -3825,86 +3847,96 @@ package body Tests.Backend_Cases is
          Input (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
       end loop;
 
-      Host_Mixture;
+      for Round in Boolean loop
+         Clamped := Round;
+         Wanted := [others => 0.0];
+         Host_Mixture;
 
-      declare
-         function Bytes_Of (Values : N.Real_Array)
-           return Model_Runner.Bytes.Byte_Count
-         is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
-      begin
-         Products.Open_Sequence (Steps);
+         declare
+            function Bytes_Of (Values : N.Real_Array)
+              return Model_Runner.Bytes.Byte_Count
+            is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+         begin
+            Products.Open_Sequence (Steps);
 
-         Products.Add_Product
-           (Steps, Router (Router'First)'Address, Bytes_Of (Router), 0,
-            Products.Values_F32, Experts, Width, Added, Kept => False);
-         Assert (Added, "the router's product was refused");
+            Products.Add_Product
+              (Steps, Router (Router'First)'Address, Bytes_Of (Router), 0,
+               Products.Values_F32, Experts, Width, Added, Kept => False);
+            Assert (Added, "the router's product was refused");
 
-         Products.Add_Route (Steps, Experts, Used, Added);
-         Assert (Added, "the routing step was refused");
+            Products.Add_Route (Steps, Experts, Used, Added);
+            Assert (Added, "the routing step was refused");
 
-         Products.Add_Gathered_Product
-           (Steps, Gates (Gates'First)'Address, Bytes_Of (Gates), 0,
-            Products.Values_F32, Experts * Feed, Feed, Width,
-            [others => 0], Used, Added, Kept => False,
-            Chained => False, Routed => 2);
-         Assert (Added, "the gathered gates were refused");
+            Products.Add_Gathered_Product
+              (Steps, Gates (Gates'First)'Address, Bytes_Of (Gates), 0,
+               Products.Values_F32, Experts * Feed, Feed, Width,
+               [others => 0], Used, Added, Kept => False,
+               Chained => False, Routed => 2);
+            Assert (Added, "the gathered gates were refused");
 
-         Products.Add_Gathered_Product
-           (Steps, Ups (Ups'First)'Address, Bytes_Of (Ups), 0,
-            Products.Values_F32, Experts * Feed, Feed, Width,
-            [others => 0], Used, Added, Kept => False,
-            Chained => False, Routed => 2);
-         Assert (Added, "the gathered ups were refused");
+            Products.Add_Gathered_Product
+              (Steps, Ups (Ups'First)'Address, Bytes_Of (Ups), 0,
+               Products.Values_F32, Experts * Feed, Feed, Width,
+               [others => 0], Used, Added, Kept => False,
+               Chained => False, Routed => 2);
+            Assert (Added, "the gathered ups were refused");
 
-         Products.Add_Combination (Steps, 0, Added, Kept => False);
-         Assert (Added, "the combination was refused");
+            if Clamped then
+               Products.Add_Combination
+                 (Steps, 3, Added, Kept => False, Alpha => Alpha, Limit => Limit);
+            else
+               Products.Add_Combination (Steps, 0, Added, Kept => False);
+            end if;
+            Assert (Added, "the combination was refused");
 
-         Products.Add_Gathered_Product
-           (Steps, Downs (Downs'First)'Address, Bytes_Of (Downs), 0,
-            Products.Values_F32, Experts * Width, Width, Feed,
-            [others => 0], Used, Added, Kept => False,
-            Chained => True, Apart => Feed, Routed => 2);
-         Assert (Added, "the gathered downs were refused");
+            Products.Add_Gathered_Product
+              (Steps, Downs (Downs'First)'Address, Bytes_Of (Downs), 0,
+               Products.Values_F32, Experts * Width, Width, Feed,
+               [others => 0], Used, Added, Kept => False,
+               Chained => True, Apart => Feed, Routed => 2);
+            Assert (Added, "the gathered downs were refused");
 
-         Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
-         Assert (Added, "the mixing step was refused");
-         Assert (Products.Length (Steps) = 7, "seven steps were named");
-      end;
+            Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+            Assert (Added, "the mixing step was refused");
+            Assert (Products.Length (Steps) = 7, "seven steps were named");
+         end;
 
-      Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
-      Assert (Ok, "the gathered mixture was refused");
-      Assert (not Halted, "nothing asked it to stop");
+         Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
+         Assert (Ok, "the gathered mixture was refused");
+         Assert (not Halted, "nothing asked it to stop");
 
-      --  The routing step's choice, as words: the same experts in the
-      --  same order as the host chose.
-      for Slot in 0 .. Used - 1 loop
-         Assert
-           (Natural (Bits (Landing (N.Element_Count (Experts + Slot))))
-              = Chosen (Slot),
-            "the device chose expert"
-            & Natural'Image
-                (Natural (Bits (Landing (N.Element_Count (Experts + Slot)))))
-            & " where the host chose" & Natural'Image (Chosen (Slot))
-            & " at rank" & Natural'Image (Slot));
-      end loop;
-
-      declare
-         At_Mix : constant N.Element_Count :=
-           N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
-                            + Used * Width);
-         Worst : N.Real := 0.0;
-      begin
-         for Row in 0 .. Width - 1 loop
-            Worst := N.Real'Max
-              (Worst,
-               abs (Landing (At_Mix + N.Element_Count (Row))
-                    - Wanted (N.Element_Count (Row))));
+         --  The routing step's choice, as words: the same experts in the
+         --  same order as the host chose.
+         for Slot in 0 .. Used - 1 loop
+            Assert
+              (Natural (Bits (Landing (N.Element_Count (Experts + Slot))))
+                 = Chosen (Slot),
+               "the device chose expert"
+               & Natural'Image
+                   (Natural (Bits (Landing (N.Element_Count (Experts + Slot)))))
+               & " where the host chose" & Natural'Image (Chosen (Slot))
+               & " at rank" & Natural'Image (Slot));
          end loop;
 
-         Assert (Worst < 1.0E-4,
-                 "the gathered mixture answers" & N.Real'Image (Worst)
-                 & " away from the host's reading of the same layer");
-      end;
+         declare
+            At_Mix : constant N.Element_Count :=
+              N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
+                               + Used * Width);
+            Worst : N.Real := 0.0;
+         begin
+            for Row in 0 .. Width - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Landing (At_Mix + N.Element_Count (Row))
+                       - Wanted (N.Element_Count (Row))));
+            end loop;
+
+            Assert (Worst < 1.0E-4,
+                    "the gathered mixture answers" & N.Real'Image (Worst)
+                    & " away from the host's reading of the same layer"
+                    & (if Clamped then ", with the clamped gate" else ""));
+         end;
+      end loop;
 
       Products.Close (Engine);
       Devices.Close (Opened);

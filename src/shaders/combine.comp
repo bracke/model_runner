@@ -54,6 +54,13 @@ layout(push_constant) uniform Shape {
     //  than in a kernel of its own because it is the same two arms in and
     //  one out, on the same layout, and a second pipeline for an addition
     //  would be a pipeline for three instructions.
+    //
+    //  Three is the clamped gate gpt-oss states, which reaches the second
+    //  arm as well as the first: the gate held at a limit and passed
+    //  through the logistic at a slope, the other arm held at the limit
+    //  either side and raised by one, and the two multiplied -- as the
+    //  host computes it, in the same order. The slope and the limit are
+    //  the two words after the base, by their bits.
     uint unit;
 
     //  The remaining words of the block the pipeline layout declares. Unused
@@ -73,6 +80,10 @@ layout(push_constant) uniform Shape {
     uint up_at;
 
     uint unused_base;
+
+    //  The clamped gate's slope and limit, as binary32 by their bits.
+    uint alpha_bits;
+    uint limit_bits;
 } shape;
 
 //  x / (1 + exp(-x)), guarded so a large negative x cannot overflow the
@@ -114,6 +125,13 @@ void main() {
 
     if (shape.unit == 2) {
         made = gate + other;
+    } else if (shape.unit == 3) {
+        float alpha = uintBitsToFloat (shape.alpha_bits);
+        float limit = uintBitsToFloat (shape.limit_bits);
+        float x = min (gate, limit);
+        float y = max (-limit, min (other, limit));
+
+        made = x / (1.0 + exp (-alpha * x)) * (y + 1.0);
     } else {
         float activated =
           shape.unit == 0 ? sigmoid_weighted(gate) : gaussian(gate);
