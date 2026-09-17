@@ -146,6 +146,37 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`--kv-values q8|q4`: the values stored otherwise than the keys.**
+  Attention reads a key through a dot product with the query, where a
+  rounded element moves every score it enters, and a value through a
+  weighted sum over the positions, where the roundings average out; so a
+  packed session may hold its values in the other packed storage from its
+  keys, and the values bear the coarser one. On TinyLlama, byte keys with
+  nibble values answer as the exact cache does where nibble keys with byte
+  values do not, at 20,043,942 bytes for the full context between the
+  byte cache's 24,585,588 and the nibble one's 15,502,296. On the
+  processor and on the device, snapshotted as a pair and refused by a
+  session of another pair, refused as a shape beside an exact or halved
+  storage, and crossed by the sweep in a bucket of its own against the
+  independent implementation rounding each side its way -- which rounds
+  to bytes now as well as to nibbles.
+- **A packed context stays packed on the device.** A `--kv-cache q8` or
+  `q4` session on the device backend used to attend on the host, out of
+  the host's bytes, with the device doing the products alone; its block
+  on the device is now the packed rows and their scales, a sixth to a
+  quarter of the exact block, and `attention_packed.comp` -- a kernel of
+  its own, a workgroup a head of a position, reading bytes or nibbles
+  back as the numbers they stand for -- attends over it, so the whole
+  context is read on the device at every token as it is for the exact
+  cache. The host packs a row and puts it there; a context shift moves
+  the rows and puts them again. Held to the exact kernel over the
+  numbers the bytes stand for to a ten-thousandth, alone and in a
+  windowed batch, and to the rounding reference by the sweep's device
+  arms. A round of packed sessions, a layer with sinks and a value head
+  wider than 128 attend on the host as before. The kernel is a plain
+  one: twelve tokens of TinyLlama read 0.345 s with the byte cache on
+  the device against 0.274 s with the exact one, so what the packed
+  cache saves there is memory and what it costs is the attention step.
 - **`--kv-cache q4`: the context in four bits an element.** Two to a
   byte, with a scale for every thirty-two rather than for the row --
   llama.cpp's four-bit cache block, rounded as it rounds: the block's
@@ -158,9 +189,8 @@ Keep a Changelog and the project uses semantic versioning.
   rounding its keys and values the same way -- on the fixtures' rows of
   four elements the rounding itself moves a logit by 4.14, which says
   nothing about the cache -- at 0.029 worst absolute, and a snapshot of
-  a nibble session reads back to the bit. On the host: the device's
-  attention reads the exact or the halved copy, as it did for the byte
-  cache.
+  a nibble session reads back to the bit. On the device as well, through the packed
+  kernel above.
 - **A video file is read, through the host's FFmpeg libraries.** A video
   part may name a file as well as a directory of frames: libavformat,
   libavcodec, libavutil and libswscale are opened by name at first use, as

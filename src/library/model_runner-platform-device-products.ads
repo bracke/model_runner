@@ -1300,6 +1300,100 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Write bytes into that cache, as they are.
+   --
+   --  A packed session's rows: its keys and values as the bytes and
+   --  nibbles the host rounded them to, and its scales as floats, which
+   --  the packed attention kernel reads back. Nothing is converted and
+   --  no half-precision copy is written, since the copy is the exact
+   --  cache's and a packed block has none.
+   --
+   --  @param Item Ready engine.
+   --  @param At_Byte Where in the cache the bytes go, in bytes.
+   --  @param Data What to write.
+   --  @param Ok True when it was written.
+   procedure Put_Bytes
+     (Item    : in out Engine;
+      At_Byte : Interfaces.Unsigned_64;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean);
+
+   --  Attend, on the device, over a cache kept packed: a byte an element
+   --  with a scale a row, or a nibble an element with a scale a block of
+   --  thirty-two, laid out in the cache buffer as the host lays its own --
+   --  the keys' bytes, the values' bytes, the key scales and the value
+   --  scales, each where the caller says. The arguments Attend_Resident
+   --  takes, with the bases in bytes for the rows and in floats for the
+   --  scales, and how many bits an element.
+   --
+   --  Through one kernel of its own, a workgroup a head of a position:
+   --  no bundles, no slices, no round, and the caller keeps a value head
+   --  wider than Attention_Room or a layer with sinks on the host.
+   --
+   --  @param Item Ready engine.
+   --  @param K_Bits Eight or four, for the keys.
+   --  @param V_Bits The same for the values, which may differ.
+   --  @param Query The queries, Positions of them, a head after the other.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first of them may look at.
+   --  @param Last Last cached position the first of them may look at.
+   --    Position p of a batch looks to Last + p.
+   --  @param K_Bytes Where the packed keys begin, in bytes.
+   --  @param V_Bytes Where the packed values begin, in bytes.
+   --  @param KS_At Where the key scales begin, in floats.
+   --  @param VS_At Where the value scales begin, in floats.
+   --  @param KV_Width How wide a row of keys is, in elements.
+   --  @param V_Width How wide a row of values is, in elements.
+   --  @param K_Blocks Scales a row of keys.
+   --  @param V_Blocks Scales a row of values.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Target Receives the blend, Positions of them.
+   --  @param Ok True when the blend was computed, False where the kernel
+   --    is not there or the shape is one it does not take.
+   --  @param Positions How many queries, one after the other.
+   --  @param Window This layer's sliding window, or zero where it does not
+   --    slide one.
+   --  @param Causal True where a position may see only what precedes it.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for a model told where a token is otherwise.
+   procedure Attend_Packed
+     (Item       : in out Engine;
+      K_Bits     : Positive;
+      V_Bits     : Positive;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Bytes    : Interfaces.Unsigned_64;
+      V_Bytes    : Interfaces.Unsigned_64;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      KS_At      : Natural;
+      VS_At      : Natural;
+      K_Blocks   : Natural;
+      V_Blocks   : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0;
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
+
+   --  Whether the packed attention kernel was made.
+   --
+   --  @param Item Engine to ask.
+   --  @return True when Attend_Packed can run.
+   function Attends_Packed (Item : Engine) return Boolean;
+
    --  Write whole numbers into that cache.
    --
    --  A round's per-row table, which a kernel reads back with
@@ -1700,6 +1794,12 @@ private
       --  holds. It shares the layout too -- three storage buffers, with the
       --  keys and values in one of them, and the same push-constant range.
       Attender   : System.Address := System.Null_Address;
+
+      --  The packed attention kernel, over a cache of bytes or nibbles
+      --  and scales, and its pipeline. Allowed to fail on their own: a
+      --  device without them attends a packed session on the host.
+      Packed_Attend : System.Address := System.Null_Address;
+      Packed_Line   : System.Address := System.Null_Address;
 
       --  The same kernel compiled with SUBGROUPS, where the device says a
       --  compute shader may reduce across a subgroup. Its tile reductions

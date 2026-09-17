@@ -803,6 +803,11 @@ package body Model_Runner.Platform.Device.Products is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
    Attention_Bytes : constant := 68;
+
+   --  And the packed kernel's, which has the bases twice over -- the
+   --  rows' in bytes and the scales' in floats -- and the bits an element
+   --  of each side.
+   Packed_Bytes    : constant := 88;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Shape_Bytes     : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -934,6 +939,36 @@ package body Model_Runner.Platform.Device.Products is
    --  What the attention kernel is told. Fifteen words, against the six the
    --  matrix kernels take, pushed into the same range. Well inside the
    --  hundred and twenty-eight bytes every device that runs Vulkan offers.
+   type Packed_Constants is record
+      Heads      : C.unsigned := 0;
+      Head_Size  : C.unsigned := 0;
+      Value_Size : C.unsigned := 0;
+      Group_Size : C.unsigned := 1;
+      First      : C.unsigned := 0;
+      Last       : C.unsigned := 0;
+      K_Bytes    : C.unsigned := 0;
+      V_Bytes    : C.unsigned := 0;
+      KV_Width   : C.unsigned := 0;
+      V_Width    : C.unsigned := 0;
+      KS_At      : C.unsigned := 0;
+      VS_At      : C.unsigned := 0;
+      K_Blocks   : C.unsigned := 1;
+      V_Blocks   : C.unsigned := 1;
+      K_Bits     : C.unsigned := 8;
+      V_Bits     : C.unsigned := 8;
+      Scale      : C.C_float := 1.0;
+      Cap        : C.C_float := 0.0;
+      Max_Bias   : C.C_float := 0.0;
+      Positions  : C.unsigned := 1;
+      Window     : C.unsigned := 0;
+      Causal     : C.unsigned := 1;
+   end record
+     with Convention => C;
+
+   pragma Compile_Time_Error
+     (Packed_Constants'Size /= Packed_Bytes * 8,
+      "the packed attention constants are not the size the shader reads");
+
    type Attention_Constants is record
       Heads      : C.unsigned := 0;
       Head_Size  : C.unsigned := 0;
@@ -1965,6 +2000,23 @@ package body Model_Runner.Platform.Device.Products is
 
          Item.Attender := Made;
 
+         --  And the packed kernel, over a cache of bytes or nibbles and
+         --  scales. Allowed to fail on its own: a device that refuses it
+         --  attends a packed session on the host.
+         declare
+            Packed : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Attention_Packed;
+         begin
+            Request.Size := Interfaces.C.size_t (Packed'Length * 4);
+            Request.Code := Packed'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Packed_Attend := Made;
+            end if;
+         end;
+
          --  And the same source compiled with SUBGROUPS, where the device
          --  offers them. Allowed to fail on its own: a device that takes
          --  the wide kernel and refuses this one attends as it always did.
@@ -2537,6 +2589,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Halved_Line := Made;
+            end if;
+         end if;
+
+         if Item.Packed_Attend /= Null_Handle then
+            Request.Stage.Module := Item.Packed_Attend;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Packed_Line := Made;
             end if;
          end if;
 
@@ -3172,6 +3234,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
+      Give_Back (Item.Packed_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
@@ -3193,6 +3256,7 @@ package body Model_Runner.Platform.Device.Products is
 
       Give_Back (Item.Extra, "vkDestroyShaderModule");
       Give_Back (Item.Halver_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Packed_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
@@ -5234,6 +5298,293 @@ package body Model_Runner.Platform.Device.Products is
 
       Ok := True;
    end Put_Cache;
+
+   ---------------
+   -- Put_Bytes --
+   ---------------
+
+   procedure Put_Bytes
+     (Item    : in out Engine;
+      At_Byte : Interfaces.Unsigned_64;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      use type System.Storage_Elements.Integer_Address;
+
+      Span : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Data'Length);
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_At = Null_Handle
+        or else Data'Length = 0
+        or else At_Byte + Span > Item.Cache_Bytes
+      then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Bytes.Byte_Array (Data'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.Cache_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Room := Data;
+      end;
+
+      Ok := True;
+   end Put_Bytes;
+
+   --------------------
+   -- Attends_Packed --
+   --------------------
+
+   function Attends_Packed (Item : Engine) return Boolean
+   is (Item.Packed_Line /= Null_Handle);
+
+   -------------------
+   -- Attend_Packed --
+   -------------------
+
+   procedure Attend_Packed
+     (Item       : in out Engine;
+      K_Bits     : Positive;
+      V_Bits     : Positive;
+      Query      : Model_Runner.Numerics.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Bytes    : Interfaces.Unsigned_64;
+      V_Bytes    : Interfaces.Unsigned_64;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      KS_At      : Natural;
+      VS_At      : Natural;
+      K_Blocks   : Natural;
+      V_Blocks   : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Numerics.Real_Array;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0;
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Slots : constant Natural := Natural'Max (Positions, 1);
+
+      Kept_Bytes  : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
+      Query_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Query'Length) * 4;
+      Blend_Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Slots) *
+        Interfaces.Unsigned_64 (Heads) *
+        Interfaces.Unsigned_64 (Value_Size) * 4;
+
+      Good      : Boolean;
+      Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Packed_Line = Null_Handle
+        or else K_Bits not in 4 | 8
+        or else V_Bits not in 4 | 8
+        or else Heads = 0
+        or else Head_Size = 0
+        or else Value_Size = 0
+        or else Value_Size > Attention_Room
+        or else Group_Size = 0
+        or else Last < First
+        or else Item.Cache_Buffer = Null_Handle
+        or else Query'Length
+                  < Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Head_Size)
+        or else Target'Length
+                  < Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Value_Size)
+      then
+         return;
+      end if;
+
+      if Item.Vector_Bytes < Query_Bytes then
+         Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
+         Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Take (Item, Query_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
+               Good);
+         if not Good then
+            return;
+         end if;
+         Item.Vector_Bytes := Query_Bytes;
+      end if;
+
+      if Item.Result_Bytes < Blend_Bytes then
+         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
+         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
+               Good, Read => True);
+         if not Good then
+            return;
+         end if;
+         Item.Result_Bytes := Blend_Bytes;
+      end if;
+
+      Standing (Item, Item.Vector_Memory, Item.Vector_At, Item.Vector_Bytes,
+                Good);
+      if Good then
+         declare
+            Room : Model_Runner.Numerics.Real_Array (Query'Range)
+              with Import, Address => Item.Vector_At;
+         begin
+            Room := Query;
+         end;
+      end if;
+      if not Good then
+         return;
+      end if;
+
+      declare
+         Update : constant Update_Sets_Call :=
+           To_Update_Sets (Point ("vkUpdateDescriptorSets"));
+
+         Told  : aliased Buffer_Info_Array;
+         Notes : aliased Write_Array;
+      begin
+         if Update = null then
+            return;
+         end if;
+
+         Told (1) := (Item.Cache_Buffer, 0, Kept_Bytes);
+         Told (2) := (Item.Vector_Buffer, 0, Query_Bytes);
+         Told (3) := (Item.Result_Buffer, 0, Blend_Bytes);
+         Told (4) := Half_Descriptor (Item);
+         Told (5) := Told (3);
+
+         for Binding in Told'Range loop
+            Notes (Binding).Target := Item.Descriptor;
+            Notes (Binding).Binding := C.unsigned (Binding - 1);
+            Notes (Binding).Buffers := Told (Binding)'Address;
+         end loop;
+
+         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+      end;
+
+      declare
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Bind_Pipeline : constant Bind_Pipeline_Call :=
+           To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+         Bind_Sets : constant Bind_Sets_Call :=
+           To_Bind_Sets (Point ("vkCmdBindDescriptorSets"));
+         Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+         Dispatch : constant Dispatch_Call :=
+           To_Dispatch (Point ("vkCmdDispatch"));
+
+         Sets  : aliased Address := Item.Descriptor;
+         Began : aliased Command_Begin_Info;
+
+         Shape : aliased Packed_Constants :=
+           (Heads      => C.unsigned (Heads),
+            Head_Size  => C.unsigned (Head_Size),
+            Value_Size => C.unsigned (Value_Size),
+            Group_Size => C.unsigned (Group_Size),
+            First      => C.unsigned (First),
+            Last       => C.unsigned (Last),
+            K_Bytes    => C.unsigned (K_Bytes),
+            V_Bytes    => C.unsigned (V_Bytes),
+            KV_Width   => C.unsigned (KV_Width),
+            V_Width    => C.unsigned (V_Width),
+            KS_At      => C.unsigned (KS_At),
+            VS_At      => C.unsigned (VS_At),
+            K_Blocks   => C.unsigned (K_Blocks),
+            V_Blocks   => C.unsigned (V_Blocks),
+            K_Bits     => C.unsigned (K_Bits),
+            V_Bits     => C.unsigned (V_Bits),
+            Scale      => C.C_float (Scale),
+            Cap        => C.C_float (Cap),
+            Max_Bias   => C.C_float (Max_Bias),
+            Positions  => C.unsigned (Slots),
+            Window     => C.unsigned (Window),
+            Causal     => (if Causal then 1 else 0));
+      begin
+         if Reset_Buffer = null or else Start = null or else Stop = null
+           or else Bind_Pipeline = null or else Bind_Sets = null
+           or else Push = null or else Dispatch = null
+         then
+            return;
+         end if;
+
+         declare
+            Settled : Boolean;
+         begin
+            Settle (Item, Settled);
+            if not Settled then
+               return;
+            end if;
+         end;
+
+         if Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Start (Item.Buffer, Began'Address) /= 0
+         then
+            return;
+         end if;
+
+         Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
+         Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
+                    Sets'Address, 0, Null_Handle);
+         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+               Packed_Bytes, Shape'Address);
+         Dispatch (Item.Buffer, C.unsigned (Heads), C.unsigned (Slots), 1);
+
+         if Stop (Item.Buffer) /= 0 then
+            return;
+         end if;
+      end;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      if not Good then
+         return;
+      end if;
+
+      declare
+         Good_Map : Boolean;
+      begin
+         Standing (Item, Item.Result_Memory, Item.Result_At,
+                   Item.Result_Bytes, Good_Map);
+         if not Good_Map then
+            return;
+         end if;
+
+         declare
+            Slice : Model_Runner.Numerics.Real_Array
+              (Target'First
+               .. Target'First
+                  + Model_Runner.Numerics.Element_Count (Slots)
+                    * Model_Runner.Numerics.Element_Count (Heads)
+                    * Model_Runner.Numerics.Element_Count (Value_Size) - 1)
+              with Import, Address => Item.Result_At;
+         begin
+            Target (Slice'Range) := Slice;
+         end;
+      end;
+
+      Ok := True;
+   end Attend_Packed;
 
    ---------------
    -- Put_Words --

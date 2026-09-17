@@ -4,7 +4,6 @@ with Ada.Unchecked_Conversion;
 with System;
 with System.Storage_Elements;
 
-with Model_Runner.Bytes;
 with Model_Runner.Platform.Device.Products;
 
 package body Model_Runner.Backend.Device is
@@ -870,6 +869,73 @@ package body Model_Runner.Backend.Device is
 
       Products.Put_Cache (Engine, At_Value, Values, Ok);
    end Put_Cache;
+
+   ---------------------
+   -- Put_Cache_Bytes --
+   ---------------------
+
+   procedure Put_Cache_Bytes
+     (At_Byte : Interfaces.Unsigned_64;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Put_Bytes (Engine, At_Byte, Data, Ok);
+   end Put_Cache_Bytes;
+
+   --------------------
+   -- Attends_Packed --
+   --------------------
+
+   function Attends_Packed return Boolean
+   is (Ready_Now and then Products.Attends_Packed (Engine));
+
+   -------------------
+   -- Attend_Packed --
+   -------------------
+
+   procedure Attend_Packed
+     (K_Bits     : Positive;
+      V_Bits     : Positive;
+      Query      : T.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Bytes    : Interfaces.Unsigned_64;
+      V_Bytes    : Interfaces.Unsigned_64;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      KS_At      : Natural;
+      VS_At      : Natural;
+      K_Blocks   : Natural;
+      V_Blocks   : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out T.Real_Array;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0;
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Attend_Packed
+        (Engine, K_Bits, V_Bits, Query, Heads, Head_Size, Value_Size, Group_Size,
+         First, Last, K_Bytes, V_Bytes, KV_Width, V_Width, KS_At, VS_At,
+         K_Blocks, V_Blocks, Scale, Cap, Target, Ok, Positions, Window,
+         Causal, Max_Bias);
+   end Attend_Packed;
 
    ---------------
    -- Get_Cache --

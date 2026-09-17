@@ -1449,6 +1449,8 @@ package body Model_Runner.CLI.Execute is
                      then Opt.Repack_Names
                      elsif Opt.Option_Name (Index) = "--kv-cache"
                      then Opt.Cache_Names
+                     elsif Opt.Option_Name (Index) = "--kv-values"
+                     then Opt.Value_Names
                      elsif Opt.Option_Name (Index) = "--arith"
                      then Opt.Arithmetic_Names
                      elsif Opt.Option_Name (Index) = "--pooling"
@@ -1869,7 +1871,7 @@ package body Model_Runner.CLI.Execute is
                --  of the one this defaults to. A storage offered for what it
                --  saves should be able to say what it saves.
                L.Plan_For (Settings, Item.Context_Size, Plan, Detail2,
-                           Cache => Item.Cache);
+                           Cache => Item.Cache, Values => Item.Values);
                Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer);
                Pres.Put_Field
                  (Screen, "cli.inspect.label.model_bytes",
@@ -2330,7 +2332,8 @@ package body Model_Runner.CLI.Execute is
          L.Open
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
-            Workers => Team, Cache => Item.Cache, Status => Condition);
+            Workers => Team, Cache => Item.Cache, Status => Condition,
+            Values => Item.Values);
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;
@@ -2384,7 +2387,8 @@ package body Model_Runner.CLI.Execute is
             L.Open
               (Draft_Session, Draft_Model, Item.Context_Size,
                Session_Bounds => Session_Bounds (Item),
-               Workers => Team, Cache => Item.Cache, Status => Condition);
+               Workers => Team, Cache => Item.Cache, Status => Condition,
+            Values => Item.Values);
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;
@@ -2975,12 +2979,14 @@ package body Model_Runner.CLI.Execute is
                        (Embed_Session, Embed_Model, 512,
                         Session_Bounds => Session_Bounds (Item),
                         Workers => Team, Cache => Item.Cache,
+                        Values => Item.Values,
                         Status => Condition);
                   else
                      L.Open
                        (Embed_Session, Prepared, 512,
                         Session_Bounds => Session_Bounds (Item),
                         Workers => Team, Cache => Item.Cache,
+                        Values => Item.Values,
                         Status => Condition);
                   end if;
                   if E.Is_Ok (Condition) then
@@ -3000,6 +3006,7 @@ package body Model_Runner.CLI.Execute is
                        (Delegate_Runner.Sessions (I), Prepared, Sub_Context,
                         Session_Bounds => Session_Bounds (Item),
                         Workers => Sub_Workers, Cache => Item.Cache,
+                        Values => Item.Values,
                         Status => Condition);
                      exit when E.Is_Error (Condition);
                      Sub_Ready := Sub_Ready + 1;
@@ -3784,7 +3791,8 @@ package body Model_Runner.CLI.Execute is
          L.Open
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
-            Workers => Team, Cache => Item.Cache, Status => Condition);
+            Workers => Team, Cache => Item.Cache, Status => Condition,
+            Values => Item.Values);
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;

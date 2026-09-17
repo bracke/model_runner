@@ -3086,6 +3086,18 @@ package body Tests.CLI_Cases is
       Expect (E.No_Error, "run m.gguf --prompt a --temperature 0.8");
       Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --temperature 0");
+      --  The values stored apart from the keys: beside a packed storage
+      --  for the keys and no other, and only in one of the two packed
+      --  storages.
+      Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q8 --kv-values q4");
+      Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q4 --kv-values q8");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --kv-cache f16 --kv-values q4");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --kv-values q4");
+      Expect (E.CLI_Invalid_Option_Value,
+              "run m.gguf --prompt a --kv-cache q8 --kv-values f16");
+
       Expect (E.CLI_Invalid_Color_Mode, "run m.gguf --color=mauve");
       Expect (E.CLI_Unexpected_Operand, "run m.gguf extra");
       Expect (E.Sampling_Invalid_Configuration, "run m.gguf --top-p 2");

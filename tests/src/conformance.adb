@@ -131,6 +131,10 @@ package body Conformance is
       --  other, where the exact answer measures the rounding itself.
       Expected_Nibbles : Expectation := [others => [others => 0.0]];
 
+      --  And with one side in bytes and the other in nibbles, each way.
+      Expected_Bytes_Nibbles : Expectation := [others => [others => 0.0]];
+      Expected_Nibbles_Bytes : Expectation := [others => [others => 0.0]];
+
       --  And what the reference's block past the stack drafts from the
       --  same text, for the architecture that carries one: compared
       --  beside the logits, in the same buckets, so that the draft the
@@ -156,6 +160,10 @@ package body Conformance is
 
       Expected_States : State_Expectation := [others => [others => 0.0]];
       Expected_States_Nibbles : State_Expectation :=
+        [others => [others => 0.0]];
+      Expected_States_Bytes_Nibbles : State_Expectation :=
+        [others => [others => 0.0]];
+      Expected_States_Nibbles_Bytes : State_Expectation :=
         [others => [others => 0.0]];
 
       --  Which architecture the fixture in hand is. Learn and Compare are
@@ -292,25 +300,48 @@ package body Conformance is
                  (Second, Tokens, Expected_States (Which) (0 .. Span - 1),
                   Made);
                if Made then
-                  R.Round_Cache_To_Nibbles (Second, True);
+                  R.Round_Cache (Second, R.To_Nibbles, R.To_Nibbles);
                   R.Run_States
                     (Second, Tokens,
                      Expected_States_Nibbles (Which) (0 .. Span - 1), Also);
-                  R.Round_Cache_To_Nibbles (Second, False);
                   Made := Also;
                end if;
+               if Made then
+                  R.Round_Cache (Second, R.To_Bytes, R.To_Nibbles);
+                  R.Run_States
+                    (Second, Tokens,
+                     Expected_States_Bytes_Nibbles (Which) (0 .. Span - 1), Also);
+                  Made := Also;
+               end if;
+               if Made then
+                  R.Round_Cache (Second, R.To_Nibbles, R.To_Bytes);
+                  R.Run_States
+                    (Second, Tokens,
+                     Expected_States_Nibbles_Bytes (Which) (0 .. Span - 1), Also);
+                  Made := Also;
+               end if;
+               R.Round_Cache (Second, R.Unrounded, R.Unrounded);
             end;
          else
             R.Run (Second, Tokens, Expected (Which), Made);
 
-            --  The same once more, rounding the cache to nibbles.
+            --  The same once more, rounding the cache to nibbles; and
+            --  with one side in bytes and the other in nibbles, each way.
             if Made then
                declare
                   Also : Boolean;
                begin
-                  R.Round_Cache_To_Nibbles (Second, True);
+                  R.Round_Cache (Second, R.To_Nibbles, R.To_Nibbles);
                   R.Run (Second, Tokens, Expected_Nibbles (Which), Also);
-                  R.Round_Cache_To_Nibbles (Second, False);
+                  if Also then
+                     R.Round_Cache (Second, R.To_Bytes, R.To_Nibbles);
+                     R.Run (Second, Tokens, Expected_Bytes_Nibbles (Which), Also);
+                  end if;
+                  if Also then
+                     R.Round_Cache (Second, R.To_Nibbles, R.To_Bytes);
+                     R.Run (Second, Tokens, Expected_Nibbles_Bytes (Which), Also);
+                  end if;
+                  R.Round_Cache (Second, R.Unrounded, R.Unrounded);
                   Made := Also;
                end;
             end if;
@@ -434,6 +465,10 @@ package body Conformance is
          Batched : Boolean := False;
          Shared  : Boolean := False;
 
+         --  The values' storage where it is not the keys': the mixed
+         --  arms, byte keys with nibble values and the other way round.
+         Values  : L.Value_Precision := L.Same_As_Keys;
+
          --  How many tokens to hand over at once, or zero for all of them.
          --  A prompt longer than --batch-size is evaluated in several
          --  calls, and the seam between them -- where the cache position
@@ -455,6 +490,9 @@ package body Conformance is
          Both_Ways : constant Boolean :=
            Current_Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
                          | Tiny_Model.Jina_Bert_V2;
+
+         --  Whether the values are stored otherwise than the keys.
+         Mixed : constant Boolean := L."/=" (Values, L.Same_As_Keys);
 
          --  Whether the engine's draft from the block past the stack is
          --  compared here. Only where the reference drafted, and not on
@@ -601,7 +639,11 @@ package body Conformance is
          begin
             if Both_Ways then
                Answer :=
-                 (if L."=" (Cache, L.Fourth)
+                 (if Mixed and then L."=" (Cache, L.Eighth)
+                  then Expected_States_Bytes_Nibbles (Which) (0 .. Span - 1)
+                  elsif Mixed
+                  then Expected_States_Nibbles_Bytes (Which) (0 .. Span - 1)
+                  elsif L."=" (Cache, L.Fourth)
                   then Expected_States_Nibbles (Which) (0 .. Span - 1)
                   else Expected_States (Which) (0 .. Span - 1));
                Model_Runner.Tensors.Allocate
@@ -623,6 +665,10 @@ package body Conformance is
                   Containers.Close (Parsed);
                   return;
                end if;
+            elsif Mixed and then L."=" (Cache, L.Eighth) then
+               Answer := Expected_Bytes_Nibbles (Which);
+            elsif Mixed then
+               Answer := Expected_Nibbles_Bytes (Which);
             elsif L."=" (Cache, L.Fourth) then
                Answer := Expected_Nibbles (Which);
             else
@@ -637,7 +683,7 @@ package body Conformance is
             L.Open
               (Session, Engine,
                Workers => (if Shared then Team'Unchecked_Access else null),
-               Cache => Cache, Status => Status);
+               Cache => Cache, Values => Values, Status => Status);
             if E.Is_Error (Status) then
                L.Close (Engine, Status);
                Containers.Close (Parsed);
@@ -795,6 +841,12 @@ package body Conformance is
                           Long_Float'Max (Result.Eighth_Worst_Abs, Gap);
                         Result.Eighth_Worst_Rel :=
                           Long_Float'Max (Result.Eighth_Worst_Rel, Relative);
+                     elsif Mixed then
+                        Result.Mixed_Compared := Result.Mixed_Compared + 1;
+                        Result.Mixed_Worst_Abs :=
+                          Long_Float'Max (Result.Mixed_Worst_Abs, Gap);
+                        Result.Mixed_Worst_Rel :=
+                          Long_Float'Max (Result.Mixed_Worst_Rel, Relative);
                      elsif L."=" (Cache, L.Fourth) then
                         Result.Fourth_Compared := Result.Fourth_Compared + 1;
                         Result.Fourth_Worst_Abs :=
@@ -852,7 +904,10 @@ package body Conformance is
                              Long_Float'Max (Allowed_Rel, Relatively);
                         end Widen;
                      begin
-                        if L."=" (Cache, L.Eighth) then
+                        if Mixed then
+                           Widen (Fourth_Absolute_Tolerance,
+                                  Fourth_Relative_Tolerance);
+                        elsif L."=" (Cache, L.Eighth) then
                            Widen (Eighth_Absolute_Tolerance,
                                   Eighth_Relative_Tolerance);
                         elsif L."=" (Cache, L.Fourth) then
@@ -1240,6 +1295,12 @@ package body Conformance is
                            Compare (3, L.Fourth, Backend, Repack);
                            Compare (4, L.Fourth, Backend, Repack);
 
+                           --  And each side in the other's storage.
+                           Compare (4, L.Eighth, Backend, Repack,
+                                    Values => L.Value_Fourth);
+                           Compare (4, L.Fourth, Backend, Repack,
+                                    Values => L.Value_Eighth);
+
                            if Batches (Backend) then
                               Compare (4, L.Halved, Backend, Repack,
                                        Batched => True);
@@ -1247,6 +1308,9 @@ package body Conformance is
                                        Batched => True);
                               Compare (4, L.Fourth, Backend, Repack,
                                        Batched => True);
+                              Compare (4, L.Eighth, Backend, Repack,
+                                       Batched => True,
+                                       Values => L.Value_Fourth);
                            end if;
                         end if;
 
@@ -1366,7 +1430,13 @@ package body Conformance is
                      Compare
                        (4, L.Fourth, Model_Runner.Backend.Backend_Device,
                         L.No_Repack, Batched => True);
-                     On_Device := On_Device + 9;
+                     Compare
+                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Values => L.Value_Fourth);
+                     Compare
+                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True, Values => L.Value_Eighth);
+                     On_Device := On_Device + 11;
                   end if;
 
                   B.Free (Image);

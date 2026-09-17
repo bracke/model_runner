@@ -977,7 +977,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 54432, logits compared 1871576,
+conformance: sequences 56265, logits compared 1871576,
              worst absolute 6.04463587507986E-05,
              worst relative 5.51705186852182E-02,
              rounded logits compared 166360,
@@ -989,31 +989,35 @@ conformance: sequences 54432, logits compared 1871576,
              quantized logits compared 1296,
              quantized worst absolute 9.86907042250004E-02,
              quantized worst relative 1.92312577295959E+00,
-             byte logits compared 71696,
+             byte logits compared 131584,
              byte worst absolute 3.02784067592779E-01,
              byte worst relative 1.99904656218687E+00,
              nibble logits compared 71696,
              nibble worst absolute 2.90289949633689E-02,
              nibble worst relative 1.41904710438192E-02,
+             mixed logits compared 11632,
+             mixed worst absolute 2.12969536432794E-05,
+             mixed worst relative 1.00962159320007E-03,
              outside tolerance 0, unlearned 0
 ```
 
-Six buckets, because six things are being compared and mixing them would
-let the loosest hide the tightest. The first is the exact path and answers to
+Seven buckets, because seven things are being compared and mixing them
+would let the loosest hide the tightest. The first is the exact path and answers to
 1.0E-3 relative and 1.0E-4 absolute; the rounded, cached and byte ones are
 `--repack bf16`, an f16 context and a q8 context, each with a measured pair
 of its own; the nibble one is a q4 context held not to the exact reference
 but to the reference rounding its own keys and values the same way, since on
 these fixtures' rows of four elements sixteen levels move a logit by whole
 units -- 4.14 against the exact reference -- which measures the rounding
-and says nothing about the cache; the quantized one is `--arith int8`, the arithmetic a run uses by
+and says nothing about the cache; the mixed one is the two pairings of
+byte keys with nibble values and the other way round, held the same way; the quantized one is `--arith int8`, the arithmetic a run uses by
 default, held to 5.0E-2 and 5.0E-1. A count of zero in any of them would say
 the sweep ran none of that kind -- which is what a mode that quietly fell
 back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
 The run above crossed 14 architectures, in 16 formats and 6 shapes,
-of which 1470 ran on a device -- which is the same claim the paragraph below makes in
+of which 1498 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
 Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
@@ -1159,6 +1163,18 @@ rounding's edges, an element a level off where its share sits on a half.
 On TinyLlama the four storages answer the same first sentence and the
 nibble one parts from the other three in the second.
 
+`--kv-values q8|q4` beside a packed `--kv-cache` stores the values in the
+other packed storage from the keys. Attention reads the two sides
+differently: a key through a dot product with the query, where a rounded
+element moves every score it enters, and a value through a weighted sum
+over the positions, where the roundings average out. So the values bear
+the coarser storage, and on TinyLlama byte keys with nibble values answer
+both sentences as the exact cache does, where nibble keys with byte values
+part from it in the first; the session takes **20,043,942** bytes, between
+the byte cache's and the nibble one's. The sweep crosses the two pairings
+in a bucket of their own, against the reference rounding each side its
+way, and holds them to the nibble bucket's bound.
+
 What it saves is now a number the program will tell you rather than one this
 document works out: `inspect --kv-cache` reports what a session would take in
 each storage, and on TinyLlama-1.1B-Chat Q8_0 at its full 2048-token context
@@ -1167,12 +1183,15 @@ in bytes and **15,502,296** in nibbles -- a little under a quarter and a
 sixth, the difference being the buffers a session holds whatever it stores
 its context in, and the scales.
 
-On the device it is the same story and worth stating separately, because a
-storage that halves what crosses to a device might have been expected to pay
-there: twelve tokens read **1.169 s** with the byte cache against **1.151 s**
-without, which is inside the spread between two runs. What the device reads
-back is a row it decodes on the host either way, so there is nothing here for
-it to save.
+On the device it is a different story and worth stating separately. A
+packed context stays packed there, and a kernel of its own reads it -- a
+plain one, a workgroup a head of a position with sixty-four lanes, none of
+the subgroup folds and bundles the exact kernel has grown -- so twelve
+tokens read **0.345 s** with the byte cache against **0.274 s** with the
+exact one, 0.312 s of it generating against 0.245 s, on the same six-token
+prompt. What the byte cache saves on the device is the memory, which is
+the whole of what it was asked for; what it costs there is the attention
+step, until that kernel is given what the other one has.
 
 What it costs in time is nothing this machine can measure: twelve tokens of
 TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**

@@ -161,6 +161,13 @@ package Conformance is
       Fourth_Worst_Abs : Long_Float := 0.0;
       Fourth_Worst_Rel : Long_Float := 0.0;
 
+      --  And with the keys in one packed storage and the values in the
+      --  other, each way, against the reference rounding each side its
+      --  way; held to the nibble bucket's bound.
+      Mixed_Compared  : Natural := 0;
+      Mixed_Worst_Abs : Long_Float := 0.0;
+      Mixed_Worst_Rel : Long_Float := 0.0;
+
       --  Where the sweep's time goes, in seconds. Building fixtures,
       --  loading and running the independent implementation, and everything
       --  else -- which is the engine loading each fixture and evaluating it.

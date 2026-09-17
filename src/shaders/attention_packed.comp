@@ -1,0 +1,244 @@
+#version 450
+
+//  A batch of positions attending to a cache kept packed: a byte an element
+//  with a scale a row, or a nibble an element with a scale a block of
+//  thirty-two, which are the two storages a session chooses with
+//  --kv-cache q8 and q4 -- and the keys in one and the values in the other,
+//  where --kv-values says so. The host rounds every position into its bytes and
+//  scales and puts them here; this reads them back as the numbers they
+//  stand for, which is what the host's own attention does out of the same
+//  bytes.
+//
+//  Written apart from attention.comp rather than as a seventh compilation
+//  of it. That source is six kernels in one text -- the vec4 reads, the
+//  bundles, the slices, the round's table -- and every one of them reads
+//  the cache four words at a time through a path a packed row cannot take.
+//  A packed session on the device is a session that could not fit
+//  otherwise, and what it wants of the device is the memory-bound read of
+//  the whole context at every token, which this does: a workgroup a head of
+//  a position, sixty-four lanes over the cached positions for the scores,
+//  and the same sixty-four over the value's components for the blend.
+//
+//  Two sweeps of the keys rather than one. The first finds the largest
+//  score and the sum of the weights, each lane over every sixty-fourth
+//  position and the lanes joined through shared memory; the second takes
+//  the positions a tile of sixty-four at a time, puts the tile's weights in
+//  shared memory, and weighs the tile's values into each lane's components.
+//  A key read twice is a byte or half a byte an element, which is what
+//  makes the second sweep cheap enough to be simpler than carrying a
+//  running softmax.
+//
+//  What this does not do, and the caller does on the host: sinks, a round
+//  of several sessions, and a value head wider than the room below.
+
+layout(local_size_x = 64) in;
+
+//  The cache buffer, as words for the bytes and nibbles and as floats for
+//  the scales: the same binding two ways, since a session's block holds
+//  both.
+layout(std430, binding = 0) readonly  buffer Words  { uint  kvw[]; };
+layout(std430, binding = 0) readonly  buffer Floats { float kvf[]; };
+layout(std430, binding = 1) readonly  buffer Query  { float q[]; };
+layout(std430, binding = 2) writeonly buffer Blend  { float y[]; };
+
+layout(push_constant, std430) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint value_size;
+    uint group_size;
+
+    //  The first and last cached positions the batch's first position may
+    //  look at; position p of the batch looks to last + p where the model
+    //  attends one way.
+    uint first;
+    uint last;
+
+    //  Where the packed keys and the packed values begin, in bytes of the
+    //  buffer, and how many elements a position's row of each holds.
+    uint k_bytes;
+    uint v_bytes;
+    uint kv_width;
+    uint v_width;
+
+    //  Where the key scales and the value scales begin, in floats of the
+    //  buffer, and how many scales a row has: one for the byte storage,
+    //  a block's worth for the nibble one.
+    uint ks_at;
+    uint vs_at;
+    uint k_blocks;
+    uint v_blocks;
+
+    //  Eight or four: how many bits an element, for the keys and for the
+    //  values, which a session may hold differently -- the values bear
+    //  the coarser storage, since a weighted sum averages their
+    //  roundings where a dot product carries a key's into every score.
+    uint k_bits;
+    uint v_bits;
+
+    float scale;
+    float cap;
+    float max_bias;
+
+    uint positions;
+    uint window;
+    uint causal;
+} shape;
+
+//  The widest value head this takes; the caller refuses a wider one.
+const uint room = 128u;
+const uint LANES = 64u;
+const uint BLOCK = 32u;
+
+shared float tile[LANES];
+shared float top_of[LANES];
+shared float sum_of[LANES];
+
+//  A byte of the buffer.
+uint byte_at (uint at) {
+    return (kvw[at >> 2u] >> ((at & 3u) * 8u)) & 0xFFu;
+}
+
+//  Element e of the packed row that begins at byte row_at, with the scales
+//  of that row beginning at scale_at, in a storage of bits an element.
+float held_of (uint bits, uint row_at, uint scale_at, uint e) {
+    if (bits == 8u) {
+        return float (int (byte_at (row_at + e)) - 128) * kvf[scale_at];
+    }
+    uint b = byte_at (row_at + (e >> 1u));
+    uint n = (e & 1u) == 0u ? (b & 0xFu) : (b >> 4u);
+    return float (int (n) - 8) * kvf[scale_at + e / BLOCK];
+}
+
+//  Bytes a row takes, in a storage of bits an element.
+uint row_bytes (uint bits, uint width) {
+    return bits == 8u ? width : (width + 1u) / 2u;
+}
+
+void main () {
+    uint head = gl_WorkGroupID.x;
+    uint slot = gl_WorkGroupID.y;
+    uint lane = gl_LocalInvocationID.x;
+
+    uint group = head / shape.group_size;
+
+    //  This position's last and first, as attention.comp derives them.
+    uint last = shape.last + (shape.causal != 0u ? slot : 0u);
+    uint first = shape.first;
+    if (shape.window > 0u) {
+        first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
+    }
+
+    //  The head's rung of the slope ladder, as attention.comp has it.
+    float slope = 0.0;
+    if (shape.max_bias > 0.0) {
+        uint rungs = 1u;
+        while (rungs * 2u <= shape.heads) {
+            rungs *= 2u;
+        }
+        float m0 = exp2 (-(shape.max_bias / float (rungs)));
+        float m1 = exp2 (-(shape.max_bias / 2.0 / float (rungs)));
+        slope = head < rungs
+                ? pow (m0, float (head + 1u))
+                : pow (m1, float (2u * (head - rungs) + 1u));
+    }
+    uint asking = shape.causal != 0u
+                  ? last
+                  : shape.last - (shape.positions - 1u) + slot;
+
+    uint q_at = slot * shape.heads * shape.head_size + head * shape.head_size;
+    uint k_row = row_bytes (shape.k_bits, shape.kv_width);
+    uint v_row = row_bytes (shape.v_bits, shape.v_width);
+    uint k_off = group * shape.head_size;
+    uint v_off = group * shape.value_size;
+
+    //  The score of a cached position: the dot product over the head,
+    //  scaled, sloped and bounded.
+    #define SCORE(pos, out) { \
+        uint row_at = shape.k_bytes + (pos) * k_row; \
+        uint scale_at = shape.ks_at + (pos) * shape.k_blocks; \
+        float acc = 0.0; \
+        for (uint i = 0u; i < shape.head_size; i++) { \
+            acc += q[q_at + i] * held_of (shape.k_bits, row_at, scale_at, k_off + i); \
+        } \
+        acc *= shape.scale; \
+        if (slope > 0.0) { \
+            acc -= slope * float (abs (int (pos) - int (asking))); \
+        } \
+        if (shape.cap > 0.0) { \
+            acc = shape.cap * tanh (acc / shape.cap); \
+        } \
+        out = acc; \
+    }
+
+    //  First sweep: each lane's largest score and its sum of weights
+    //  against that largest, then the lanes joined.
+    float top = -1.0 / 0.0;
+    float sum = 0.0;
+    for (uint pos = first + lane; pos <= last; pos += LANES) {
+        float s;
+        SCORE (pos, s);
+        if (s > top) {
+            sum = sum * exp (top - s) + 1.0;
+            top = s;
+        } else {
+            sum += exp (s - top);
+        }
+    }
+    top_of[lane] = top;
+    sum_of[lane] = sum;
+    barrier ();
+
+    float whole_top = top_of[0];
+    for (uint l = 1u; l < LANES; l++) {
+        whole_top = max (whole_top, top_of[l]);
+    }
+    float whole_sum = 0.0;
+    for (uint l = 0u; l < LANES; l++) {
+        if (top_of[l] > -1.0 / 0.0) {
+            whole_sum += sum_of[l] * exp (top_of[l] - whole_top);
+        }
+    }
+
+    //  Second sweep: a tile of sixty-four positions at a time, its weights
+    //  in shared memory, and every lane's components weighed by them.
+    float mine[room / LANES];
+    for (uint k = 0u; k < room / LANES; k++) {
+        mine[k] = 0.0;
+    }
+
+    for (uint base = first; base <= last; base += LANES) {
+        uint pos = base + lane;
+        float w = 0.0;
+        if (pos <= last) {
+            float s;
+            SCORE (pos, s);
+            w = exp (s - whole_top) / whole_sum;
+        }
+        barrier ();
+        tile[lane] = w;
+        barrier ();
+
+        uint count = min (LANES, last - base + 1u);
+        for (uint k = 0u; k < room / LANES; k++) {
+            uint c = lane + k * LANES;
+            if (c < shape.value_size) {
+                float acc = 0.0;
+                for (uint t = 0u; t < count; t++) {
+                    uint p = base + t;
+                    uint row_at = shape.v_bytes + p * v_row;
+                    uint scale_at = shape.vs_at + p * shape.v_blocks;
+                    acc += tile[t] * held_of (shape.v_bits, row_at, scale_at, v_off + c);
+                }
+                mine[k] += acc;
+            }
+        }
+    }
+
+    uint out_at = slot * shape.heads * shape.value_size + head * shape.value_size;
+    for (uint k = 0u; k < room / LANES; k++) {
+        uint c = lane + k * LANES;
+        if (c < shape.value_size) {
+            y[out_at + c] = mine[k];
+        }
+    }
+}

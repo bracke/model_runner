@@ -7110,6 +7110,197 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Fourth_Cache_Holds_A_Sixth;
 
+   --  The values stored otherwise than the keys.
+   --
+   --  Attention reads a key through a dot product with the query, where a
+   --  rounded element moves every score it enters, and a value through a
+   --  weighted sum over the positions, where the roundings average out;
+   --  so a session may hold its values coarser than its keys. A session
+   --  with byte keys and nibble values, and one the other way round, on
+   --  the processor and on the device where there is one, agree with the
+   --  independent implementation rounding each side its way, to the
+   --  nibble bucket's bound; their plans lie between the byte and nibble
+   --  caches'; a snapshot of one reads back to the bit into a session of
+   --  the same pair and is refused by a session of another; and a pairing
+   --  that is not two packed storages is refused as a shape.
+   procedure Values_Stored_Apart_From_Keys
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      Image  : B.Byte_Array_Access;
+      Kept   : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded, Made : Boolean;
+         Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Direct, Restored : Logit_Vector;
+
+         --  The engine, on Backend, with Cache keys and Values values,
+         --  against the reference rounding as each says.
+         procedure Cross
+           (Backend : Model_Runner.Backend.Backend_Kind;
+            Cache   : L.Cache_Precision;
+            Values  : L.Value_Precision;
+            Keys_As, Values_As : Reference_Transformer.Cache_Rounding;
+            What    : String)
+         is
+            Ready  : L.Model;
+            Live   : L.Session;
+            Result : Logit_Vector;
+            Worst  : Long_Float := 0.0;
+         begin
+            L.Prepare (Ready, Parsed, Source, Backend => Backend, Status => Status);
+            if Status.Code = E.Backend_No_Device then
+               return;
+            end if;
+            Assert (E.Is_Ok (Status), "the model did not prepare for " & What);
+
+            Reference_Transformer.Round_Cache (Second, Keys_As, Values_As);
+            Reference_Transformer.Run (Second, Tokens, Expected, Made);
+            Assert (Made, "the rounding reference produced no logits");
+
+            L.Open (Live, Ready, Cache => Cache, Values => Values, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open for " & What
+                    & ": " & E.Error_Code'Image (Status.Code));
+            Assert (L."=" (L.Value_Precision_Of (Live), L.Values_Held (Cache, Values)),
+                    "the session does not say how its values are held");
+            for Token of Prompt loop
+               L.Evaluate (Live, Ready, Token, Result, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed for " & What & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+            L.Close (Live);
+            L.Close (Ready, Status);
+
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst, abs (Long_Float (Result (N.Element_Count (Index)))
+                              - Expected (Index)));
+            end loop;
+            Assert (Worst < Conformance.Fourth_Absolute_Tolerance,
+                    What & " and the independent implementation rounding each "
+                    & "side its way disagree by" & Long_Float'Image (Worst));
+         end Cross;
+      begin
+         Start (Under);
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+
+         --  The device backend is a singleton the suite leaves closed, so
+         --  it is opened here and closed after; a machine without one
+         --  crosses on the processor alone.
+         declare
+            Awake : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            if not Awake then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no device held values apart from keys here");
+            end if;
+         end;
+         for Backend in Model_Runner.Backend.Backend_Kind range
+           Model_Runner.Backend.Backend_CPU .. Model_Runner.Backend.Backend_Device
+         loop
+            Cross (Backend, L.Eighth, L.Value_Fourth,
+                   Reference_Transformer.To_Bytes, Reference_Transformer.To_Nibbles,
+                   "byte keys with nibble values on "
+                   & Model_Runner.Backend.Backend_Kind'Image (Backend));
+            Cross (Backend, L.Fourth, L.Value_Eighth,
+                   Reference_Transformer.To_Nibbles, Reference_Transformer.To_Bytes,
+                   "nibble keys with byte values on "
+                   & Model_Runner.Backend.Backend_Kind'Image (Backend));
+         end loop;
+         Model_Runner.Backend.Device.Close;
+
+         --  The plans, between the two.
+         declare
+            use type Interfaces.Unsigned_64;
+            Bytes, Nibbles, Mixed : Model_Runner.Memory.Session_Plan;
+         begin
+            L.Plan_Session (Under.Ready, 0, Bytes, Status, L.Eighth);
+            L.Plan_Session (Under.Ready, 0, Nibbles, Status, L.Fourth);
+            L.Plan_Session (Under.Ready, 0, Mixed, Status, L.Eighth, L.Value_Fourth);
+            Assert (E.Is_Ok (Status), "the mixed plan was refused");
+            Assert (Mixed.KV_Cache_Bytes < Bytes.KV_Cache_Bytes
+                    and then Mixed.KV_Cache_Bytes > Nibbles.KV_Cache_Bytes,
+                    "byte keys with nibble values did not plan between the two:"
+                    & Interfaces.Unsigned_64'Image (Mixed.KV_Cache_Bytes));
+         end;
+
+         --  A pairing the engine does not store.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Cache => L.Halved, Values => L.Value_Fourth,
+                    Status => Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "halved keys with nibble values were not refused: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+
+         --  The snapshot, into the same pair and into another.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Cache => L.Eighth, Values => L.Value_Fourth,
+                    Status => Status);
+            Assert (E.Is_Ok (Status), "the mixed session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Direct, Status => Status);
+            end loop;
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the mixed session did not snapshot");
+            L.Evaluate (Live, Under.Ready, 4, Direct, Status => Status);
+            L.Close (Live);
+
+            L.Open (Live, Under.Ready, Cache => L.Eighth, Values => L.Value_Fourth,
+                    Status => Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status), "a mixed snapshot was not adopted by the "
+                    & "same pair: " & E.Error_Code'Image (Status.Code));
+            L.Evaluate (Live, Under.Ready, 4, Restored, Status => Status);
+            L.Close (Live);
+            for Index in Direct'Range loop
+               Assert (Direct (Index) = Restored (Index),
+                       "a mixed cache did not survive being written out and read back");
+            end loop;
+
+            L.Open (Live, Under.Ready, Cache => L.Eighth, Status => Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (Status.Code = E.Lifecycle_Cache_Mismatched,
+                    "a mixed snapshot was adopted by a byte session: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+            B.Free (Kept);
+         end;
+
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      B.Free (Image);
+   end Values_Stored_Apart_From_Keys;
+
    --  A mixture under the qwen3moe keys is read as one.
    --
    --  The sweep crosses llama, qwen2 and qwen3 with every format and path,
@@ -10564,6 +10755,14 @@ package body Tests.Inference_Cases is
          "a four-bit cache holds a sixth and a bit of the bytes, answers "
          & "near the exact one, survives a snapshot to the bit, and its two "
          & "kernels read nibbles and block scales as a plain computation does");
+      Register_Routine
+        (T, Values_Stored_Apart_From_Keys'Access,
+         "a session holds its values in the other packed storage from its "
+         & "keys, on the processor and the device, agreeing with the "
+         & "independent implementation rounding each side its way; plans "
+         & "between the two; snapshots to the bit into the same pair and "
+         & "not another; and a pairing that is not two packed storages is "
+         & "refused");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");

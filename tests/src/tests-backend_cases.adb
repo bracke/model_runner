@@ -2234,6 +2234,34 @@ package body Tests.Backend_Cases is
             Assert (Same,
                     "the keys read out of the cache are not the keys put in");
          end;
+
+         --  And the same buffer taken as bytes, which is how a packed
+         --  session's rows and scales go in: the first key's four bytes
+         --  written back over themselves, and the key still what it was.
+         declare
+            function To_Word is new Ada.Unchecked_Conversion
+              (Model_Runner.Numerics.Real, Interfaces.Unsigned_32);
+
+            Word : constant Interfaces.Unsigned_32 := To_Word (Keys (0));
+
+            Raw : Model_Runner.Bytes.Byte_Array (1 .. 4);
+         begin
+            for Index in Raw'Range loop
+               Raw (Index) := Model_Runner.Bytes.Byte
+                 (Interfaces."and"
+                    (Interfaces.Shift_Right (Word, 8 * Natural (Index - 1)),
+                     16#FF#));
+            end loop;
+
+            Model_Runner.Backend.Device.Put_Cache_Bytes (0, Raw, Ok);
+            Assert (Ok, "a device that took the keys would not take bytes");
+
+            Read (0) := 0.0;
+            Model_Runner.Backend.Device.Get_Cache (0, Read, Ok);
+            Assert (Ok and then Read (0) = Keys (0),
+                    "the bytes written into the cache are not the key "
+                    & "read out of it");
+         end;
       end;
 
       Model_Runner.Backend.Device.Attend
@@ -4836,6 +4864,270 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Halved_Attention_Says_Nearly_What_The_Exact_Says;
 
+   -------------------------------------------------------
+   -- A_Packed_Attention_Says_What_The_Exact_Cache_Says --
+   -------------------------------------------------------
+
+   --  The packed kernel over a cache of bytes with a scale a row, and of
+   --  nibbles with a scale a block, against the exact kernel over the
+   --  numbers those bytes stand for: the same attention to binary32's
+   --  rounding, since the packed kernel reads back exactly the numbers
+   --  the exact one was given. Three hundred positions, two groups of
+   --  heads, a batch of one and of seven with a window, and heads
+   --  sixty-four wide -- two blocks a head -- so the nibble path's scale
+   --  changes inside a head. The cache is laid out as the engine lays a
+   --  packed block: the keys' bytes, the values' bytes, the key scales
+   --  and the value scales, at word offsets the test chooses.
+   procedure A_Packed_Attention_Says_What_The_Exact_Cache_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 4;
+      Groups    : constant := 2;
+      Head_Size : constant := 64;
+      Positions : constant := 300;
+      Batch     : constant := 7;
+      Block     : constant := 32;
+
+      KV_Span : constant N.Element_Count := Groups * Head_Size;
+      Rows    : constant N.Element_Count := Positions + Batch;
+      Room    : constant N.Element_Count := Rows * KV_Span;
+      Span    : constant N.Element_Count := Heads * Head_Size;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok : Boolean;
+
+      --  The numbers, the bytes and nibbles they round to, and the
+      --  numbers those stand for -- which is what the exact kernel is
+      --  handed, so the two kernels are asked the same question.
+      Exact_Cache : N.Real_Array (0 .. 2 * Room - 1);
+      Query       : N.Real_Array (0 .. Span * Batch - 1);
+
+      procedure Compare (K_Bits, V_Bits : Positive; What : String) is
+         use type Interfaces.Unsigned_64;
+         function Row_Bytes_Of (Bits : Positive) return N.Element_Count
+         is (if Bits = 8 then KV_Span else KV_Span / 2);
+         function Blocks_Of (Bits : Positive) return N.Element_Count
+         is (if Bits = 8 then 1 else KV_Span / Block);
+         K_Row_Bytes : constant N.Element_Count := Row_Bytes_Of (K_Bits);
+         V_Row_Bytes : constant N.Element_Count := Row_Bytes_Of (V_Bits);
+         K_Blocks    : constant N.Element_Count := Blocks_Of (K_Bits);
+         V_Blocks    : constant N.Element_Count := Blocks_Of (V_Bits);
+         Key_Words   : constant N.Element_Count := (Rows * K_Row_Bytes + 3) / 4;
+         Value_Words : constant N.Element_Count := (Rows * V_Row_Bytes + 3) / 4;
+
+         --  Where the four regions lie, in words, after a little the
+         --  test leaves empty at the front so that nothing sits at nought.
+         Base       : constant N.Element_Count := 16;
+         Values_At  : constant N.Element_Count := Base + Key_Words;
+         K_Scale_At : constant N.Element_Count := Values_At + Value_Words;
+         V_Scale_At : constant N.Element_Count := K_Scale_At + Rows * K_Blocks;
+         Whole      : constant N.Element_Count := V_Scale_At + Rows * V_Blocks;
+
+         Key_Bytes : Model_Runner.Bytes.Byte_Array
+           (0 .. Model_Runner.Bytes.Byte_Count (Rows * K_Row_Bytes) - 1) :=
+             [others => 0];
+         Value_Bytes : Model_Runner.Bytes.Byte_Array
+           (0 .. Model_Runner.Bytes.Byte_Count (Rows * V_Row_Bytes) - 1) :=
+             [others => 0];
+         Key_Scales   : N.Real_Array (0 .. Rows * K_Blocks - 1);
+         Value_Scales : N.Real_Array (0 .. Rows * V_Blocks - 1);
+         Stand : N.Real_Array (0 .. 2 * Room - 1) := [others => 0.0];
+
+         --  Pack one row of the numbers, as the engine packs it in a
+         --  storage of Bits an element, and note what each stands for.
+         procedure Pack
+           (Bits   : Positive;
+            Row    : N.Element_Count;
+            Source : N.Real_Array;
+            Into   : in out Model_Runner.Bytes.Byte_Array;
+            Scales : in out N.Real_Array;
+            Stands : out N.Real_Array)
+         is
+            use type Model_Runner.Bytes.Byte;
+            Row_Bytes : constant N.Element_Count := Row_Bytes_Of (Bits);
+            Blocks    : constant N.Element_Count := Blocks_Of (Bits);
+            At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+              Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
+         begin
+            if Bits = 8 then
+               declare
+                  Largest : N.Real := 0.0;
+                  Scale   : N.Real;
+               begin
+                  for V of Source loop
+                     Largest := N.Real'Max (Largest, abs V);
+                  end loop;
+                  Scale := (if Largest > 0.0 then Largest / 127.0 else 1.0);
+                  Scales (Row) := Scale;
+                  for Index in 0 .. KV_Span - 1 loop
+                     declare
+                        Step : constant Integer :=
+                          Integer (N.Real'Rounding (Source (Source'First + Index) / Scale));
+                        Q : constant Integer := Integer'Max (-127, Integer'Min (127, Step));
+                     begin
+                        Into (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                          Model_Runner.Bytes.Byte (Q + 128);
+                        Stands (Stands'First + Index) := N.Real (Q) * Scale;
+                     end;
+                  end loop;
+               end;
+            else
+               for B in 0 .. Blocks - 1 loop
+                  declare
+                     Largest, Signed : N.Real := 0.0;
+                     Scale, Inverse : N.Real;
+                  begin
+                     for Index in B * Block .. (B + 1) * Block - 1 loop
+                        if abs Source (Source'First + Index) > Largest then
+                           Largest := abs Source (Source'First + Index);
+                           Signed := Source (Source'First + Index);
+                        end if;
+                     end loop;
+                     Scale := Signed / (-8.0);
+                     Inverse := (if Scale /= 0.0 then 1.0 / Scale else 0.0);
+                     Scales (Row * Blocks + B) := Scale;
+                     for Index in B * Block .. (B + 1) * Block - 1 loop
+                        declare
+                           Level : constant N.Real :=
+                             N.Real'Floor (Source (Source'First + Index) * Inverse + 8.5);
+                           Q : constant Integer :=
+                             Integer (N.Real'Max (0.0, N.Real'Min (15.0, Level)));
+                           Where : constant Model_Runner.Bytes.Byte_Count :=
+                             At_Byte + Model_Runner.Bytes.Byte_Count (Index / 2);
+                        begin
+                           if Index mod 2 = 0 then
+                              Into (Where) := Model_Runner.Bytes.Byte (Q);
+                           else
+                              Into (Where) := Into (Where) or Model_Runner.Bytes.Byte (Q * 16);
+                           end if;
+                           Stands (Stands'First + Index) := N.Real (Q - 8) * Scale;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end if;
+         end Pack;
+
+         Exact_Blend, Packed_Blend : N.Real_Array (0 .. Span * Batch - 1);
+         Worst : N.Real := 0.0;
+      begin
+         for Row in 0 .. Rows - 1 loop
+            Pack (K_Bits, Row, Exact_Cache (Row * KV_Span .. (Row + 1) * KV_Span - 1),
+                  Key_Bytes, Key_Scales, Stand (Row * KV_Span .. (Row + 1) * KV_Span - 1));
+            Pack (V_Bits, Row,
+                  Exact_Cache (Room + Row * KV_Span .. Room + (Row + 1) * KV_Span - 1),
+                  Value_Bytes, Value_Scales,
+                  Stand (Room + Row * KV_Span .. Room + (Row + 1) * KV_Span - 1));
+         end loop;
+
+         --  The exact kernel over what the bytes stand for, one query and
+         --  a batch of seven under a window of two hundred.
+         Products.Reserve (Engine, N.Element_Count'Max (Whole, 2 * Room), Ok);
+         Assert (Ok, "the cache would not be reserved for " & What);
+         Products.Put_Cache (Engine, 0, Stand, Ok);
+         Assert (Ok, "the standing cache would not be written");
+
+         for Arm in 1 .. 2 loop
+            declare
+               Positions_Now : constant Positive := (if Arm = 1 then 1 else Batch);
+               Window : constant Natural := (if Positions_Now = 1 then 0 else 200);
+            begin
+               Exact_Blend := [others => 0.0];
+               Packed_Blend := [others => 0.0];
+               Products.Prefer_Exact_Attention (Engine, True);
+               Products.Attend_Resident
+                 (Engine, Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
+                  Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                  Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                  K_Base => 0, V_Base => Natural (Room),
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.125, Cap => 0.0, Target => Exact_Blend, Ok => Ok,
+                  Positions => Positions_Now, Window => Window);
+               Products.Prefer_Exact_Attention (Engine, False);
+               Assert (Ok, "the exact attention was refused for " & What);
+
+               --  The packed block over the same cache, past the standing
+               --  numbers so the two never overlap.
+               Products.Reserve (Engine, 2 * Room + Whole, Ok);
+               Assert (Ok, "the cache would not be widened for " & What);
+               Products.Put_Bytes (Engine, Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                                   Key_Bytes, Ok);
+               Assert (Ok, "the key bytes would not be written for " & What);
+               Products.Put_Bytes (Engine, Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                                   Value_Bytes, Ok);
+               Assert (Ok, "the value bytes would not be written for " & What);
+               Products.Put_Cache (Engine, 2 * Room + K_Scale_At, Key_Scales, Ok);
+               Assert (Ok, "the key scales would not be written for " & What);
+               Products.Put_Cache (Engine, 2 * Room + V_Scale_At, Value_Scales, Ok);
+               Assert (Ok, "the value scales would not be written for " & What);
+
+               Products.Attend_Packed
+                 (Engine, K_Bits, V_Bits,
+                  Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
+                  Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                  Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                  K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                  V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  KS_At => Natural (2 * Room + K_Scale_At),
+                  VS_At => Natural (2 * Room + V_Scale_At),
+                  K_Blocks => Natural (K_Blocks), V_Blocks => Natural (V_Blocks),
+                  Scale => 0.125, Cap => 0.0, Target => Packed_Blend, Ok => Ok,
+                  Positions => Positions_Now, Window => Window);
+               Assert (Ok, "the packed attention was refused for " & What);
+
+               for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1 loop
+                  Worst := N.Real'Max (Worst, abs (Exact_Blend (Index) - Packed_Blend (Index)));
+               end loop;
+               Assert (Worst <= 1.0e-4,
+                       "the packed attention over " & What & " answers"
+                       & N.Real'Image (Worst) & " away from the exact one over "
+                       & "what the bytes stand for, at" & Positive'Image (Positions_Now)
+                       & " positions");
+            end;
+         end loop;
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready or else not Products.Attends_Packed (Engine) then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Exact_Cache'Range loop
+         Exact_Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5
+           + N.Real (Index mod 7) * 0.01;
+      end loop;
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+      end loop;
+
+      Compare (8, 8, "bytes");
+      Compare (4, 4, "nibbles");
+      Compare (8, 4, "byte keys and nibble values");
+      Compare (4, 8, "nibble keys and byte values");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Packed_Attention_Says_What_The_Exact_Cache_Says;
+
    ----------------------------------------------------------
    -- A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One --
    ----------------------------------------------------------
@@ -5888,6 +6180,12 @@ package body Tests.Backend_Cases is
          "a token attending out of the half-precision copy says nearly "
          & "what the cache proper says, in bundles of four and of eight, "
          & "and a batch with the copy preferred still answers every head");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Packed_Attention_Says_What_The_Exact_Cache_Says'Access,
+         "the packed attention kernel over a cache of bytes with a scale a "
+         & "row, and of nibbles with a scale a block, and of each side in "
+         & "the other's storage, says what the exact kernel says over the "
+         & "numbers the bytes stand for, alone and in a windowed batch");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One'Access,
          "a batch with heads a hundred and twenty-eight wide attends "

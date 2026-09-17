@@ -1,5 +1,7 @@
 with Interfaces;
 
+with Model_Runner.Bytes;
+
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
@@ -341,6 +343,80 @@ package Model_Runner.Backend.Device is
      (At_Value : Model_Runner.Numerics.Element_Count;
       Values   : Model_Runner.Tensors.Real_Array;
       Ok       : out Boolean);
+
+   --  Write bytes into that cache as they are: a packed session's rows and
+   --  scales, which the packed attention kernel reads back.
+   --
+   --  @param At_Byte Where in the cache the bytes go, in bytes.
+   --  @param Data What to write.
+   --  @param Ok True when it was written.
+   procedure Put_Cache_Bytes
+     (At_Byte : Interfaces.Unsigned_64;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Ok      : out Boolean);
+
+   --  Whether the device has the kernel that attends over a packed cache.
+   --
+   --  @return True when Attend_Packed can run.
+   function Attends_Packed return Boolean;
+
+   --  Attend over a cache kept packed on the device -- a byte an element
+   --  with a scale a row, or a nibble an element with a scale a block of
+   --  thirty-two -- as Attend does over the exact one. The rows' bases
+   --  are in bytes and the scales' in floats of the cache buffer.
+   --
+   --  @param K_Bits Eight or four, for the keys.
+   --  @param V_Bits The same for the values, which may differ.
+   --  @param Query The queries, Positions of them, a head after the other.
+   --  @param Heads How many heads.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @param Group_Size How many heads share one group of keys and values.
+   --  @param First First cached position the first of them may look at.
+   --  @param Last Last cached position the first of them may look at.
+   --  @param K_Bytes Where the packed keys begin, in bytes.
+   --  @param V_Bytes Where the packed values begin, in bytes.
+   --  @param KV_Width How wide a row of keys is, in elements.
+   --  @param V_Width How wide a row of values is, in elements.
+   --  @param KS_At Where the key scales begin, in floats.
+   --  @param VS_At Where the value scales begin, in floats.
+   --  @param K_Blocks Scales a row of keys.
+   --  @param V_Blocks Scales a row of values.
+   --  @param Scale What a score is multiplied by.
+   --  @param Cap The bound on a score, or zero for none.
+   --  @param Target Receives the blend, Positions of them.
+   --  @param Ok True when the blend was computed on the device.
+   --  @param Positions How many queries, one after the other.
+   --  @param Window This layer's sliding window, or zero for none.
+   --  @param Causal True where a position may see only what precedes it.
+   --  @param Max_Bias How steeply a head's attention falls off with
+   --    distance, or zero for none.
+   procedure Attend_Packed
+     (K_Bits     : Positive;
+      V_Bits     : Positive;
+      Query      : Model_Runner.Tensors.Real_Array;
+      Heads      : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural;
+      First      : Natural;
+      Last       : Natural;
+      K_Bytes    : Interfaces.Unsigned_64;
+      V_Bytes    : Interfaces.Unsigned_64;
+      KV_Width   : Natural;
+      V_Width    : Natural;
+      KS_At      : Natural;
+      VS_At      : Natural;
+      K_Blocks   : Natural;
+      V_Blocks   : Natural;
+      Scale      : Model_Runner.Numerics.Real;
+      Cap        : Model_Runner.Numerics.Real;
+      Target     : out Model_Runner.Tensors.Real_Array;
+      Ok         : out Boolean;
+      Positions  : Natural := 1;
+      Window     : Natural := 0;
+      Causal     : Boolean := True;
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
    --  And back out of it, which is how the host's copy of the cache is
    --  brought up to date after a batch the device took whole.

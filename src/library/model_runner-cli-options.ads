@@ -149,6 +149,11 @@ package Model_Runner.CLI.Options is
    --  @return Comma-separated identifiers, in declaration order.
    function Cache_Names return String;
 
+   --  The storages a caller may name for the values apart from the keys.
+   --
+   --  @return Comma-separated identifiers, the two packed ones.
+   function Value_Names return String;
+
    --  The arithmetics a caller may name, in one line.
    --
    --  @return Comma-separated identifiers, in declaration order.
@@ -536,6 +541,13 @@ package Model_Runner.CLI.Options is
       --  figure was measured against.
       Cache      : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Exact;
+
+      --  How the values are stored where that differs from the keys: one
+      --  of the packed storages beside a packed --kv-cache, since attention
+      --  reads the values through a weighted sum that averages their
+      --  roundings and the keys through a dot product that does not.
+      Values     : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys;
 
       --  How a matrix product multiplies. Quantized, because it is twice
       --  the speed for a bound the conformance sweep states and holds, and

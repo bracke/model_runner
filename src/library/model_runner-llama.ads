@@ -577,6 +577,34 @@ package Model_Runner.Llama is
    --  this program does to a number it will read back.
    type Cache_Precision is (Exact, Halved, Eighth, Fourth);
 
+   --  How the values are stored where a caller asks for something other
+   --  than the keys' storage: the keys', or one of the two packed storages.
+   --  Attention reads the two sides differently, and the values bear the
+   --  coarser one.
+   type Value_Precision is (Same_As_Keys, Value_Eighth, Value_Fourth);
+
+   --  What the values' storage is beside the keys'.
+   --
+   --  @param Cache The keys' storage.
+   --  @param Values The values' choice.
+   --  @return The precision the values are held in.
+   function Values_Held
+     (Cache : Cache_Precision; Values : Value_Precision) return Cache_Precision
+   is (case Values is
+         when Same_As_Keys => Cache,
+         when Value_Eighth => Eighth,
+         when Value_Fourth => Fourth);
+
+   --  Whether a pairing of the keys' storage and the values' is one this
+   --  stores: both alike, or both packed.
+   --
+   --  @param Cache The keys' storage.
+   --  @param Values The values' choice.
+   --  @return True where a session may be opened with the pair.
+   function Stores_Pair
+     (Cache : Cache_Precision; Values : Value_Precision) return Boolean
+   is (Values = Same_As_Keys or else Cache in Eighth | Fourth);
+
    --  The identifier a caller names a cache precision by.
    --
    --  @param Item Precision to name.
@@ -1042,12 +1070,14 @@ package Model_Runner.Llama is
    --  @param Status Success or Memory_Plan_Overflow.
    --  @param Cache Precision the session would store its context in, which
    --    is half the bytes for Halved and the whole reason to ask.
+   --  @param Values Where the values are stored otherwise than the keys.
    procedure Plan_Session
      (Item    : Model;
       Context : Natural;
       Plan    : out Model_Runner.Memory.Session_Plan;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cache   : Cache_Precision := Exact);
+      Cache   : Cache_Precision := Exact;
+      Values  : Value_Precision := Same_As_Keys);
 
    --  Estimate session memory from a configuration alone.
    --
@@ -1056,12 +1086,14 @@ package Model_Runner.Llama is
    --  @param Plan Estimate; Valid is False on overflow.
    --  @param Status Success or Memory_Plan_Overflow.
    --  @param Cache Precision the session would store its context in.
+   --  @param Values Where the values are stored otherwise than the keys.
    procedure Plan_For
      (Settings : Configuration;
       Context  : Natural;
       Plan     : out Model_Runner.Memory.Session_Plan;
       Status   : out Model_Runner.Errors.Error_Info;
-      Cache    : Cache_Precision := Exact);
+      Cache    : Cache_Precision := Exact;
+      Values   : Value_Precision := Same_As_Keys);
 
    --  Open a session on a prepared model.
    --
@@ -1079,8 +1111,17 @@ package Model_Runner.Llama is
    --    precision the engine computes in and the correctness baseline;
    --    Halved is binary16, which holds half the bytes and is lossy by a
    --    measured amount.
-   --  @param Status Success, Lifecycle_Model_Not_Ready, Arch_Context_Too_Large
-   --    or a memory diagnostic.
+   --  @param Values How it stores the values where that differs from the
+   --    keys: attention reads a key through a dot product with the query,
+   --    where a rounded element moves every score it enters, and a value
+   --    through a weighted sum over the positions, where the roundings
+   --    average out -- so the values bear a coarser storage than the keys.
+   --    Same_As_Keys, the default, stores both alike; otherwise one of the
+   --    packed storages beside a packed Cache -- q8 keys with q4 values, or
+   --    the other way -- and any other pairing is refused as a shape.
+   --  @param Status Success, Lifecycle_Model_Not_Ready, Arch_Context_Too_Large,
+   --    Tensor_Shape_Mismatch for a pairing this does not store, or a
+   --    memory diagnostic.
    procedure Open
      (Item           : in out Session;
       Source         : in out Model'Class;
@@ -1089,7 +1130,8 @@ package Model_Runner.Llama is
         Model_Runner.Limits.Default_Session_Limits;
       Workers        : Model_Runner.Backend.CPU.Pool_Reference := null;
       Cache          : Cache_Precision := Exact;
-      Status         : out Model_Runner.Errors.Error_Info);
+      Status         : out Model_Runner.Errors.Error_Info;
+      Values         : Value_Precision := Same_As_Keys);
 
    --  The hidden state the last evaluated position left behind.
    --
@@ -1113,11 +1155,16 @@ package Model_Runner.Llama is
       Target : out Real_Array;
       Status : out Model_Runner.Errors.Error_Info);
 
-   --  How this session stores its keys and values.
+   --  How this session stores its keys, and its values.
    --
    --  @param Item Session to inspect.
    --  @return The precision it was opened with.
    function Precision (Item : Session) return Cache_Precision;
+
+   --  @param Item Session to inspect.
+   --  @return The precision its values are stored in, which is the keys'
+   --    unless the session was opened with another.
+   function Value_Precision_Of (Item : Session) return Cache_Precision;
 
    --  Worker pool the session was opened with.
    --
@@ -2094,6 +2141,10 @@ private
       --  Exactly one pair is allocated; the other stays null, which is what
       --  the reads below test rather than carrying a converted copy.
       Held       : Cache_Precision := Exact;
+
+      --  And how the values are held, which is Held unless the session
+      --  was opened with another packed storage for them.
+      Held_Values : Cache_Precision := Exact;
 
       --  Whether the session asked for halves and got them on the device,
       --  where the host's copy is exact and the device attends out of its

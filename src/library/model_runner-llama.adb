@@ -4838,6 +4838,85 @@ package body Model_Runner.Llama is
    --  @param Ok True when the block is the session's and holds its cache.
    procedure Take_Block (Item : Session_Access; Ok : out Boolean);
 
+   --  The packed caches' layout, for the two precisions that pack: a row
+   --  of Width elements takes Row_Bytes of the bytes and Blocks_Of scales,
+   --  and an element -- numbered over the whole cache, a row after a row
+   --  -- sits at Byte_Of, in the low half of its byte for an even offset
+   --  in the row and the high half for an odd one where the cache is
+   --  nibbles, with its scale at Scale_Of.
+   Block : constant Element_Count := K.Nibble_Block;
+
+   function Row_Bytes
+     (Held : Cache_Precision; Width : Element_Count) return B.Byte_Count
+   is (if Held = Fourth then B.Byte_Count ((Width + 1) / 2)
+       else B.Byte_Count (Width));
+
+   function Blocks_Of
+     (Held : Cache_Precision; Width : Element_Count) return Element_Count
+   is (if Held = Fourth then (Width + Block - 1) / Block else 1);
+
+   function Byte_Of
+     (Held : Cache_Precision; Element, Width : Element_Count) return B.Byte_Count
+   is (if Held = Fourth
+       then B.Byte_Count (Element / Width) * Row_Bytes (Held, Width)
+            + B.Byte_Count ((Element mod Width) / 2)
+       else B.Byte_Count (Element));
+
+   function Scale_Of
+     (Held : Cache_Precision; Element, Width : Element_Count) return Element_Count
+   is (if Held = Fourth
+       then (Element / Width) * Blocks_Of (Held, Width)
+            + (Element mod Width) / Block
+       else Element / Width);
+
+   --  How a packed session's block is laid out in the device's cache, in
+   --  words of four bytes from the block's base: the keys' bytes, the
+   --  values' bytes, the key scales and the value scales, each a whole
+   --  number of words along.
+   type Packed_Block is record
+      Key_Words       : Element_Count := 0;
+      Value_Words     : Element_Count := 0;
+
+      --  Where each region begins, in words from the block's base: the
+      --  keys at nought, the values after the keys' words -- which are
+      --  not the values' where the two sides are stored differently --
+      --  and the scales after both.
+      Values_At       : Element_Count := 0;
+      Key_Scales_At   : Element_Count := 0;
+      Value_Scales_At : Element_Count := 0;
+      Span            : Element_Count := 0;
+   end record;
+
+   function Packed_Layout (Item : Session) return Packed_Block is
+      Key_Words : constant Element_Count :=
+        (if Item.Byte_Keys = null then 0
+         else (Element_Count (Item.Byte_Keys.all'Length) + 3) / 4);
+      Value_Words : constant Element_Count :=
+        (if Item.Byte_Values = null then 0
+         else (Element_Count (Item.Byte_Values.all'Length) + 3) / 4);
+      Key_Scales : constant Element_Count :=
+        (if Item.Key_Scales = null then 0 else Item.Key_Scales.all'Length);
+      Value_Scales : constant Element_Count :=
+        (if Item.Value_Scales = null then 0 else Item.Value_Scales.all'Length);
+   begin
+      return (Key_Words       => Key_Words,
+              Value_Words     => Value_Words,
+              Values_At       => Key_Words,
+              Key_Scales_At   => Key_Words + Value_Words,
+              Value_Scales_At => Key_Words + Value_Words + Key_Scales,
+              Span            => Key_Words + Value_Words + Key_Scales
+                                 + Value_Scales);
+   end Packed_Layout;
+
+   --  How wide a session's block is, in elements: the exact cache's keys
+   --  and values, or the packed cache's words.
+   function Block_Span_Of (Item : Session) return Element_Count
+   is (if Item.Held = Exact
+       then (if Item.Keys = null or else Item.Values = null then 0
+             else Item.Keys.all'Length + Item.Values.all'Length)
+       elsif Item.Held in Eighth | Fourth then Packed_Layout (Item).Span
+       else 0);
+
    procedure Take_Block (Item : Session_Access; Ok : out Boolean)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -4849,9 +4928,14 @@ package body Model_Runner.Llama is
       if Item = null
         or else Item.Owner = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-        or else Item.Held /= Exact
-        or else Item.Keys = null
-        or else Item.Values = null
+        or else (Item.Held = Exact
+                 and then (Item.Keys = null or else Item.Values = null))
+        or else Item.Held = Halved
+        or else (Item.Held in Eighth | Fourth
+                 and then (Item.Byte_Keys = null or else Item.Byte_Values = null
+                           or else Item.Key_Scales = null
+                           or else Item.Value_Scales = null
+                           or else not Model_Runner.Backend.Device.Attends_Packed))
       then
          return;
       end if;
@@ -4878,8 +4962,7 @@ package body Model_Runner.Llama is
       end if;
 
       declare
-         Span : constant Element_Count :=
-           Item.Keys.all'Length + Item.Values.all'Length;
+         Span : constant Element_Count := Block_Span_Of (Item.all);
 
          --  Room for the blocks dealt out so far and for the table a round
          --  reads at the end of them.
@@ -4918,7 +5001,7 @@ package body Model_Runner.Llama is
          --  two writes, and only where it has committed something. A
          --  session with nothing committed has nothing to preserve, and the
          --  buffer it is taking a block of was zeroed when it was made.
-         if Item.Committed > 0 then
+         if Item.Committed > 0 and then Item.Held = Exact then
             Model_Runner.Backend.Device.Put_Cache
               (Base, Item.Keys.all, Written);
 
@@ -4926,6 +5009,30 @@ package body Model_Runner.Llama is
                Model_Runner.Backend.Device.Put_Cache
                  (Base + Item.Keys.all'Length, Item.Values.all, Written);
             end if;
+         elsif Item.Committed > 0 then
+            --  A packed session's block: its bytes as they are, and its
+            --  scales as floats, each where Packed_Block says.
+            declare
+               Laid : constant Packed_Block := Packed_Layout (Item.all);
+            begin
+               Model_Runner.Backend.Device.Put_Cache_Bytes
+                 (Interfaces.Unsigned_64 (Base) * 4, Item.Byte_Keys.all,
+                  Written);
+               if Written then
+                  Model_Runner.Backend.Device.Put_Cache_Bytes
+                    (Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4,
+                     Item.Byte_Values.all, Written);
+               end if;
+               if Written then
+                  Model_Runner.Backend.Device.Put_Cache
+                    (Base + Laid.Key_Scales_At, Item.Key_Scales.all, Written);
+               end if;
+               if Written then
+                  Model_Runner.Backend.Device.Put_Cache
+                    (Base + Laid.Value_Scales_At, Item.Value_Scales.all,
+                     Written);
+               end if;
+            end;
          end if;
 
          if not Written then
@@ -4950,10 +5057,8 @@ package body Model_Runner.Llama is
 
    --  Where a session's cache begins in the device's buffer.
    function Block_Base (Item : Session) return Element_Count
-   is (if Item.Seat < 0 or else Item.Keys = null or else Item.Values = null
-       then 0
-       else Element_Count (Item.Seat)
-            * (Item.Keys.all'Length + Item.Values.all'Length));
+   is (if Item.Seat < 0 then 0
+       else Element_Count (Item.Seat) * Block_Span_Of (Item));
 
    --  Give the host's copy of the cache the positions the device wrote.
    --
@@ -5091,6 +5196,78 @@ package body Model_Runner.Llama is
       end;
    end Put_Position;
 
+   --  A packed position's rows into the device's copy: the row's bytes and
+   --  its scales, for the keys at Slot and the values at V_Slot, where the
+   --  host has just packed them. What Put_Position is for the exact cache.
+   --
+   --  @param Item Session whose cache this is.
+   --  @param Slot The keys' first element, numbered over the cache.
+   --  @param V_Slot The values' first element.
+   --  @param KV_Width Elements a row of keys.
+   --  @param V_Width Elements a row of values.
+   --  @param Resident True when the rows reached the device.
+   procedure Put_Packed_Position
+     (Item     : Session_Access;
+      Slot     : Element_Count;
+      V_Slot   : Element_Count;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count;
+      Resident : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Resident := False;
+
+      if Item = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else Item.Held not in Eighth | Fourth
+      then
+         return;
+      end if;
+
+      Take_Block (Item, Resident);
+      if not Resident then
+         return;
+      end if;
+
+      declare
+         Base : constant Element_Count := Block_Base (Item.all);
+         Laid : constant Packed_Block := Packed_Layout (Item.all);
+         Held : constant Cache_Precision := Item.Held;
+         V_Held : constant Cache_Precision := Item.Held_Values;
+         K_At : constant B.Byte_Count := Byte_Of (Held, Slot, KV_Width);
+         V_At : constant B.Byte_Count := Byte_Of (V_Held, V_Slot, V_Width);
+         K_Scale : constant Element_Count := Scale_Of (Held, Slot, KV_Width);
+         V_Scale : constant Element_Count := Scale_Of (V_Held, V_Slot, V_Width);
+      begin
+         Model_Runner.Backend.Device.Put_Cache_Bytes
+           (Interfaces.Unsigned_64 (Base) * 4 + Interfaces.Unsigned_64 (K_At),
+            Item.Byte_Keys.all (K_At .. K_At + Row_Bytes (Held, KV_Width) - 1),
+            Resident);
+         if Resident then
+            Model_Runner.Backend.Device.Put_Cache_Bytes
+              (Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4
+               + Interfaces.Unsigned_64 (V_At),
+               Item.Byte_Values.all (V_At .. V_At + Row_Bytes (V_Held, V_Width) - 1),
+               Resident);
+         end if;
+         if Resident then
+            Model_Runner.Backend.Device.Put_Cache
+              (Base + Laid.Key_Scales_At + K_Scale,
+               Item.Key_Scales.all
+                 (K_Scale .. K_Scale + Blocks_Of (Held, KV_Width) - 1),
+               Resident);
+         end if;
+         if Resident then
+            Model_Runner.Backend.Device.Put_Cache
+              (Base + Laid.Value_Scales_At + V_Scale,
+               Item.Value_Scales.all
+                 (V_Scale .. V_Scale + Blocks_Of (V_Held, V_Width) - 1),
+               Resident);
+         end if;
+      end;
+   end Put_Packed_Position;
+
    --  One position attending, on the device, to the cache it already holds.
    --
    --  The arguments the processor's own attention takes, in the same order,
@@ -5163,7 +5340,35 @@ package body Model_Runner.Llama is
       --  the fixture check said the sinks moved no logit.
       Took := False;
 
-      if Sinks = null then
+      if Sinks = null and then Item.Held in Eighth | Fourth then
+         --  Over the packed block: the rows' bases in bytes and the
+         --  scales' in floats, each from where the layer's rows begin.
+         declare
+            Base : constant Element_Count := Block_Base (Item);
+            Laid : constant Packed_Block := Packed_Layout (Item);
+         begin
+            Model_Runner.Backend.Device.Attend_Packed
+              ((if Item.Held = Fourth then 4 else 8),
+               (if Item.Held_Values = Fourth then 4 else 8),
+               Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
+               Source.Settings.Group_Size, Natural (First), Natural (Last),
+               Interfaces.Unsigned_64 (Base) * 4
+               + Interfaces.Unsigned_64 (Byte_Of (Item.Held, K_Base, KV_Width)),
+               Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4
+               + Interfaces.Unsigned_64
+                   (Byte_Of (Item.Held_Values, V_Base, V_Width)),
+               Natural (KV_Width), Natural (V_Width),
+               Natural (Base + Laid.Key_Scales_At
+                        + Scale_Of (Item.Held, K_Base, KV_Width)),
+               Natural (Base + Laid.Value_Scales_At
+                        + Scale_Of (Item.Held_Values, V_Base, V_Width)),
+               Natural (Blocks_Of (Item.Held, KV_Width)),
+               Natural (Blocks_Of (Item.Held_Values, V_Width)),
+               Scale, Source.Settings.Attention_Cap, Target, Took,
+               Positions => Natural (Positions), Window => Window,
+               Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
+         end;
+      elsif Sinks = null then
          Model_Runner.Backend.Device.Attend
            (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
             Source.Settings.Group_Size, Natural (First), Natural (Last),
@@ -5249,37 +5454,6 @@ package body Model_Runner.Llama is
    --  one scale for a whole context would be set by whichever position had
    --  the largest key in it and would quantize every other position against
    --  that.
-   --  The packed caches' layout, for the two precisions that pack: a row
-   --  of Width elements takes Row_Bytes of the bytes and Blocks_Of scales,
-   --  and an element -- numbered over the whole cache, a row after a row
-   --  -- sits at Byte_Of, in the low half of its byte for an even offset
-   --  in the row and the high half for an odd one where the cache is
-   --  nibbles, with its scale at Scale_Of.
-   Block : constant Element_Count := K.Nibble_Block;
-
-   function Row_Bytes
-     (Held : Cache_Precision; Width : Element_Count) return B.Byte_Count
-   is (if Held = Fourth then B.Byte_Count ((Width + 1) / 2)
-       else B.Byte_Count (Width));
-
-   function Blocks_Of
-     (Held : Cache_Precision; Width : Element_Count) return Element_Count
-   is (if Held = Fourth then (Width + Block - 1) / Block else 1);
-
-   function Byte_Of
-     (Held : Cache_Precision; Element, Width : Element_Count) return B.Byte_Count
-   is (if Held = Fourth
-       then B.Byte_Count (Element / Width) * Row_Bytes (Held, Width)
-            + B.Byte_Count ((Element mod Width) / 2)
-       else B.Byte_Count (Element));
-
-   function Scale_Of
-     (Held : Cache_Precision; Element, Width : Element_Count) return Element_Count
-   is (if Held = Fourth
-       then (Element / Width) * Blocks_Of (Held, Width)
-            + (Element mod Width) / Block
-       else Element / Width);
-
    --  One row of the cache rounded into its bytes and scales: a signed
    --  byte an element with the row's one scale, or a nibble an element
    --  with a scale a block of thirty-two -- the block's largest element,
@@ -5398,6 +5572,7 @@ package body Model_Runner.Llama is
    --  session would put a branch there rather than around it.
    procedure Blend_Eighth
      (Held       : Cache_Precision;
+      V_Held     : Cache_Precision;
       Query      : Real_Array;
       Keys       : B.Byte_Array;
       Values     : B.Byte_Array;
@@ -5548,7 +5723,7 @@ package body Model_Runner.Llama is
                        Element_Count'Min (Run, Value_Size - At_Component);
                      Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                   begin
-                     if Held = Fourth then
+                     if V_Held = Fourth then
                         K.Blend_Run_Fourth
                           (Sums      => Sums,
                            Weights   => Scores,
@@ -8249,11 +8424,11 @@ package body Model_Runner.Llama is
                               KB : constant B.Byte_Count :=
                                 Row_Bytes (Item.Held, KV_Width);
                               VB : constant B.Byte_Count :=
-                                Row_Bytes (Item.Held, V_Width);
+                                Row_Bytes (Item.Held_Values, V_Width);
                               KS : constant Element_Count :=
                                 Blocks_Of (Item.Held, KV_Width);
                               VS : constant Element_Count :=
-                                Blocks_Of (Item.Held, V_Width);
+                                Blocks_Of (Item.Held_Values, V_Width);
                               Row_0 : constant Element_Count :=
                                 Keys_Base / KV_Width;
                               V_Row_0 : constant Element_Count :=
@@ -8312,6 +8487,22 @@ package body Model_Runner.Llama is
                              (Vals_Base
                               .. Vals_Base + Moved * V_Width - 1),
                            Sent);
+                     end;
+                  elsif Moved > 0
+                    and then Item.Seat >= 0
+                    and then Item.Held in Eighth | Fourth
+                  then
+                     --  The packed rows that moved, a row at a time.
+                     declare
+                        Sent : Boolean;
+                     begin
+                        for Row in 0 .. Moved - 1 loop
+                           Put_Packed_Position
+                             (Item'Unchecked_Access,
+                              Keys_Base + Row * KV_Width,
+                              Vals_Base + Row * V_Width,
+                              KV_Width, V_Width, Sent);
+                        end loop;
                      end;
                   end if;
 
@@ -8440,7 +8631,12 @@ package body Model_Runner.Llama is
       Put_Count (Settings.Value_Size);
       Put_Count (Item.Context);
       Put_Count (Item.Committed);
-      Put_Count (Cache_Precision'Pos (Item.Held));
+      --  The keys' storage, and the values' where it differs, in the
+      --  word's eighths: a snapshot of a session storing both alike says
+      --  what it always said.
+      Put_Count (Cache_Precision'Pos (Item.Held)
+                 + (if Item.Held_Values /= Item.Held
+                    then 8 * Cache_Precision'Pos (Item.Held_Values) else 0));
 
       for Index in 0 .. Item.Committed - 1 loop
          Put_Count (Natural (Item.History.all (Index)));
@@ -8507,7 +8703,7 @@ package body Model_Runner.Llama is
                        (Unpack
                           (Item.Byte_Values.all, First + Index,
                            Element_Count (V_Width), Item.Value_Scales.all,
-                           Item.Held)));
+                           Item.Held_Values)));
                elsif Item.Held = Exact then
                   Put_Bits (N.Bits (Item.Values.all (First + Index)));
                else
@@ -8687,7 +8883,7 @@ package body Model_Runner.Llama is
                            Pack_Row
                              (Item.Value_Row.all (0 .. Width - 1),
                               Item.Byte_Values.all, First + Index - Width + 1,
-                              Width, Item.Value_Scales.all, Item.Held);
+                              Width, Item.Value_Scales.all, Item.Held_Values);
                         end if;
                      end if;
                   end;
@@ -8775,7 +8971,10 @@ package body Model_Runner.Llama is
          if not Trouble
            and then Packed
                     /= Interfaces.Unsigned_64
-                         (Cache_Precision'Pos (Item.Held))
+                         (Cache_Precision'Pos (Item.Held)
+                          + (if Item.Held_Values /= Item.Held
+                             then 8 * Cache_Precision'Pos (Item.Held_Values)
+                             else 0))
          then
             Refuse (E.Lifecycle_Cache_Mismatched, "another precision");
          end if;
@@ -8955,9 +9154,10 @@ package body Model_Runner.Llama is
       Context : Natural;
       Plan    : out Mem.Session_Plan;
       Status  : out E.Error_Info;
-      Cache   : Cache_Precision := Exact) is
+      Cache   : Cache_Precision := Exact;
+      Values  : Value_Precision := Same_As_Keys) is
    begin
-      Plan_For (Item.Settings, Context, Plan, Status, Cache);
+      Plan_For (Item.Settings, Context, Plan, Status, Cache, Values);
    end Plan_Session;
 
    ---------------
@@ -8969,7 +9169,8 @@ package body Model_Runner.Llama is
       Context  : Natural;
       Plan     : out Mem.Session_Plan;
       Status   : out E.Error_Info;
-      Cache    : Cache_Precision := Exact)
+      Cache    : Cache_Precision := Exact;
+      Values   : Value_Precision := Same_As_Keys)
    is
       Capacity : constant Natural :=
         (if Context = 0 then Settings.Context_Length else Context);
@@ -9029,12 +9230,16 @@ package body Model_Runner.Llama is
       --  positions * kv heads * head size * bytes * 2, entirely in checked
       --  arithmetic so that an implausible request is reported as an
       --  overflow rather than wrapping into a small allocation.
+      --  The keys' side and the values', each at its own storage.
       Room : constant A.Checked :=
-        A.To_Checked (Positions)
-        * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
-        * A.To_Checked
-            (Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Value_Size))
-        * A.To_Checked (Cache_Element_Sixteenths (Cache))
+        (A.To_Checked (Positions)
+         * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
+         * A.To_Checked (Interfaces.Unsigned_64 (Settings.Head_Size))
+         * A.To_Checked (Cache_Element_Sixteenths (Cache))
+         + A.To_Checked (Positions)
+           * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
+           * A.To_Checked (Interfaces.Unsigned_64 (Settings.Value_Size))
+           * A.To_Checked (Cache_Element_Sixteenths (Values_Held (Cache, Values))))
         / A.To_Checked (Interfaces.Unsigned_64'(16));
    begin
       Plan := (others => <>);
@@ -9075,7 +9280,8 @@ package body Model_Runner.Llama is
         Model_Runner.Limits.Default_Session_Limits;
       Workers        : Workers_CPU.Pool_Reference := null;
       Cache          : Cache_Precision := Exact;
-      Status         : out E.Error_Info)
+      Status         : out E.Error_Info;
+      Values         : Value_Precision := Same_As_Keys)
    is
       Settings : Configuration;
       Capacity : Natural;
@@ -9278,6 +9484,13 @@ package body Model_Runner.Llama is
          else
             Item.Held := Cache;
          end if;
+         Item.Held_Values := Values_Held (Item.Held, Values);
+         if not Stores_Pair (Item.Held, Values) then
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            E.Add_Text (Status, "detail", "values stored apart from keys "
+                        & "that are not packed", E.Param_Identifier);
+            return;
+         end if;
 
          case Item.Held is
             when Exact =>
@@ -9297,9 +9510,11 @@ package body Model_Runner.Llama is
                    (0 .. B.Byte_Count (Rows) * Row_Bytes (Item.Held, KV) - 1);
                Item.Byte_Values :=
                  new B.Byte_Array
-                   (0 .. B.Byte_Count (Rows) * Row_Bytes (Item.Held, KV_Out) - 1);
+                   (0 .. B.Byte_Count (Rows)
+                         * Row_Bytes (Item.Held_Values, KV_Out) - 1);
                T.Allocate (Rows * Blocks_Of (Item.Held, KV), Item.Key_Scales);
-               T.Allocate (Rows * Blocks_Of (Item.Held, KV_Out), Item.Value_Scales);
+               T.Allocate
+                 (Rows * Blocks_Of (Item.Held_Values, KV_Out), Item.Value_Scales);
          end case;
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
@@ -9660,6 +9875,9 @@ package body Model_Runner.Llama is
    function Precision (Item : Session) return Cache_Precision
    is (if Item.Device_Halves then Halved else Item.Held);
 
+   function Value_Precision_Of (Item : Session) return Cache_Precision
+   is (if Item.Device_Halves then Halved else Item.Held_Values);
+
    -------------------
    -- Hidden_State --
    -------------------
@@ -9961,13 +10179,13 @@ package body Model_Runner.Llama is
                         --  The values move whole, bytes and scales.
                         declare
                            VB : constant B.Byte_Count :=
-                             Row_Bytes (Item.Held, V_Width);
+                             Row_Bytes (Item.Held_Values, V_Width);
                            VS : constant Element_Count :=
-                             Blocks_Of (Item.Held, V_Width);
+                             Blocks_Of (Item.Held_Values, V_Width);
                            From_Byte : constant B.Byte_Count :=
-                             Byte_Of (Item.Held, V_From, V_Width);
+                             Byte_Of (Item.Held_Values, V_From, V_Width);
                            Into_Byte : constant B.Byte_Count :=
-                             Byte_Of (Item.Held, V_Into, V_Width);
+                             Byte_Of (Item.Held_Values, V_Into, V_Width);
                         begin
                            Item.Byte_Values.all (Into_Byte .. Into_Byte + VB - 1) :=
                              Item.Byte_Values.all (From_Byte .. From_Byte + VB - 1);
@@ -11219,7 +11437,7 @@ package body Model_Runner.Llama is
 
          if Item.Held in Eighth | Fourth then
             Blend_Eighth
-              (Item.Held, Item.Query.all, Item.Byte_Keys.all,
+              (Item.Held, Item.Held_Values, Item.Query.all, Item.Byte_Keys.all,
                Item.Byte_Values.all,
                Item.Key_Scales.all, Item.Value_Scales.all,
                Share.Base, Share.V_Base, Share.Rows_Base, KV_Width,
@@ -11758,7 +11976,13 @@ package body Model_Runner.Llama is
                      Slot, KV_Width, Item.Key_Scales.all, Item.Held);
                   Pack_Row
                     (Item.Value_Row.all (0 .. V_Width - 1), Item.Byte_Values.all,
-                     V_Slot, V_Width, Item.Value_Scales.all, Item.Held);
+                     V_Slot, V_Width, Item.Value_Scales.all, Item.Held_Values);
+
+                  --  And into the device's own copy of the packed block,
+                  --  where its attention reads the bytes the host rounded.
+                  Put_Packed_Position
+                    (Item'Unchecked_Access, Slot, V_Slot, KV_Width, V_Width,
+                     Resident);
                elsif Item.Held = Exact then
                   for Offset in 0 .. KV_Width - 1 loop
                      Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
@@ -11821,7 +12045,7 @@ package body Model_Runner.Llama is
                   --  attention has none, and the pair below took every
                   --  mixture with them as if it had none -- the fixture check
                   --  said their sinks moved no logit.
-                  if Item.Held /= Exact or else not Resident
+                  if Item.Held = Halved or else not Resident
                     or else Current.Sinks /= null
                     or else Hybrid (Settings.Kind)
                   then
@@ -11878,6 +12102,17 @@ package body Model_Runner.Llama is
                            V_Width, Scale, Item.Attention.all, Usable,
                            Sinks => Current.Sinks);
                      end if;
+                  elsif Item.Held in Eighth | Fourth then
+                     --  A packed session's attention on the device, alone:
+                     --  the kernel that reads its block does that and no
+                     --  more, and the projection follows on the host.
+                     Attend_There
+                       (Item, Source, Item.Query.all, Heads, Head_Size,
+                        Value_Size,
+                        Cell_Of (Item, Natural (Index), First), Cell,
+                        Base, V_Base, KV_Width,
+                        V_Width, Scale, Item.Attention.all, Usable,
+                        Sinks => Current.Sinks);
                   elsif Item.Held = Exact and then Resident then
                      --  Attention and the matrix that reads its result, named
                      --  together so they go over as one command buffer and the
@@ -13673,7 +13908,21 @@ package body Model_Runner.Llama is
                         Pack_Row
                           (Values.all (V_At .. V_At + V_Width - 1),
                            Held_By (Which).Byte_Values.all, V_Place, V_Width,
-                           Held_By (Which).Value_Scales.all, Item.Held);
+                           Held_By (Which).Value_Scales.all, Item.Held_Values);
+
+                        --  And the device's copy of the packed block, for
+                        --  a batch of one session; a round of packed
+                        --  sessions attends on the host.
+                        if not Rounding then
+                           declare
+                              Placed : Boolean;
+                           begin
+                              Put_Packed_Position
+                                (Held_By (Which), Place, V_Place, KV_Width,
+                                 V_Width, Placed);
+                              Resident := Placed;
+                           end;
+                        end if;
                      elsif Item.Held = Exact then
                         for Offset in 0 .. KV_Width - 1 loop
                            Held_By (Which).Keys.all (Place + Offset) :=
@@ -13750,9 +13999,11 @@ package body Model_Runner.Llama is
                --  attention moves every position's end along by one, and
                --  a batch with a run in it is attended on the host, which
                --  knows where each run ends.
-               if Item.Held = Exact and then Resident and then not Fused
+               if Item.Held in Exact | Eighth | Fourth and then Resident
+                 and then not Fused
                  and then not Hybrid (Settings.Kind)
                  and then not Has_Runs
+                 and then not (Item.Held in Eighth | Fourth and then Rounding)
                then
                   declare
                      --  What Earliest would return for the batch's first
@@ -13810,7 +14061,11 @@ package body Model_Runner.Llama is
                      --  to be added up. The steps are the same nine; only the
                      --  position count differs, and every kernel in them was
                      --  written to take one.
-                     if Settings.Experts = 0
+                     --  And only over the exact cache: a packed block is
+                     --  read by the packed kernel alone, through
+                     --  Attend_There below.
+                     if Item.Held = Exact
+                       and then Settings.Experts = 0
                        and then T.Is_Present (Current.Gate)
                        and then Current.Feed_Norm /= null
                        and then Current.Out_Bias = null
@@ -13941,7 +14196,8 @@ package body Model_Runner.Llama is
                            begin
                               if Item.Held in Eighth | Fourth then
                                  Blend_Eighth
-                                   (Item.Held, Query.all (Q_At .. Q_At + Wide - 1),
+                                   (Item.Held, Item.Held_Values,
+                                    Query.all (Q_At .. Q_At + Wide - 1),
                                     Held_By (Which).Byte_Keys.all,
                                     Held_By (Which).Byte_Values.all,
                                     Held_By (Which).Key_Scales.all,

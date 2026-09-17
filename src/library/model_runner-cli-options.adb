@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 105) of Registry_Row :=
+   Registry : constant array (1 .. 106) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -63,6 +63,10 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed | Command_Inspect => True,
         others => False],
        Text ("kv_cache")),
+      (Text ("--kv-values"),
+       [Command_Run | Command_Embed | Command_Inspect => True,
+        others => False],
+       Text ("kv_values")),
       (Text ("--arith"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("arith")),
@@ -303,6 +307,14 @@ package body Model_Runner.CLI.Options is
       end loop;
       return Room (1 .. Used);
    end Cache_Names;
+
+   -----------------
+   -- Value_Names --
+   -----------------
+
+   function Value_Names return String
+   is (Model_Runner.Llama.Cache_Name (Model_Runner.Llama.Eighth) & ", "
+       & Model_Runner.Llama.Cache_Name (Model_Runner.Llama.Fourth));
 
    -----------------------
    -- Arithmetic_Names --
@@ -867,6 +879,7 @@ package body Model_Runner.CLI.Options is
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
          Flag_Repack,
          Flag_Cache,
+         Flag_Values,
          Flag_Arithmetic,
          Flag_Pooling,
          Flag_Load_Session,
@@ -1558,6 +1571,30 @@ package body Model_Runner.CLI.Options is
                         end loop;
 
                         if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name,
+                                 T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
+
+                  elsif Name = "--kv-values" then
+                     declare
+                        Asked : T.Bounded;
+                     begin
+                        Bounded_Value (Flag_Values, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+
+                        if T.To_String (Asked)
+                             = Model_Runner.Llama.Cache_Name (Model_Runner.Llama.Eighth)
+                        then
+                           Result.Values := Model_Runner.Llama.Value_Eighth;
+                        elsif T.To_String (Asked)
+                             = Model_Runner.Llama.Cache_Name (Model_Runner.Llama.Fourth)
+                        then
+                           Result.Values := Model_Runner.Llama.Value_Fourth;
+                        else
                            Fail (E.CLI_Invalid_Option_Value, Name,
                                  T.To_String (Asked));
                            return;
@@ -2670,6 +2707,19 @@ package body Model_Runner.CLI.Options is
          Status := E.Make (E.CLI_Option_Combination);
          E.Add_Text (Status, "option", "--tools", E.Param_Identifier);
          E.Add_Text (Status, "other", "--tools-file", E.Param_Identifier);
+         return;
+      end if;
+
+      --  The values stored apart from the keys, only beside a packed
+      --  storage for the keys: the exact and halved storages hold both
+      --  sides alike, and a session with one side exact and the other
+      --  packed is not one the engine stores.
+      if Model_Runner.Llama."/=" (Result.Values, Model_Runner.Llama.Same_As_Keys)
+        and then not Model_Runner.Llama.Stores_Pair (Result.Cache, Result.Values)
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--kv-values", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--kv-cache", E.Param_Identifier);
          return;
       end if;
 

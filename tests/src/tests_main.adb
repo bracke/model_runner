@@ -1381,6 +1381,12 @@ begin
             & Long_Float'Image (Result.Fourth_Worst_Abs)
             & ", nibble worst relative"
             & Long_Float'Image (Result.Fourth_Worst_Rel)
+            & ", mixed logits compared"
+            & Natural'Image (Result.Mixed_Compared)
+            & ", mixed worst absolute"
+            & Long_Float'Image (Result.Mixed_Worst_Abs)
+            & ", mixed worst relative"
+            & Long_Float'Image (Result.Mixed_Worst_Rel)
             & ", outside tolerance" & Natural'Image (Result.Failures)
             & ", unlearned" & Natural'Image (Result.Unlearned));
 

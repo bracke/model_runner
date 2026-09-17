@@ -53,6 +53,38 @@ package body Reference_Transformer is
       end loop;
    end Round_To_Nibbles;
 
+   --  A row rounded to a signed byte an element with the row's one scale,
+   --  as the spec describes: what a value becomes when the engine's byte
+   --  cache keeps it and hands it back.
+   procedure Round_To_Bytes (Row : in out Real_Vector) is
+      Largest : Long_Float := 0.0;
+      Scale   : Long_Float;
+   begin
+      for Value of Row loop
+         Largest := Long_Float'Max (Largest, abs Value);
+      end loop;
+      Scale := (if Largest > 0.0 then Largest / 127.0 else 1.0);
+      for Index in Row'Range loop
+         declare
+            Step : constant Long_Float := Long_Float'Rounding (Row (Index) / Scale);
+            Held : constant Long_Float :=
+              Long_Float'Max (-127.0, Long_Float'Min (127.0, Step));
+         begin
+            Row (Index) := Held * Scale;
+         end;
+      end loop;
+   end Round_To_Bytes;
+
+   --  A row rounded as one side's rounding says.
+   procedure Round_As (Row : in out Real_Vector; How : Cache_Rounding) is
+   begin
+      case How is
+         when Unrounded  => null;
+         when To_Bytes   => Round_To_Bytes (Row);
+         when To_Nibbles => Round_To_Nibbles (Row);
+      end case;
+   end Round_As;
+
    procedure Free_Matrix is
      new Ada.Unchecked_Deallocation (Matrix, Matrix_Access);
    procedure Free_Vector is
@@ -3431,10 +3463,8 @@ package body Reference_Transformer is
                   Rotate (Query, Item.Heads, Step, Block);
                   Rotate (Key_Row, Item.KV_Heads, Step, Block);
 
-                  if Item.Nibbles then
-                     Round_To_Nibbles (Key_Row);
-                     Round_To_Nibbles (Val_Row);
-                  end if;
+                  Round_As (Key_Row, Item.Key_Rounding);
+                  Round_As (Val_Row, Item.Value_Rounding);
                   for Index in 0 .. KV_Width - 1 loop
                      Keys (Slot, Index) := Key_Row (Index);
                   end loop;
@@ -4036,8 +4066,20 @@ package body Reference_Transformer is
 
    procedure Round_Cache_To_Nibbles (Item : in out Model; On : Boolean) is
    begin
-      Item.Nibbles := On;
+      Item.Key_Rounding := (if On then To_Nibbles else Unrounded);
+      Item.Value_Rounding := Item.Key_Rounding;
    end Round_Cache_To_Nibbles;
+
+   -----------------
+   -- Round_Cache --
+   -----------------
+
+   procedure Round_Cache
+     (Item : in out Model; Keys, Values : Cache_Rounding) is
+   begin
+      Item.Key_Rounding := Keys;
+      Item.Value_Rounding := Values;
+   end Round_Cache;
 
    ---------
    -- Run --

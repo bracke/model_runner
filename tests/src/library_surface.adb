@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 36) of Text_Access :=
+   Held : constant array (1 .. 37) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -106,7 +106,13 @@ package body Library_Surface is
       --  caller handed a session by somebody else does not, and a rewind
       --  refused after the fact is a poorer answer than a count asked
       --  first.
-      new String'("States_Kept")];
+      new String'("States_Kept"),
+
+      --  What a session holds its values in, where --kv-values stored them
+      --  otherwise than its keys. The command chose and has no reason to
+      --  ask back; a caller handed a session, or a test holding one to
+      --  what it asked for, does.
+      new String'("Value_Precision_Of")];
 
    ---------------
    -- Is_Listed --

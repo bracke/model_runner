@@ -93,14 +93,27 @@ package Reference_Transformer is
       Logits : out Real_Vector;
       Ok     : out Boolean);
 
-   --  Round every key and value the model keeps to four bits an element
-   --  the way the engine's nibble cache does, or stop: a block of
-   --  thirty-two elements scaled by its largest, sign and all, over minus
-   --  eight, each element its share of that plus eight and a half cut to
-   --  a whole number and held to fifteen. Written here on its own, in
-   --  binary64, so that the engine's nibble cache can be held to what it
-   --  claims -- the same rounding -- rather than to the exact cache,
-   --  which it is not.
+   --  How the model rounds what it keeps, where it is asked to: as the
+   --  engine's byte cache does -- a signed byte an element with the row's
+   --  largest over a hundred and twenty-seven, rounded to the nearest --
+   --  or as its nibble cache does -- a block of thirty-two elements scaled
+   --  by its largest, sign and all, over minus eight, each element its
+   --  share of that plus eight and a half cut to a whole number and held
+   --  to fifteen. Written here on its own, in binary64, so that the
+   --  engine's packed caches can be held to what they claim -- the same
+   --  rounding -- rather than to the exact cache, which they are not.
+   type Cache_Rounding is (Unrounded, To_Bytes, To_Nibbles);
+
+   --  Round every key and value the model keeps, each side its own way,
+   --  from now on.
+   --
+   --  @param Item Loaded model.
+   --  @param Keys How the keys are rounded.
+   --  @param Values How the values are.
+   procedure Round_Cache
+     (Item : in out Model; Keys, Values : Cache_Rounding);
+
+   --  Round both sides to nibbles, or neither.
    --
    --  @param Item Loaded model.
    --  @param On True to round from now on.
@@ -287,9 +300,10 @@ private
       Loaded       : Boolean := False;
       Kind         : Architecture := Llama;
 
-      --  Whether the keys and values are rounded to nibbles as they are
-      --  kept, as Round_Cache_To_Nibbles says.
-      Nibbles      : Boolean := False;
+      --  How the keys and the values are rounded as they are kept, as
+      --  Round_Cache says.
+      Key_Rounding   : Cache_Rounding := Unrounded;
+      Value_Rounding : Cache_Rounding := Unrounded;
       Embedding    : Natural := 0;
       Feed_Forward : Natural := 0;
       Layers       : Natural := 0;
