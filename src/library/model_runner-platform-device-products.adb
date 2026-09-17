@@ -802,13 +802,13 @@ package body Model_Runner.Platform.Device.Products is
    --  validation layer was running to say so. Two numbers a word apart is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
-   Attention_Bytes : constant := 68;
+   Attention_Bytes : constant := 72;
 
    --  And the packed kernel's, which has the bases twice over -- the
    --  rows' in bytes and the scales' in floats -- the bits an element of
-   --  each side, how many heads and positions a workgroup answers, and a
-   --  round's table.
-   Packed_Bytes    : constant := 100;
+   --  each side, how many heads and positions a workgroup answers, a
+   --  round's table and the sinks.
+   Packed_Bytes    : constant := 104;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Shape_Bytes     : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -966,6 +966,7 @@ package body Model_Runner.Platform.Device.Products is
       Bundle     : C.unsigned := 1;
       Queries    : C.unsigned := 1;
       Table_At   : C.unsigned := 0;
+      Sinks_At   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -1009,6 +1010,12 @@ package body Model_Runner.Platform.Device.Products is
       --  were pushed until a round wanted more rows than a push block has
       --  room for words.
       Table_At   : C.unsigned := 0;
+
+      --  Where the heads' sinks begin in the cache, in elements, for an
+      --  architecture that learned one a head -- a score that joins the
+      --  softmax's denominator and takes no value -- and zero for none.
+      --  In the cache for the reason the table is.
+      Sinks_At   : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -5712,7 +5719,8 @@ package body Model_Runner.Platform.Device.Products is
             Causal     => (if Causal then 1 else 0),
             Bundle     => C.unsigned (Bundle),
             Queries    => C.unsigned (Queries),
-            Table_At   => 0);
+            Table_At   => 0,
+            Sinks_At   => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -6064,8 +6072,10 @@ package body Model_Runner.Platform.Device.Products is
             Max_Bias   => C.C_float (Max_Bias),
 
             --  Never a round: this is the single call, one session's own
-            --  positions.
-            Table_At   => 0);
+            --  positions. And no sinks: a layer with them goes over as a
+            --  sequence or on the host.
+            Table_At   => 0,
+            Sinks_At   => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -7072,7 +7082,8 @@ package body Model_Runner.Platform.Device.Products is
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
       Table_At   : Natural := 0;
-      Packed     : Packed_Cache := Not_Packed) is
+      Packed     : Packed_Cache := Not_Packed;
+      Sinks_At   : Natural := 0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -7115,7 +7126,8 @@ package body Model_Runner.Platform.Device.Products is
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
          Causal => Causal, Max_Bias => Max_Bias,
-         Table => Table_At, Packed => Packed, others => <>);
+         Table => Table_At, Packed => Packed, Sinks => Sinks_At,
+         others => <>);
       Added := True;
    end Add_Attention;
 
@@ -8528,9 +8540,13 @@ package body Model_Runner.Platform.Device.Products is
                declare
                   --  A product with a join folded into it reads the
                   --  residual the join named, which is a step nothing else
-                  --  in this step says it reads.
+                  --  in this step says it reads. A routing step says Joins
+                  --  for the bias it adds and names no step, which read
+                  --  step nought here and stopped a batch of a mixture
+                  --  with a router bias the first time one reached the
+                  --  device.
                   Joined : constant Natural :=
-                    (if This.Joins
+                    (if This.Joins and then This.Joined /= 0
                      then Steps.Items (This.Joined).Reads else 0);
 
                   --  A gather routed on the device reads the routing
@@ -8615,7 +8631,8 @@ package body Model_Runner.Platform.Device.Products is
                         Causal     => (if This.Causal then 1 else 0),
                         Bundle     => C.unsigned (Bundle),
                         Queries    => C.unsigned (Queries),
-                        Table_At   => C.unsigned (This.Table));
+                        Table_At   => C.unsigned (This.Table),
+                        Sinks_At   => C.unsigned (This.Sinks));
 
                      --  A round is never sliced: its rows' lasts are in
                      --  the table, not in First and Last.
@@ -8738,7 +8755,8 @@ package body Model_Runner.Platform.Device.Products is
                              + (if Halved (Index)
                                 then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
-                        Table_At   => C.unsigned (This.Table));
+                        Table_At   => C.unsigned (This.Table),
+                        Sinks_At   => C.unsigned (This.Sinks));
 
                      Slices : constant Natural :=
                        (if Barrier = null then 1

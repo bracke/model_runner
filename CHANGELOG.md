@@ -192,9 +192,15 @@ Keep a Changelog and the project uses semantic versioning.
   workgroup a position's heads and no more since a round's rows share
   no keys, and the packing step puts each row into its own member's
   block out of the same table; members holding their values in
-  different storages are served on the host. A layer with sinks, a
-  value head wider than 128 and a device without subgroup arithmetic
-  attend on the host as before. What it
+  different storages are served on the host. A layer with sinks goes
+  to the device too, its sinks put in the cache after a round's table
+  and read by every attention kernel there as the running softmax's
+  first position, a weight of one and no value: gpt-oss's token is
+  attended and projected in one submission with them, exact or in
+  bytes, held to the independent implementation; its batch's attention
+  stays on the host, since the clamped gate keeps the layer from going
+  over whole. A value head wider than 128 and a device without subgroup
+  arithmetic attend on the host as before. What it
   costs: sixty-four tokens of TinyLlama after a prompt of 1,419 read
   1.65 s generating with the byte cache against 1.38 s with the exact
   one -- 25.8 ms a token against 21.5 -- and the prompt itself 0.70 s

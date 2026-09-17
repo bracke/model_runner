@@ -64,6 +64,11 @@ package Model_Runner.Backend.Device is
    --  Words that table holds: two a row.
    Table_Room : constant := 2 * Table_Rows;
 
+   --  Elements after the table for a layer's sinks, one a head, where an
+   --  architecture learned them; a model with more heads than this
+   --  attends its sinking layers on the host.
+   Sink_Room : constant := 256;
+
    --  A round's per-row table: where each row has got to and where its
    --  cache begins, a row at a time in the rows' order.
    type Word_List is array (Positive range <>) of Natural;
@@ -574,6 +579,8 @@ package Model_Runner.Backend.Device is
    --  @param Packed The session's packed block, where it has one, which
    --    the attention step then reads with the packed kernel; K_Base and
    --    V_Base go unread.
+   --  @param Sinks_At Where the heads' sinks begin in the cache, in
+   --    elements, for a layer that has them; zero for none.
    procedure Attend_And_Project
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -595,7 +602,8 @@ package Model_Runner.Backend.Device is
       Window     : Natural := 0;
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
-      Packed     : Packed_Cache := Not_Packed);
+      Packed     : Packed_Cache := Not_Packed;
+      Sinks_At   : Natural := 0);
 
    --  A layer's second half, in one submission rather than two.
    --
@@ -645,6 +653,8 @@ package Model_Runner.Backend.Device is
    --  @param Packed The session's packed block, where it has one, which
    --    the attention step then reads with the packed kernel; K_Base and
    --    V_Base go unread.
+   --  @param Sinks_At Where the heads' sinks begin in the cache, in
+   --    elements, for a layer that has them; zero for none.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -674,7 +684,8 @@ package Model_Runner.Backend.Device is
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0;
-      Packed      : Packed_Cache := Not_Packed);
+      Packed      : Packed_Cache := Not_Packed;
+      Sinks_At    : Natural := 0);
 
    --  Several products of the same activation, in one submission.
    --
@@ -885,6 +896,9 @@ package Model_Runner.Backend.Device is
    --    values are unpacked into the copy first, and the attention reads
    --    them there as an exact session's does. Taken where that kernel
    --    would be the one for the batch, and otherwise not.
+   --  @param Sinks_At Where the heads' sinks begin in the cache, in
+   --    elements, for a layer that has them, which the caller put there;
+   --    zero for none.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
@@ -949,7 +963,8 @@ package Model_Runner.Backend.Device is
       Packed         : Packed_Cache := Not_Packed;
       Pack_Keys      : Packing_Shape := Not_Packing;
       Pack_Values    : Packing_Shape := Not_Packing;
-      Unpacked       : Unpacking_Shape := Not_Unpacked);
+      Unpacked       : Unpacking_Shape := Not_Unpacked;
+      Sinks_At       : Natural := 0);
 
    --  A gated feed-forward block, whole, in one submission.
    --

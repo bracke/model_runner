@@ -4964,11 +4964,12 @@ package body Model_Runner.Llama is
       declare
          Span : constant Element_Count := Block_Span_Of (Item.all);
 
-         --  Room for the blocks dealt out so far and for the table a round
-         --  reads at the end of them.
+         --  Room for the blocks dealt out so far, for the table a round
+         --  reads at the end of them, and for a layer's sinks after that.
          Wanted : constant Element_Count :=
            Element_Count (Seat + 1) * Span
-           + Element_Count (Model_Runner.Backend.Device.Table_Room);
+           + Element_Count (Model_Runner.Backend.Device.Table_Room)
+           + Element_Count (Model_Runner.Backend.Device.Sink_Room);
 
          Base : constant Element_Count := Element_Count (Seat) * Span;
 
@@ -5050,10 +5051,56 @@ package body Model_Runner.Llama is
    --  cache has been dealt into. Zero where it holds no block yet, which is
    --  also what tells the kernel a call is not a round.
    function Table_At return Element_Count
-   is (if Block_Taken > Element_Count (Model_Runner.Backend.Device.Table_Room)
+   is (if Block_Taken > Element_Count (Model_Runner.Backend.Device.Table_Room
+                                       + Model_Runner.Backend.Device.Sink_Room)
        then Block_Taken
-            - Element_Count (Model_Runner.Backend.Device.Table_Room)
+            - Element_Count (Model_Runner.Backend.Device.Table_Room
+                             + Model_Runner.Backend.Device.Sink_Room)
        else 0);
+
+   --  Where a layer's sinks sit, in elements: after the table. Zero where
+   --  the cache holds no block yet.
+   function Sinks_Room_At return Element_Count
+   is (if Block_Taken > Element_Count (Model_Runner.Backend.Device.Sink_Room)
+       then Block_Taken - Element_Count (Model_Runner.Backend.Device.Sink_Room)
+       else 0);
+
+   --  Whether a layer's sinks can go to the device: the layer has them,
+   --  the cache has room for them, and there are no more heads than the
+   --  room holds.
+   --
+   --  @param Sinks The layer's sinks, or null.
+   --  @return True where Sinks_Ready would put them.
+   function Sinks_Fit
+     (Sinks : Model_Runner.Tensors.Real_Array_Access) return Boolean
+   is (Sinks = null
+       or else Sinks.all'Length
+               <= Element_Count (Model_Runner.Backend.Device.Sink_Room));
+
+   --  A layer's sinks put where the device's attention reads them, a head
+   --  each after the round's table, and where they went: what the
+   --  attention step is told as Sinks_At. Zero for a layer without them,
+   --  which is every layer of every architecture but one; and zero where
+   --  they could not be put, which sends the layer to the host. Put every
+   --  time rather than once, because every session of the model puts the
+   --  same numbers and a copy of a few hundred bytes into a standing
+   --  mapping is nothing beside the layer.
+   --
+   --  @param Sinks The layer's sinks, or null.
+   --  @return Where they begin, in elements, or zero.
+   function Sinks_Ready
+     (Sinks : Model_Runner.Tensors.Real_Array_Access) return Natural
+   is
+      Where : constant Element_Count := Sinks_Room_At;
+      Ok    : Boolean;
+   begin
+      if Sinks = null or else Where = 0 or else not Sinks_Fit (Sinks) then
+         return 0;
+      end if;
+
+      Model_Runner.Backend.Device.Put_Cache (Where, Sinks.all, Ok);
+      return (if Ok then Natural (Where) else 0);
+   end Sinks_Ready;
 
    --  Where a session's cache begins in the device's buffer.
    function Block_Base (Item : Session) return Element_Count
@@ -5436,6 +5483,92 @@ package body Model_Runner.Llama is
          Blocks    => Natural (Blocks_Of (Held, Width)));
    end Packing_Of;
 
+   --  The blends over the other two storages, named here ahead of the
+   --  device fallback that reads whichever the session keeps; the bodies
+   --  follow it.
+   procedure Blend_Halved
+     (Query      : Real_Array;
+      Keys       : T.Half_Array;
+      Values     : T.Half_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      Scale      : Real;
+      Cap        : Real;
+      Max_Bias   : Real;
+      Query_At   : Element_Count;
+
+      --  One score a head that joins the softmax's denominator and takes
+      --  none of the weight, or null for an architecture that states none.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The heads this call is to blend, and how far apart the rows of the
+      --  score buffer are.
+      --
+      --  A head at a time was one buffer for all of them, which is right
+      --  when one task walks the heads in order and wrong the moment two do
+      --  it at once: the scores of a head are written, softmaxed and read
+      --  back within its own iteration, so two heads sharing them is two
+      --  heads answering with each other's arithmetic. A row apiece is what
+      --  lets a share of the heads run beside another share.
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Score_Room : Element_Count;
+      Scores     : in out Real_Array;
+      Target     : out Real_Array;
+      Ok         : out Boolean);
+
+   procedure Blend_Eighth
+     (Held       : Cache_Precision;
+      V_Held     : Cache_Precision;
+      Query      : Real_Array;
+      Keys       : B.Byte_Array;
+      Values     : B.Byte_Array;
+      Key_Scales : Real_Array;
+      Val_Scales : Real_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      Rows       : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Heads      : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      First      : Element_Count;
+      Last       : Element_Count;
+      Scale      : Real;
+      Cap        : Real;
+      Max_Bias   : Real;
+      Query_At   : Element_Count;
+
+      --  One score a head that joins the softmax's denominator and takes
+      --  none of the weight, or null for an architecture that states none.
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The heads this call is to blend, and how far apart the rows of the
+      --  score buffer are.
+      --
+      --  A head at a time was one buffer for all of them, which is right
+      --  when one task walks the heads in order and wrong the moment two do
+      --  it at once: the scores of a head are written, softmaxed and read
+      --  back within its own iteration, so two heads sharing them is two
+      --  heads answering with each other's arithmetic. A row apiece is what
+      --  lets a share of the heads run beside another share.
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Score_Room : Element_Count;
+      Scores     : in out Real_Array;
+      Target     : out Real_Array;
+      Ok         : out Boolean);
+
    --  How a packed session's batch may attend through the matrix
    --  instruction: this layer's cells, from the first to the batch's
    --  last, unpacked into the half-precision copy where the exact copy
@@ -5623,17 +5756,49 @@ package body Model_Runner.Llama is
 
             Fine : Boolean;
          begin
-            Blend_Exact
-              (Query (Query'First + Q_At .. Query'First + Q_At
-                      + Query_Span - 1),
-               Item.Keys.all, Item.Values.all,
-               K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
-               Value_Size, Element_Count (Source.Settings.Group_Size),
-               Since, Ends, Scale, Source.Settings.Attention_Cap,
-               Source.Settings.Max_Bias, Asking, Sinks,
-               0, Heads - 1, Item.Score_Room, Item.Scores.all,
-               Target (Target'First + B_At .. Target'First + B_At
-                       + Blend_Span - 1), Fine);
+            --  Out of whichever storage the session keeps: a packed
+            --  session's bytes and scales, whose row scales begin a row
+            --  a position from the layer's first row.
+            if Item.Held in Eighth | Fourth then
+               Blend_Eighth
+                 (Item.Held, Item.Held_Values,
+                  Query (Query'First + Q_At .. Query'First + Q_At
+                         + Query_Span - 1),
+                  Item.Byte_Keys.all, Item.Byte_Values.all,
+                  Item.Key_Scales.all, Item.Value_Scales.all,
+                  K_Base, V_Base, K_Base / KV_Width, KV_Width, V_Width,
+                  Heads, Head_Size, Value_Size,
+                  Element_Count (Source.Settings.Group_Size),
+                  Since, Ends, Scale, Source.Settings.Attention_Cap,
+                  Source.Settings.Max_Bias, Asking, Sinks,
+                  0, Heads - 1, Item.Score_Room, Item.Scores.all,
+                  Target (Target'First + B_At .. Target'First + B_At
+                          + Blend_Span - 1), Fine);
+            elsif Item.Held = Halved then
+               Blend_Halved
+                 (Query (Query'First + Q_At .. Query'First + Q_At
+                         + Query_Span - 1),
+                  Item.Half_Keys.all, Item.Half_Values.all,
+                  K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                  Value_Size, Element_Count (Source.Settings.Group_Size),
+                  Since, Ends, Scale, Source.Settings.Attention_Cap,
+                  Source.Settings.Max_Bias, Asking, Sinks,
+                  0, Heads - 1, Item.Score_Room, Item.Scores.all,
+                  Target (Target'First + B_At .. Target'First + B_At
+                          + Blend_Span - 1), Fine);
+            else
+               Blend_Exact
+                 (Query (Query'First + Q_At .. Query'First + Q_At
+                         + Query_Span - 1),
+                  Item.Keys.all, Item.Values.all,
+                  K_Base, V_Base, KV_Width, V_Width, Heads, Head_Size,
+                  Value_Size, Element_Count (Source.Settings.Group_Size),
+                  Since, Ends, Scale, Source.Settings.Attention_Cap,
+                  Source.Settings.Max_Bias, Asking, Sinks,
+                  0, Heads - 1, Item.Score_Room, Item.Scores.all,
+                  Target (Target'First + B_At .. Target'First + B_At
+                          + Blend_Span - 1), Fine);
+            end if;
 
             Usable := Usable and then Fine;
             exit when not Fine;
@@ -11540,10 +11705,11 @@ package body Model_Runner.Llama is
           --  time.
           and then not Hybrid (Settings.Kind)
 
-          --  The device's attention has no sinks. A mixture with them
-          --  went whole for a day and the fixture check said its sinks
-          --  answered to nothing, which is what this line is.
-          and then L.Sinks = null
+          --  The device's attention takes a layer's sinks where the
+          --  cache has room for them. A mixture with them went whole for
+          --  a day with none, and the fixture check said its sinks
+          --  answered to nothing, which is what the check is for.
+          and then Sinks_Fit (L.Sinks)
           and then L.Attention_Norm /= null
           and then L.Attention_Norm_Bias = null
           and then L.Feed_Norm /= null
@@ -12061,7 +12227,11 @@ package body Model_Runner.Llama is
                                                      KV_Width, V_Width),
                         Pack_Keys   => Packing_Of (Item, Slot, KV_Width, True),
                         Pack_Values => Packing_Of (Item, V_Slot, V_Width,
-                                                   False));
+                                                   False),
+
+                        --  The layer's sinks, put where the attention
+                        --  reads them.
+                        Sinks_At    => Sinks_Ready (Current.Sinks));
                   end if;
                end if;
 
@@ -12265,12 +12435,10 @@ package body Model_Runner.Llama is
                      Ok       => True);
                   Shared : E.Error_Info;
                begin
-                  --  A layer with sinks attends on the host: the device's
-                  --  attention has none, and the pair below took every
-                  --  mixture with them as if it had none -- the fixture check
-                  --  said their sinks moved no logit.
+                  --  A layer with sinks the device has no room for attends
+                  --  on the host; the pair below is given the others'.
                   if Item.Held = Halved or else not Resident
-                    or else Current.Sinks /= null
+                    or else not Sinks_Fit (Current.Sinks)
                     or else Hybrid (Settings.Kind)
                   then
                      --  How much arithmetic the heads are between them: every
@@ -12317,7 +12485,8 @@ package body Model_Runner.Llama is
                         Gate_Unit (Source), Item.Activation, Fused,
                         Max_Bias => Settings.Max_Bias,
                         Packed => Packed_Shape (Item, Base, V_Base,
-                                                KV_Width, V_Width));
+                                                KV_Width, V_Width),
+                        Sinks_At => Sinks_Ready (Current.Sinks));
 
                      if Fused then
                         Usable := True;
@@ -12348,7 +12517,8 @@ package body Model_Runner.Llama is
                         Item.Normalized, Projected,
                         Max_Bias => Settings.Max_Bias,
                         Packed => Packed_Shape (Item, Base, V_Base,
-                                                KV_Width, V_Width));
+                                                KV_Width, V_Width),
+                        Sinks_At => Sinks_Ready (Current.Sinks));
 
                      if Projected then
                         Usable := True;
@@ -12891,7 +13061,7 @@ package body Model_Runner.Llama is
           --  device's sequence; its full attention layers go a step at a
           --  time.
           and then not Hybrid (Settings.Kind)
-          and then L.Sinks = null
+          and then Sinks_Fit (L.Sinks)
           and then L.Out_Bias = null
           and then L.Up_Bias = null
           and then L.Down_Bias = null
@@ -13932,7 +14102,8 @@ package body Model_Runner.Llama is
                            else Unpacking_Of
                                   (Item, Base, V_Base, KV_Width, V_Width,
                                    Cell_Of (Item, Natural (Index), Reserved)
-                                   + Count)));
+                                   + Count)),
+                        Sinks_At    => Sinks_Ready (Current.Sinks));
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14370,7 +14541,8 @@ package body Model_Runner.Llama is
                            Table_At  => Table,
                            Packed    => Packed_Shape (Item, Base, V_Base,
                                                       KV_Width, V_Width,
-                                                      Seated => Rounding));
+                                                      Seated => Rounding),
+                           Sinks_At  => Sinks_Ready (Current.Sinks));
                      end if;
 
                      --  A packed round the device would not take as one

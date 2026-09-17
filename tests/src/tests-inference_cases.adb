@@ -8097,6 +8097,85 @@ package body Tests.Inference_Cases is
                  "the engine and the independent implementation disagree "
                  & "about a gpt-oss model by" & Long_Float'Image (Worst));
 
+         --  And on the device, where the kernels take the sinks as the
+         --  running softmax's first position: a token at a time, as a
+         --  batch, and with the context in bytes, each against the
+         --  reference rounding as the session does. A device without
+         --  room for the sinks would attend these layers on the host, and
+         --  a kernel that dropped them would answer, and answer wrongly,
+         --  which is what the reference is for.
+         declare
+            Awake : Boolean;
+
+            procedure On_Device
+              (Cache   : L.Cache_Precision;
+               Batched : Boolean;
+               Bound   : Long_Float;
+               What    : String)
+            is
+               Over   : Harness (Held'Access);
+               Live   : L.Session;
+               Able   : Boolean;
+               Got    : Logit_Vector;
+               Worst  : Long_Float := 0.0;
+            begin
+               Start (Over, Model_Runner.Backend.Backend_Device, Able);
+               if not Able then
+                  return;
+               end if;
+
+               L.Open (Live, Over.Ready, Cache => Cache, Status => Status);
+               Assert (E.Is_Ok (Status), "the device session did not open " & What);
+               if Batched then
+                  L.Evaluate_Batch (Live, Over.Ready, Prompt, Got, Status => Status);
+               else
+                  for Token of Prompt loop
+                     L.Evaluate (Live, Over.Ready, Token, Got, Status => Status);
+                     exit when E.Is_Error (Status);
+                  end loop;
+               end if;
+               Assert (E.Is_Ok (Status), "the device evaluation failed " & What
+                       & ": " & E.Error_Code'Image (Status.Code));
+               L.Close (Live);
+               L.Close (Over.Ready, Status);
+
+               Reference_Transformer.Round_Cache
+                 (Second,
+                  (if L."=" (Cache, L.Eighth) then Reference_Transformer.To_Bytes
+                   else Reference_Transformer.Unrounded),
+                  (if L."=" (Cache, L.Eighth) then Reference_Transformer.To_Bytes
+                   else Reference_Transformer.Unrounded));
+               Reference_Transformer.Run (Second, Tokens, Expected, Made);
+               Assert (Made, "the reference produced no logits " & What);
+
+               for Index in Expected'Range loop
+                  Worst := Long_Float'Max
+                    (Worst,
+                     abs (Long_Float (Got (Model_Runner.Numerics.Element_Count (Index)))
+                          - Expected (Index)));
+               end loop;
+               Assert (Worst < Bound,
+                       "the device and the independent implementation disagree "
+                       & "about a gpt-oss model " & What & " by"
+                       & Long_Float'Image (Worst));
+            end On_Device;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            if Awake then
+               On_Device (L.Exact, False, 5.0E-2, "a token at a time");
+               On_Device (L.Exact, True, 5.0E-2, "as a batch");
+               On_Device (L.Eighth, False, Conformance.Fourth_Absolute_Tolerance,
+                          "a token at a time in bytes");
+               On_Device (L.Eighth, True, Conformance.Fourth_Absolute_Tolerance,
+                          "as a batch in bytes");
+               Model_Runner.Backend.Device.Close;
+            else
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no device attended with sinks here");
+            end if;
+         end;
+
          Reference_Transformer.Close (Second);
          Containers.Close (Parsed);
       end;
@@ -11076,7 +11155,8 @@ package body Tests.Inference_Cases is
          & "tensors is refused as a missing tensor");
       Register_Routine
         (T, Sinks_And_A_Clamped_Gate'Access,
-         "an attention sink and a clamped gate agree with the independent "
+         "on the device too, a token at a time, as a batch and in bytes, "
+         & "an attention sink and a clamped gate agree with the independent "
          & "implementation of both");
       Register_Routine
         (T, Head_Widths_May_Differ'Access,

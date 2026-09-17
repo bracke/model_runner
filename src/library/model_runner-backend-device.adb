@@ -1072,7 +1072,8 @@ package body Model_Runner.Backend.Device is
       Window     : Natural := 0;
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
-      Packed     : Packed_Cache := Not_Packed)
+      Packed     : Packed_Cache := Not_Packed;
+      Sinks_At   : Natural := 0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1118,7 +1119,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Packed => Packed);
+         Kept => False, Packed => Packed, Sinks_At => Sinks_At);
       if not Added then
          return;
       end if;
@@ -1193,7 +1194,8 @@ package body Model_Runner.Backend.Device is
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
       Table_At    : Natural := 0;
-      Packed      : Packed_Cache := Not_Packed)
+      Packed      : Packed_Cache := Not_Packed;
+      Sinks_At    : Natural := 0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1279,7 +1281,8 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Table_At => Table_At, Packed => Packed);
+         Kept => False, Table_At => Table_At, Packed => Packed,
+         Sinks_At => Sinks_At);
       if not Added then
          return;
       end if;
@@ -1850,7 +1853,8 @@ package body Model_Runner.Backend.Device is
       Packed         : Packed_Cache := Not_Packed;
       Pack_Keys      : Packing_Shape := Not_Packing;
       Pack_Values    : Packing_Shape := Not_Packing;
-      Unpacked       : Unpacking_Shape := Not_Unpacked)
+      Unpacked       : Unpacking_Shape := Not_Unpacked;
+      Sinks_At       : Natural := 0)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -2270,7 +2274,8 @@ package body Model_Runner.Backend.Device is
             Unpacked.K_Base, Unpacked.V_Base, KV_Width, V_Width, Scale, Cap,
             Added,
             Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-            Chained => True, From_Step => Step_Q_Turned, Kept => False);
+            Chained => True, From_Step => Step_Q_Turned, Kept => False,
+            Sinks_At => Sinks_At);
          if not Added then
             return;
          end if;
@@ -2284,7 +2289,7 @@ package body Model_Runner.Backend.Device is
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
          Chained => True, From_Step => Step_Q_Turned, Kept => False,
-         Table_At => Table_At, Packed => Packed);
+         Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At);
       if not Added then
          return;
       end if;

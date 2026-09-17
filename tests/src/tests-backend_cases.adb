@@ -5179,6 +5179,178 @@ package body Tests.Backend_Cases is
             end;
          end loop;
 
+         --  And with a sink a head: the packed step and the exact step,
+         --  each as a chained step of a sequence and each told where the
+         --  sinks are, say the same -- one query, where the packed kernel
+         --  bundles the heads and slices the cache, and seven.
+         declare
+            Sinks : constant N.Real_Array (0 .. N.Element_Count (Heads) - 1) :=
+              [1.5, -0.5, 3.0, 0.0];
+            Sinks_At : constant N.Element_Count := 2 * Room + Whole;
+            Identity : Model_Runner.Bytes.Byte_Array_Access;
+         begin
+            Products.Reserve (Engine, Sinks_At + Heads, Ok);
+            Assert (Ok, "the cache would not be widened for the sinks for " & What);
+            Products.Put_Cache (Engine, Sinks_At, Sinks, Ok);
+            Assert (Ok, "the sinks would not be written for " & What);
+
+            Model_Runner.Bytes.Allocate
+              (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Identity);
+            Assert (Identity /= null, "no room for the matrix");
+            Identity.all := [others => 0];
+            for Row in 0 .. Span - 1 loop
+               declare
+                  At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Row * Span + Row) * 4 + 1;
+               begin
+                  Identity.all (At_Byte .. At_Byte + 3) :=
+                    Model_Runner.Bytes.Put_F32 (1.0);
+               end;
+            end loop;
+
+            for Positions_Now in Positive range 1 .. Batch loop
+               if Positions_Now = 1 or else Positions_Now = Batch then
+                  declare
+                     Blend_At : constant N.Element_Count :=
+                       Span * N.Element_Count (Positions_Now);
+                     Exact_Through, Packed_Through : N.Real_Array
+                       (0 .. 2 * Span * N.Element_Count (Positions_Now) - 1) :=
+                         [others => 0.0];
+                     Steps  : Products.Sequence;
+                     Added, Halted : Boolean;
+                  begin
+                     Products.Open_Sequence (Steps);
+                     Products.Add_Product
+                       (Steps, Identity.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+                        0, Products.Values_F32,
+                        Natural (Span), Natural (Span), Added);
+                     Products.Prefer_Exact_Attention (Engine, True);
+                     Products.Add_Attention
+                       (Steps,
+                        Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                        Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                        K_Base => 0, V_Base => Natural (Room),
+                        KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                        Scale => 0.125, Cap => 0.0, Added => Added,
+                        Chained => True, Sinks_At => Natural (Sinks_At));
+                     Assert (Added, "a sequence would not take the exact step with sinks");
+                     Products.Run
+                       (Engine, Steps,
+                        Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
+                        Positions_Now, Exact_Through, Ok, Halted);
+                     Products.Prefer_Exact_Attention (Engine, False);
+                     Assert (Ok, "the exact sequence with sinks was refused for " & What);
+
+                     Products.Open_Sequence (Steps);
+                     Products.Add_Product
+                       (Steps, Identity.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+                        0, Products.Values_F32,
+                        Natural (Span), Natural (Span), Added);
+                     Products.Add_Attention
+                       (Steps,
+                        Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                        Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                        K_Base => 0, V_Base => 0,
+                        KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                        Scale => 0.125, Cap => 0.0, Added => Added,
+                        Chained => True, Sinks_At => Natural (Sinks_At),
+                        Packed =>
+                          (K_Bits => K_Bits, V_Bits => V_Bits,
+                           K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                           V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                           KS_At => Natural (2 * Room + K_Scale_At),
+                           VS_At => Natural (2 * Room + V_Scale_At),
+                           K_Blocks => Natural (K_Blocks),
+                           V_Blocks => Natural (V_Blocks)));
+                     Assert (Added, "a sequence would not take the packed step with sinks");
+                     Products.Run
+                       (Engine, Steps,
+                        Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
+                        Positions_Now, Packed_Through, Ok, Halted);
+                     Assert (Ok, "the packed sequence with sinks was refused for " & What);
+
+                     Worst := 0.0;
+                     for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1 loop
+                        Worst := N.Real'Max
+                          (Worst, abs (Exact_Through (Blend_At + Index)
+                                       - Packed_Through (Blend_At + Index)));
+                     end loop;
+                     Assert (Worst <= 1.0e-4,
+                             "with a sink a head, the packed step over " & What
+                             & " answers" & N.Real'Image (Worst)
+                             & " away from the exact one, at"
+                             & Positive'Image (Positions_Now) & " positions");
+
+                     --  And the one query against a softmax worked out
+                     --  here over what the bytes stand for, with the sink
+                     --  in its denominator -- so two kernels agreeing on
+                     --  the wrong count of it would be seen.
+                     if Positions_Now = 1 then
+                        Worst := 0.0;
+                        for Head in 0 .. Heads - 1 loop
+                           declare
+                              Group : constant N.Element_Count :=
+                                N.Element_Count (Head / (Heads / Groups));
+                              Q_At  : constant N.Element_Count :=
+                                N.Element_Count (Head * Head_Size);
+                              Top   : N.Real := Sinks (N.Element_Count (Head));
+                              Sum   : N.Real;
+                              Scores : N.Real_Array (0 .. Positions - 1);
+                              Blend  : N.Real_Array (0 .. Head_Size - 1) :=
+                                [others => 0.0];
+                           begin
+                              for Pos in Scores'Range loop
+                                 declare
+                                    K_At : constant N.Element_Count :=
+                                      Pos * KV_Span + Group * Head_Size;
+                                    Dot  : N.Real := 0.0;
+                                 begin
+                                    for C in 0 .. N.Element_Count (Head_Size) - 1 loop
+                                       Dot := Dot + Query (Q_At + C) * Stand (K_At + C);
+                                    end loop;
+                                    Scores (Pos) := Dot * 0.125;
+                                    Top := N.Real'Max (Top, Scores (Pos));
+                                 end;
+                              end loop;
+                              Sum := N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                               (Float (Sinks (N.Element_Count (Head)) - Top)));
+                              for Pos in Scores'Range loop
+                                 Scores (Pos) :=
+                                   N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                             (Float (Scores (Pos) - Top)));
+                                 Sum := Sum + Scores (Pos);
+                              end loop;
+                              for Pos in Scores'Range loop
+                                 declare
+                                    V_At : constant N.Element_Count :=
+                                      Room + Pos * KV_Span + Group * Head_Size;
+                                 begin
+                                    for C in Blend'Range loop
+                                       Blend (C) := Blend (C)
+                                         + Scores (Pos) / Sum * Stand (V_At + C);
+                                    end loop;
+                                 end;
+                              end loop;
+                              for C in Blend'Range loop
+                                 Worst := N.Real'Max
+                                   (Worst, abs (Blend (C)
+                                                - Packed_Through (Blend_At + Q_At + C)));
+                              end loop;
+                           end;
+                        end loop;
+                        Assert (Worst <= 1.0e-4,
+                                "with a sink a head, the packed step over " & What
+                                & " answers" & N.Real'Image (Worst)
+                                & " away from the softmax with the sink in it");
+                     end if;
+                  end;
+               end if;
+            end loop;
+            Model_Runner.Bytes.Free (Identity);
+         end;
+
          --  And a batch long enough for the matrix instruction, where the
          --  device has it: the packed rows unpacked into the copy by two
          --  steps and attended there through that kernel, against the
@@ -5698,6 +5870,102 @@ package body Tests.Backend_Cases is
          Assert (not Products.Prefers_Exact_Attention (Engine),
                  "the engine kept a batch off the instruction after being "
                  & "told not to");
+
+         --  And with a sink a head, through the instruction and off it,
+         --  against a softmax worked out here with the sink in its
+         --  denominator: the sinks are put in the cache after the
+         --  positions, where the kernel is told to find them.
+         declare
+            Sinks : constant N.Real_Array (0 .. N.Element_Count (Heads) - 1) :=
+              [2.0, 0.5, -1.0, 3.0];
+            Sinks_At : constant N.Element_Count := Room * 2;
+            Wanted : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
+            Scores : N.Real_Array (0 .. Positions + Batch - 1);
+         begin
+            Products.Reserve (Engine, Cache'Length + Heads, Ok);
+            Assert (Ok, "the cache would not be widened for the sinks");
+            Products.Put_Cache (Engine, Sinks_At, Sinks, Ok);
+            Assert (Ok, "the sinks would not be written");
+
+            for Which in 0 .. Batch - 1 loop
+               for Head in 0 .. Heads - 1 loop
+                  declare
+                     Last  : constant Natural := Positions - 1 + Which;
+                     Group : constant N.Element_Count :=
+                       N.Element_Count (Head / (Heads / Groups));
+                     Q_At  : constant N.Element_Count :=
+                       Span * N.Element_Count (Which)
+                       + N.Element_Count (Head * Head_Size);
+                     Top   : N.Real := Sinks (N.Element_Count (Head));
+                     Sum   : N.Real;
+                  begin
+                     for Pos in 0 .. Last loop
+                        declare
+                           K_At : constant N.Element_Count :=
+                             N.Element_Count (Pos) * KV_Span
+                             + Group * N.Element_Count (Head_Size);
+                           Dot  : N.Real := 0.0;
+                        begin
+                           for C in 0 .. N.Element_Count (Head_Size) - 1 loop
+                              Dot := Dot + Query (Q_At + C) * Cache (K_At + C);
+                           end loop;
+                           Scores (N.Element_Count (Pos)) := Dot * 0.0625;
+                           Top := N.Real'Max (Top, Scores (N.Element_Count (Pos)));
+                        end;
+                     end loop;
+                     Sum := N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                      (Float (Sinks (N.Element_Count (Head)) - Top)));
+                     for Pos in 0 .. Last loop
+                        Scores (N.Element_Count (Pos)) :=
+                          N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                    (Float (Scores (N.Element_Count (Pos)) - Top)));
+                        Sum := Sum + Scores (N.Element_Count (Pos));
+                     end loop;
+                     for Pos in 0 .. Last loop
+                        declare
+                           V_At : constant N.Element_Count :=
+                             Room + N.Element_Count (Pos) * KV_Span
+                             + Group * N.Element_Count (Head_Size);
+                           W : constant N.Real := Scores (N.Element_Count (Pos)) / Sum;
+                        begin
+                           for C in 0 .. N.Element_Count (Head_Size) - 1 loop
+                              Wanted (Q_At + C) := Wanted (Q_At + C) + W * Cache (V_At + C);
+                           end loop;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+
+            Products.Open_Sequence (Steps);
+            Products.Add_Attention
+              (Steps,
+               Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+               Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+               K_Base => 0, V_Base => Natural (Room),
+               KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+               Scale => 0.0625, Cap => 0.0, Added => Added,
+               Sinks_At => Natural (Sinks_At));
+            Assert (Added, "a sequence would not take the attention step with sinks");
+
+            for Off_Instruction in Boolean loop
+               Products.Prefer_Exact_Attention (Engine, Off_Instruction);
+               Batched := [others => 0.0];
+               Worst := 0.0;
+               Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
+               Assert (Ok, "the batch with sinks was refused");
+               for Index in Batched'Range loop
+                  Worst := N.Real'Max (Worst, abs (Wanted (Index) - Batched (Index)));
+               end loop;
+               Assert (Worst <= (if Off_Instruction then Exact else Near),
+                       "a batch with heads" & Positive'Image (Head_Size)
+                       & " wide and a sink a head, "
+                       & (if Off_Instruction then "off" else "through")
+                       & " the instruction, answers" & N.Real'Image (Worst)
+                       & " away from the softmax with the sink in it");
+            end loop;
+            Products.Prefer_Exact_Attention (Engine, False);
+         end;
       end Compare;
    begin
       Devices.Open (Held, Found);

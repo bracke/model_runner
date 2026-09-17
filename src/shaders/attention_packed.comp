@@ -66,8 +66,12 @@
 //  bytes over four and floats as they are. A round's rows share no keys,
 //  so a workgroup of a round takes one position's heads and no more.
 //
-//  What this does not do, and the caller does on the host: sinks, and a
-//  value head wider than the room below.
+//  A head's sink -- gpt-oss learned one a head, a score that joins the
+//  denominator and takes no value -- is the running softmax's first
+//  position: the largest starts at the sink and the sum at one.
+//
+//  What this does not do, and the caller does on the host: a value head
+//  wider than the room below.
 
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -133,6 +137,11 @@ layout(push_constant, std430) uniform Shape {
     //  A round: where its per-row table begins, in words of the buffer,
     //  or zero for a batch.
     uint table_at;
+
+    //  A head's sink, for an architecture that learned one: a score that
+    //  joins the softmax's denominator and takes no value. Where the
+    //  heads' sinks begin in the cache, in floats, or zero for none.
+    uint sinks_at;
 } shape;
 
 //  The widest query head this takes, and the widest value head: four
@@ -364,12 +373,21 @@ void main () {
     uint e4 = e0 & ~3u;
     uint in_word = e0 & 3u;
 
+    //  The running softmax starts empty -- or, where the head has a sink,
+    //  with the sink as a first position that carries no value: the
+    //  largest is the sink and the sum is its weight against itself, one.
+    //  The first slice alone takes it.
     float mine[ROWS][4];
     float top[ROWS];
     float sum[ROWS];
     for (uint r = 0u; r < ROWS; r++) {
-        top[r] = -1.0 / 0.0;
-        sum[r] = 0.0;
+        if (shape.sinks_at != 0u && slice == 0u && row_live[r]) {
+            top[r] = kvf[shape.sinks_at + head0 + r / shape.queries];
+            sum[r] = 1.0;
+        } else {
+            top[r] = -1.0 / 0.0;
+            sum[r] = 0.0;
+        }
         for (uint j = 0u; j < 4u; j++) {
             mine[r][j] = 0.0;
         }

@@ -1210,6 +1210,11 @@ package Model_Runner.Platform.Device.Products is
    --    step then binds the packed kernel over it, with K_Base and V_Base
    --    unread, and Run refuses the sequence where the device has no such
    --    kernel or the block's bases and widths are not multiples of four.
+   --  @param Sinks_At Where the heads' sinks begin in the cache, counted
+   --    in elements, for an architecture that learned one a head: a score
+   --    that joins the softmax's denominator and takes no value. Zero for
+   --    a layer without them. The caller puts Heads of them there before
+   --    the sequence runs, as it puts a round's table.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -1232,7 +1237,8 @@ package Model_Runner.Platform.Device.Products is
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
       Table_At   : Natural := 0;
-      Packed     : Packed_Cache := Not_Packed);
+      Packed     : Packed_Cache := Not_Packed;
+      Sinks_At   : Natural := 0);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -2466,6 +2472,10 @@ private
 
       --  A packed session's block, where the attention reads one.
       Packed     : Packed_Cache := Not_Packed;
+
+      --  Where the heads' sinks begin in the cache, in elements, or zero
+      --  for a layer without them.
+      Sinks      : Natural := 0;
 
       --  And how a placing step packs its rows into one -- or, where
       --  Unpacks, how the rows it unpacks into the half-precision copy

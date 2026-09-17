@@ -169,6 +169,10 @@ float held_at (uint at) { return kv[at]; }
 uint word_at (uint at) { return floatBitsToUint (kv[at]); }
 #endif
 
+//  A head's sink, out of the cache: a binary32 whichever way the cache
+//  is bound.
+float sink_at (uint at) { return uintBitsToFloat (word_at (at)); }
+
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
 layout(std430, binding = 1) readonly  buffer Query4 { vec4 q4[]; };
 layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
@@ -241,6 +245,12 @@ layout(push_constant, std430) uniform Shape {
     //  buffer this kernel has bound already, so the table costs a read
     //  where it was going to cost a limit.
     uint table_at;
+
+    //  A head's sink, for an architecture that learned one: a score that
+    //  joins the softmax's denominator and takes no value. Where the
+    //  heads' sinks begin in the cache, in elements, or zero for none.
+    //  They are in the cache for the reason the table is.
+    uint sinks_at;
 } shape;
 
 //  The largest value width this kernel will take. A head wider than this is
@@ -637,6 +647,11 @@ void main() {
     vec4 heldv[QUERIES][HEADS];
 #endif
 
+    //  The running softmax starts empty -- or, where the head has a sink,
+    //  with the sink as a first position that carries no value: the
+    //  largest is the sink and the sum is its weight against itself, one.
+    //  The first slice alone takes it, so a cache cut into slices counts
+    //  it once.
     for (uint i = 0u; i < QUERIES; i++) {
         for (uint h = 0u; h < HEADS; h++) {
 #ifndef FOURS
@@ -644,8 +659,13 @@ void main() {
                 held[i][h][k] = 0.0;
             }
 #endif
-            top[i][h] = -1.0 / 0.0;
-            sum[i][h] = 0.0;
+            if (shape.sinks_at != 0u && slice == 0u) {
+                top[i][h] = sink_at (shape.sinks_at + head + h);
+                sum[i][h] = 1.0;
+            } else {
+                top[i][h] = -1.0 / 0.0;
+                sum[i][h] = 0.0;
+            }
 #ifndef HALVED
             heldv[i][h] = vec4 (0.0);
 #endif
