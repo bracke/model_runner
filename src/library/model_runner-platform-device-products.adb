@@ -805,9 +805,9 @@ package body Model_Runner.Platform.Device.Products is
    Attention_Bytes : constant := 68;
 
    --  And the packed kernel's, which has the bases twice over -- the
-   --  rows' in bytes and the scales' in floats -- and the bits an element
-   --  of each side.
-   Packed_Bytes    : constant := 88;
+   --  rows' in bytes and the scales' in floats -- the bits an element of
+   --  each side, and how many heads and positions a workgroup answers.
+   Packed_Bytes    : constant := 96;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Shape_Bytes     : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -962,6 +962,8 @@ package body Model_Runner.Platform.Device.Products is
       Positions  : C.unsigned := 1;
       Window     : C.unsigned := 0;
       Causal     : C.unsigned := 1;
+      Bundle     : C.unsigned := 1;
+      Queries    : C.unsigned := 1;
    end record
      with Convention => C;
 
@@ -2001,21 +2003,25 @@ package body Model_Runner.Platform.Device.Products is
          Item.Attender := Made;
 
          --  And the packed kernel, over a cache of bytes or nibbles and
-         --  scales. Allowed to fail on its own: a device that refuses it
-         --  attends a packed session on the host.
-         declare
-            Packed : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Attention_Packed;
-         begin
-            Request.Size := Interfaces.C.size_t (Packed'Length * 4);
-            Request.Code := Packed'Address;
+         --  scales. It joins a tile's scores through subgroup operations
+         --  and is compiled for nothing else, so a device without them
+         --  attends a packed session on the host. Allowed to fail on its
+         --  own for the same reason.
+         if Has_Subgroup_Arithmetic (On) then
+            declare
+               Packed : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Attention_Packed;
+            begin
+               Request.Size := Interfaces.C.size_t (Packed'Length * 4);
+               Request.Code := Packed'Address;
 
-            if Create (Item.Logical, Request'Address, Null_Handle,
-                       Made'Access) = 0
-            then
-               Item.Packed_Attend := Made;
-            end if;
-         end;
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Packed_Attend := Made;
+               end if;
+            end;
+         end if;
 
          --  And the same source compiled with SUBGROUPS, where the device
          --  offers them. Allowed to fail on its own: a device that takes
@@ -5347,6 +5353,74 @@ package body Model_Runner.Platform.Device.Products is
    function Attends_Packed (Item : Engine) return Boolean
    is (Item.Packed_Line /= Null_Handle);
 
+   --  Whether the packed kernel takes this shape over this block: the
+   --  kernel reads a row a word at a time, four elements of it, and a
+   --  head's four never straddle a word only where every base and width
+   --  is a multiple of four -- which the engine's layout gives, and which
+   --  this holds it to. Asked by the single call and by a sequence alike.
+   function Packed_Fits
+     (Item       : Engine;
+      Packed     : Packed_Cache;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural) return Boolean
+   is (Item.Packed_Line /= Null_Handle
+       and then Packed.K_Bits in 4 | 8
+       and then Packed.V_Bits in 4 | 8
+       and then Head_Size in 4 .. 256
+       and then Head_Size mod 4 = 0
+       and then Value_Size in 4 .. Attention_Room
+       and then Value_Size mod 4 = 0
+       and then KV_Width mod 4 = 0
+       and then V_Width mod 4 = 0
+       and then Packed.K_Bytes mod 4 = 0
+       and then Packed.V_Bytes mod 4 = 0);
+
+   --  The rows a workgroup of the packed kernel answers: eight, as the
+   --  shader declares, shared between positions of a batch and heads of
+   --  a group. A batch takes the positions first, since eight positions
+   --  of one head share a group's keys as eight heads of one position
+   --  do and a batch has positions to spare; a token takes the heads.
+   Packed_Rows : constant := 8;
+
+   --  How many positions a workgroup answers.
+   function Packed_Queries (Positions : Positive) return Positive
+   is (Positive'Min (Positions, Packed_Rows));
+
+   --  How many heads: the most that fit beside the positions and divide
+   --  the group, so a workgroup reads a group's keys and values once for
+   --  every row of it and never crosses into another group's -- and one
+   --  over a short cache, where a workgroup a head is more workgroups
+   --  doing little each, as the exact bundle is bound.
+   function Packed_Bundle
+     (Group_Size : Positive;
+      Queries    : Positive;
+      Span       : Natural) return Positive
+   is (if Span < Bundle_Least then 1
+       elsif Queries = 1 and then Group_Size mod 8 = 0 then 8
+       elsif Queries <= 2 and then Group_Size mod 4 = 0 then 4
+       elsif Queries <= 4 and then Group_Size mod 2 = 0 then 2
+       else 1);
+
+   --  How many slices a sequence's packed attention cuts the cache into,
+   --  as Attend_Slices cuts it for the exact kernel: a token against a
+   --  long cache is a few bundles streaming megabytes each, and a part
+   --  with a dozen compute units wants dozens of workgroups. A batch has
+   --  its positions for that already.
+   function Packed_Slices
+     (Item      : Engine;
+      Positions : Natural;
+      First     : Natural;
+      Last      : Natural) return Natural
+   is (if Item.Merge_Line = Null_Handle
+         or else Positions >= Query_Block
+         or else Last < First
+       then 1
+       else Natural'Min
+              (Slice_Limit,
+               (Last - First + Slice_Least) / Slice_Least));
+
    -------------------
    -- Attend_Packed --
    -------------------
@@ -5397,13 +5471,14 @@ package body Model_Runner.Platform.Device.Products is
       Ok := False;
 
       if not Is_Ready (Item)
-        or else Item.Packed_Line = Null_Handle
-        or else K_Bits not in 4 | 8
-        or else V_Bits not in 4 | 8
+        or else not Packed_Fits
+                      (Item,
+                       (K_Bits => K_Bits, V_Bits => V_Bits,
+                        K_Bytes => K_Bytes, V_Bytes => V_Bytes,
+                        KS_At => KS_At, VS_At => VS_At,
+                        K_Blocks => K_Blocks, V_Blocks => V_Blocks),
+                       Head_Size, Value_Size, KV_Width, V_Width)
         or else Heads = 0
-        or else Head_Size = 0
-        or else Value_Size = 0
-        or else Value_Size > Attention_Room
         or else Group_Size = 0
         or else Last < First
         or else Item.Cache_Buffer = Null_Handle
@@ -5498,6 +5573,10 @@ package body Model_Runner.Platform.Device.Products is
          Sets  : aliased Address := Item.Descriptor;
          Began : aliased Command_Begin_Info;
 
+         Queries : constant Positive := Packed_Queries (Slots);
+         Bundle  : constant Positive :=
+           Packed_Bundle (Group_Size, Queries, Last - First + 1);
+
          Shape : aliased Packed_Constants :=
            (Heads      => C.unsigned (Heads),
             Head_Size  => C.unsigned (Head_Size),
@@ -5520,7 +5599,9 @@ package body Model_Runner.Platform.Device.Products is
             Max_Bias   => C.C_float (Max_Bias),
             Positions  => C.unsigned (Slots),
             Window     => C.unsigned (Window),
-            Causal     => (if Causal then 1 else 0));
+            Causal     => (if Causal then 1 else 0),
+            Bundle     => C.unsigned (Bundle),
+            Queries    => C.unsigned (Queries));
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -5544,12 +5625,17 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         --  A workgroup its rows of heads and positions, and one slice:
+         --  the single call has no merge after it, and a sequence is
+         --  where a token's long cache is cut.
          Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
          Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                     Sets'Address, 0, Null_Handle);
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Packed_Bytes, Shape'Address);
-         Dispatch (Item.Buffer, C.unsigned (Heads), C.unsigned (Slots), 1);
+         Dispatch (Item.Buffer,
+                   C.unsigned ((Heads + Bundle - 1) / Bundle),
+                   C.unsigned ((Slots + Queries - 1) / Queries), 1);
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -6852,7 +6938,8 @@ package body Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Table_At   : Natural := 0) is
+      Table_At   : Natural := 0;
+      Packed     : Packed_Cache := Not_Packed) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -6895,7 +6982,7 @@ package body Model_Runner.Platform.Device.Products is
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
          Causal => Causal, Max_Bias => Max_Bias,
-         Table => Table_At, others => <>);
+         Table => Table_At, Packed => Packed, others => <>);
       Added := True;
    end Add_Attention;
 
@@ -7211,6 +7298,13 @@ package body Model_Runner.Platform.Device.Products is
                --  named, which is an answer and a wrong one.
                if This.Rows = 0
                  or else Item.Cache_Buffer = Null_Handle
+                 --  A packed block needs the kernel that reads one, and
+                 --  a shape that kernel takes.
+                 or else (This.Packed.K_Bits /= 0
+                          and then not Packed_Fits
+                                         (Item, This.Packed, This.Head_Size,
+                                          This.Value_Size, This.KV_Width,
+                                          This.V_Width))
                  or else (not This.Chained
                           and then Model_Runner.Numerics.Element_Count
                                      (This.Columns)
@@ -8174,6 +8268,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  cache -- so it is never halved either.
                   or else (Steps.Items (Which).Attends
                            and then Steps.Items (Which).Table = 0
+                           and then Steps.Items (Which).Packed.K_Bits = 0
                            and then Attends_By_Matrix
                                       (Item, Count,
                                        Steps.Items (Which).Head_Size,
@@ -8331,6 +8426,90 @@ package body Model_Runner.Platform.Device.Products is
 
                Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
                           Bound'Address, 0, Null_Handle);
+
+               if This.Attends and then This.Packed.K_Bits /= 0 then
+                  --  Over a packed block: the one kernel that reads one,
+                  --  a workgroup a head of a position, as the single call
+                  --  dispatches it -- and no slices, no merge, no
+                  --  half-precision copy, which are the exact kernels'.
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Packed_Line);
+
+                  declare
+                     Queries : constant Positive := Packed_Queries (Count);
+                     Bundle  : constant Positive :=
+                       Packed_Bundle (This.Group_Size, Queries,
+                                      This.Last - This.First + 1);
+
+                     Shape : aliased Packed_Constants :=
+                       (Heads      => C.unsigned (This.Heads),
+                        Head_Size  => C.unsigned (This.Head_Size),
+                        Value_Size => C.unsigned (This.Value_Size),
+                        Group_Size => C.unsigned (This.Group_Size),
+                        First      => C.unsigned (This.First),
+                        Last       => C.unsigned (This.Last),
+                        K_Bytes    => C.unsigned (This.Packed.K_Bytes),
+                        V_Bytes    => C.unsigned (This.Packed.V_Bytes),
+                        KV_Width   => C.unsigned (This.KV_Width),
+                        V_Width    => C.unsigned (This.V_Width),
+                        KS_At      => C.unsigned (This.Packed.KS_At),
+                        VS_At      => C.unsigned (This.Packed.VS_At),
+                        K_Blocks   => C.unsigned (This.Packed.K_Blocks),
+                        V_Blocks   => C.unsigned (This.Packed.V_Blocks),
+                        K_Bits     => C.unsigned (This.Packed.K_Bits),
+                        V_Bits     => C.unsigned (This.Packed.V_Bits),
+                        Scale      => C.C_float (This.Scale),
+                        Cap        => C.C_float (This.Cap),
+                        Max_Bias   => C.C_float (This.Max_Bias),
+                        Positions  => C.unsigned (Count),
+                        Window     => C.unsigned (This.Window),
+                        Causal     => (if This.Causal then 1 else 0),
+                        Bundle     => C.unsigned (Bundle),
+                        Queries    => C.unsigned (Queries));
+
+                     Slices : constant Natural :=
+                       (if Barrier = null then 1
+                        else Packed_Slices
+                               (Item, Count, This.First, This.Last));
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Packed_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer,
+                               C.unsigned ((This.Heads + Bundle - 1) / Bundle),
+                               C.unsigned ((Count + Queries - 1) / Queries),
+                               C.unsigned (Slices));
+
+                     --  The slices put together, as the exact kernel's
+                     --  are: the records lie where merge.comp reads them.
+                     if Slices > 1 then
+                        declare
+                           Merged : aliased Merge_Constants :=
+                             (Heads      => C.unsigned (This.Heads),
+                              Value_Size => C.unsigned (This.Value_Size),
+                              Positions  => C.unsigned (Count),
+                              Slices     => C.unsigned (Slices));
+                        begin
+                           Barrier
+                             (Item.Buffer, Pipeline_Stage_Compute,
+                              Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                              0, Null_Handle, 0, Null_Handle);
+                           Bind_Pipeline
+                             (Item.Buffer, Bind_Point_Compute,
+                              Item.Merge_Line);
+                           Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                                 Merge_Bytes, Merged'Address);
+                           Dispatch
+                             (Item.Buffer, C.unsigned (This.Heads),
+                              C.unsigned (Count), 1);
+                        end;
+                     end if;
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
 
                if This.Attends then
                   --  The attention kernel, and back again afterwards, as

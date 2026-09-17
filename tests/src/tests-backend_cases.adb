@@ -5088,6 +5088,79 @@ package body Tests.Backend_Cases is
                        & N.Real'Image (Worst) & " away from the exact one over "
                        & "what the bytes stand for, at" & Positive'Image (Positions_Now)
                        & " positions");
+
+               --  And the same step recorded into a sequence, chained to
+               --  a product that hands it the queries unchanged -- which
+               --  is how the engine records it, and what lets a token's
+               --  three hundred positions be cut into slices and merged,
+               --  where a batch's seven take a workgroup between them.
+               declare
+                  Steps    : Products.Sequence;
+                  Added    : Boolean;
+                  Halted   : Boolean;
+                  Identity : Model_Runner.Bytes.Byte_Array_Access;
+                  Through  : N.Real_Array
+                    (0 .. 2 * Span * N.Element_Count (Positions_Now) - 1) :=
+                      [others => 0.0];
+                  Blend_At : constant N.Element_Count :=
+                    Span * N.Element_Count (Positions_Now);
+               begin
+                  Model_Runner.Bytes.Allocate
+                    (Model_Runner.Bytes.Byte_Count (Span * Span) * 4, Identity);
+                  Assert (Identity /= null, "no room for the matrix");
+                  Identity.all := [others => 0];
+                  for Row in 0 .. Span - 1 loop
+                     declare
+                        At_Byte : constant Model_Runner.Bytes.Byte_Count :=
+                          Model_Runner.Bytes.Byte_Count (Row * Span + Row) * 4 + 1;
+                     begin
+                        Identity.all (At_Byte .. At_Byte + 3) :=
+                          Model_Runner.Bytes.Put_F32 (1.0);
+                     end;
+                  end loop;
+
+                  Products.Open_Sequence (Steps);
+                  Products.Add_Product
+                    (Steps, Identity.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Identity.all'Length),
+                     0, Products.Values_F32,
+                     Natural (Span), Natural (Span), Added);
+                  Assert (Added, "a sequence would not take the product for " & What);
+                  Products.Add_Attention
+                    (Steps,
+                     Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+                     Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+                     K_Base => 0, V_Base => 0,
+                     KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                     Scale => 0.125, Cap => 0.0, Added => Added,
+                     Window => Window, Chained => True,
+                     Packed =>
+                       (K_Bits => K_Bits, V_Bits => V_Bits,
+                        K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
+                        V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
+                        KS_At => Natural (2 * Room + K_Scale_At),
+                        VS_At => Natural (2 * Room + V_Scale_At),
+                        K_Blocks => Natural (K_Blocks),
+                        V_Blocks => Natural (V_Blocks)));
+                  Assert (Added, "a sequence would not take the packed step for " & What);
+                  Products.Run
+                    (Engine, Steps,
+                     Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
+                     Positions_Now, Through, Ok, Halted);
+                  Assert (Ok, "the sequence with the packed step was refused for " & What);
+                  Model_Runner.Bytes.Free (Identity);
+
+                  Worst := 0.0;
+                  for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1 loop
+                     Worst := N.Real'Max
+                       (Worst, abs (Exact_Blend (Index) - Through (Blend_At + Index)));
+                  end loop;
+                  Assert (Worst <= 1.0e-4,
+                          "the packed attention step of a sequence over " & What
+                          & " answers" & N.Real'Image (Worst)
+                          & " away from the exact one, at"
+                          & Positive'Image (Positions_Now) & " positions");
+               end;
             end;
          end loop;
       end Compare;

@@ -4,8 +4,6 @@ with Ada.Unchecked_Conversion;
 with System;
 with System.Storage_Elements;
 
-with Model_Runner.Platform.Device.Products;
-
 package body Model_Runner.Backend.Device is
 
    use type System.Address;
@@ -1014,7 +1012,8 @@ package body Model_Runner.Backend.Device is
       Positions  : Natural := 1;
       Window     : Natural := 0;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0)
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      Packed     : Packed_Cache := Not_Packed)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1060,7 +1059,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False);
+         Kept => False, Packed => Packed);
       if not Added then
          return;
       end if;
@@ -1134,7 +1133,8 @@ package body Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Table_At    : Natural := 0)
+      Table_At    : Natural := 0;
+      Packed      : Packed_Cache := Not_Packed)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1220,7 +1220,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Table_At => Table_At);
+         Kept => False, Table_At => Table_At, Packed => Packed);
       if not Added then
          return;
       end if;

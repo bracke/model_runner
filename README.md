@@ -1184,14 +1184,25 @@ sixth, the difference being the buffers a session holds whatever it stores
 its context in, and the scales.
 
 On the device it is a different story and worth stating separately. A
-packed context stays packed there, and a kernel of its own reads it -- a
-plain one, a workgroup a head of a position with sixty-four lanes, none of
-the subgroup folds and bundles the exact kernel has grown -- so twelve
-tokens read **0.345 s** with the byte cache against **0.274 s** with the
-exact one, 0.312 s of it generating against 0.245 s, on the same six-token
-prompt. What the byte cache saves on the device is the memory, which is
-the whole of what it was asked for; what it costs there is the attention
-step, until that kernel is given what the other one has.
+packed context stays packed there, and a kernel of its own reads it: a
+workgroup eight rows that share one group's keys and values -- a token's
+eight heads of a group, or a batch's eight positions of a head -- each
+key read once, a word of four elements at a time, and dotted into every
+row, the softmax carried along a tile of sixty-four positions at a time
+through subgroup reductions, a long cache cut into slices and merged as
+the exact kernel's is, and the whole of it a step of the layer's fused
+sequence. Twelve tokens read **0.303 s** with the byte cache against
+**0.275 s** with the exact one on the six-token prompt, which is inside
+what a short context can show; after a prompt of 1,419 tokens, sixty-four
+more read **1.96 s** generating against **1.38 s** -- 30.7 ms a token
+against 21.6. The first form of this kernel, a workgroup a head reading a
+byte at a time and the keys twice, took 36.5 ms a token there. What the
+byte cache still pays on the device is the prompt: **2.55 s** against
+**0.74 s** for those 1,419 tokens, because an exact cache's batch attends
+through the matrix instruction and a packed one through this kernel, a
+block of eight positions at a time against every position before them.
+That is the next thing this kernel lacks, and it is named under
+`## Not implemented`.
 
 What it costs in time is nothing this machine can measure: twelve tokens of
 TinyLlama-1.1B Q8_0 take **1.912 s** with the byte cache against **1.871 s**
@@ -1454,6 +1465,14 @@ Named in the specification, absent here:
   stricter instead: the source's digest is recorded beside the compiled form,
   so a shader edited and not recompiled fails the checklist rather than going
   on running the old one.
+- **A packed batch through the matrix instruction.** A `--kv-cache q8`
+  or `q4` session attends through `attention_packed.comp` for a batch as
+  for a token, a block of eight positions at a time against every
+  position before them, where an exact cache's batch goes through the
+  cooperative-matrix kernel over its half-precision copy. A packed block
+  has no such copy -- that is what it saves -- and the kernel that would
+  unpack a tile of it into one for the instruction is not written; a
+  1,419-token prompt reads 2.55 s against 0.74.
 
 ## Speed
 

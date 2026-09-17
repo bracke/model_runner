@@ -5,6 +5,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Tensors;
 
 --  The backend that runs on a device.
@@ -491,6 +492,15 @@ package Model_Runner.Backend.Device is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0);
 
+   --  A packed session's block on the device, as Products describes it:
+   --  what the fused sequences below are given so that their attention
+   --  step reads the packed kernel rather than the exact one.
+   subtype Packed_Cache is Model_Runner.Platform.Device.Products.Packed_Cache;
+
+   --  A cache the exact kernels read.
+   Not_Packed : constant Packed_Cache :=
+     Model_Runner.Platform.Device.Products.Not_Packed;
+
    --  Attend, and project the blend, in one submission.
    --
    --  A layer's attention and the matrix that reads its result are two
@@ -531,6 +541,9 @@ package Model_Runner.Backend.Device is
    --    which is every model that generates. False where it sees the whole
    --    text, and every position then attends to Last rather than to Last
    --    plus its own place in the batch.
+   --  @param Packed The session's packed block, where it has one, which
+   --    the attention step then reads with the packed kernel; K_Base and
+   --    V_Base go unread.
    procedure Attend_And_Project
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -551,7 +564,8 @@ package Model_Runner.Backend.Device is
       Positions  : Natural := 1;
       Window     : Natural := 0;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      Packed     : Packed_Cache := Not_Packed);
 
    --  A layer's second half, in one submission rather than two.
    --
@@ -598,6 +612,9 @@ package Model_Runner.Backend.Device is
    --    distance, or zero for a model told where a token is otherwise.
    --  @param Table_At A round: where in the cache its per-row table
    --    begins, counted in elements. Zero for a batch, which needs none.
+   --  @param Packed The session's packed block, where it has one, which
+   --    the attention step then reads with the packed kernel; K_Base and
+   --    V_Base go unread.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -626,7 +643,8 @@ package Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Table_At    : Natural := 0);
+      Table_At    : Natural := 0;
+      Packed      : Packed_Cache := Not_Packed);
 
    --  Several products of the same activation, in one submission.
    --

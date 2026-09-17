@@ -502,6 +502,26 @@ package Model_Runner.Platform.Device.Products is
 
    type Sequence is limited private;
 
+   --  A packed session's block on the device, for an attention step of a
+   --  sequence: where its rows begin in bytes of the cache buffer and its
+   --  scales in floats, how many scales a row has, and how many bits an
+   --  element for the keys and for the values -- what Attend_Packed is
+   --  told, carried into a sequence so the step binds that kernel rather
+   --  than the exact one. K_Bits zero is a cache the exact kernels read.
+   type Packed_Cache is record
+      K_Bits   : Natural := 0;
+      V_Bits   : Natural := 0;
+      K_Bytes  : Interfaces.Unsigned_64 := 0;
+      V_Bytes  : Interfaces.Unsigned_64 := 0;
+      KS_At    : Natural := 0;
+      VS_At    : Natural := 0;
+      K_Blocks : Natural := 0;
+      V_Blocks : Natural := 0;
+   end record;
+
+   --  A cache the exact kernels read.
+   Not_Packed : constant Packed_Cache := (others => <>);
+
    --  Empty a sequence so that products may be added to it.
    --
    --  @param Steps Sequence to empty.
@@ -1133,6 +1153,10 @@ package Model_Runner.Platform.Device.Products is
    --  @param From_Step Which step the queries come from, or zero for the
    --    step before this one. A layer named whole rotates them several
    --    steps before it attends with them.
+   --  @param Packed The session's packed block, where it has one: the
+   --    step then binds the packed kernel over it, with K_Base and V_Base
+   --    unread, and Run refuses the sequence where the device has no such
+   --    kernel or the block's bases and widths are not multiples of four.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -1154,7 +1178,8 @@ package Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Table_At   : Natural := 0);
+      Table_At   : Natural := 0;
+      Packed     : Packed_Cache := Not_Packed);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -1326,9 +1351,16 @@ package Model_Runner.Platform.Device.Products is
    --  takes, with the bases in bytes for the rows and in floats for the
    --  scales, and how many bits an element.
    --
-   --  Through one kernel of its own, a workgroup a head of a position:
-   --  no bundles, no slices, no round, and the caller keeps a value head
-   --  wider than Attention_Room or a layer with sinks on the host.
+   --  Through one kernel of its own: a workgroup eight rows sharing one
+   --  group's keys and values -- heads of a position, or positions of a
+   --  head -- the positions a tile of sixty-four at a time with the
+   --  softmax carried along, a row read a word at a time. One slice here;
+   --  a sequence's step cuts a token's long cache into slices and merges
+   --  them. No round, and the caller keeps a value head wider than
+   --  Attention_Room, a layer with sinks, and a base or width that is not
+   --  a multiple of four on the host. The kernel joins a tile through
+   --  subgroup operations, so a device without them has no kernel and
+   --  Attends_Packed says so.
    --
    --  @param Item Ready engine.
    --  @param K_Bits Eight or four, for the keys.
@@ -2326,6 +2358,9 @@ private
       --  A round: where in the cache the per-row table begins, in
       --  elements. Zero for a batch, which needs no table.
       Table      : Natural := 0;
+
+      --  A packed session's block, where the attention reads one.
+      Packed     : Packed_Cache := Not_Packed;
 
       --  A gathered product, as Add_Gathered_Product describes it: how
       --  many members, which slices they are, the rows of the whole stack

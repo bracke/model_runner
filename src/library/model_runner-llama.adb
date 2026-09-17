@@ -5268,6 +5268,60 @@ package body Model_Runner.Llama is
       end;
    end Put_Packed_Position;
 
+   --  How many elements a session's exact keys are, which is where its
+   --  exact values begin on the device -- and nought for a packed session,
+   --  which holds no exact rows and whose values the packed kernel finds
+   --  through Packed_Shape.
+   --
+   --  @param Item Session to ask.
+   --  @return The keys' element count, or zero.
+   function Exact_Keys (Item : Session) return Element_Count
+   is (if Item.Keys = null then 0 else Item.Keys.all'Length);
+
+   --  A packed session's block on the device, for this layer's rows: the
+   --  rows' bases in bytes and the scales' in floats, each from where the
+   --  layer's rows begin, and how many bits an element each side holds.
+   --  What the packed kernel is told, whether it is called alone or as a
+   --  step of a layer's sequence. Not_Packed for a session that is not.
+   --
+   --  @param Item Session whose block it is.
+   --  @param K_Base Where this layer's keys begin, in elements of a row.
+   --  @param V_Base Where this layer's values begin.
+   --  @param KV_Width How far apart one position's keys are from the next.
+   --  @param V_Width How far apart one position's values are from the next.
+   --  @return The block as the kernel reads it.
+   function Packed_Shape
+     (Item     : Session;
+      K_Base   : Element_Count;
+      V_Base   : Element_Count;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count)
+      return Model_Runner.Backend.Device.Packed_Cache
+   is
+      Base : constant Element_Count := Block_Base (Item);
+      Laid : constant Packed_Block := Packed_Layout (Item);
+   begin
+      if Item.Held not in Eighth | Fourth then
+         return Model_Runner.Backend.Device.Not_Packed;
+      end if;
+
+      return
+        (K_Bits   => (if Item.Held = Fourth then 4 else 8),
+         V_Bits   => (if Item.Held_Values = Fourth then 4 else 8),
+         K_Bytes  => Interfaces.Unsigned_64 (Base) * 4
+                     + Interfaces.Unsigned_64
+                         (Byte_Of (Item.Held, K_Base, KV_Width)),
+         V_Bytes  => Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4
+                     + Interfaces.Unsigned_64
+                         (Byte_Of (Item.Held_Values, V_Base, V_Width)),
+         KS_At    => Natural (Base + Laid.Key_Scales_At
+                              + Scale_Of (Item.Held, K_Base, KV_Width)),
+         VS_At    => Natural (Base + Laid.Value_Scales_At
+                              + Scale_Of (Item.Held_Values, V_Base, V_Width)),
+         K_Blocks => Natural (Blocks_Of (Item.Held, KV_Width)),
+         V_Blocks => Natural (Blocks_Of (Item.Held_Values, V_Width)));
+   end Packed_Shape;
+
    --  One position attending, on the device, to the cache it already holds.
    --
    --  The arguments the processor's own attention takes, in the same order,
@@ -5344,26 +5398,16 @@ package body Model_Runner.Llama is
          --  Over the packed block: the rows' bases in bytes and the
          --  scales' in floats, each from where the layer's rows begin.
          declare
-            Base : constant Element_Count := Block_Base (Item);
-            Laid : constant Packed_Block := Packed_Layout (Item);
+            Block : constant Model_Runner.Backend.Device.Packed_Cache :=
+              Packed_Shape (Item, K_Base, V_Base, KV_Width, V_Width);
          begin
             Model_Runner.Backend.Device.Attend_Packed
-              ((if Item.Held = Fourth then 4 else 8),
-               (if Item.Held_Values = Fourth then 4 else 8),
+              (Block.K_Bits, Block.V_Bits,
                Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
                Source.Settings.Group_Size, Natural (First), Natural (Last),
-               Interfaces.Unsigned_64 (Base) * 4
-               + Interfaces.Unsigned_64 (Byte_Of (Item.Held, K_Base, KV_Width)),
-               Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4
-               + Interfaces.Unsigned_64
-                   (Byte_Of (Item.Held_Values, V_Base, V_Width)),
+               Block.K_Bytes, Block.V_Bytes,
                Natural (KV_Width), Natural (V_Width),
-               Natural (Base + Laid.Key_Scales_At
-                        + Scale_Of (Item.Held, K_Base, KV_Width)),
-               Natural (Base + Laid.Value_Scales_At
-                        + Scale_Of (Item.Held_Values, V_Base, V_Width)),
-               Natural (Blocks_Of (Item.Held, KV_Width)),
-               Natural (Blocks_Of (Item.Held_Values, V_Width)),
+               Block.KS_At, Block.VS_At, Block.K_Blocks, Block.V_Blocks,
                Scale, Source.Settings.Attention_Cap, Target, Took,
                Positions => Natural (Positions), Window => Window,
                Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
@@ -12058,7 +12102,7 @@ package body Model_Runner.Llama is
                        (Item.Team, Heads, Share'Unchecked_Access, Shared,
                         Cost => Heads * Reserved * Head_Size);
                      Usable := Share.Ok and then E.Is_Ok (Shared);
-                  elsif Item.Held = Exact and then Resident
+                  elsif Resident
                     and then Settings.Experts = 0
                     and then T.Is_Present (Current.Gate)
                     and then Current.Feed_Norm /= null
@@ -12073,7 +12117,9 @@ package body Model_Runner.Llama is
                      --  Everything the host used to do between its two
                      --  submissions -- the residual join and the
                      --  normalization -- is a step of it, so the two become
-                     --  one and the fence between them is not paid.
+                     --  one and the fence between them is not paid. A packed
+                     --  session's step reads its block with the packed
+                     --  kernel; the rest of the sequence is the same.
                      Model_Runner.Backend.Device.Attend_And_Feed
                        (Item.Query.all, Item.Activation.all,
                         Natural (Heads), Natural (Head_Size),
@@ -12081,14 +12127,17 @@ package body Model_Runner.Llama is
                         Natural (Cell_Of (Item, Natural (Index), First)),
                         Natural (Cell),
                         Natural (Block_Base (Item) + Base),
-                        Natural (Block_Base (Item)
-                                 + Item.Keys.all'Length + V_Base),
+                        --  A packed session has no exact rows for the
+                        --  values to follow; its step reads neither base.
+                        Natural (Block_Base (Item) + Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Current.Feed_Norm.all, Settings.Epsilon,
                         Current.Gate, Current.Up, Current.Down,
                         Gate_Unit (Source), Item.Activation, Fused,
-                        Max_Bias => Settings.Max_Bias);
+                        Max_Bias => Settings.Max_Bias,
+                        Packed => Packed_Shape (Item, Base, V_Base,
+                                                KV_Width, V_Width));
 
                      if Fused then
                         Usable := True;
@@ -12102,18 +12151,7 @@ package body Model_Runner.Llama is
                            V_Width, Scale, Item.Attention.all, Usable,
                            Sinks => Current.Sinks);
                      end if;
-                  elsif Item.Held in Eighth | Fourth then
-                     --  A packed session's attention on the device, alone:
-                     --  the kernel that reads its block does that and no
-                     --  more, and the projection follows on the host.
-                     Attend_There
-                       (Item, Source, Item.Query.all, Heads, Head_Size,
-                        Value_Size,
-                        Cell_Of (Item, Natural (Index), First), Cell,
-                        Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable,
-                        Sinks => Current.Sinks);
-                  elsif Item.Held = Exact and then Resident then
+                  elsif Resident then
                      --  Attention and the matrix that reads its result, named
                      --  together so they go over as one command buffer and the
                      --  blend never comes back. Where the device will not take
@@ -12124,11 +12162,13 @@ package body Model_Runner.Llama is
                         Natural (Value_Size), Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index), First)),
                         Natural (Cell), Natural (Base),
-                        Natural (Item.Keys.all'Length + V_Base),
+                        Natural (Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Item.Normalized, Projected,
-                        Max_Bias => Settings.Max_Bias);
+                        Max_Bias => Settings.Max_Bias,
+                        Packed => Packed_Shape (Item, Base, V_Base,
+                                                KV_Width, V_Width));
 
                      if Projected then
                         Usable := True;
@@ -14061,10 +14101,10 @@ package body Model_Runner.Llama is
                      --  to be added up. The steps are the same nine; only the
                      --  position count differs, and every kernel in them was
                      --  written to take one.
-                     --  And only over the exact cache: a packed block is
-                     --  read by the packed kernel alone, through
-                     --  Attend_There below.
-                     if Item.Held = Exact
+                     --  A packed block's step reads it with the packed
+                     --  kernel; a round of packed sessions is attended on
+                     --  the host, and never reaches here.
+                     if Item.Held in Exact | Eighth | Fourth
                        and then Settings.Experts = 0
                        and then T.Is_Present (Current.Gate)
                        and then Current.Feed_Norm /= null
@@ -14082,7 +14122,7 @@ package body Model_Runner.Llama is
                            Natural (Value_Size), Settings.Group_Size,
                            Natural (First_Step), Natural (Last_Step),
                            Natural (Seat_At + Base),
-                           Natural (Seat_At + Item.Keys.all'Length + V_Base),
+                           Natural (Seat_At + Exact_Keys (Item) + V_Base),
                            Natural (KV_Width), Natural (V_Width), Scale,
                            Settings.Attention_Cap, Current.Attention_Out,
                            Current.Feed_Norm.all, Settings.Epsilon,
@@ -14092,7 +14132,9 @@ package body Model_Runner.Llama is
                            Window    => Window_Here,
                            Causal    => Settings.Causal,
                            Max_Bias  => Settings.Max_Bias,
-                           Table_At  => Table);
+                           Table_At  => Table,
+                           Packed    => Packed_Shape (Item, Base, V_Base,
+                                                      KV_Width, V_Width));
                      end if;
 
                      if Fused then
