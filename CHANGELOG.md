@@ -197,6 +197,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The conformance sweep puts the device's tile kernels under the
+  reference.** Its device arms were sequences of eight tokens or fewer,
+  and a batch takes the tile kernels from sixteen: the three device bugs
+  of the day -- a Qwen2 batch reading zeros for its keys, a race on the
+  half-precision copy, the nibble packing writing past a short row --
+  were on a path the sweep never reached, and each was found by a test
+  written for something else. A fifth sequence of forty-one tokens goes
+  to the device in one batch, which is a narrow tile and a third, and in
+  chunks of seventeen across a seam inside a tile, on every architecture
+  and with both packed caches on the two-layer fixture, learned from the
+  reference on demand since the processor's arithmetic does not change
+  with the count. An eighth bucket, tiled, held to the halved cache's
+  pair and measured at a fifth of it, with a count that says the tile
+  was under the sweep at all.
 - **A packed batch on a shallow model attends through the matrix
   instruction.** A batch of a packed session unpacks the layer's rows
   into the block's own half-precision copy and attends through the

@@ -98,14 +98,30 @@ package body Conformance is
       Short : constant Sequence := [1, 4, 5, 6, 7];
       Long  : constant Sequence := [4, 4, 4, 5, 5, 6, 7, 8];
 
-      subtype Sequence_Index is Positive range 1 .. 4;
+      --  And one long enough for the device's tile kernels, which a batch
+      --  of sixteen positions or more takes: forty-one, so that it is one
+      --  narrow tile and a third of another, and in chunks of seventeen
+      --  crosses a seam inside a tile. Compared on the device alone --
+      --  the processor's arithmetic does not change with the count -- and
+      --  learned on demand, since the reference computes it in binary64
+      --  and the main loop never asks for it.
+      Tiled : constant Sequence :=
+        [4, 4, 4, 5, 5, 6, 7, 8, 1, 4, 5, 6, 7, 8, 2, 3,
+         4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 4,
+         5, 6, 7, 8, 1, 2, 3, 4, 5];
+
+      subtype Sequence_Index is Positive range 1 .. 5;
+
+      --  The one the main loop never asks for.
+      Tiled_Index : constant Sequence_Index := 5;
 
       function Chosen (Which : Sequence_Index) return Sequence
       is (case Which is
             when 1 => Alone,
             when 2 => Pair,
             when 3 => Short,
-            when 4 => Long);
+            when 4 => Long,
+            when 5 => Tiled);
 
       --  What the independent implementation makes of the current fixture,
       --  computed once for each sequence and kept.
@@ -153,7 +169,7 @@ package body Conformance is
       --  widest embedding any fixture here is built at, because one array
       --  serves every fixture and the widths differ by format.
       Widest : constant Natural := Tiny_Model.Deep_Embedding;
-      Longest : constant Natural := 8;
+      Longest : constant Natural := Tiled'Length;
 
       type State_Expectation is array (Sequence_Index) of
         R.Real_Vector (0 .. Longest * Widest - 1);
@@ -424,7 +440,7 @@ package body Conformance is
 
          --  And the other three, on the model already loaded.
          for Other in Sequence_Index loop
-            if not Known (Other) then
+            if not Known (Other) and then Other /= Tiled_Index then
                declare
                   Also : constant Sequence := Chosen (Other);
                   Held : R.Token_Vector (Also'Range);
@@ -885,6 +901,12 @@ package body Conformance is
                           Long_Float'Max (Result.Cached_Worst_Abs, Gap);
                         Result.Cached_Worst_Rel :=
                           Long_Float'Max (Result.Cached_Worst_Rel, Relative);
+                     elsif Which = Tiled_Index then
+                        Result.Tiled_Compared := Result.Tiled_Compared + 1;
+                        Result.Tiled_Worst_Abs :=
+                          Long_Float'Max (Result.Tiled_Worst_Abs, Gap);
+                        Result.Tiled_Worst_Rel :=
+                          Long_Float'Max (Result.Tiled_Worst_Rel, Relative);
                      elsif Repack = L.To_BF16 then
                         Result.Lossy_Compared := Result.Lossy_Compared + 1;
                         Result.Lossy_Worst_Abs :=
@@ -947,6 +969,13 @@ package body Conformance is
                         if Repack = L.To_BF16 then
                            Widen (Lossy_Absolute_Tolerance,
                                   Lossy_Relative_Tolerance);
+                        end if;
+
+                        --  The tile's half-precision operand, over the
+                        --  sequence long enough to take it.
+                        if Which = Tiled_Index then
+                           Widen (Tiled_Absolute_Tolerance,
+                                  Tiled_Relative_Tolerance);
                         end if;
 
                         --  What the backend was told, read once here rather
@@ -1396,19 +1425,40 @@ package body Conformance is
             for Which_Arch in Crossed'Range loop
                for Format of Device_Formats loop
                   Since := Ada.Calendar.Clock;
+
+                  --  Room for the tiled sequence, which the default
+                  --  context of sixteen has not got.
                   Tiny_Model.Build
-                    (Image, Format, Kind => Crossed (Which_Arch));
+                    (Image, Format, Kind => Crossed (Which_Arch),
+                     Room => 64);
                   Current_Kind := Crossed (Which_Arch);
                   Result.Built := Result.Built
                     + (Ada.Calendar.Clock - Since);
                   Forget;
 
                   for Which in Sequence_Index loop
-                     Compare
-                       (Which, L.Exact,
-                        Model_Runner.Backend.Backend_Device, L.No_Repack);
-                     On_Device := On_Device + 1;
+                     if Which /= Tiled_Index then
+                        Compare
+                          (Which, L.Exact,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack);
+                        On_Device := On_Device + 1;
+                     end if;
                   end loop;
+
+                  --  The tile kernels: the long sequence in one batch,
+                  --  which is a narrow tile and a third, and in chunks of
+                  --  seventeen, which cross a seam inside one. The
+                  --  processor's arithmetic does not change with the
+                  --  count, so these are the device's alone.
+                  Compare
+                    (Tiled_Index, L.Exact,
+                     Model_Runner.Backend.Backend_Device, L.No_Repack,
+                     Batched => True);
+                  Compare
+                    (Tiled_Index, L.Exact,
+                     Model_Runner.Backend.Backend_Device, L.No_Repack,
+                     Batched => True, Chunk => 17);
+                  On_Device := On_Device + 2;
 
                   --  Eight tokens in one pass, and the same eight three at a
                   --  time, which is a batch longer than the eight an
@@ -1474,6 +1524,29 @@ package body Conformance is
                        (4, L.Fourth, Model_Runner.Backend.Backend_Device,
                         L.No_Repack, Batched => True, Values => L.Value_Eighth);
                      On_Device := On_Device + 11;
+
+                     --  And the packed caches over the tile: the layer's
+                     --  rows unpacked into the block's own copy and
+                     --  attended through the matrix instruction, on a
+                     --  fixture of two layers -- a block padded out to
+                     --  them -- in one batch and across a seam.
+                     Compare
+                       (Tiled_Index, L.Eighth,
+                        Model_Runner.Backend.Backend_Device, L.No_Repack,
+                        Batched => True);
+                     Compare
+                       (Tiled_Index, L.Fourth,
+                        Model_Runner.Backend.Backend_Device, L.No_Repack,
+                        Batched => True);
+                     Compare
+                       (Tiled_Index, L.Eighth,
+                        Model_Runner.Backend.Backend_Device, L.No_Repack,
+                        Batched => True, Chunk => 17);
+                     Compare
+                       (Tiled_Index, L.Fourth,
+                        Model_Runner.Backend.Backend_Device, L.No_Repack,
+                        Batched => True, Chunk => 17);
+                     On_Device := On_Device + 4;
                   end if;
 
                   B.Free (Image);

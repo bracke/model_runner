@@ -982,7 +982,7 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 56265, logits compared 1871576,
+conformance: sequences 56715, logits compared 1871576,
              worst absolute 6.04463587507986E-05,
              worst relative 5.51705186852182E-02,
              rounded logits compared 166360,
@@ -991,20 +991,23 @@ conformance: sequences 56265, logits compared 1871576,
              cached logits compared 71696,
              cached worst absolute 2.68876483092638E-02,
              cached worst relative 1.56983883123592E+00,
+             tiled logits compared 225064,
+             tiled worst absolute 2.03674660256541E-02,
+             tiled worst relative 1.99589296353605E+00,
              quantized logits compared 1296,
              quantized worst absolute 9.86907042250004E-02,
              quantized worst relative 1.92312577295959E+00,
-             byte logits compared 131584,
+             byte logits compared 132920,
              byte worst absolute 3.02784067592779E-01,
              byte worst relative 1.99904656218687E+00,
-             nibble logits compared 71696,
+             nibble logits compared 73032,
              nibble worst absolute 2.90289949633689E-02,
              nibble worst relative 1.41904710438192E-02,
              mixed logits compared 11632,
              mixed worst absolute 2.12969536432794E-05,
              mixed worst relative 1.00962159320007E-03,
              outside tolerance 0, unlearned 0, refused 0,
-             not applicable 6315, wanted 62580
+             not applicable 6369, wanted 63084
 ```
 
 The last three are the count's own accounting: what the loops asked for,
@@ -1017,11 +1020,18 @@ comparison in it agreed, and nothing it printed said so. The arm is tallied
 where it runs now, as the device pass is, and the line prints the three
 numbers the verdict turns on.
 
-Seven buckets, because seven things are being compared and mixing them
+Eight buckets, because eight things are being compared and mixing them
 would let the loosest hide the tightest. The first is the exact path and answers to
 1.0E-3 relative and 1.0E-4 absolute; the rounded, cached and byte ones are
 `--repack bf16`, an f16 context and a q8 context, each with a measured pair
-of its own; the nibble one is a q4 context held not to the exact reference
+of its own; the tiled one is the device over a batch long enough for its
+tile kernels -- forty-one positions in one batch and in chunks of seventeen
+across a seam, on every architecture and, with both packed caches, on a
+fixture of two layers whose block is padded for the unpacking -- held to the
+f16 context's pair, since the tile's operand is the same rounding, and
+measured at a fifth of it; it is the bucket three device bugs in a day were
+outside of, on a path no sequence of eight tokens reaches, and its count is
+what says the tile was under the sweep at all; the nibble one is a q4 context held not to the exact reference
 but to the reference rounding its own keys and values the same way, since on
 these fixtures' rows of four elements sixteen levels move a logit by whole
 units -- 4.14 against the exact reference -- which measures the rounding
@@ -1033,7 +1043,7 @@ back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
 The run above crossed 14 architectures, in 16 formats and 6 shapes,
-of which 1498 ran on a device -- which is the same claim the paragraph below makes in
+of which 2002 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
 Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,

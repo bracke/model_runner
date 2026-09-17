@@ -180,6 +180,12 @@ procedure Tests_Main is
                     & Long_Float'Image (Item.Cached_Worst_Abs)),
         new String'("cached worst relative"
                     & Long_Float'Image (Item.Cached_Worst_Rel)),
+        new String'("tiled logits compared"
+                    & Natural'Image (Item.Tiled_Compared)),
+        new String'("tiled worst absolute"
+                    & Long_Float'Image (Item.Tiled_Worst_Abs)),
+        new String'("tiled worst relative"
+                    & Long_Float'Image (Item.Tiled_Worst_Rel)),
         new String'("quantized logits compared"
                     & Natural'Image (Item.Integer_Compared)),
         new String'("quantized worst absolute"
@@ -1369,6 +1375,12 @@ begin
             & Long_Float'Image (Result.Cached_Worst_Abs)
             & ", cached worst relative"
             & Long_Float'Image (Result.Cached_Worst_Rel)
+            & ", tiled logits compared"
+            & Natural'Image (Result.Tiled_Compared)
+            & ", tiled worst absolute"
+            & Long_Float'Image (Result.Tiled_Worst_Abs)
+            & ", tiled worst relative"
+            & Long_Float'Image (Result.Tiled_Worst_Rel)
             & ", quantized logits compared"
             & Natural'Image (Result.Integer_Compared)
             & ", quantized worst absolute"

@@ -49,6 +49,15 @@ package Conformance is
    Cached_Relative_Tolerance : constant := 5.0E-2;
    Cached_Absolute_Tolerance : constant := 1.0E-1;
 
+   --  And what the device's tile kernels are allowed to move a logit by,
+   --  over a batch long enough to take them: the operand is half
+   --  precision for every product of the layer, and the attention over
+   --  the exact cache reads a half-precision copy of it. The halved
+   --  cache's pair, since the rounding is the same rounding; measured
+   --  over this sweep well inside it.
+   Tiled_Relative_Tolerance : constant := 5.0E-2;
+   Tiled_Absolute_Tolerance : constant := 1.0E-1;
+
    --  And what storing it in one byte an element is allowed to move a logit
    --  by. A byte with a scale for its row keeps about seven bits of a
    --  number where a binary16 keeps eleven, and what is rounded is a key or
@@ -96,7 +105,7 @@ package Conformance is
 
    --  What a comparison found.
    --  What the reference cost on each of the four sequences.
-   type Sequence_Cost is array (1 .. 4) of Duration;
+   type Sequence_Cost is array (1 .. 5) of Duration;
 
    type Report is record
       Sequences  : Natural := 0;
@@ -120,6 +129,19 @@ package Conformance is
       Cached_Compared  : Natural := 0;
       Cached_Worst_Abs : Long_Float := 0.0;
       Cached_Worst_Rel : Long_Float := 0.0;
+
+      --  And again for the device's batches long enough to take the tile
+      --  kernels -- forty-one positions in one batch, and in chunks of
+      --  seventeen across a seam -- whose operand is half precision
+      --  where the exact cache's rows are not: the same physics as the
+      --  halved cache, entered per product rather than per position. A
+      --  bucket of its own because its count is what says the tile was
+      --  under the sweep at all: three device bugs in a day were found
+      --  by a test written for one of them, on a path no sequence of
+      --  eight tokens reaches.
+      Tiled_Compared  : Natural := 0;
+      Tiled_Worst_Abs : Long_Float := 0.0;
+      Tiled_Worst_Rel : Long_Float := 0.0;
 
       --  And again for the comparisons where the activations were quantized
       --  to a byte an element. A bucket of its own for the same reason the
@@ -233,7 +255,8 @@ package Conformance is
    --
    --  Several token sequences of different lengths are evaluated, so that the
    --  comparison covers a single token, a short context and a context long
-   --  enough to exercise attention over several past positions.
+   --  enough to exercise attention over several past positions -- and, on
+   --  the device alone, one long enough for its tile kernels.
    --
    --  @param Result Totals, including the worst differences observed.
    procedure Run (Result : out Report);
