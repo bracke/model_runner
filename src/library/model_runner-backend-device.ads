@@ -925,15 +925,42 @@ package Model_Runner.Backend.Device is
    --    Width, or null for none.
    --  @param Post_Feed_Norm The same on what the feed-forward produced,
    --    or null; refused with a mixture, whose sum joins the residual as
-   --    it sums.
+   --    it sums -- except After, where it is the normalization of that
+   --    sum.
+   --  @param Shifted True where the layer's normalizations are the
+   --    centred ones with a shift that GPT-2, Phi-2, Falcon and Bert
+   --    state: every normalization weight is then twice the width, the
+   --    gain and after it the shift.
+   --  @param After True for an architecture that normalizes on the way
+   --    out of each sublayer, Bert's: Attention_Norm and Feed_Norm are
+   --    empty, the projections read the layer's input as it is,
+   --    Post_Attention_Norm normalizes the sum of the input and what
+   --    attention produced, the feed-forward reads that sum and joins
+   --    it, and Post_Feed_Norm normalizes the second sum into the
+   --    layer's answer. Both must be present.
+   --
+   --  The two normalization weights are named by reference, as every
+   --  weight the device keeps is: the device remembers a weight by its
+   --  address, and an array passed by value is a copy at a new one each
+   --  call. Null is a normalization the layer has not got.
+   --
+   --  Three shapes of the feed-forward besides the gated one and the
+   --  mixture: a Feed_Norm that is null with After false runs the
+   --  feed-forward beside attention, from the normalization on the way in
+   --  (Falcon, Phi-2); a Gate that is not present is the one projection
+   --  up with Unit alone on it, and Up_Bias is then that projection's own
+   --  one slice rather than a mixture's stack, added before the unit;
+   --  Down_Bias is the projection down's one slice for any dense layer,
+   --  gated or not, added after it. And a Rotary of zero turns nothing, which is what
+   --  an architecture that learned a row a position has: Turns is empty.
    --
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
    --  and the host's copy is the thing carrying does not write.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
-      Attention_Norm : Model_Runner.Tensors.Real_Array;
-      Feed_Norm      : Model_Runner.Tensors.Real_Array;
+      Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Feed_Norm      : Model_Runner.Tensors.Real_Array_Access;
       Epsilon        : Model_Runner.Numerics.Real;
       Query          : Model_Runner.Tensors.View;
       Key            : Model_Runner.Tensors.View;
@@ -1002,7 +1029,9 @@ package Model_Runner.Backend.Device is
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
-      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null);
+      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;
+      Shifted        : Boolean := False;
+      After          : Boolean := False);
 
    --  A gated feed-forward block, whole, in one submission.
    --

@@ -61,6 +61,11 @@ layout(push_constant) uniform Shape {
     //  either side and raised by one, and the two multiplied -- as the
     //  host computes it, in the same order. The slope and the limit are
     //  the two words after the base, by their bits.
+    //
+    //  Four and five are the first two units alone, on one arm: the
+    //  feed-forward of an architecture without a gate puts its unit on
+    //  the one projection up and multiplies by nothing. The caller names
+    //  the same step for both arms, and the second is not read.
     uint unit;
 
     //  The remaining words of the block the pipeline layout declares. Unused
@@ -125,6 +130,10 @@ void main() {
 
     if (shape.unit == 2) {
         made = gate + other;
+    } else if (shape.unit == 4) {
+        made = sigmoid_weighted(gate);
+    } else if (shape.unit == 5) {
+        made = gaussian(gate);
     } else if (shape.unit == 3) {
         float alpha = uintBitsToFloat (shape.alpha_bits);
         float limit = uintBitsToFloat (shape.limit_bits);

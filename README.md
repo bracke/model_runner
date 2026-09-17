@@ -1003,8 +1003,19 @@ conformance: sequences 56265, logits compared 1871576,
              mixed logits compared 11632,
              mixed worst absolute 2.12969536432794E-05,
              mixed worst relative 1.00962159320007E-03,
-             outside tolerance 0, unlearned 0
+             outside tolerance 0, unlearned 0, refused 0,
+             not applicable 6315, wanted 62580
 ```
+
+The last three are the count's own accounting: what the loops asked for,
+and how much of it a bidirectional architecture -- which has no token at a
+time -- declined rather than ran. The sequences and the declined together
+have to make the wanted figure, and for a week they did not: the
+cache-precision arm had grown from two storages to four with the formula
+still counting two, so the sweep failed its own count while every
+comparison in it agreed, and nothing it printed said so. The arm is tallied
+where it runs now, as the device pass is, and the line prints the three
+numbers the verdict turns on.
 
 Seven buckets, because seven things are being compared and mixing them
 would let the loosest hide the tightest. The first is the exact path and answers to

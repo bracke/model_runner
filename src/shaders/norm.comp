@@ -1,6 +1,7 @@
 #version 450
 
-//  The root-mean-square normalization, on the device.
+//  The root-mean-square normalization, on the device -- and the centred
+//  one with a shift, which is the same kernel with a mean taken first.
 //
 //  It is here for what it saves around it rather than for itself. A layer
 //  normalizes twice and each of those is a few thousand multiplications
@@ -63,10 +64,10 @@ layout(push_constant) uniform Shape {
     //  Components a position holds.
     uint width;
 
-    //  The slot the shape shares with the products, which this shader
-    //  does not read. It once said whether to lift the gain by one, for
-    //  Gemma -- and a Gemma file already holds that one, so nothing asks.
-    uint unused;
+    //  One for the centred normalization with a shift: the mean taken
+    //  off first, and a shift of the width read after the gain. Zero for
+    //  the root-mean-square one, which reads the gain alone.
+    uint centered;
 
     //  Positions in this batch.
     uint count;
@@ -117,11 +118,37 @@ void main() {
         return;
     }
 
+    //  The mean first, for the centred one: the same fold, over the
+    //  values rather than their squares.
+    float mean = 0.0;
+
+    if (shape.centered != 0u) {
+        float total = 0.0;
+
+        for (uint c = lane; c < shape.width; c += LANES) {
+            total += x[at + c];
+        }
+
+        partial[lane] = total;
+
+        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+            barrier();
+
+            if (lane < reach) {
+                partial[lane] += partial[lane + reach];
+            }
+        }
+
+        barrier();
+        mean = partial[0] / float (shape.width);
+        barrier();
+    }
+
     //  A stride a lane, so that the lanes of a turn read neighbours.
     float mine = 0.0;
 
     for (uint c = lane; c < shape.width; c += LANES) {
-        float v = x[at + c];
+        float v = x[at + c] - mean;
         mine += v * v;
     }
 
@@ -155,9 +182,11 @@ void main() {
 
     //  And out, every lane at once: nothing here is serial either.
     for (uint c = lane; c < shape.width; c += LANES) {
-        float scaled = x[at + c] * gain;
+        float scaled = (x[at + c] - mean) * gain;
 
-        float made = scaled * g[shape.base + c];
+        float made = scaled * g[shape.base + c]
+                     + (shape.centered != 0u
+                        ? g[shape.base + shape.width + c] : 0.0);
 
         if (halved) {
             h[at + c] = float16_t (made);

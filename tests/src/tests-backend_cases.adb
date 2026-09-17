@@ -3425,8 +3425,10 @@ package body Tests.Backend_Cases is
       Ok    : Boolean;
 
       Acts : N.Real_Array (0 .. Positions * Width - 1);
-      Gain : N.Real_Array (0 .. Width - 1);
-      Feed_Gain : N.Real_Array (0 .. Width - 1);
+      Gain : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Width - 1);
+      Feed_Gain : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Width - 1);
 
       Angles : N.Wide_Real_Array (0 .. Positions * Pairs * 2 - 1);
 
@@ -3458,9 +3460,9 @@ package body Tests.Backend_Cases is
       for Index in Acts'Range loop
          Acts (Index) := N.Real (Index mod 11) / 11.0 - 0.4;
       end loop;
-      for Index in Gain'Range loop
-         Gain (Index) := 0.5 + N.Real (Index mod 5) / 8.0;
-         Feed_Gain (Index) := 0.6 + N.Real (Index mod 3) / 7.0;
+      for Index in Gain.all'Range loop
+         Gain.all (Index) := 0.5 + N.Real (Index mod 5) / 8.0;
+         Feed_Gain.all (Index) := 0.6 + N.Real (Index mod 3) / 7.0;
       end loop;
 
       for Slot in 0 .. Positions - 1 loop
@@ -3538,7 +3540,7 @@ package body Tests.Backend_Cases is
       --  The two halves, as the engine named them before.
       Model_Runner.Backend.Device.Normalize_And_Project
         ([Views (1), Views (2), Views (3)],
-         new N.Real_Array'(Acts), Gain, Epsilon,
+         new N.Real_Array'(Acts), Gain.all, Epsilon,
          [Query_Row, Key_Row, Value_Row], Ok,
          Spread    => Positions,
          Turns     => Angles,
@@ -3576,7 +3578,7 @@ package body Tests.Backend_Cases is
             Natural (Heads), Natural (Head_Size), Natural (Head_Size), 1,
             0, Natural (Positions) - 1, 0, Natural (Context * Width),
             Natural (Width), Natural (Width), 0.25, 0.0,
-            Views (4), Feed_Gain, Epsilon,
+            Views (4), Feed_Gain.all, Epsilon,
             Views (5), Views (6), Views (7), 0, Apart, Ok,
             Positions => Natural (Positions));
       end;
@@ -4092,6 +4094,91 @@ package body Tests.Backend_Cases is
                  & " away from the row plus the bias");
       end;
 
+      --  And after a product the tile kernel made: a batch past the tile's
+      --  least, of a packed matrix the tile decodes. The step reads the
+      --  product's answer where the tile left it, which is not where the
+      --  row kernel leaves one, and a Qwen2 batch of sixty-four on the
+      --  device answered nonsense for as long as nothing asked this.
+      declare
+         Wide  : constant := 64;
+         Many  : constant := 20;
+
+         Matrix : N.Real_Array (0 .. Wide * Wide - 1);
+         Rows   : N.Real_Array (0 .. Wide * Many - 1);
+         Room   : N.Real_Array (0 .. 2 * Wide * Many - 1) := [others => 0.0];
+         Shift  : N.Real_Array (0 .. Wide - 1);
+         Worst  : N.Real := 0.0;
+      begin
+         for Index in Matrix'Range loop
+            Matrix (Index) := N.Real ((Index * 5) mod 11) / 11.0 - 0.45;
+         end loop;
+         for Index in Rows'Range loop
+            Rows (Index) := N.Real ((Index * 3) mod 13) / 13.0 - 0.4;
+         end loop;
+         for Index in Shift'Range loop
+            Shift (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+         end loop;
+
+         declare
+            Packed : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Matrix);
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Packed (Packed'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Packed'Length), 0,
+               Products.Packed_Q8_0, Wide, Wide, Added, Kept => False,
+               Key => Packed (Packed'First)'Address);
+            Assert (Added, "the packed product was refused");
+            Products.Add_Bias
+              (Steps, Shift (Shift'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Shift'Length) * 4, 0,
+               1, Wide, 1, 0, Added, Key => Shift (Shift'First)'Address);
+            Assert (Added, "the bias after the tile was refused");
+
+            Products.Run (Engine, Steps, Rows, Many, Room, Ok, Halted);
+            Assert (Ok, "the tiled product with a bias was refused");
+         end;
+
+         --  Against the row kernel over the same matrix and the first
+         --  three of the same rows, which the tile's half-precision
+         --  operand puts within a hundredth of.
+         declare
+            Few    : constant := 3;
+            Packed : constant B.Byte_Array := Fixtures.Encode_Q8_0 (Matrix);
+            Narrow : N.Real_Array (0 .. 2 * Wide * Few - 1) :=
+              [others => 0.0];
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Packed (Packed'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Packed'Length), 0,
+               Products.Packed_Q8_0, Wide, Wide, Added, Kept => False,
+               Key => Packed (Packed'First)'Address);
+            Assert (Added, "the packed product was refused again");
+            Products.Add_Bias
+              (Steps, Shift (Shift'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Shift'Length) * 4, 0,
+               1, Wide, 1, 0, Added, Key => Shift (Shift'First)'Address);
+            Assert (Added, "the bias after the row kernel was refused");
+
+            Products.Run
+              (Engine, Steps, Rows (0 .. Wide * Few - 1), Few, Narrow, Ok,
+               Halted);
+            Assert (Ok, "the row product with a bias was refused");
+
+            for Index in 0 .. N.Element_Count (Wide * Few) - 1 loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Room (N.Element_Count (Wide * Many) + Index)
+                       - Narrow (N.Element_Count (Wide * Few) + Index)));
+            end loop;
+         end;
+         Assert (Worst <= 2.0e-2,
+                 "a bias after a product the tile made is"
+                 & N.Real'Image (Worst) & " away from one after the row "
+                 & "kernel's");
+      end;
+
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);
@@ -4587,6 +4674,215 @@ package body Tests.Backend_Cases is
       Devices.Close (Opened);
       Devices.Close (Held);
    end The_Heads_Step_Says_What_Three_Steps_Say;
+
+   ----------------------------------------------------------
+   -- A_Centred_Norm_And_A_Unit_Alone_Say_What_The_Host_Says --
+   ----------------------------------------------------------
+
+   --  The two steps a layer without a gate needs and no other has: the
+   --  centred normalization with a shift, and a unit on one arm
+   --  multiplied by nothing. Each against the host's kernel, over a batch,
+   --  to a tolerance: the normalization's folds associate as the device's
+   --  do, and the unit's tanh is the device's.
+   procedure A_Centred_Norm_And_A_Unit_Alone_Say_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width     : constant := 48;
+      Positions : constant := 5;
+      Epsilon   : constant N.Real := 1.0E-5;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      --  The gain and the shift as one weight, the shift after the gain.
+      Pair  : N.Real_Array (0 .. 2 * Width - 1);
+      Input : N.Real_Array (0 .. Positions * Width - 1);
+
+      --  The normalization's room and the unit's, in order.
+      Landing : N.Real_Array (0 .. 2 * Positions * Width - 1) :=
+        [others => 0.0];
+
+      Steps : Products.Sequence;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in 0 .. N.Element_Count (Width) - 1 loop
+         Pair (Index) := 0.5 + N.Real (Index mod 5) / 5.0;
+         Pair (N.Element_Count (Width) + Index) :=
+           N.Real (Index mod 7) / 7.0 - 0.3;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real (Index mod 13) / 13.0 - 0.45
+                          + N.Real (Index / Width) / 10.0;
+      end loop;
+
+      --  A shift with a head normalization is refused: a shift is one
+      --  stretch after the gain, and a stretch is the whole position.
+      Products.Open_Sequence (Steps);
+      Products.Add_Norm
+        (Steps, Pair (Pair'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Pair'Length) * 4, 0, Width,
+         Epsilon, Added, Key => Pair (Pair'First)'Address,
+         Groups => 2, Shift => True);
+      Assert (not Added, "a shifted head normalization was taken");
+
+      --  A unit alone on an empty sequence has nothing to read.
+      Products.Open_Sequence (Steps);
+      Products.Add_Combination (Steps, 5, Added);
+      Assert (not Added, "a unit alone was taken with nothing before it");
+
+      Products.Open_Sequence (Steps);
+      Products.Add_Norm
+        (Steps, Pair (Pair'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Pair'Length) * 4, 0, Width,
+         Epsilon, Added, Key => Pair (Pair'First)'Address, Shift => True);
+      Assert (Added, "the centred normalization was refused");
+      Products.Add_Combination (Steps, 5, Added);
+      Assert (Added, "the unit alone was refused");
+
+      Products.Run
+        (Engine, Steps, Input, Positions, Landing, Ok, Halted);
+      Assert (Ok, "the two steps were refused");
+
+      declare
+         Expected : N.Real_Array (0 .. Positions * Width - 1);
+         Worst    : N.Real := 0.0;
+      begin
+         for Slot in 0 .. N.Element_Count (Positions) - 1 loop
+            declare
+               From : constant N.Element_Count := Slot * Width;
+            begin
+               Model_Runner.Kernels.Layer_Norm
+                 (Input (From .. From + Width - 1),
+                  Pair (0 .. Width - 1), Pair (Width .. 2 * Width - 1),
+                  Epsilon, Expected (From .. From + Width - 1));
+            end;
+         end loop;
+
+         for Index in Expected'Range loop
+            Worst := N.Real'Max
+              (Worst, abs (Landing (Index) - Expected (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-5,
+                 "the device's centred normalization differs from the "
+                 & "host's by " & N.Real'Image (Worst));
+
+         Model_Runner.Kernels.GELU (Expected);
+
+         Worst := 0.0;
+         for Index in Expected'Range loop
+            Worst := N.Real'Max
+              (Worst,
+               abs (Landing (N.Element_Count (Positions * Width) + Index)
+                    - Expected (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-5,
+                 "the device's unit alone differs from the host's by "
+                 & N.Real'Image (Worst));
+      end;
+
+      --  And the unit alone between two products the tile kernel makes,
+      --  which is the shape a feed-forward without a gate takes over a
+      --  batch: the one arm is then written as halves for the unit to
+      --  read, and the unit's answer as halves for the projection down.
+      --  Against the same three steps over a batch the row kernel takes,
+      --  at the fixture's own widths -- up twice the width, down back --
+      --  and at forty-one positions, which is the narrow tile.
+      declare
+         Narrow_Width : constant := 32;
+         Feed         : constant := 64;
+         Many         : constant := 41;
+         Few          : constant := 3;
+
+         Up_Matrix   : N.Real_Array (0 .. Feed * Narrow_Width - 1);
+         Down_Matrix : N.Real_Array (0 .. Narrow_Width * Feed - 1);
+         Rows        : N.Real_Array (0 .. Narrow_Width * Many - 1);
+         Room        : N.Real_Array (0 .. (2 * Feed + Narrow_Width) * Many - 1)
+           := [others => 0.0];
+         Narrow      : N.Real_Array (0 .. (2 * Feed + Narrow_Width) * Few - 1)
+           := [others => 0.0];
+         Worst       : N.Real := 0.0;
+
+         procedure Three (Count : Positive; Into : out N.Real_Array) is
+            Up_Packed   : constant B.Byte_Array :=
+              Fixtures.Encode_Q8_0 (Up_Matrix);
+            Down_Packed : constant B.Byte_Array :=
+              Fixtures.Encode_Q8_0 (Down_Matrix);
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Up_Packed (Up_Packed'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Up_Packed'Length), 0,
+               Products.Packed_Q8_0, Feed, Narrow_Width, Added,
+               Kept => False, Key => Up_Packed (Up_Packed'First)'Address);
+            Assert (Added, "the arm's product was refused");
+            Products.Add_Combination (Steps, 5, Added, Kept => False);
+            Assert (Added, "the unit alone after the arm was refused");
+            Products.Add_Chained_Product
+              (Steps, Down_Packed (Down_Packed'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Down_Packed'Length), 0,
+               Products.Packed_Q8_0, Narrow_Width, Feed, Added,
+               Key => Down_Packed (Down_Packed'First)'Address);
+            Assert (Added, "the product after the unit was refused");
+
+            Products.Run
+              (Engine, Steps,
+               Rows (0 .. N.Element_Count (Narrow_Width * Count) - 1),
+               Count, Into, Ok, Halted);
+            Assert (Ok, "the three steps were refused");
+         end Three;
+      begin
+         for Index in Up_Matrix'Range loop
+            Up_Matrix (Index) := N.Real ((Index * 5) mod 11) / 11.0 - 0.45;
+            Down_Matrix (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.4;
+         end loop;
+         for Index in Rows'Range loop
+            Rows (Index) := N.Real ((Index * 3) mod 13) / 13.0 - 0.4;
+         end loop;
+
+         Three (Many, Room);
+         Three (Few, Narrow);
+
+         for Index in 0 .. N.Element_Count (Narrow_Width * Few) - 1 loop
+            Worst := N.Real'Max
+              (Worst,
+               abs (Room (N.Element_Count (2 * Feed * Many) + Index)
+                    - Narrow (N.Element_Count (2 * Feed * Few) + Index)));
+         end loop;
+         Assert (Worst <= 2.0E-2,
+                 "the unit alone between two tiled products answers"
+                 & N.Real'Image (Worst) & " away from the row kernel's");
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Centred_Norm_And_A_Unit_Alone_Say_What_The_Host_Says;
 
    -------------------------------------------------------
    -- A_Listed_Mixture_Says_What_The_Gathered_One_Says --
@@ -7211,6 +7507,11 @@ package body Tests.Backend_Cases is
          "the fused heads step -- a head normalization, a rotation and a "
          & "placement as one dispatch -- says what the three steps say, to "
          & "the bit");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Centred_Norm_And_A_Unit_Alone_Say_What_The_Host_Says'Access,
+         "the centred normalization with a shift and the unit alone on "
+         & "one arm -- what a layer without a gate needs -- say what the "
+         & "host's kernels say");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Backend_Routes_And_Gathers_As_It_Slices'Access,
          "the backend's routing, gathered experts and expert over a batch "

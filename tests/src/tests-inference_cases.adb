@@ -2234,9 +2234,9 @@ package body Tests.Inference_Cases is
             (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1),
             (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1),
             (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1),
-            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1),
             (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1),
+            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1),
             (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2)];
       begin
          for Row of Rows loop
@@ -2259,12 +2259,16 @@ package body Tests.Inference_Cases is
                Assert (Why = E.No_Error,
                        "the processor refused " & Name & ": "
                        & E.Error_Code'Image (Why));
-               --  In one batch, and a position at a time, which is the
-               --  path a generated token takes.
-               for Chunk in reverse 1 .. 2 loop
+               --  In one batch, in chunks of forty-one -- which is the
+               --  narrow tile, and the only one of the three the
+               --  fixture's width reaches -- and a position at a time,
+               --  which is the path a generated token takes.
+               for Chunk in reverse 1 .. 3 loop
                   Logits_On
                     (Image, Model_Runner.Backend.Backend_Device,
-                     (if Chunk = 2 then Length else 1), Device, Why);
+                     (if Chunk = 3 then Length elsif Chunk = 2 then 41
+                      else 1),
+                     Device, Why);
                   Assert (Why = E.No_Error,
                           "the device refused " & Name & ": "
                           & E.Error_Code'Image (Why));
@@ -2274,7 +2278,8 @@ package body Tests.Inference_Cases is
                   end loop;
                   Assert (Worst <= Tolerance,
                           "on " & Name
-                          & (if Chunk = 2 then " in one batch"
+                          & (if Chunk = 3 then " in one batch"
+                             elsif Chunk = 2 then " in chunks of forty-one"
                              else " a position at a time")
                           & " the device's logits differ from the "
                           & "processor's by " & N.Real'Image (Worst));
@@ -2330,6 +2335,126 @@ package body Tests.Inference_Cases is
                B.Free (Image);
             end;
          end loop;
+      end;
+
+      --  And the one that answers with states rather than logits: Bert,
+      --  which normalizes on the way out of each sublayer with a shift,
+      --  attends both ways and turns nothing. Its whole layer on the
+      --  device is a shape none of the rows above has -- the two
+      --  normalizations after the joins, the projections reading the
+      --  input as it is -- and every position's state is compared, not
+      --  the last one's.
+      declare
+         Width : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Embedding);
+
+         procedure States_On
+           (Image   : B.Byte_Array_Access;
+            Backend : Model_Runner.Backend.Backend_Kind;
+            Answer  : Model_Runner.Tensors.Real_Array_Access;
+            Refusal : out E.Error_Code)
+         is
+            Held    : aliased constant B.Byte_Array := Image.all;
+            Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Item    : Containers.Container;
+            Model   : L.Model;
+            Session : L.Session;
+            Status  : E.Error_Info;
+            None    : N.Real_Array (1 .. 0);
+         begin
+            Refusal := E.No_Error;
+
+            Containers.Reader.Parse (Item, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the bert fixture did not parse");
+
+            L.Prepare
+              (Model, Item, Source, Backend => Backend, Status => Status);
+            if E.Is_Error (Status) then
+               Refusal := Status.Code;
+               Containers.Close (Item);
+               return;
+            end if;
+
+            L.Open (Session, Model, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a bert session did not open on "
+                    & Model_Runner.Backend.Backend_Name (Backend) & ": "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Evaluate_Batch
+              (Session, Model, Tokens, None, States => Answer,
+               Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the bert batch did not evaluate on "
+                    & Model_Runner.Backend.Backend_Name (Backend) & ": "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Close (Session);
+            L.Close (Model, Status);
+            Containers.Close (Item);
+         end States_On;
+
+         --  And the two that are that shape with parts swapped: nomic-bert
+         --  rotating and gating, and jina-bert-v2 with no positions at all,
+         --  a shift on what it projects down -- the one gated layer here
+         --  with one -- and, in its code variant, three normalizations
+         --  more that keep its layers off the sequence and on the host's
+         --  steps, which the same comparison holds to the processor.
+         type Bert_Row is record
+            Kind : Tiny_Model.Fixture_Architecture;
+            Code : Boolean;
+         end record;
+         Berts : constant array (1 .. 4) of Bert_Row :=
+           [(Tiny_Model.Bert, False), (Tiny_Model.Nomic_Bert, False),
+            (Tiny_Model.Jina_Bert_V2, False),
+            (Tiny_Model.Jina_Bert_V2, True)];
+
+         Image  : B.Byte_Array_Access;
+         Host   : Model_Runner.Tensors.Real_Array_Access := null;
+         Device : Model_Runner.Tensors.Real_Array_Access := null;
+         Why    : E.Error_Code;
+         Worst  : N.Real := 0.0;
+      begin
+         Model_Runner.Tensors.Allocate (Length * Width, Host);
+         Model_Runner.Tensors.Allocate (Length * Width, Device);
+         Assert (Host /= null and then Device /= null,
+                 "no room for the bert states");
+
+         for Row of Berts loop
+            declare
+               Name : constant String :=
+                 Tiny_Model.Fixture_Architecture'Image (Row.Kind)
+                 & (if Row.Code then " with the code norms" else "");
+            begin
+               Tiny_Model.Build
+                 (Image, Tiny_Model.Q8_0, Room => Room, Kind => Row.Kind,
+                  Code_Norms => Row.Code);
+               States_On (Image, Model_Runner.Backend.Backend_CPU, Host, Why);
+               Assert (Why = E.No_Error,
+                       "the processor refused " & Name & ": "
+                       & E.Error_Code'Image (Why));
+               States_On
+                 (Image, Model_Runner.Backend.Backend_Device, Device, Why);
+               Assert (Why = E.No_Error,
+                       "the device refused " & Name & ": "
+                       & E.Error_Code'Image (Why));
+
+               Worst := 0.0;
+               for Index in 0 .. Length * Width - 1 loop
+                  Worst := N.Real'Max
+                    (Worst, abs (Host.all (Index) - Device.all (Index)));
+               end loop;
+               Assert (Worst <= Tolerance,
+                       "on " & Name & " the device's states differ from the "
+                       & "processor's by " & N.Real'Image (Worst));
+
+               B.Free (Image);
+            end;
+         end loop;
+
+         Model_Runner.Tensors.Free (Host);
+         Model_Runner.Tensors.Free (Device);
       end;
 
       Model_Runner.Backend.Device.Close;

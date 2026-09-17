@@ -1798,8 +1798,8 @@ package body Model_Runner.Backend.Device is
 
    procedure Whole_Layer
      (Residual       : T.Real_Array;
-      Attention_Norm : T.Real_Array;
-      Feed_Norm      : T.Real_Array;
+      Attention_Norm : T.Real_Array_Access;
+      Feed_Norm      : T.Real_Array_Access;
       Epsilon        : Model_Runner.Numerics.Real;
       Query          : T.View;
       Key            : T.View;
@@ -1868,7 +1868,9 @@ package body Model_Runner.Backend.Device is
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
-      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null)
+      Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;
+      Shifted        : Boolean := False;
+      After          : Boolean := False)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1880,12 +1882,25 @@ package body Model_Runner.Backend.Device is
       --  as it goes.
       Mixed : constant Boolean := T.Is_Present (Router);
 
+      --  Whether the feed-forward has a gate, or is the one projection
+      --  up with a unit on it that Falcon, Phi-2, GPT-2 and Bert state.
+      Gated : constant Boolean := T.Is_Present (Gate);
+
+      --  Whether the two halves run side by side, both reading the
+      --  normalization on the way in: a layer with no normalization
+      --  before its feed-forward is one that runs it beside attention.
+      Parallel : constant Boolean := not After and then Feed_Norm = null;
+
       Step_Norm_In, Step_Q, Step_K, Step_V, Step_Q_Turned, Step_K_Turned,
       Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
       Step_Router, Step_Route, Step_Downs : Natural := 0;
 
-      Width : constant Model_Runner.Numerics.Element_Count :=
-        Model_Runner.Numerics.Element_Count (Attention_Norm'Length);
+      Width : constant Model_Runner.Numerics.Element_Count := Query.Columns;
+
+      --  A normalization's weight: the gain, and after it the shift where
+      --  the normalization is the centred one.
+      Norm_Span : constant Model_Runner.Numerics.Element_Count :=
+        (if Shifted then 2 * Width else Width);
 
       Steps  : Products.Sequence;
       Added  : Boolean;
@@ -2003,7 +2018,8 @@ package body Model_Runner.Backend.Device is
         (Gain  : T.Real_Array_Access;
          Rows  : Model_Runner.Numerics.Element_Count;
          Which : in out Natural;
-         Added : out Boolean) is
+         Added : out Boolean;
+         Kept  : Boolean := False) is
       begin
          Added := True;
 
@@ -2019,7 +2035,8 @@ package body Model_Runner.Backend.Device is
               (Steps, At_Weight,
                Model_Runner.Bytes.Byte_Count (Gain.all'Length) * 4, 0,
                Natural (Rows), Epsilon, Added,
-               From_Step => Which, Key => At_Weight, Kept => False);
+               From_Step => Which, Key => At_Weight, Kept => Kept,
+               Shift => Shifted);
          end;
          if not Added then
             return;
@@ -2027,6 +2044,30 @@ package body Model_Runner.Backend.Device is
          Which := Products.Length (Steps);
          Step_Room (Rows);
       end Add_Post_Norm;
+
+      --  A projection of the layer's input: of the normalization on the
+      --  way in, or -- for an architecture that normalizes on the way out
+      --  and has none -- of the activation the caller handed over, which
+      --  a product not chained to any step reads.
+      procedure Add_Input_Product
+        (Matrix : T.View;
+         P      : Products.Weight_Packing;
+         Kept   : Boolean;
+         Added  : out Boolean) is
+      begin
+         if Step_Norm_In = 0 then
+            Products.Add_Product
+              (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
+               Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
+               Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept);
+         else
+            Products.Add_Chained_Product
+              (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
+               Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
+               Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept,
+               From_Step => Step_Norm_In);
+         end if;
+      end Add_Input_Product;
 
       procedure Add_Down_Bias
         (Down_Bias : T.Real_Array_Access;
@@ -2058,12 +2099,28 @@ package body Model_Runner.Backend.Device is
       if not Ready_Now
         or else Width = 0
         or else Head_Size = 0
-        or else Rotary = 0
+        --  No rotation at all is an architecture that learned a row a
+        --  position, GPT-2's and Bert's, and turns nothing.
         or else Rotary > Head_Size
         or else Rotary mod 2 /= 0
         or else Heads = 0
         or else Keys = null or else Values = null or else Into = null
-        or else Feed_Norm'Length /= Attention_Norm'Length
+        --  The normalizations, as the architecture arranges them: one on
+        --  the way in and one before the feed-forward, the second absent
+        --  where the two halves run side by side, both absent and the
+        --  two after the joins present where it normalizes on the way
+        --  out. Each of the width, or twice it with a shift.
+        or else (Attention_Norm = null) /= After
+        or else (Attention_Norm /= null
+                 and then Attention_Norm.all'Length /= Norm_Span)
+        or else (Feed_Norm /= null and then Feed_Norm.all'Length /= Norm_Span)
+        or else (After
+                 and then (Feed_Norm /= null
+                           or else Post_Attention_Norm = null
+                           or else Post_Feed_Norm = null))
+        --  A feed-forward without a gate takes a unit alone on its one
+        --  arm, and a mixture is gated by its stacks.
+        or else (not Gated and then not Mixed and then Unit not in 0 | 1)
         or else Residual'Length < Slots * Width
         or else Query.Columns /= Width
         or else Key.Columns /= Width
@@ -2074,12 +2131,23 @@ package body Model_Runner.Backend.Device is
         or else Values.all'Length < Slots * Value.Rows
         or else Into.all'Length < Slots * Width
         --  A post-norm is a gain of the width; and a mixture's sum joins
-        --  the residual as it sums, with no room for one after it.
+        --  the residual as it sums, with no room for one before it --
+        --  the one after the sum is Bert's, which the mix leaves for it.
         or else (Post_Attention_Norm /= null
-                 and then Post_Attention_Norm.all'Length /= Width)
+                 and then Post_Attention_Norm.all'Length /= Norm_Span)
         or else (Post_Feed_Norm /= null
-                 and then (Post_Feed_Norm.all'Length /= Width
-                           or else Experts > 0))
+                 and then (Post_Feed_Norm.all'Length /= Norm_Span
+                           or else (Experts > 0 and then not After)))
+        --  The expert biases are a mixture's; a plain feed-forward's
+        --  are the one slice each on its two projections.
+        or else (not Mixed
+                 and then (Gate_Bias /= null
+                           or else (Up_Bias /= null
+                                    and then (Gated
+                                              or else Up_Bias.all'Length
+                                                      /= Up.Rows))
+                           or else (Down_Bias /= null
+                                    and then Down_Bias.all'Length /= Width)))
       then
          return;
       end if;
@@ -2139,9 +2207,11 @@ package body Model_Runner.Backend.Device is
             return;
          end if;
       else
-         Packing_Of (Gate.Format, Gate_P, Known);
-         if not Known then
-            return;
+         if Gated then
+            Packing_Of (Gate.Format, Gate_P, Known);
+            if not Known then
+               return;
+            end if;
          end if;
          Packing_Of (Up.Format, Up_P, Known);
          if not Known then
@@ -2165,30 +2235,31 @@ package body Model_Runner.Backend.Device is
 
       Products.Open_Sequence (Steps);
 
-      --  One: the normalization on the way in, of what the caller handed us.
-      declare
-         At_Norm : constant System.Address :=
-           Attention_Norm (Attention_Norm'First)'Address;
-      begin
-         Products.Add_Norm
-           (Steps, At_Norm,
-            Model_Runner.Bytes.Byte_Count (Attention_Norm'Length) * 4, 0,
-            Natural (Width), Epsilon, Added,
-            Key => At_Norm, Kept => False);
-      end;
-      if not Added then
-         return;
+      --  One: the normalization on the way in, of what the caller handed
+      --  us -- where the architecture has one. Bert's projections read
+      --  the input as it is.
+      if not After then
+         declare
+            At_Norm : constant System.Address :=
+              Attention_Norm.all (Attention_Norm.all'First)'Address;
+         begin
+            Products.Add_Norm
+              (Steps, At_Norm,
+               Model_Runner.Bytes.Byte_Count (Attention_Norm.all'Length) * 4,
+               0,
+               Natural (Width), Epsilon, Added,
+               Key => At_Norm, Kept => False, Shift => Shifted);
+         end;
+         if not Added then
+            return;
+         end if;
+         Step_Norm_In := Products.Length (Steps);
+         Step_Room (Width);
       end if;
-      Step_Norm_In := Products.Length (Steps);
-      Step_Room (Width);
 
       --  The queries, the keys and the values, each reading the
       --  normalization rather than the step before it.
-      Products.Add_Chained_Product
-        (Steps, Query.Base, Query.Span, Query.Offset, Q_P,
-         Natural (Query.Rows), Natural (Query.Columns), Added,
-         Key => At_Offset (Query.Base, Query.Offset), Kept => False,
-         From_Step => Step_Norm_In);
+      Add_Input_Product (Query, Q_P, False, Added);
       if not Added then
          return;
       end if;
@@ -2200,28 +2271,28 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
 
-      Products.Add_Chained_Product
-        (Steps, Key.Base, Key.Span, Key.Offset, K_P,
-         Natural (Key.Rows), Natural (Key.Columns), Added,
-         Key => At_Offset (Key.Base, Key.Offset), Kept => False,
-         From_Step => Step_Norm_In);
+      --  The keys go back to a caller that wants them (Mirror) from the
+      --  turning, or from here where there is none.
+      At_Keys := Wanted;
+      Add_Input_Product
+        (Key, K_P, Mirror and then Rotary = 0 and then Key_Bias = null,
+         Added);
       if not Added then
          return;
       end if;
       Step_K := Products.Length (Steps);
       Step_Room (Key.Rows);
 
-      Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added);
+      if Key_Bias /= null then
+         At_Keys := Wanted;
+      end if;
+      Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added,
+                           Kept => Mirror and then Rotary = 0);
       if not Added then
          return;
       end if;
 
-      Products.Add_Chained_Product
-        (Steps, Value.Base, Value.Span, Value.Offset, V_P,
-         Natural (Value.Rows), Natural (Value.Columns), Added,
-         Key => At_Offset (Value.Base, Value.Offset),
-         Kept => Mirror and then Value_Bias = null,
-         From_Step => Step_Norm_In);
+      Add_Input_Product (Value, V_P, Mirror and then Value_Bias = null, Added);
       if not Added then
          return;
       end if;
@@ -2249,6 +2320,7 @@ package body Model_Runner.Backend.Device is
       --  the caller wants the keys and values back (Mirror), because the
       --  fused step leaves them only in the cache.
       if Products.Readies_Heads (Engine)
+        and then Rotary > 0
         and then not Mirror
         and then Table_At = 0
         and then Head_Size <= 256
@@ -2380,6 +2452,15 @@ package body Model_Runner.Backend.Device is
          Step_Room (Key.Rows);
       end if;
 
+      --  No turning where the architecture turns nothing: the queries
+      --  and the keys are placed and attended as the projections made
+      --  them.
+      if Rotary = 0 then
+         Step_Q_Turned := Step_Q;
+         Step_K_Turned := Step_K;
+         goto Place;
+      end if;
+
       --  The turning, of the queries and of the keys.
       declare
          At_Turn : constant System.Address := Turns (Turns'First)'Address;
@@ -2411,6 +2492,8 @@ package body Model_Runner.Backend.Device is
          At_Keys := Wanted;
          Step_Room (Key.Rows);
       end;
+
+      <<Place>>
 
       --  Into the cache, before anything attends to it -- packed, for a
       --  packed session's block.
@@ -2501,9 +2584,11 @@ package body Model_Runner.Backend.Device is
       if not Added then
          return;
       end if;
-      Add_Post_Norm (Post_Attention_Norm, Weight.Rows, Step_Out, Added);
-      if not Added then
-         return;
+      if not After then
+         Add_Post_Norm (Post_Attention_Norm, Weight.Rows, Step_Out, Added);
+         if not Added then
+            return;
+         end if;
       end if;
 
       Products.Add_Join (Steps, Added, From_Step => Step_Out, Kept => False);
@@ -2513,22 +2598,41 @@ package body Model_Runner.Backend.Device is
       Step_Join := Products.Length (Steps);
       Step_Room (Width);
 
-      declare
-         At_Feed : constant System.Address :=
-           Feed_Norm (Feed_Norm'First)'Address;
-      begin
-         Products.Add_Norm
-           (Steps, At_Feed,
-            Model_Runner.Bytes.Byte_Count (Feed_Norm'Length) * 4, 0,
-            Natural (Width), Epsilon, Added,
-            From_Step => Step_Join, Key => At_Feed,
-            Kept => False);
-      end;
-      if not Added then
-         return;
+      --  And the normalization Bert puts on the sum, which is then what
+      --  the feed-forward reads and what its join adds to.
+      if After then
+         Add_Post_Norm (Post_Attention_Norm, Width, Step_Join, Added);
+         if not Added then
+            return;
+         end if;
       end if;
-      Step_Norm_Feed := Products.Length (Steps);
-      Step_Room (Width);
+
+      --  The normalization before the feed-forward, of the residual as
+      --  it now stands -- or, where the two halves run side by side, the
+      --  one on the way in read again; and Bert's feed-forward reads the
+      --  normalized sum.
+      if Parallel then
+         Step_Norm_Feed := Step_Norm_In;
+      elsif After then
+         Step_Norm_Feed := Step_Join;
+      else
+         declare
+            At_Feed : constant System.Address :=
+              Feed_Norm.all (Feed_Norm.all'First)'Address;
+         begin
+            Products.Add_Norm
+              (Steps, At_Feed,
+               Model_Runner.Bytes.Byte_Count (Feed_Norm.all'Length) * 4, 0,
+               Natural (Width), Epsilon, Added,
+               From_Step => Step_Join, Key => At_Feed,
+               Kept => False, Shift => Shifted);
+         end;
+         if not Added then
+            return;
+         end if;
+         Step_Norm_Feed := Products.Length (Steps);
+         Step_Room (Width);
+      end if;
 
       if Mixed then
          --  The router, the choosing, the chosen experts' three
@@ -2710,22 +2814,25 @@ package body Model_Runner.Backend.Device is
 
          Products.Add_Mix
            (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
-            Residual_Step => Step_Join, Kept => not Carry_Out);
+            Residual_Step => Step_Join,
+            Kept => not Carry_Out and then not After);
          if not Added then
             return;
          end if;
          At_Out := Wanted;
          Step_Room (Width);
       else
-         Products.Add_Chained_Product
-           (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
-            Natural (Gate.Rows), Natural (Gate.Columns), Added,
-            Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
-            From_Step => Step_Norm_Feed);
-         if not Added then
-            return;
+         if Gated then
+            Products.Add_Chained_Product
+              (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
+               Natural (Gate.Rows), Natural (Gate.Columns), Added,
+               Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+               From_Step => Step_Norm_Feed);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Gate.Rows);
          end if;
-         Step_Room (Gate.Rows);
 
          Products.Add_Chained_Product
            (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
@@ -2737,12 +2844,28 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Room (Up.Rows);
 
-         Products.Add_Combination (Steps, Unit, Added, Kept => False,
-                                        Alpha => Alpha, Limit => Limit);
+         --  Gated, the unit on the gate arm multiplied by the up arm;
+         --  not, the unit alone on the one projection up, with its bias
+         --  added first because the bias is the projection's.
+         if Gated then
+            Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                      Alpha => Alpha, Limit => Limit);
+         else
+            declare
+               Step_Up : Natural := Products.Length (Steps);
+            begin
+               Add_Projection_Bias (Up_Bias, Up.Rows, Step_Up, Added);
+               if not Added then
+                  return;
+               end if;
+            end;
+
+            Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
+         end if;
          if not Added then
             return;
          end if;
-         Step_Room (Gate.Rows);
+         Step_Room (Up.Rows);
 
          Products.Add_Chained_Product
            (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
@@ -2754,21 +2877,45 @@ package body Model_Runner.Backend.Device is
          Step_Downs := Products.Length (Steps);
          Step_Room (Down.Rows);
 
-         --  And the normalization Gemma puts on what the feed-forward
-         --  produced, before the second join reads it.
-         Add_Post_Norm (Post_Feed_Norm, Down.Rows, Step_Downs, Added);
+         --  The projection down's bias, gated or not: the one gated
+         --  architecture that shifts what it projects down is jina-bert-v2.
+         Add_Projection_Bias (Down_Bias, Down.Rows, Step_Downs, Added);
          if not Added then
             return;
          end if;
 
+         --  And the normalization Gemma puts on what the feed-forward
+         --  produced, before the second join reads it.
+         if not After then
+            Add_Post_Norm (Post_Feed_Norm, Down.Rows, Step_Downs, Added);
+            if not Added then
+               return;
+            end if;
+         end if;
+
          Products.Add_Join
            (Steps, Added, From_Step => Step_Downs, Residual_Step => Step_Join,
-            Kept => not Carry_Out);
+            Kept => not Carry_Out and then not After);
          if not Added then
             return;
          end if;
          At_Out := Wanted;
          Step_Room (Width);
+      end if;
+
+      --  Bert's second, over the sum the join or the mix made: the
+      --  layer's answer.
+      if After then
+         declare
+            Step_Sum : Natural := Products.Length (Steps);
+         begin
+            At_Out := Wanted;
+            Add_Post_Norm (Post_Feed_Norm, Width, Step_Sum, Added,
+                           Kept => not Carry_Out);
+            if not Added then
+               return;
+            end if;
+         end;
       end if;
 
       if Landing = null or else Landing.all'Length < Wanted then
@@ -3083,7 +3230,6 @@ package body Model_Runner.Backend.Device is
          Declined (Status, Asked);
       end if;
    end Run_Sequence;
-
 
    --  The three bias stacks of a mixture whose members the host chose,
    --  as steps of the sequence: the two arms' after both arms, so the

@@ -974,7 +974,10 @@ package Model_Runner.Platform.Device.Products is
    --    three for the clamped gate that reaches the second arm too -- the
    --    first held at Limit and passed through the logistic at a slope of
    --    Alpha, the second held at the limit either side and raised by one,
-   --    the two multiplied.
+   --    the two multiplied. Four and five are the first two alone, on the
+   --    one step before this and multiplied by nothing, which is the
+   --    feed-forward of an architecture without a gate; one step behind
+   --    is enough for those.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
    --  @param Kept False when nothing on the host reads this step's answer,
@@ -1203,6 +1206,11 @@ package Model_Runner.Platform.Device.Products is
    --    before this one.
    --  @param Key Identifies the weight so the device may keep it.
    --  @param Kept False when nothing on the host reads this step's answer.
+   --  @param Shift True for the centred normalization with a shift that
+   --    GPT-2, Phi-2, Falcon and Bert state: the position's mean is taken
+   --    off before the mean square, and the weight is two stretches, the
+   --    gain and then the shift, added after the gain. Refused with
+   --    Groups other than one.
    procedure Add_Norm
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1214,7 +1222,8 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
-      Groups    : Positive := 1);
+      Groups    : Positive := 1;
+      Shift     : Boolean := False);
 
    --  Name an attention step for a sequence to perform.
    --
@@ -2505,6 +2514,11 @@ private
       --  Rows / Groups wide, as Add_Norm describes it. One for a whole
       --  position.
       Groups  : Positive := 1;
+
+      --  Whether the normalization is the centred one with a shift: the
+      --  mean taken off first, and the weight a gain and then a shift of
+      --  the same width, added after the gain.
+      Shifts  : Boolean := False;
 
       --  The floor under the mean square, as the architecture states it.
       Epsilon : Model_Runner.Numerics.Real := 0.0;

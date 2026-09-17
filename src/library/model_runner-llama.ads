@@ -1783,6 +1783,16 @@ private
       Post_Attention_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Post_Feed_Norm_Bias      : Model_Runner.Tensors.Real_Array_Access;
 
+      --  Each centred normalization's gain and shift laid end to end,
+      --  twice the width, which is how the device's normalizing step
+      --  takes the two: one resident weight. Built as the block resolves,
+      --  for a normalization the engine centres; null for one it scales
+      --  by root mean square, and for one the layer has not got.
+      Attention_Norm_Pair      : Model_Runner.Tensors.Real_Array_Access;
+      Feed_Norm_Pair           : Model_Runner.Tensors.Real_Array_Access;
+      Post_Attention_Norm_Pair : Model_Runner.Tensors.Real_Array_Access;
+      Post_Feed_Norm_Pair      : Model_Runner.Tensors.Real_Array_Access;
+
       --  The bias its normalization carries, for an architecture that
       --  centres rather than scaling. Null for every architecture that
       --  normalizes by root mean square, which is all of them but Falcon

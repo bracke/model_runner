@@ -2110,6 +2110,20 @@ package body Model_Runner.Llama is
       Mark := Now;
    end Charge;
 
+   --  A turning table for an architecture that turns nothing, for the
+   --  device's whole layer.
+   No_Turns : constant N.Wide_Real_Array (1 .. 0) := [others => 0.0];
+
+   --  Whether a normalization with this shift is the centred one: the
+   --  architectures whose normalization centres, and a shift the file
+   --  carries. Asked by Normalize and by the pairing for the device, so
+   --  that the two cannot disagree.
+   function Centres
+     (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
+   is (Item.Settings.Kind
+         in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
+       and then Bias /= null);
+
    --  Normalize the way the architecture does, into Target.
    --
    --  Falcon, Phi2, GPT2 and Bert centre and carry a bias; everything else
@@ -2124,15 +2138,80 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access;
       Target : out Real_Array) is
    begin
-      if Item.Settings.Kind
-           in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
-        and then Bias /= null
-      then
+      if Centres (Item, Bias) then
          K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
       else
          K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target);
       end if;
    end Normalize;
+
+   --  The gain and the shift of each of a layer's centred normalizations
+   --  laid end to end, for the device, which takes the two as one
+   --  resident weight of twice the width. Built once, here, because the
+   --  device keeps a weight by its address and the address has to stay:
+   --  a pair made at the call would be resident once a call.
+   procedure Pair_Norms (Item : Model'Class; Current : in out Layer) is
+      procedure Pair
+        (Gain, Bias : T.Real_Array_Access;
+         Into       : in out T.Real_Array_Access) is
+      begin
+         if Gain = null
+           or else not Centres (Item, Bias)
+           or else Gain.all'Length /= Bias.all'Length
+         then
+            return;
+         end if;
+
+         T.Allocate (2 * Gain.all'Length, Into);
+         if Into = null then
+            return;
+         end if;
+
+         Into.all (Into.all'First .. Into.all'First + Gain.all'Length - 1) :=
+           Gain.all;
+         Into.all (Into.all'First + Gain.all'Length .. Into.all'Last) :=
+           Bias.all;
+      end Pair;
+   begin
+      Pair (Current.Attention_Norm, Current.Attention_Norm_Bias,
+            Current.Attention_Norm_Pair);
+      Pair (Current.Feed_Norm, Current.Feed_Norm_Bias,
+            Current.Feed_Norm_Pair);
+      Pair (Current.Post_Attention_Norm, Current.Post_Attention_Norm_Bias,
+            Current.Post_Attention_Norm_Pair);
+      Pair (Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
+            Current.Post_Feed_Norm_Pair);
+   end Pair_Norms;
+
+   --  Whether a layer's normalizations go to the device centred: every
+   --  one the layer has is paired above. All or none: the device's
+   --  sequence centres a layer's normalizations together, and a layer
+   --  with one centred and one not -- a GPT-2 file without its
+   --  feed-forward shift is the one that would be -- goes a step at a
+   --  time.
+   function Norms_Shifted (L : Layer) return Boolean
+   is (L.Attention_Norm_Pair /= null
+       or else L.Post_Attention_Norm_Pair /= null);
+
+   function Norms_Agree (L : Layer) return Boolean
+   is ((L.Attention_Norm = null
+        or else (L.Attention_Norm_Pair /= null) = Norms_Shifted (L))
+       and then (L.Feed_Norm = null
+                 or else (L.Feed_Norm_Pair /= null) = Norms_Shifted (L))
+       and then (L.Post_Attention_Norm = null
+                 or else (L.Post_Attention_Norm_Pair /= null)
+                         = Norms_Shifted (L))
+       and then (L.Post_Feed_Norm = null
+                 or else (L.Post_Feed_Norm_Pair /= null)
+                         = Norms_Shifted (L)));
+
+   --  A normalization's weight as the device takes it: the pair where
+   --  the layer's are centred, the gain where not, and null where the
+   --  layer has not got one. By reference, because the device keeps a
+   --  weight by its address.
+   function Device_Norm
+     (Gain, Pair : T.Real_Array_Access) return T.Real_Array_Access
+   is (if Pair /= null then Pair else Gain);
 
    --  The state a position is left with: what the last layer produced,
    --  through the model's final normalization where it has one.
@@ -3463,6 +3542,10 @@ package body Model_Runner.Llama is
             end if;
 
             exit when E.Is_Error (Status);
+
+            if Index < Item.Settings.Layers then
+               Pair_Norms (Item, Item.Layers.all (Index));
+            end if;
          end loop;
 
          if E.Is_Error (Status) then
@@ -8064,6 +8147,10 @@ package body Model_Runner.Llama is
             T.Free (Which.Post_Feed_Norm);
             T.Free (Which.Feed_Norm);
             T.Free (Which.Feed_Norm_Bias);
+            T.Free (Which.Attention_Norm_Pair);
+            T.Free (Which.Feed_Norm_Pair);
+            T.Free (Which.Post_Attention_Norm_Pair);
+            T.Free (Which.Post_Feed_Norm_Pair);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
@@ -11708,8 +11795,12 @@ package body Model_Runner.Llama is
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
+      --  A dense layer goes whole gated or not -- the one projection up
+      --  with a unit alone on it is a shape the sequence takes -- and a
+      --  mixture where the device holds its stacks.
       function Whole_Layer_Fits (L : Layer) return Boolean
-      is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
+      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+           else T.Is_Present (L.Up))
 
           --  A hybrid's head gates and shared expert are not in the
           --  device's sequence; its full attention layers go a step at a
@@ -11721,9 +11812,20 @@ package body Model_Runner.Llama is
           --  a day with none, and the fixture check said its sinks
           --  answered to nothing, which is what the check is for.
           and then Sinks_Fit (L.Sinks)
-          and then L.Attention_Norm /= null
-          and then L.Attention_Norm_Bias = null
-          and then L.Feed_Norm /= null
+
+          --  The normalization on the way in, which every architecture
+          --  has but the one that normalizes on the way out and has the
+          --  two after the joins instead. The one before the
+          --  feed-forward may be absent: the two halves then run side by
+          --  side, both from the one on the way in.
+          and then (L.Attention_Norm /= null)
+                   = not Normalizes_After (Settings.Kind)
+          and then (not Normalizes_After (Settings.Kind)
+                    or else (L.Post_Attention_Norm /= null
+                             and then L.Post_Feed_Norm /= null))
+
+          --  Centred all or none, as Norms_Agree says.
+          and then Norms_Agree (L)
 
           --  The attention projections' biases go as steps of the
           --  sequence, all three or none: an architecture states them
@@ -11735,17 +11837,20 @@ package body Model_Runner.Llama is
           --  the sequence normalizes the queries and the keys as a pair
           --  and an architecture states them as one.
           and then (L.Query_Norm = null) = (L.Key_Norm = null)
-          and then L.Up_Bias = null
-          and then L.Down_Bias = null
-          and then L.Feed_Norm_Bias = null
 
-          --  The normalizations Gemma puts before its joins are steps of
-          --  the sequence; the ones Bert puts after, with a shift, are
-          --  not.
-          and then L.Post_Attention_Norm_Bias = null
-          and then L.Post_Feed_Norm_Bias = null
-          and then not Normalizes_After (Settings.Kind)
-          and then (L.Post_Feed_Norm = null or else Settings.Experts = 0));
+          --  A dense feed-forward's two biases are steps of the
+          --  sequence; a mixture's are its experts', named apart.
+          and then (Settings.Experts = 0
+                    or else (L.Up_Bias = null and then L.Down_Bias = null))
+          and then (L.Post_Feed_Norm = null
+                    or else Settings.Experts = 0
+                    or else Normalizes_After (Settings.Kind))
+
+          --  The code variant's three normalizations more -- over the
+          --  whole of the queries and the keys, and the attention
+          --  sublayer's residual joined again -- are not in the sequence.
+          and then L.Second_Attention_Norm = null
+          and then L.Query_Whole_Norm = null);
 
       --  A slice of a token's work, for the pool.
       --
@@ -12150,12 +12255,13 @@ package body Model_Runner.Llama is
                --  two of them a layer and makes one. A packed session's
                --  keys and values are packed as they are placed, by a step
                --  of the same sequence.
+               --  An architecture that turns nothing -- GPT-2 learned a
+               --  row a position -- hands over an empty table and the
+               --  sequence has no turning step.
                if Item.Held in Exact | Eighth | Fourth
-                 and then Settings.Rotary > 0
                  and then Element_Count (Settings.Rotary) <= Head_Size
                  and then (Settings.Experts = 0 or else Mixture_Whole (Current))
                  and then Whole_Layer_Fits (Current)
-                 and then Source.Settings.Kind not in Falcon | Phi2
                  and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
@@ -12163,22 +12269,28 @@ package body Model_Runner.Llama is
                   Take_Block (Item'Unchecked_Access, Resident);
 
                   if Resident then
-                     K.Rotary_Table
-                       (Element_Count (Settings.Rotary), Item.Committed,
-                        Turn_Base (Settings, Natural (Index)),
-                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                        Cosines => Cosines, Sines => Sines,
-                        Sections => Settings.Sections,
-                        Place => Place_At (Item, Item.Committed));
+                     if Settings.Rotary > 0 then
+                        K.Rotary_Table
+                          (Element_Count (Settings.Rotary), Item.Committed,
+                           Turn_Base (Settings, Natural (Index)),
+                           Turn_Scaling (Settings, Natural (Index)),
+                           Turns (Source),
+                           Cosines => Cosines, Sines => Sines,
+                           Sections => Settings.Sections,
+                           Place => Place_At (Item, Item.Committed));
 
-                     for Pair in 0 .. Pairs - 1 loop
-                        Angles (Pair * 2) := Cosines (Pair);
-                        Angles (Pair * 2 + 1) := Sines (Pair);
-                     end loop;
+                        for Pair in 0 .. Pairs - 1 loop
+                           Angles (Pair * 2) := Cosines (Pair);
+                           Angles (Pair * 2 + 1) := Sines (Pair);
+                        end loop;
+                     end if;
 
                      Model_Runner.Backend.Device.Whole_Layer
                        (Item.Activation.all,
-                        Current.Attention_Norm.all, Current.Feed_Norm.all,
+                        Device_Norm (Current.Attention_Norm,
+                                     Current.Attention_Norm_Pair),
+                        Device_Norm (Current.Feed_Norm,
+                                     Current.Feed_Norm_Pair),
                         Settings.Epsilon,
                         Current.Query, Current.Key, Current.Value,
                         Angles, Natural (Head_Size), Settings.Rotary,
@@ -12256,16 +12368,28 @@ package body Model_Runner.Llama is
                         Limit => Settings.Gate_Limit,
 
                         --  And its experts' biases, where the layer
-                        --  carries them, as steps of the sequence.
+                        --  carries them, as steps of the sequence -- or
+                        --  a dense feed-forward's own two.
                         Gate_Bias   => Current.Expert_Gate_Bias,
-                        Up_Bias     => Current.Expert_Up_Bias,
-                        Down_Bias   => Current.Expert_Down_Bias,
+                        Up_Bias     =>
+                          (if Settings.Experts > 0 then Current.Expert_Up_Bias
+                           else Current.Up_Bias),
+                        Down_Bias   =>
+                          (if Settings.Experts > 0
+                           then Current.Expert_Down_Bias
+                           else Current.Down_Bias),
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
                         Out_Bias    => Current.Out_Bias,
-                        Post_Attention_Norm => Current.Post_Attention_Norm,
-                        Post_Feed_Norm      => Current.Post_Feed_Norm);
+                        Post_Attention_Norm =>
+                          Device_Norm (Current.Post_Attention_Norm,
+                                       Current.Post_Attention_Norm_Pair),
+                        Post_Feed_Norm      =>
+                          Device_Norm (Current.Post_Feed_Norm,
+                                       Current.Post_Feed_Norm_Pair),
+                        Shifted => Norms_Shifted (Current),
+                        After   => Normalizes_After (Settings.Kind));
                   end if;
                end if;
 
@@ -13093,21 +13217,31 @@ package body Model_Runner.Llama is
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
+      --  As the token's: a dense layer gated or not, a mixture where the
+      --  device holds its stacks, the normalizations as the architecture
+      --  arranges them and centred all or none.
       function Whole_Layer_Fits (L : Layer) return Boolean
-      is ((T.Is_Present (L.Gate) or else Mixture_Whole (L))
+      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+           else T.Is_Present (L.Up))
 
           --  A hybrid's head gates and shared expert are not in the
           --  device's sequence; its full attention layers go a step at a
           --  time.
           and then not Hybrid (Settings.Kind)
           and then Sinks_Fit (L.Sinks)
-          and then L.Up_Bias = null
-          and then L.Down_Bias = null
-          and then L.Feed_Norm_Bias = null
-          and then L.Post_Attention_Norm_Bias = null
-          and then L.Post_Feed_Norm_Bias = null
-          and then not Normalizes_After (Settings.Kind)
-          and then (L.Post_Feed_Norm = null or else Settings.Experts = 0)
+          and then (L.Attention_Norm /= null)
+                   = not Normalizes_After (Settings.Kind)
+          and then (not Normalizes_After (Settings.Kind)
+                    or else (L.Post_Attention_Norm /= null
+                             and then L.Post_Feed_Norm /= null))
+          and then Norms_Agree (L)
+          and then (Settings.Experts = 0
+                    or else (L.Up_Bias = null and then L.Down_Bias = null))
+          and then (L.Post_Feed_Norm = null
+                    or else Settings.Experts = 0
+                    or else Normalizes_After (Settings.Kind))
+          and then L.Second_Attention_Norm = null
+          and then L.Query_Whole_Norm = null
 
           --  The attention projections' biases go as steps of the
           --  sequence, all three or none, as the token's whole layer
@@ -13894,25 +14028,29 @@ package body Model_Runner.Llama is
             --  What a round does not take is Whole_Layer below, which does
             --  name a cache and a run of positions, and is refused a round
             --  where it is chosen rather than here.
+            --  The front half alone -- the normalization and the three
+            --  projections -- is a shape the device takes only where the
+            --  normalization is by root mean square, the feed-forward has
+            --  its own and the two halves run one after the other. A head
+            --  normalization, or a projection's bias, a centred
+            --  normalization, a parallel or a post-normalizing layer, is
+            --  a step of the whole layer and of nothing else here: such
+            --  a layer goes whole or goes to the host, which is what the
+            --  fallback below keeps to.
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
               and then not Is_Linear
-              and then Current.Attention_Norm /= null
-              and then Current.Attention_Norm_Bias = null
-              and then Current.Feed_Norm /= null
-
-              --  A head normalization, or a projection's bias, is a
-              --  step of the whole layer and of nothing else here: a
-              --  layer with one goes whole or goes to the host, which is
-              --  what the fallback below keeps to.
-              and then ((Current.Query_Norm = null
-                         and then Current.Query_Bias = null)
+              and then ((Current.Attention_Norm /= null
+                         and then Current.Attention_Norm_Bias = null
+                         and then Current.Feed_Norm /= null
+                         and then Current.Query_Norm = null
+                         and then Current.Query_Bias = null
+                         and then Source.Settings.Kind not in Falcon | Phi2)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then not Rounding
                                  and then Whole_Layer_Fits (Current)
                                  and then Has_Block (Item'Unchecked_Access)))
-              and then Source.Settings.Kind not in Falcon | Phi2
             then
                Charge (Item, Normalizing, Mark);
 
@@ -14014,7 +14152,7 @@ package body Model_Runner.Llama is
                   --  they are placed, by a step of the same sequence; a
                   --  round's each into its own member's block, out of the
                   --  table, as an exact round's are.
-                  if Turnable
+                  if (Turnable or else Settings.Rotary = 0)
                     and then Resident
                     and then Item.Held in Exact | Eighth | Fourth
                     and then (Settings.Experts = 0
@@ -14024,10 +14162,15 @@ package body Model_Runner.Llama is
                   then
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
-                        Current.Attention_Norm.all,
-                        Current.Feed_Norm.all, Settings.Epsilon,
+                        Device_Norm (Current.Attention_Norm,
+                                     Current.Attention_Norm_Pair),
+                        Device_Norm (Current.Feed_Norm,
+                                     Current.Feed_Norm_Pair),
+                        Settings.Epsilon,
                         Current.Query, Current.Key, Current.Value,
-                        Angles.all (0 .. Count * Pairs * 2 - 1),
+                        (if Turnable
+                         then Angles.all (0 .. Count * Pairs * 2 - 1)
+                         else No_Turns),
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
                         Natural ((if Rounding then 0
@@ -14148,16 +14291,28 @@ package body Model_Runner.Llama is
                         Limit => Settings.Gate_Limit,
 
                         --  And its experts' biases, where the layer
-                        --  carries them, as steps of the sequence.
+                        --  carries them, as steps of the sequence -- or
+                        --  a dense feed-forward's own two.
                         Gate_Bias   => Current.Expert_Gate_Bias,
-                        Up_Bias     => Current.Expert_Up_Bias,
-                        Down_Bias   => Current.Expert_Down_Bias,
+                        Up_Bias     =>
+                          (if Settings.Experts > 0 then Current.Expert_Up_Bias
+                           else Current.Up_Bias),
+                        Down_Bias   =>
+                          (if Settings.Experts > 0
+                           then Current.Expert_Down_Bias
+                           else Current.Down_Bias),
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
                         Out_Bias    => Current.Out_Bias,
-                        Post_Attention_Norm => Current.Post_Attention_Norm,
-                        Post_Feed_Norm      => Current.Post_Feed_Norm);
+                        Post_Attention_Norm =>
+                          Device_Norm (Current.Post_Attention_Norm,
+                                       Current.Post_Attention_Norm_Pair),
+                        Post_Feed_Norm      =>
+                          Device_Norm (Current.Post_Feed_Norm,
+                                       Current.Post_Feed_Norm_Pair),
+                        Shifted => Norms_Shifted (Current),
+                        After   => Normalizes_After (Settings.Kind));
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -14176,6 +14331,10 @@ package body Model_Runner.Llama is
                      Cached := True;
                   elsif Current.Query_Norm = null
                     and then Current.Query_Bias = null
+                    and then Current.Attention_Norm /= null
+                    and then Current.Attention_Norm_Bias = null
+                    and then Current.Feed_Norm /= null
+                    and then Source.Settings.Kind not in Falcon | Phi2
                   then
                      --  Not for a layer whose projections carry a bias:
                      --  the host adds it before the turning, and this

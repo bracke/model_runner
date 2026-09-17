@@ -6944,12 +6944,17 @@ package body Model_Runner.Platform.Device.Products is
       Kept  : Boolean := True;
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0) is
+      --  A unit alone reads the one step before it, for both arms: the
+      --  kernel reads the first and not the second, and naming the same
+      --  step twice is what keeps the two-arm binding as it is.
+      Alone : constant Boolean := Unit in 4 | 5;
    begin
-      if Steps.Held < 2
+      if Steps.Held < (if Alone then 1 else 2)
         or else Steps.Held = Sequence_Limit
-        or else Steps.Items (Steps.Held).Rows
-                  /= Steps.Items (Steps.Held - 1).Rows
-        or else Unit > 3
+        or else (not Alone
+                 and then Steps.Items (Steps.Held).Rows
+                            /= Steps.Items (Steps.Held - 1).Rows)
+        or else Unit > 5
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -6965,6 +6970,8 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Steps.Items (Steps.Held - 1).Rows,
          Columns => Steps.Items (Steps.Held - 1).Rows,
          Key => System.Null_Address, Chained => True, Kept => Kept,
+         Reads => (if Alone then Steps.Held - 1 else 0),
+         Reads_Two => (if Alone then Steps.Held - 1 else 0),
          Blends => True, Unit => Unit, Alpha => Alpha, Limit => Limit,
          Attends => False,
          others => <>);
@@ -7239,7 +7246,8 @@ package body Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
-      Groups    : Positive := 1)
+      Groups    : Positive := 1;
+      Shift     : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -7248,10 +7256,13 @@ package body Model_Runner.Platform.Device.Products is
       --  caller's own activation -- which is what a product first in a
       --  sequence reads too. A layer's second half normalizes a step and
       --  its first half normalizes what it was handed.
+      --  A shift is one stretch after the gain, and a stretch is the
+      --  whole position: a head normalization has no shift here.
       if Steps.Held = Sequence_Limit
         or else Width = 0
         or else Width mod Groups /= 0
         or else Source > Steps.Held
+        or else (Shift and then Groups /= 1)
       then
          Added := False;
          return;
@@ -7263,7 +7274,7 @@ package body Model_Runner.Platform.Device.Products is
          Packing => Weight_Packing'First,
          Rows => Width, Columns => Width, Key => Key,
          Chained => Source /= 0, Reads => Source,
-         Kept => Kept, Norms => True, Groups => Groups,
+         Kept => Kept, Norms => True, Groups => Groups, Shifts => Shift,
          Epsilon => Epsilon, Attends => False, Blends => False,
          others => <>);
       Added := True;
@@ -7653,14 +7664,17 @@ package body Model_Runner.Platform.Device.Products is
                            < Interfaces.Unsigned_64 (This.At_Byte)
                              + Interfaces.Unsigned_64
                                  (This.Rows / This.Groups) * 4
+                               * (if This.Shifts then 2 else 1)
                then
                   return;
                end if;
 
                --  The weight is one stretch wide, however many stretches
-               --  a position is normalized as.
+               --  a position is normalized as -- and two, gain then
+               --  shift, for the centred normalization.
                Places (Index).Weight :=
-                 Interfaces.Unsigned_64 (This.Rows / This.Groups) * 4;
+                 Interfaces.Unsigned_64 (This.Rows / This.Groups) * 4
+                 * (if This.Shifts then 2 else 1);
             elsif This.Biases then
                --  A biasing step carries the bias stack, which the device
                --  keeps the way it keeps a matrix, and reads a gathered
@@ -8635,6 +8649,7 @@ package body Model_Runner.Platform.Device.Products is
          declare
             function Only_Halved (Which : Natural) return Boolean is
                Asked : Natural := 0;
+               Last  : Natural := Which;
             begin
                if Steps.Items (Which).Kept then
                   return False;
@@ -8662,6 +8677,7 @@ package body Model_Runner.Platform.Device.Products is
                   begin
                      if Reads_It then
                         Asked := Asked + 1;
+                        Last := Later;
 
                         if not Tiled (Later) then
                            return False;
@@ -8671,7 +8687,41 @@ package body Model_Runner.Platform.Device.Products is
                end loop;
 
                --  Nothing reading it is not a licence to write nothing.
-               return Asked > 0;
+               if Asked = 0 then
+                  return False;
+               end if;
+
+               --  And the copy has to hold this answer until the last of
+               --  them has read it: a step written only as halves has no
+               --  binary32 form to convert again from. Between this step
+               --  and its last reader, nothing else may write the front
+               --  of the half-precision buffer -- a normalization, a
+               --  combination or an attention that would be halved, or a
+               --  tiled product converting some other step's answer into
+               --  it. A parallel block reads the normalization on the way
+               --  in for its feed-forward after attention has been and
+               --  gone, and Falcon on the device answered nonsense over
+               --  the tile for as long as this went unasked.
+               for Between in Which + 1 .. Last - 1 loop
+                  declare
+                     That : Step renames Steps.Items (Between);
+
+                     Reads_It : constant Boolean :=
+                       That.Reads = Which
+                       or else ((That.Chained or else That.Blends
+                                 or else That.Attends)
+                                and then That.Reads = 0
+                                and then Between = Which + 1);
+                  begin
+                     if That.Norms or else That.Blends or else That.Attends
+                       or else (Tiled (Between) and then not Reads_It)
+                     then
+                        return False;
+                     end if;
+                  end;
+               end loop;
+
+               return True;
             end Only_Halved;
          begin
             for Which in 1 .. Steps.Held loop
@@ -8783,8 +8833,15 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
-               Half_From := -1;
-               Half_Wide := 0;
+               --  The copy is not invalidated here. It once was, at every
+               --  step, and re-established only by a tiled product -- so a
+               --  step of any other kind between two products of the same
+               --  normalization, a projection's bias say, had the second
+               --  convert the normalization's binary32 answer again, and a
+               --  normalization written only as halves has no such answer:
+               --  every Qwen2 batch over the tile read zeros for its keys.
+               --  The copy holds what it held until something writes its
+               --  front, and the steps that do say so below.
 
                --  A chained product reads what the one before it wrote, so
                --  the device is told to finish writing before it starts
@@ -8829,8 +8886,32 @@ package body Model_Runner.Platform.Device.Products is
                            elsif This.Chained and then This.Reads = 0
                            then Index - 1
                            else 0)));
+                  --  Whether this step writes the front of the
+                  --  half-precision buffer: a tiled product converting
+                  --  some answer other than the one the copy holds, or a
+                  --  normalization, combination or attention written as
+                  --  halves. The step before may still be reading that
+                  --  front -- a tiled product reads its operand there --
+                  --  and a step whose own sources are long fenced would
+                  --  otherwise overwrite it under that read. Falcon's
+                  --  projection up reads the normalization on the way in,
+                  --  fenced twelve steps back, and converted it over the
+                  --  attention the projection out was still reading.
+                  Writes_Copy : constant Boolean :=
+                    (if This.Norms or else This.Blends or else This.Attends
+                     then Halved (Index)
+                     elsif This.Rotates or else This.Places
+                       or else This.Readies or else This.Routes
+                       or else This.Mixes or else This.Biases
+                       or else This.Inverts
+                     then False
+                     else Tiled (Index)
+                          and then (Was_From /= Source
+                                    or else Was_Wide /= This.Columns));
+
                   Wanted : constant Natural :=
-                    (if This.Attends then Natural'Max (Source, Cached)
+                    (if Writes_Copy then Index - 1
+                     elsif This.Attends then Natural'Max (Source, Cached)
                      else Source);
                begin
                   Reading := Source;
@@ -9430,9 +9511,10 @@ package body Model_Runner.Platform.Device.Products is
                      --  one after another exactly as positions do.
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Rows / This.Groups),
-                        --  The slot the shape shares with the products,
-                        --  which this shader does not read.
-                        Columns => 0,
+                        --  One for the centred normalization with a
+                        --  shift, in the slot the products' shape holds
+                        --  their columns in.
+                        Columns => (if This.Shifts then 1 else 0),
                         Count   => C.unsigned (Count * This.Groups),
                         First   => Bits (This.Epsilon),
 

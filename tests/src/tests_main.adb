@@ -186,7 +186,13 @@ procedure Tests_Main is
                     & Long_Float'Image (Item.Integer_Worst_Abs)),
         new String'("quantized worst relative"
                     & Long_Float'Image (Item.Integer_Worst_Rel)),
-        new String'("outside tolerance" & Natural'Image (Item.Failures))]);
+        new String'("outside tolerance" & Natural'Image (Item.Failures)),
+
+        --  The count's own accounting, which is what the verdict turns on
+        --  and what nothing printed for the week it was wrong.
+        new String'("refused" & Natural'Image (Item.Refused)),
+        new String'("not applicable" & Natural'Image (Item.Not_Applicable)),
+        new String'("wanted" & Natural'Image (Item.Wanted))]);
 
    --  Refuse an option this command does not take.
    --
@@ -1388,7 +1394,10 @@ begin
             & ", mixed worst relative"
             & Long_Float'Image (Result.Mixed_Worst_Rel)
             & ", outside tolerance" & Natural'Image (Result.Failures)
-            & ", unlearned" & Natural'Image (Result.Unlearned));
+            & ", unlearned" & Natural'Image (Result.Unlearned)
+            & ", refused" & Natural'Image (Result.Refused)
+            & ", not applicable" & Natural'Image (Result.Not_Applicable)
+            & ", wanted" & Natural'Image (Result.Wanted));
 
          if not Conformance.Is_Clean (Result) then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);

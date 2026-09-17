@@ -55,6 +55,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A Qwen2 batch over the device's tile read zeros for its keys.** The
+  half-precision copy of a batch, which the tile kernel reads its
+  operand from, was marked stale at every step and remade only by a
+  tiled product; a step of any other kind between two products of the
+  same normalization -- a projection's bias, which Qwen2 has on all
+  three -- had the second product convert the normalization's binary32
+  answer again, and a normalization written only as halves has no such
+  answer. Every Qwen2 prompt of sixteen tokens or more on the device
+  answered nonsense. The copy holds what it held until something writes
+  its front, and a normalization is written only as halves only where
+  nothing but its readers writes that front before the last of them.
+- **A parallel block over the tile raced on the same copy.** A tiled
+  product converting its operand into the copy's front waited for the
+  step it read and for nothing else, and Falcon's projection up reads
+  the normalization on the way in -- fenced a dozen steps back -- so it
+  converted over the attention the projection out was still reading. A
+  step that writes the front of the copy now waits for the step before
+  it. The processor-and-device comparison runs its long prompt in
+  chunks of forty-one as well, which is the narrow tile and the only
+  tile the fixture's width reaches; neither of these two had a test
+  until it did.
+- **The conformance sweep failed its own count in silence.** The
+  cache-precision arm had grown from two storages to four with the
+  formula that predicts the sweep's size still counting two, so the
+  sweep exited with a failure while every comparison in it agreed, and
+  nothing it printed said which of the two had moved. The arm is
+  tallied where it runs, as the device pass is; the summary prints the
+  refused, declined and wanted counts the verdict turns on; and the
+  first refusal is named as the first disagreement is.
 - **A `--kv-cache q8` session could not snapshot.** The values of a byte
   cache went out through the halved storage's arm, which holds nothing
   for it, and the write failed as an internal error. The packed caches'
@@ -146,6 +175,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every arrangement of a layer goes over whole.** Falcon's and Phi-2's
+  block -- attention and the feed-forward side by side, both reading the
+  one normalization -- GPT-2's and Bert's centred normalizations with a
+  shift, the feed-forward without a gate and the two biases on it, and
+  Bert's normalizations after the joins with no rotation anywhere, each
+  kept its layers off the device's whole-layer sequence: the host stood
+  between the halves, or took the layer itself. All four are shapes of
+  the sequence now. `norm.comp` centres and shifts where it is told to,
+  the gain and the shift resident as one weight of twice the width;
+  `combine.comp` has the two units alone on one arm; `Whole_Layer` takes
+  a null feed normalization as the parallel block, a gate that is not
+  present as the one projection up with its biases, a rotation of zero
+  as no turning, and `After` as Bert's arrangement, with the projections
+  reading the input as it is. The processor and the device are held to
+  each other on Falcon, Phi-2 and GPT-2 in one batch and a position at a
+  time, and on Bert over every position's state; the centred
+  normalization and the unit alone are held to the host's kernels on
+  their own. GPT-2 small reads a 104-token prompt and generates 64 on
+  the device in 0.223 s against 0.513 -- 0.014 s evaluating against
+  0.053, 0.209 s generating against 0.460 -- with the same text as
+  before. What still goes a step at a time is a hybrid's attention
+  layers.
 - **Gemma's layers go over whole.** The normalizations Gemma 2 and 3 put
   on what attention and the feed-forward produced before each residual
   join -- which kept every layer of both off the device's whole-layer

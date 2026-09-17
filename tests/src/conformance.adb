@@ -567,6 +567,16 @@ package body Conformance is
             --  the expected count noticed -- which is how gpt2 came to be
             --  nine hundred sequences short with nothing saying why.
             Result.Refused := Result.Refused + 1;
+            if Result.Refused = 1 then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "first refusal: architecture "
+                  & Tiny_Model.Fixture_Architecture'Image (Current_Kind)
+                  & " would not load on "
+                  & Model_Runner.Backend.Backend_Name (Backend)
+                  & ", repack " & L.Repack_Mode'Image (Repack)
+                  & ", " & E.Error_Code'Image (Status.Code));
+            end if;
             Containers.Close (Parsed);
             return;
          end if;
@@ -806,6 +816,22 @@ package body Conformance is
             --  buffer for an afternoon.
             if not E.Is_Ok (Status) then
                Result.Refused := Result.Refused + 1;
+
+               --  The first one, named, as the first disagreement is: a
+               --  refusal fails the sweep and the totals do not print it,
+               --  which cost a run per guess until this was written.
+               if Result.Refused = 1 then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "first refusal: architecture "
+                     & Tiny_Model.Fixture_Architecture'Image (Current_Kind)
+                     & ", backend "
+                     & Model_Runner.Backend.Backend_Name (Backend)
+                     & ", repack " & L.Repack_Mode'Image (Repack)
+                     & ", cache " & L.Cache_Precision'Image (Cache)
+                     & ", batched " & Boolean'Image (Batched)
+                     & ", " & E.Error_Code'Image (Status.Code));
+               end if;
             end if;
 
             if E.Is_Ok (Status) and then Both_Ways then
@@ -1046,6 +1072,15 @@ package body Conformance is
          --  How many comparisons the device pass below made. Zero on a
          --  machine with no device, which is most of them.
          On_Device : Natural := 0;
+
+         --  And how many the cache-precision arm made: tallied beside its
+         --  calls, as the device's are, rather than stated again as a
+         --  formula. The formula was written for two storages and read
+         --  six comparisons a backend where the arm had grown to twelve,
+         --  and the sweep failed its own count for a week while every
+         --  comparison it made agreed -- and nothing printed said which
+         --  of the two had moved.
+         Cached : Natural := 0;
          Device_Ready : Boolean := False;
       begin
          --  The backends this crosses with everything else. The device one
@@ -1300,6 +1335,7 @@ package body Conformance is
                                     Values => L.Value_Fourth);
                            Compare (4, L.Fourth, Backend, Repack,
                                     Values => L.Value_Eighth);
+                           Cached := Cached + 8;
 
                            if Batches (Backend) then
                               Compare (4, L.Halved, Backend, Repack,
@@ -1311,6 +1347,7 @@ package body Conformance is
                               Compare (4, L.Eighth, Backend, Repack,
                                        Batched => True,
                                        Values => L.Value_Fourth);
+                              Cached := Cached + 4;
                            end if;
                         end if;
 
@@ -1495,20 +1532,7 @@ package body Conformance is
             --  is the finding rather than a gap: the published lossy figure
             --  describes a dense model with full attention and heads the
             --  width its embedding implies, and nothing else.
-            --  And the half-precision cache, which runs on the plain and
-            --  windowed shapes with the weights unrounded: two sequences a
-            --  backend, and one of them again through the batched path
-            --  where the backend takes one.
-            --  Twice over: the halved cache and the byte one run the same
-            --  comparisons.
-            --  Counted over the pairs the cached comparisons actually
-            --  reach rather than as architectures times two shapes. The two
-            --  are the same number until an architecture cannot hold one of
-            --  the two shapes -- and a bidirectional one cannot hold the
-            --  windowed shape, so the product would ask for a fixture the
-            --  loops never build.
-            Cached_Pairs : Natural := 0;
-            Cached : Natural := 0;
+            --  The cache-precision arm is tallied where it runs, above.
 
             --  The architectures with no gate, which run every shape but
             --  the mixture. Counted rather than named twice: what makes a
@@ -1529,13 +1553,9 @@ package body Conformance is
                for Shape in Model_Shape loop
                   if Tiny_Model.Cannot_Hold (Kind, Shape) then
                      Skipped := Skipped + 1;
-                  elsif Shape in Plain | Windowed then
-                     Cached_Pairs := Cached_Pairs + 1;
                   end if;
                end loop;
             end loop;
-
-            Cached := 2 * Formats * Cached_Pairs * (Backends * 2 + Batching);
 
             --  The mixture shape runs every repack mode but the rounded one,
             --  which is skipped for every architecture; an ungated one runs
