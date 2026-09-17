@@ -5295,6 +5295,19 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  Past what the device said one storage buffer may hold, refused
+      --  here rather than bound: the allocation goes through, the
+      --  descriptor naming a range past the bound does not, and every
+      --  read out of it is undefined. Phi-3 mini at its own 4,096 asks
+      --  for 4.8 GB of context with the half-precision copy, on a part
+      --  that reads 4 GiB of one buffer, and answered nonsense from the
+      --  first token. Refused, the session keeps its context on the host
+      --  and attends there, as one the device has no room for does; a
+      --  packed cache is a quarter of the size and fits.
+      if Over_Limit (Item, Wanted) then
+         return;
+      end if;
+
       --  Already large enough is already done, so a caller may say this
       --  every layer without paying for it after the first.
       if Item.Cache_Bytes >= Wanted then

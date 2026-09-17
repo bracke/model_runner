@@ -4484,6 +4484,70 @@ package body Tests.Backend_Cases is
       Device.Close;
    end The_Backend_Routes_And_Gathers_As_It_Slices;
 
+   -----------------------------------------------
+   -- A_Cache_Past_The_Storage_Bound_Is_Refused --
+   -----------------------------------------------
+
+   --  A cache the device could allocate but not read: past what it says
+   --  one storage buffer may hold, a descriptor naming the range reads
+   --  undefined values and the driver refuses nothing. Phi-3 mini at its
+   --  own 4,096 asked for 4.8 GB of context on a part that reads 4 GiB
+   --  and answered nonsense from the first token. Reserve refuses it, and
+   --  a cache that fits is still taken afterwards.
+   procedure A_Cache_Past_The_Storage_Bound_Is_Refused
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      use type Interfaces.Unsigned_64;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok : Boolean;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      --  A device that states no bound bounds nothing here, and the
+      --  request would go to the driver: nothing to hold it to.
+      if Products.Byte_Limit (Engine) > 0 then
+         declare
+            --  Six bytes an element: one more element than the bound
+            --  holds.
+            Past : constant N.Element_Count :=
+              N.Element_Count (Products.Byte_Limit (Engine) / 6 + 1);
+         begin
+            Products.Reserve (Engine, Past, Ok);
+            Assert (not Ok,
+                    "a cache past what one storage buffer holds was taken");
+            Assert (Products.Cached_Bytes (Engine) = 0,
+                    "the refused cache left bytes reserved");
+         end;
+      end if;
+
+      Products.Reserve (Engine, 1024, Ok);
+      Assert (Ok, "a cache that fits was refused after one that did not");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Cache_Past_The_Storage_Bound_Is_Refused;
+
    -----------------------------------------
    -- The_Heads_Step_Says_What_Three_Steps_Say --
    -----------------------------------------
@@ -7507,6 +7571,11 @@ package body Tests.Backend_Cases is
          "the fused heads step -- a head normalization, a rotation and a "
          & "placement as one dispatch -- says what the three steps say, to "
          & "the bit");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Cache_Past_The_Storage_Bound_Is_Refused'Access,
+         "a cache past what the device says one storage buffer may hold "
+         & "is refused rather than read as undefined values, and one that "
+         & "fits is taken after it");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Centred_Norm_And_A_Unit_Alone_Say_What_The_Host_Says'Access,
          "the centred normalization with a shift and the unit alone on "

@@ -1457,7 +1457,12 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Item Ready engine.
    --  @param Elements How many values, keys and values together.
-   --  @param Ok True when the room is there.
+   --  @param Ok True when the room is there. False where the device has
+   --    no room, and where the cache with its half-precision copy --
+   --    six bytes an element -- would be larger than what the device
+   --    says one storage buffer may hold, which Byte_Limit reports: a
+   --    descriptor naming a range past that bound reads undefined
+   --    values rather than being refused by the driver.
    procedure Reserve
      (Item     : in out Engine;
       Elements : Model_Runner.Numerics.Element_Count;

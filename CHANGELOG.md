@@ -55,6 +55,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Phi-3 mini at its own context answered nonsense on the device.**
+  Its exact cache at 4,096 positions, with the half-precision copy the
+  matrix attention reads, is 4.8 GB in one buffer, and the part here
+  says it reads 4 GiB of one: the allocation went through, the
+  descriptor naming a range past the bound read undefined values, and
+  every token from the first was noise. A cache past what the device
+  says one storage buffer may hold is refused now, as a matrix past it
+  has been, and the session keeps its context on the host and attends
+  there, as one the device has no room for does -- `--show-stats` then
+  says the device holds no bytes of context. A packed cache is a
+  quarter of the size and fits: `--kv-cache q8` at 4,096 puts 1.2 GB on
+  the device and generates at 0.538 s for twelve tokens against 0.688
+  with the context on the host.
 - **A Qwen2 batch over the device's tile read zeros for its keys.** The
   half-precision copy of a batch, which the tile kernel reads its
   operand from, was marked stale at every step and remade only by a
