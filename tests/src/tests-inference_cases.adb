@@ -3379,17 +3379,18 @@ package body Tests.Inference_Cases is
    ------------------------------------------------------------
 
    --  The device's cache is dealt out in blocks, one a session, and there
-   --  are sixteen of them. A seventeenth session takes the block of
-   --  whichever held one longest, and the one turned out writes its cache
-   --  into a block again when it next runs -- the host's copy being the
-   --  copy of record, which is what makes turning one out safe.
+   --  are sixteen of them. A seventeenth session takes the block stamped
+   --  longest ago, and the one turned out writes its cache into a block
+   --  again when it next runs -- the host's copy being the copy of
+   --  record, which is what makes turning one out safe. A seventeenth
+   --  used to be refused the device's cache for the rest of its life.
    --
-   --  That write used to be the whole of the session's arrays, the shape
-   --  of the cache rather than the shape of what is in it; it is now a
-   --  layer at a time and only the cells each layer holds. So this opens
-   --  seventeen sessions of a few tokens each, runs the first again, and
-   --  asks whether it says what the same sequence says on the processor:
-   --  what the turned-out session carries back has to be what it left.
+   --  So this opens seventeen sessions of a few tokens each and asks two
+   --  things of them: that the seventeenth has its layers go over whole,
+   --  which is the block it was given; and that the first, run again
+   --  after it was turned out of its own, says what the same sequence
+   --  says to a session that never left one. What it carries back into
+   --  the block it is given has to be what it left in the block it had.
    procedure A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3453,7 +3454,8 @@ package body Tests.Inference_Cases is
          Says (Under, First, Alone);
 
          --  Sixteen more, each of which takes a block: the first one's
-         --  goes to the last of them.
+         --  goes to the last of them, which is the one that finds every
+         --  block held.
          for Index in Beside'Range loop
             L.Open (Beside (Index), Under.Ready, Status => Status);
             Assert (E.Is_Ok (Status),
@@ -3461,8 +3463,20 @@ package body Tests.Inference_Cases is
 
             declare
                Ignored : Logit_Vector;
+               Whole   : constant Natural :=
+                 Model_Runner.Backend.Device.Layers_Whole;
             begin
                Says (Under, Beside (Index), Ignored);
+
+               --  The seventeenth session of sixteen blocks: it takes one
+               --  from whoever has gone longest without reading theirs,
+               --  where it used to be told there was none and attend
+               --  every layer on the processor.
+               if Index = Beside'Last then
+                  Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
+                          "the seventeenth session had no layer go over"
+                          & " whole: it was refused a block");
+               end if;
             end;
          end loop;
 

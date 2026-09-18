@@ -218,9 +218,11 @@ How it is built, which is what the pricing said it had to be:
   bound already, so what was a limit became a read of two words a row.
 - **The device's cache, dealt out in blocks.** It held one session's keys and
   values. It is handed out in blocks of one session's worth now, and a
-  session takes one the first time it writes to that cache and keeps it until
-  it closes. A round's rows read the blocks their sessions were already in,
-  so forming a round writes the table and nothing else.
+  session takes one the first time it writes to that cache and keeps it while
+  anything else can be given one: where every block is held, the block
+  stamped longest ago goes to the session asking. A round's rows read the
+  blocks their sessions were already in, so forming a round writes the table
+  and nothing else.
 - **Sixteen members.** What memory bounds rather than what a push block
   holds: sixteen blocks of this model at two thousand positions is two
   gigabytes. More than that keeps attention on the host, as stage two left
@@ -239,12 +241,15 @@ A wider cache buffer used to come up empty and turn every seated session out
 of its block. It carries its contents over now, values and half-precision
 copy alike.
 
-A seventeenth session turns the first out of its block, and the session
-turned out writes its keys and values back into whatever block it is given
+A seventeenth session turns out whichever block has gone longest unasked --
+the session holding it reads back whatever the device owes its copy, gives
+the block up, and writes its keys and values into whatever block it is given
 next. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
-that layer still holds.
+that layer still holds. A round stamps every member before any of them asks,
+so no member turns another out, and a round holds at most as many members as
+there are blocks.
 
 And two sessions on one device used to write over each other's keys, which
 nothing did and nothing caught; blocks are the answer to that as well.

@@ -9910,9 +9910,9 @@ the processor, saving a context, and rolling one.
 
 So it is owed instead of sent. A session records the range of positions the
 device has written and its copy has not been given; `Settle_Cache` fetches
-them, and the three readers call it before they read. There is no eviction to
-lose them to -- a block is granted once and a session keeps it until it
-closes -- so a range recorded is still on the device when it is asked for.
+them, and the three readers call it before they read. A session turned out of
+its block settles what it owes before the block goes, so a range recorded is
+still in the block it was written to when it is asked for.
 `Adopt` and `Reset` clear it instead of fetching, because a context replaced
 or dropped is one nothing will read.
 
@@ -16550,9 +16550,14 @@ product on the device and left attention on the host, because the device
 holds one cache laid out as one session's and a round's rows are different
 sessions. Now it holds several: the cache buffer is dealt out in blocks of
 one session's worth, and a session takes a block the first time it writes to
-the device's cache and keeps it until it closes. A round's rows read the
-blocks their sessions were already in, so **forming a round costs a table of
-two words a row and nothing else**.
+the device's cache and keeps it while anything else can be given one. A
+round's rows read the blocks their sessions were already in, so **forming a
+round costs a table of two words a row and nothing else**. Where every block
+is held, a session asking for one takes the block stamped longest ago -- the
+session holding it settles its copy first and writes its cells back into
+whatever block it is given next -- so a seventeenth session is dealt into the
+sixteen rather than attending every layer on the processor for the rest of
+its life.
 
 That table -- where each row has got to, and where its block begins -- lives
 at the end of the cache rather than in the kernel's push constants. Push

@@ -267,6 +267,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A seventeenth session is dealt a block of the device's cache instead of
+  being refused one for life.** The cache is dealt out in blocks a session
+  apiece and there are sixteen; a session that found every one held was told
+  there was none and attended every layer on the processor from then on,
+  however idle the sixteen holding blocks were. Each block is stamped every
+  time the session holding it asks for it, and a session that finds none free
+  takes the one stamped longest ago: the session holding it reads back
+  whatever the device owes its copy -- the host's copy being the copy of
+  record -- and writes its cells into whatever block it is given next, which
+  is the write the entry below made proportional to what a session holds. A
+  round stamps every member before any of them asks, so no member turns
+  another out, and a round is capped at as many members as there are blocks.
+  The path had no test at all before this; it has one that opens seventeen
+  sessions and holds the turned-out one's logits against a session that never
+  left its block.
 - **A session returning to a block writes the cells it holds, not the room
   it has for them.** The cache is dealt out in blocks a session apiece, and
   a session turned out of its block writes what it committed back into the

@@ -2192,9 +2192,20 @@ private
       --  something is about to read them instead -- which is
       --  Settle_Cache, and the three places that call it.
       --
-      --  There is no eviction to lose them to: a block is granted once and
-      --  a session keeps it until it closes, so a range recorded here is
-      --  still on the device when it is asked for.
+      --  A session turned out of its block settles what it owes before
+      --  the block goes, so a range recorded here is still in the block it
+      --  was written to when it is asked for.
+      --
+      --  Every layer of the call has to have gone over whole for the
+      --  positions to be owed rather than read. A layer that wrote the
+      --  host's copy itself may not have written the device's, so reading
+      --  its rows back out of the block would put whatever is there over a
+      --  good copy, and a call of some layers one way and some the other
+      --  reads the whole ones back there and then. No model this program
+      --  reads mixes them -- a layer goes over whole or the session has no
+      --  block at all, which the model and the device decide between them
+      --  and not the layer -- so that reading back was measured, over the
+      --  suite and six models, and never once happened.
       Owed_At    : Natural := 0;
       Owed_Count : Natural := 0;
 

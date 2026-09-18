@@ -4932,6 +4932,15 @@ package body Model_Runner.Llama is
    Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
+   --  And when each block was last asked for. A session stamps its block
+   --  every time it asks for it -- which is every layer that goes over
+   --  whole, so the stamp is how recently the block was read rather than
+   --  how recently it was granted -- and a session that finds every block
+   --  held takes the one stamped longest ago. The clock counts asks and
+   --  nothing else: it is compared and never read as a time.
+   Block_Clock : Natural := 0;
+   Block_Used  : array (Block_Holder'Range) of Natural := [others => 0];
+
    --  Which sessions hold a seat in the device's state room: a ring
    --  each, Kept_States + 1 slots of every linear layer's memories and
    --  states, laid one after another past the runs' table at the front.
@@ -5244,14 +5253,28 @@ package body Model_Runner.Llama is
    --  Give a session a block of the device's cache, and keep it there.
    --
    --  A session takes the lowest free block the first time it writes to the
-   --  device's cache and holds it until it closes. Nothing moves afterwards
-   --  -- not when a round forms, not when its members change -- which is
-   --  what makes a round free to form: its rows read the blocks their
-   --  sessions were already in.
+   --  device's cache and holds it while anything else can be given one.
+   --  Nothing moves while a round forms -- not when its members change --
+   --  which is what makes a round free to form: its rows read the blocks
+   --  their sessions were already in.
+   --
+   --  Where every block is held, the one stamped longest ago is taken from
+   --  the session holding it. That session's cache is read back into the
+   --  host's copy first, which is the copy of record for every other thing
+   --  a session can do, and written into a block again when the session
+   --  next has a layer to put there. A seventeenth session used to be
+   --  refused the device's cache for the rest of its life and attend every
+   --  layer on the processor, whatever the sixteen holding blocks were
+   --  doing with them.
    --
    --  @param Item The session.
    --  @param Ok True when the block is the session's and holds its cache.
    procedure Take_Block (Item : Session_Access; Ok : out Boolean);
+
+   --  Read back whatever the device wrote that the host's copy has not
+   --  got. Declared here because a session turned out of its block must
+   --  settle before the block goes; said where it is written, below.
+   procedure Settle_Cache (Item : in out Session);
 
    --  The packed caches' layout, for the two precisions that pack: a row
    --  of Width elements takes Row_Bytes of the bytes and Blocks_Of scales,
@@ -5483,11 +5506,24 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  Already this session's, which is every call after the first: the
-      --  block was granted once and nothing turns a session out of one, so
-      --  there is nothing to ask the device and nothing to write.
+      --  Already this session's, which is every call after the first:
+      --  there is nothing to ask the device and nothing to write. Stamped
+      --  as it goes, so that the block another session takes where every
+      --  one is held is the one nobody has read for longest.
       if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
+         Block_Clock := Block_Clock + 1;
+         Block_Used (Item.Seat) := Block_Clock;
          Ok := True;
+         return;
+      end if;
+
+      --  Every session sharing the buffer must agree on how wide a block
+      --  is. One that does not -- another model, or the same one with
+      --  another context -- is refused the device's cache and attends on
+      --  the host, which is the answer it would have got there anyway.
+      --  Asked before a block is looked for, because a session that cannot
+      --  use one must not turn another out of one.
+      if Block_Span /= 0 and then Block_Span /= Block_Span_Of (Item.all) then
          return;
       end if;
 
@@ -5500,8 +5536,45 @@ package body Model_Runner.Llama is
          Seat := Seat + 1;
       end loop;
 
+      --  None free: the block stamped longest ago is taken from the
+      --  session holding it. What the device wrote into that block and the
+      --  host has not read yet is read first -- the host's copy is what
+      --  the session carries back into the block it is given next, and a
+      --  read that fails leaves the block where it is rather than losing
+      --  the positions in it.
       if Seat >= Block_Holder'Length then
-         return;
+         declare
+            Oldest : Natural := 0;
+            Found  : Integer := -1;
+         begin
+            for Which in Block_Holder'Range loop
+               if Block_Holder (Which) /= null
+                 and then Block_Holder (Which) /= Item
+                 and then (Found < 0 or else Block_Used (Which) < Oldest)
+               then
+                  Found  := Which;
+                  Oldest := Block_Used (Which);
+               end if;
+            end loop;
+
+            if Found < 0 then
+               return;
+            end if;
+
+            declare
+               Turned : constant Session_Access := Block_Holder (Found);
+            begin
+               Settle_Cache (Turned.all);
+
+               if Turned.Owed_Count > 0 then
+                  return;
+               end if;
+
+               Block_Holder (Found) := null;
+               Turned.Seat := -1;
+               Seat := Found;
+            end;
+         end;
       end if;
 
       declare
@@ -5518,14 +5591,10 @@ package body Model_Runner.Llama is
 
          Written : Boolean := True;
       begin
-         --  Every session sharing the buffer must agree on how wide a block
-         --  is. One that does not -- another model, or the same one with
-         --  another context -- is refused the device's cache and attends on
-         --  the host, which is the answer it would have got there anyway.
+         --  The width every block has, from the first session to take one;
+         --  asked of every session before it looks for a block, above.
          if Block_Span = 0 then
             Block_Span := Span;
-         elsif Block_Span /= Span then
-            return;
          end if;
 
          Model_Runner.Backend.Device.Reserve_Cache (Wanted, Ok);
@@ -5630,6 +5699,8 @@ package body Model_Runner.Llama is
 
          Item.Seat := Seat;
          Block_Holder (Seat) := Item;
+         Block_Clock := Block_Clock + 1;
+         Block_Used (Seat) := Block_Clock;
          Ok := True;
       end;
    end Take_Block;
@@ -14481,6 +14552,28 @@ package body Model_Runner.Llama is
                     Model_Runner.Backend.Backend_Device)
       then
          Seated := True;
+
+         --  Every member's block stamped before any of them asks, so that
+         --  a member seated late in the round does not turn out one seated
+         --  early -- or one not yet asked, which would have it carry its
+         --  cache into another block a line later. A round holds at most
+         --  as many members as there are blocks, so stamping them all
+         --  leaves a block to turn out only where somebody outside the
+         --  round holds one.
+         for Which in 0 .. Count - 1 loop
+            declare
+               Member : constant Session_Access := Held_By (Which);
+            begin
+               if Member /= null
+                 and then Member.Seat >= 0
+                 and then Member.Seat <= Block_Holder'Last
+                 and then Block_Holder (Member.Seat) = Member
+               then
+                  Block_Clock := Block_Clock + 1;
+                  Block_Used (Member.Seat) := Block_Clock;
+               end if;
+            end;
+         end loop;
 
          for Which in 0 .. Count - 1 loop
             declare
