@@ -1,0 +1,175 @@
+#version 450
+
+//  The gated delta rule of a hybrid's linear layer, a head at a time,
+//  over a batch of positions in order.
+//
+//  A position's state is the one before decayed and corrected: S_t =
+//  a_t S_(t-1) + k_t u_t', with u_t = b_t (v_t - a_t S_(t-1)' k_t), and
+//  its answer is S_t' q_t, scaled, normalized over the head by its own
+//  mean square and a gain, and gated by the logistic-weighted unit of z.
+//  The host unrolls a chunk of this into triangles so that the state is
+//  read once for the chunk; here the state is read and written once a
+//  position, which is a head's square twice through the cache for each
+//  -- and the same numbers, associated in the order the rule states them
+//  rather than the order the triangles do, which the sweep holds to its
+//  tolerance.
+//
+//  The decay is exp(A_log times the softplus of alpha plus dt's bias)
+//  and the rate the logistic of beta, one number a head a position, as
+//  the host computes them. A_log, dt's bias and the gain lie one after
+//  another in the weight the device keeps for this step.
+//
+//  The state the batch begins with is in a slot of the ring, and each
+//  position's goes to the slot the position after it reads -- every
+//  position's, where the host writes only the ones it may rewind to,
+//  which leaves the slots the same, since a slot holds the last of the
+//  positions that map to it. A head's state is Head rows of Head,
+//  key-major: row i holds S (i, j) for every j, so a lane is a j and a
+//  row read is one read a lane, in step.
+//
+//  A workgroup a value head, its lanes over the columns of the state.
+
+const uint LANES = 128u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Rooms  { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a mixed row holds, and the state's width.
+    uint mix;
+    uint head;
+
+    //  Positions in this batch, and the position it begins at.
+    uint count;
+    uint first;
+
+    //  Key heads, and elements the queries or the keys take in a row.
+    uint key_heads;
+    uint key_width;
+
+    //  Where the weight begins, in elements: A_log a value head, then
+    //  dt's bias a value head, then the gain a column.
+    uint base;
+
+    //  Value heads, which is how many workgroups there are.
+    uint value_heads;
+
+    //  Where this layer's state begins within a slot, in elements; how
+    //  many elements a slot holds; how many slots the ring has.
+    uint state_at;
+    uint every;
+    uint slots;
+
+    //  Where the gate rows, the alphas and the betas lie in the rooms
+    //  buffer, in elements: a row of Value_Heads * Head, of Value_Heads
+    //  and of Value_Heads a position.
+    uint z_at;
+    uint alpha_at;
+    uint beta_at;
+
+    //  The scale on the answer and the epsilon under the mean square,
+    //  by their bits.
+    uint scale;
+    uint epsilon;
+
+    uint unused[8];
+} shape;
+
+shared float partial[LANES];
+
+float logistic(float v) {
+    return 1.0 / (1.0 + exp(-clamp(v, -60.0, 60.0)));
+}
+
+float softplus(float v) {
+    return v > 20.0 ? v : log(1.0 + exp(v));
+}
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (h >= shape.value_heads) {
+        return;
+    }
+
+    uint head = shape.head;
+    uint square = head * head;
+    uint kh = h % shape.key_heads;
+    float a_log = w[shape.base + h];
+    float dt_bias = w[shape.base + shape.value_heads + h];
+    float scale = uintBitsToFloat(shape.scale);
+    float epsilon = uintBitsToFloat(shape.epsilon);
+
+    for (uint t = 0u; t < shape.count; t++) {
+        uint row = t * shape.mix;
+        uint q_at = row + kh * head;
+        uint k_at = row + shape.key_width + kh * head;
+        uint v_at = row + 2u * shape.key_width + h * head;
+
+        uint read_at = ((shape.first + t) % shape.slots) * shape.every
+                       + shape.state_at + h * square;
+        uint write_at = ((shape.first + t + 1u) % shape.slots) * shape.every
+                        + shape.state_at + h * square;
+
+        float alpha = r[shape.alpha_at + t * shape.value_heads + h];
+        float beta = r[shape.beta_at + t * shape.value_heads + h];
+        float a = exp(a_log * softplus(alpha + dt_bias));
+        float b = logistic(beta);
+
+        float sum = 0.0;
+
+        for (uint j = lane; j < head; j += LANES) {
+            //  The correction: what the decayed state already says
+            //  about this key, taken off the value and rated.
+            float said = 0.0;
+            for (uint i = 0u; i < head; i++) {
+                said += s[read_at + i * head + j] * x[k_at + i];
+            }
+            float u = b * (x[v_at + j] - a * said);
+
+            //  The state decayed and corrected, and the answer read
+            //  out of it as it is written.
+            float o = 0.0;
+            for (uint i = 0u; i < head; i++) {
+                float made = a * s[read_at + i * head + j] + x[k_at + i] * u;
+                s[write_at + i * head + j] = made;
+                o += made * x[q_at + i];
+            }
+
+            o *= scale;
+            y[t * shape.value_heads * head + h * head + j] = o;
+            sum += o * o;
+        }
+
+        //  The head's mean square, folded.
+        partial[lane] = sum;
+        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+            barrier();
+            if (lane < reach) {
+                partial[lane] += partial[lane + reach];
+            }
+        }
+        barrier();
+
+        float root = 1.0 / sqrt(partial[0] / float(head) + epsilon);
+
+        for (uint j = lane; j < head; j += LANES) {
+            uint at = t * shape.value_heads * head + h * head + j;
+            float z = r[shape.z_at + t * shape.value_heads * head + h * head + j];
+            float gain = w[shape.base + 2u * shape.value_heads + j];
+            y[at] = y[at] * root * gain * (z / (1.0 + exp(-clamp(z, -60.0, 60.0))));
+        }
+
+        //  The write of this position's state has to land before the
+        //  next position reads it -- the same slot where the ring is
+        //  one -- and every lane wrote rows every other lane reads.
+        memoryBarrierBuffer();
+        barrier();
+    }
+}

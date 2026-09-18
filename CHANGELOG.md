@@ -55,6 +55,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A layer's answer carried out on the device was lost when the next
+  layer refused it before running.** A whole layer refused by its own
+  guards -- a shape its sequence does not take, which the layer before
+  could not know -- returned without bringing the carried activation
+  home, and the host went on from the layer before's input; the same
+  answer refused by the device once submitted was brought home, and
+  the guards were not. Every refusal leaves through one door now. It
+  showed on a nibble-cached hybrid whose tiny fixture the packed
+  attention would not take after its linear layer had gone whole.
+- **A layer's answer carried out on the device was lost when the next
+  layer's sequence needed a larger result buffer.** A sequence carrying
+  in reads its activation from the front of the buffer the one before
+  left it in, and a buffer that grows is a new buffer: the front stayed
+  behind, and the next layer went on from noise. It never showed while
+  every layer's sequence was the same size; a hybrid's linear layer is
+  smaller than the attention layer after it, and its first batch of a
+  new length lost every answer past a hundred and twenty-eight
+  positions. The front comes over with the buffer now, after the
+  sequence before is waited for.
 - **A hybrid mixture's one position on the device went without its
   shared expert.** The token mixture's device road -- the chosen experts
   gathered as one dispatch -- returned before the shared expert every
@@ -205,6 +224,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hybrid's linear layers go over whole, ring and all.** The gated
+  delta rule and the convolution before it ran on the host under the
+  device backend, with the layer's five products going over one
+  submission at a time around them: three quarters of Qwen3.5's layers,
+  and most of a token. `conv.comp` convolves each position over the
+  memory a ring of slots keeps and writes the memory each position
+  leaves; `rule.comp` runs the rule a value head at a time over the
+  batch in order, reading and writing the state once a position -- the
+  same numbers as the host's chunked kernel, associated as the rule
+  states them, held to it within a ten-thousandth over a ring that
+  wraps. The ring lives in a room of the device's the session takes,
+  goes over once and comes home when the host is about to read it -- a
+  snapshot, a change of how many states are kept, a layer the device
+  will not take -- so a token of Qwen3.5-0.8B is one chained sequence
+  a layer from the first to the last: it reads a 101-token prompt and
+  generates 64 on the device in 1.115 s against 1.383 with the rule on
+  the host, 0.104 s evaluating against 0.106 and 1.019 s generating
+  against 1.240, the same text. A round of sessions keeps its
+  rule on the host, since its rows would take turns with the one ring
+  the device holds.
 - **A hybrid's attention layers go over whole.** Qwen3.5's attention
   layers project each head's queries and a gate for the head in one
   tensor and multiply the blend by the logistic of the gate, and its

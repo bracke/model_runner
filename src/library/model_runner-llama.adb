@@ -2181,6 +2181,28 @@ package body Model_Runner.Llama is
             Current.Post_Attention_Norm_Pair);
       Pair (Current.Post_Feed_Norm, Current.Post_Feed_Norm_Bias,
             Current.Post_Feed_Norm_Pair);
+
+      --  And a linear layer's three rows of numbers as one, for the
+      --  device's rule step.
+      if Current.A_Log /= null and then Current.DT_Bias /= null
+        and then Current.State_Norm /= null
+        and then Current.A_Log.all'Length = Current.DT_Bias.all'Length
+      then
+         declare
+            Heads : constant Element_Count := Current.A_Log.all'Length;
+            Wide  : constant Element_Count := Current.State_Norm.all'Length;
+         begin
+            T.Allocate (2 * Heads + Wide, Current.Linear_Numbers);
+            if Current.Linear_Numbers /= null then
+               Current.Linear_Numbers.all (0 .. Heads - 1) :=
+                 Current.A_Log.all;
+               Current.Linear_Numbers.all (Heads .. 2 * Heads - 1) :=
+                 Current.DT_Bias.all;
+               Current.Linear_Numbers.all (2 * Heads .. 2 * Heads + Wide - 1) :=
+                 Current.State_Norm.all;
+            end if;
+         end;
+      end if;
    end Pair_Norms;
 
    --  Whether a layer's normalizations go to the device centred: every
@@ -4910,6 +4932,167 @@ package body Model_Runner.Llama is
    Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
+   --  And which session's ring of linear states the device's state room
+   --  holds, or null. One session at a time: a ring is Kept_States + 1
+   --  slots of every linear layer's memories and states, and a session
+   --  that takes the room from another brings that one's ring home
+   --  first. A round of sessions keeps its rule on the host for that
+   --  reason, since its rows would take turns.
+   State_Holder : Session_Access := null;
+
+   --  How many elements one slot of the ring takes on the device: the
+   --  memories of every linear layer, then the states.
+   function Device_Slot_Span (Item : Session) return Element_Count
+   is (Conv_Room (Item.Owner.Settings) + State_Room (Item.Owner.Settings));
+
+   --  Bring a session's ring home from the device, where the device's
+   --  copy is the newer. A no-op otherwise, so it is asked wherever the
+   --  host is about to read the ring.
+   procedure Fetch_States (Item : Session_Access) is
+      Read : Boolean := True;
+   begin
+      if Item = null or else not Item.State_On_Device
+        or else Item.Delta_State = null or else Item.Conv_State = null
+      then
+         return;
+      end if;
+
+      declare
+         Settings   : Configuration renames Item.Owner.Settings;
+         Every      : constant Element_Count := Device_Slot_Span (Item.all);
+         Every_Conv : constant Element_Count := Conv_Room (Settings);
+         Every_State : constant Element_Count := State_Room (Settings);
+         Slots      : constant Element_Count :=
+           Element_Count (Item.Kept_States) + 1;
+      begin
+         for Slot in 0 .. Slots - 1 loop
+            Model_Runner.Backend.Device.Get_State
+              (Slot * Every,
+               Item.Conv_State.all
+                 (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1),
+               Read);
+            exit when not Read;
+            Model_Runner.Backend.Device.Get_State
+              (Slot * Every + Every_Conv,
+               Item.Delta_State.all
+                 (Slot * Every_State .. (Slot + 1) * Every_State - 1),
+               Read);
+            exit when not Read;
+         end loop;
+      end;
+
+      --  Read or not, the device's copy is not the one to read again: a
+      --  read that failed leaves the host's as it was, and the next
+      --  layer on the device starts from that.
+      Item.State_On_Device := False;
+   end Fetch_States;
+
+   --  Put a session's ring on the device, where the host's copy is the
+   --  newer, taking the room from whoever holds it.
+   procedure Send_States (Item : Session_Access; Ok : out Boolean) is
+   begin
+      Ok := False;
+
+      if Item = null or else Item.Owner = null
+        or else Item.Delta_State = null or else Item.Conv_State = null
+      then
+         return;
+      end if;
+
+      if State_Holder /= Item then
+         Fetch_States (State_Holder);
+         State_Holder := Item;
+         Item.State_On_Device := False;
+      end if;
+
+      if Item.State_On_Device then
+         Ok := True;
+         return;
+      end if;
+
+      declare
+         Settings   : Configuration renames Item.Owner.Settings;
+         Every      : constant Element_Count := Device_Slot_Span (Item.all);
+         Every_Conv : constant Element_Count := Conv_Room (Settings);
+         Every_State : constant Element_Count := State_Room (Settings);
+         Slots      : constant Element_Count :=
+           Element_Count (Item.Kept_States) + 1;
+         Written    : Boolean;
+      begin
+         Model_Runner.Backend.Device.Reserve_State (Slots * Every, Written);
+         if not Written then
+            return;
+         end if;
+
+         for Slot in 0 .. Slots - 1 loop
+            Model_Runner.Backend.Device.Put_State
+              (Slot * Every,
+               Item.Conv_State.all
+                 (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1),
+               Written);
+            if not Written then
+               return;
+            end if;
+            Model_Runner.Backend.Device.Put_State
+              (Slot * Every + Every_Conv,
+               Item.Delta_State.all
+                 (Slot * Every_State .. (Slot + 1) * Every_State - 1),
+               Written);
+            if not Written then
+               return;
+            end if;
+         end loop;
+      end;
+
+      Item.State_On_Device := True;
+      Ok := True;
+   end Send_States;
+
+   --  A linear layer's geometry and its place in the ring, as the
+   --  device's steps take them; the row steps are filled in there.
+   function Linear_Shape_Of
+     (Item : Session; Index : Natural; First : Natural)
+      return Model_Runner.Backend.Device.Linear_Shape
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+   begin
+      return
+        (Mix         => Mix_Width (Settings),
+         Head        => Settings.State_Size,
+         Taps        => Settings.Conv_Kernel,
+         Unit_Blocks => 2 * Settings.Key_Heads,
+         Key_Heads   => Settings.Key_Heads,
+         Value_Heads => Settings.Value_Heads,
+         Key_Width   => Key_Width (Settings),
+         Region_At   => Natural (Conv_At (Settings, Index)),
+         Every       => Natural (Device_Slot_Span (Item)),
+         Slots       => Item.Kept_States + 1,
+         First       => First,
+         Z_Step      => 0,
+         Alpha_Step  => 0,
+         Beta_Step   => 0,
+         Scale       =>
+           Real (1.0 / N.Sqrt (N.Wide_Real (Settings.State_Size))),
+         Epsilon     => Settings.Epsilon);
+   end Linear_Shape_Of;
+
+   --  Where a linear layer's state lies within a slot on the device:
+   --  after every layer's memories.
+   function Linear_State_At (Item : Session; Index : Natural) return Natural
+   is (Natural (Conv_Room (Item.Owner.Settings)
+                + State_At (Item.Owner.Settings, Index)));
+
+   --  Let go of the room, at a session's close.
+   procedure Release_State_Room (Item : Session_Access) is
+   begin
+      if State_Holder = Item then
+         State_Holder := null;
+      end if;
+      if Item /= null then
+         Item.State_On_Device := False;
+      end if;
+   end Release_State_Room;
+
    --  Give a session a block of the device's cache, and keep it there.
    --
    --  A session takes the lowest free block the first time it writes to the
@@ -5323,6 +5506,12 @@ package body Model_Runner.Llama is
          Item.Owed_Count := 0;
 
          for Index in Source.Layers.all'Range loop
+            --  A linear layer keeps a state rather than keys and values,
+            --  and its ring comes home by its own road.
+            if Linear (Settings, Natural (Index)) then
+               goto Next_Layer;
+            end if;
+
             declare
                Layer_Keys : constant Element_Count :=
                  Keys_At (Item, Natural (Index));
@@ -5358,6 +5547,8 @@ package body Model_Runner.Llama is
 
                exit when not Read;
             end;
+
+            <<Next_Layer>>
          end loop;
       end;
    end Settle_Cache;
@@ -8185,6 +8376,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Feed_Norm_Pair);
             T.Free (Which.Post_Attention_Norm_Pair);
             T.Free (Which.Post_Feed_Norm_Pair);
+            T.Free (Which.Linear_Numbers);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
@@ -9562,6 +9754,10 @@ package body Model_Runner.Llama is
       --  newest the ring holds and the only one: what was before it
       --  belongs to a session that is not this one.
       if not Trouble and then Item.Conv_State /= null then
+         Fetch_States (Item'Unchecked_Access);
+      end if;
+
+      if not Trouble and then Item.Conv_State /= null then
          declare
             Slot : constant Element_Count :=
               State_Slot (Item, Natural (Held));
@@ -9598,6 +9794,9 @@ package body Model_Runner.Llama is
          end;
       end if;
       Item.Kept_Newest := Natural (Held);
+
+      --  What was adopted is the host's, whatever the device held.
+      Item.State_On_Device := False;
 
       --  What each position turns by, where the model has three parts
       --  and the snapshot carries them; a snapshot from before they were
@@ -10301,6 +10500,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Shared_Rows_A);
       T.Free (Item.Shared_Rows_B);
       T.Free (Item.Shared_Rows_Out);
+      Release_State_Room (Item'Unchecked_Access);
       T.Free (Item.Conv_State);
       T.Free (Item.Delta_State);
       T.Free (Item.Routing);
@@ -10814,6 +11014,10 @@ package body Model_Runner.Llama is
                  (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1) :=
                  [others => 0.0];
             end;
+
+            --  The slot the ring starts from again is the host's now;
+            --  what the device holds in the others is not read again.
+            Item.State_On_Device := False;
             Item.Kept_Newest := 0;
          elsif Position <= Item.Kept_Newest
            and then Item.Kept_Newest - Position <= Item.Kept_States
@@ -10856,6 +11060,8 @@ package body Model_Runner.Llama is
       if Item.Delta_State = null or else Count = Item.Kept_States then
          return;
       end if;
+
+      Fetch_States (Item'Unchecked_Access);
 
       --  The ring made anew with Count + 1 slots, the state as it is
       --  now carried into the slot the committed count reads; what was
@@ -10935,6 +11141,7 @@ package body Model_Runner.Llama is
       if Item.Delta_State /= null then
          Item.Delta_State.all := [others => 0.0];
       end if;
+      Item.State_On_Device := False;
       Item.Kept_Newest := 0;
 
       --  And the last state was the last of a context that is over.
@@ -11375,6 +11582,10 @@ package body Model_Runner.Llama is
          E.Add_Text (Status, "tensor", "ssm_conv1d", E.Param_Identifier);
          return;
       end if;
+
+      --  The ring as the device left it, where a layer before this one
+      --  went whole there.
+      Fetch_States (Item'Unchecked_Access);
 
       while Taken < Rows.Count loop
          declare
@@ -11829,6 +12040,26 @@ package body Model_Runner.Llama is
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
+      --  A hybrid's linear layer goes whole where the device has the
+      --  rule and the convolution, the session a ring, and the
+      --  feed-forward behind it is a shape the sequence takes.
+      function Linear_Layer_Fits (L : Layer) return Boolean
+      is (Item.Delta_State /= null
+          and then Item.Conv_State /= null
+          and then Model_Runner.Backend.Device.Runs_Linear
+          and then T.Is_Present (L.Mix)
+          and then T.Is_Present (L.Z_Gate)
+          and then T.Is_Present (L.Alpha)
+          and then T.Is_Present (L.Beta)
+          and then T.Is_Present (L.Linear_Out)
+          and then L.Conv /= null
+          and then L.Linear_Numbers /= null
+          and then L.Attention_Norm /= null
+          and then L.Feed_Norm /= null
+          and then Norms_Agree (L)
+          and then (if Settings.Experts > 0 then Mixture_Whole (L)
+                    else T.Is_Present (L.Up)));
+
       --  A dense layer goes whole gated or not -- the one projection up
       --  with a unit alone on it is a shape the sequence takes -- and a
       --  mixture where the device holds its stacks.
@@ -11892,6 +12123,12 @@ package body Model_Runner.Llama is
           --  sublayer's residual joined again -- are not in the sequence.
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
+
+      --  Whichever of the two a layer is: what the carry from the layer
+      --  before asks of the layer after.
+      function Layer_Fits (L : Layer; Index : Natural) return Boolean
+      is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
+          else Whole_Layer_Fits (L, Index));
 
       --  A slice of a token's work, for the pool.
       --
@@ -12274,6 +12511,128 @@ package body Model_Runner.Llama is
               Linear (Settings, Natural (Index));
          begin
             if Is_Linear then
+               --  The whole of it on the device, the ring included: the
+               --  four projections, the convolution over the memory the
+               --  ring keeps, the rule over the state it keeps, the
+               --  projection out and the feed-forward, as one sequence.
+               --  The ring goes over once, the first time, and comes
+               --  home when the host is about to read it.
+               if Model_Runner.Backend."="
+                    (Item.Owner.Able.Kind,
+                     Model_Runner.Backend.Backend_Device)
+                 and then Linear_Layer_Fits (Current)
+               then
+                  declare
+                     Sent, Back : Boolean;
+                  begin
+                     Send_States (Item'Unchecked_Access, Sent);
+
+                     --  No ring on the device is no layer on it; the
+                     --  activation the layer before carried out comes
+                     --  home for the host to go on from.
+                     if not Sent and then Carried then
+                        Model_Runner.Backend.Device.Fetch_Carried
+                          (Item.Activation.all, Back);
+                        Carried := False;
+                        if not Back then
+                           Item.Current := Failed;
+                           Status := E.Make (E.Backend_Device_Refused);
+                           return;
+                        end if;
+                     end if;
+
+                     if Sent then
+                        Model_Runner.Backend.Device.Whole_Layer
+                          (Item.Activation.all,
+                           Device_Norm (Current.Attention_Norm,
+                                        Current.Attention_Norm_Pair),
+                           Device_Norm (Current.Feed_Norm,
+                                        Current.Feed_Norm_Pair),
+                           Settings.Epsilon,
+                           T.Empty_View, T.Empty_View, T.Empty_View,
+                           No_Turns, Natural (Head_Size), 0,
+                           K."=" (Settings.Pairing, K.Split),
+                           0, 0, Natural (Heads), Natural (Value_Size),
+                           Settings.Group_Size, 0, 0, 0, 0,
+                           Natural (KV_Width), Natural (V_Width),
+                           Scale, Settings.Attention_Cap,
+                           Current.Linear_Out,
+                           Current.Gate, Current.Up, Current.Down,
+                           Gate_Unit (Source),
+                           Item.Key_Row, Item.Value_Row, Item.Activation,
+                           Fused,
+                           Carry_In  => Carried,
+                           Carry_Out =>
+                             Chaining
+                             and then Index < Source.Layers.all'Last
+                             and then Layer_Fits
+                                        (Source.Layers.all (Index + 1),
+                                         Natural (Index) + 1),
+                           Mirror    => False,
+                           Cancel    => Item.Stopping,
+                           Router     =>
+                             (if Settings.Experts > 0 then Current.Router
+                              else T.Empty_View),
+                           Router_Bias => Current.Router_Bias,
+                           Gate_Stack  => Current.Gate_Stack,
+                           Up_Stack    => Current.Up_Stack,
+                           Down_Stack  => Current.Down_Stack,
+                           Feed        => Settings.Expert_Feed,
+                           Used        => Settings.Experts_Used,
+                           Experts     => Settings.Experts,
+                           Alpha => Settings.Gate_Alpha,
+                           Limit => Settings.Gate_Limit,
+                           Gate_Bias   => Current.Expert_Gate_Bias,
+                           Up_Bias     =>
+                             (if Settings.Experts > 0
+                              then Current.Expert_Up_Bias
+                              else Current.Up_Bias),
+                           Down_Bias   =>
+                             (if Settings.Experts > 0
+                              then Current.Expert_Down_Bias
+                              else Current.Down_Bias),
+                           Post_Attention_Norm =>
+                             Device_Norm (Current.Post_Attention_Norm,
+                                          Current.Post_Attention_Norm_Pair),
+                           Post_Feed_Norm      =>
+                             Device_Norm (Current.Post_Feed_Norm,
+                                          Current.Post_Feed_Norm_Pair),
+                           Shifted => Norms_Shifted (Current),
+                           Shared_Gate   => Current.Shared_Gate,
+                           Shared_Up     => Current.Shared_Up,
+                           Shared_Down   => Current.Shared_Down,
+                           Shared_Router => Current.Shared_Router,
+                           Linear_Mix    => Current.Mix,
+                           Linear_Z      => Current.Z_Gate,
+                           Linear_Alpha  => Current.Alpha,
+                           Linear_Beta   => Current.Beta,
+                           Conv          => Current.Conv,
+                           Numbers       => Current.Linear_Numbers,
+                           Linear        =>
+                             Linear_Shape_Of (Item, Natural (Index),
+                                              Natural (Reserved)),
+                           Linear_State_At =>
+                             Linear_State_At (Item, Natural (Index)));
+                     end if;
+                  end;
+
+                  if Fused then
+                     Item.Kept_Newest :=
+                       Natural'Max (Item.Kept_Newest, Natural (Reserved) + 1);
+                     Carried :=
+                       Chaining
+                       and then Index < Source.Layers.all'Last
+                       and then Layer_Fits
+                                  (Source.Layers.all (Index + 1),
+                                   Natural (Index) + 1);
+                     if Chaining then
+                        Deferred (Index) := True;
+                     end if;
+                     Charge (Item, Fusing, Mark);
+                     goto Layer_Done;
+                  end if;
+               end if;
+
                Normalize
                  (Source, Item.Activation.all, Current.Attention_Norm.all,
                   Current.Attention_Norm_Bias, Item.Normalized.all);
@@ -12365,7 +12724,7 @@ package body Model_Runner.Llama is
                         Carry_Out =>
                           Chaining
                           and then Index < Source.Layers.all'Last
-                          and then Whole_Layer_Fits
+                          and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
                                       Natural (Index) + 1),
                         Mirror    => not Chaining,
@@ -12447,7 +12806,7 @@ package body Model_Runner.Llama is
                  Chaining
                  and then Fused
                  and then Index < Source.Layers.all'Last
-                 and then Whole_Layer_Fits
+                 and then Layer_Fits
                             (Source.Layers.all (Index + 1),
                              Natural (Index) + 1);
 
@@ -12953,7 +13312,9 @@ package body Model_Runner.Llama is
          end if;
 
          for Index in Source.Layers.all'Range loop
-            if Deferred (Index) and then not Owing then
+            if Deferred (Index) and then not Owing
+              and then not Linear (Settings, Natural (Index))
+            then
                declare
                   At_Key : constant Element_Count :=
                     Keys_At (Item, Natural (Index))
@@ -13269,6 +13630,24 @@ package body Model_Runner.Llama is
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members);
 
+      --  As the token's.
+      function Linear_Layer_Fits (L : Layer) return Boolean
+      is (Item.Delta_State /= null
+          and then Item.Conv_State /= null
+          and then Model_Runner.Backend.Device.Runs_Linear
+          and then T.Is_Present (L.Mix)
+          and then T.Is_Present (L.Z_Gate)
+          and then T.Is_Present (L.Alpha)
+          and then T.Is_Present (L.Beta)
+          and then T.Is_Present (L.Linear_Out)
+          and then L.Conv /= null
+          and then L.Linear_Numbers /= null
+          and then L.Attention_Norm /= null
+          and then L.Feed_Norm /= null
+          and then Norms_Agree (L)
+          and then (if Settings.Experts > 0 then Mixture_Whole (L)
+                    else T.Is_Present (L.Up)));
+
       --  As the token's: a dense layer gated or not, a mixture where the
       --  device holds its stacks, the normalizations as the architecture
       --  arranges them and centred all or none, and a hybrid's attention
@@ -13304,6 +13683,12 @@ package body Model_Runner.Llama is
           --  A head normalization goes to the device, both or neither,
           --  as the token's whole layer takes them.
           and then (L.Query_Norm = null) = (L.Key_Norm = null));
+
+      --  Whichever of the two a layer is: what the carry from the layer
+      --  before asks of the layer after.
+      function Layer_Fits (L : Layer; Index : Natural) return Boolean
+      is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
+          else Whole_Layer_Fits (L, Index));
 
       --  Whether the session holds a block of the device's cache, taking
       --  one where it may: what the whole layer writes its keys and
@@ -14089,6 +14474,132 @@ package body Model_Runner.Llama is
             --  a step of the whole layer and of nothing else here: such
             --  a layer goes whole or goes to the host, which is what the
             --  fallback below keeps to.
+            --  A hybrid's linear layer whole on the device, as the
+            --  token's: the ring goes over once and comes home when the
+            --  host is about to read it. Not for a round, whose rows
+            --  are different sessions' and would take turns with the
+            --  one ring the device holds, and not for a batch with a
+            --  picture's rows in it.
+            if Model_Runner.Backend."="
+                 (Item.Owner.Able.Kind,
+                  Model_Runner.Backend.Backend_Device)
+              and then Is_Linear
+              and then not Rounding
+              and then not Has_Runs
+              and then Linear_Layer_Fits (Current)
+            then
+               declare
+                  Sent, Back : Boolean;
+               begin
+                  Send_States (Item'Unchecked_Access, Sent);
+
+                  if not Sent and then Carried then
+                     Model_Runner.Backend.Device.Fetch_Carried
+                       (Acts.all (0 .. Count * Width - 1), Back);
+                     Carried := False;
+                     if not Back then
+                        Release;
+                        Item.Current := Failed;
+                        Status := E.Make (E.Backend_Device_Refused);
+                        return;
+                     end if;
+                  end if;
+
+                  if Sent then
+                     Model_Runner.Backend.Device.Whole_Layer
+                       (Acts.all (0 .. Count * Width - 1),
+                        Device_Norm (Current.Attention_Norm,
+                                     Current.Attention_Norm_Pair),
+                        Device_Norm (Current.Feed_Norm,
+                                     Current.Feed_Norm_Pair),
+                        Settings.Epsilon,
+                        T.Empty_View, T.Empty_View, T.Empty_View,
+                        No_Turns, Natural (Head_Size), 0,
+                        K."=" (Settings.Pairing, K.Split),
+                        0, 0, Natural (Heads), Natural (Value_Size),
+                        Settings.Group_Size, 0, 0, 0, 0,
+                        Natural (KV_Width), Natural (V_Width),
+                        Scale, Settings.Attention_Cap,
+                        Current.Linear_Out,
+                        Current.Gate, Current.Up, Current.Down,
+                        Gate_Unit (Source),
+                        Keys, Values, Acts, Whole_Layer_Done,
+                        Positions => Natural (Count),
+                        Cancel    => Item.Stopping,
+                        Carry_In  => Carried,
+                        Mirror    => False,
+                        Carry_Out =>
+                          Carrying
+                          and then Index < Source.Layers.all'Last
+                          and then Layer_Fits
+                                     (Source.Layers.all (Index + 1),
+                                      Natural (Index) + 1),
+                        Router     =>
+                          (if Settings.Experts > 0 then Current.Router
+                           else T.Empty_View),
+                        Router_Bias => Current.Router_Bias,
+                        Gate_Stack  => Current.Gate_Stack,
+                        Up_Stack    => Current.Up_Stack,
+                        Down_Stack  => Current.Down_Stack,
+                        Feed        => Settings.Expert_Feed,
+                        Used        => Settings.Experts_Used,
+                        Experts     => Settings.Experts,
+                        Alpha => Settings.Gate_Alpha,
+                        Limit => Settings.Gate_Limit,
+                        Gate_Bias   => Current.Expert_Gate_Bias,
+                        Up_Bias     =>
+                          (if Settings.Experts > 0 then Current.Expert_Up_Bias
+                           else Current.Up_Bias),
+                        Down_Bias   =>
+                          (if Settings.Experts > 0
+                           then Current.Expert_Down_Bias
+                           else Current.Down_Bias),
+                        Post_Attention_Norm =>
+                          Device_Norm (Current.Post_Attention_Norm,
+                                       Current.Post_Attention_Norm_Pair),
+                        Post_Feed_Norm      =>
+                          Device_Norm (Current.Post_Feed_Norm,
+                                       Current.Post_Feed_Norm_Pair),
+                        Shifted => Norms_Shifted (Current),
+                        Shared_Gate   => Current.Shared_Gate,
+                        Shared_Up     => Current.Shared_Up,
+                        Shared_Down   => Current.Shared_Down,
+                        Shared_Router => Current.Shared_Router,
+                        Linear_Mix    => Current.Mix,
+                        Linear_Z      => Current.Z_Gate,
+                        Linear_Alpha  => Current.Alpha,
+                        Linear_Beta   => Current.Beta,
+                        Conv          => Current.Conv,
+                        Numbers       => Current.Linear_Numbers,
+                        Linear        =>
+                          Linear_Shape_Of (Item, Natural (Index),
+                                           Natural (Sits_At (0))),
+                        Linear_State_At =>
+                          Linear_State_At (Item, Natural (Index)));
+                  end if;
+               end;
+
+               Deferred (Index) := Deferring and then Whole_Layer_Done;
+
+               Carried :=
+                 Carrying
+                 and then Whole_Layer_Done
+                 and then Index < Source.Layers.all'Last
+                 and then Layer_Fits
+                            (Source.Layers.all (Index + 1),
+                             Natural (Index) + 1);
+
+               if Whole_Layer_Done then
+                  Item.Kept_Newest :=
+                    Natural'Max (Item.Kept_Newest,
+                                 Natural (Sits_At (0)) + Natural (Count));
+                  Projected := True;
+                  Rotated := True;
+                  Fused := True;
+                  Cached := True;
+               end if;
+            end if;
+
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
@@ -14284,7 +14795,7 @@ package body Model_Runner.Llama is
                         Carry_Out =>
                           Carrying
                           and then Index < Source.Layers.all'Last
-                          and then Whole_Layer_Fits
+                          and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
                                       Natural (Index) + 1),
 
@@ -14379,7 +14890,7 @@ package body Model_Runner.Llama is
                     Carrying
                     and then Whole_Layer_Done
                     and then Index < Source.Layers.all'Last
-                    and then Whole_Layer_Fits
+                    and then Layer_Fits
                                (Source.Layers.all (Index + 1),
                                 Natural (Index) + 1);
 
@@ -14450,7 +14961,10 @@ package body Model_Runner.Llama is
                  Norm.all (0 .. Count * Width - 1);
             end if;
 
-            if Is_Linear then
+            if Is_Linear and then Fused then
+               --  Gone over whole above, feed-forward and all.
+               null;
+            elsif Is_Linear then
                --  The linear layer's projections once over the whole batch,
                --  then its positions one after another, since each reads
                --  the state the one before it left; then the projection
@@ -15243,7 +15757,9 @@ package body Model_Runner.Llama is
          end if;
 
          for Index in Source.Layers.all'Range loop
-            if Deferred (Index) and then not Owing then
+            if Deferred (Index) and then not Owing
+              and then not Linear (Settings, Natural (Index))
+            then
                declare
                   Layer_Keys : constant Element_Count :=
                     Keys_At (Item, Natural (Index));

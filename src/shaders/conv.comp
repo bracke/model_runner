@@ -1,0 +1,170 @@
+#version 450
+
+//  The front of a hybrid's linear layer: the short causal convolution
+//  over each position and the ones remembered, the unit, and the query
+//  and key heads to unit length.
+//
+//  A linear layer projects a position into a mixed row -- its queries,
+//  its keys and its values, one after another -- and convolves each
+//  channel of the row over the last Taps positions before the rule reads
+//  it. The positions before this batch are what the layer remembered: a
+//  memory of Taps - 1 mixed rows in a slot of the state buffer, the
+//  oldest first, which the host kept in a ring of slots so a draft could
+//  rewind to one; this writes the memory each position leaves into the
+//  slot the position after it reads, and the ring's arithmetic is the
+//  host's. The convolved row goes through the logistic-weighted unit,
+//  and each query and key head -- the first blocks of the row -- is
+//  scaled to unit length, held away from nothing by the epsilon.
+//
+//  Two passes, told apart by a word of the shape: the first convolves and
+//  writes the rows, reading the memory; the second writes the memories.
+//  The two are one dispatch each with a barrier between, because a
+//  position's memory may land in the slot another position of the batch
+//  is still reading -- the ring wraps -- and workgroups have no order.
+//
+//  A workgroup a position and a block, its lanes over the block: a block
+//  is a head's width, so a query or key head is one block and its length
+//  is one reduction.
+
+const uint LANES = 128u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) buffer Target { float y[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    //  Elements a mixed row holds.
+    uint mix;
+
+    //  Elements a block holds, which is the state's width.
+    uint head;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  The position the batch begins at, for the ring.
+    uint first;
+
+    //  Taps of the convolution.
+    uint taps;
+
+    //  Where the weights begin in the buffer the device kept them in, in
+    //  elements: Taps rows of Mix, the oldest tap first.
+    uint base;
+
+    //  One to write the memories, zero to convolve.
+    uint writing;
+
+    //  Blocks scaled to unit length: the query heads and the key heads.
+    uint unit_blocks;
+
+    //  Where this layer's memory begins within a slot, in elements; how
+    //  many elements a slot holds; how many slots the ring has; and the
+    //  epsilon by its bits.
+    uint memory_at;
+    uint every;
+    uint slots;
+    uint epsilon;
+
+    uint unused[12];
+} shape;
+
+shared float partial[LANES];
+
+//  x / (1 + exp(-x)), as the host's kernel computes it.
+float unit(float v) {
+    return v / (1.0 + exp(-clamp(v, -60.0, 60.0)));
+}
+
+void main() {
+    uint block = gl_WorkGroupID.x;
+    uint t = gl_WorkGroupID.y;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (t >= shape.count) {
+        return;
+    }
+
+    uint c0 = block * shape.head;
+    uint remembered = shape.taps - 1u;
+
+    //  Where the memory this batch begins with lies, and where this
+    //  position's goes.
+    uint read_slot = shape.first % shape.slots;
+    uint write_slot = (shape.first + t + 1u) % shape.slots;
+    uint read_at = read_slot * shape.every + shape.memory_at;
+    uint write_at = write_slot * shape.every + shape.memory_at;
+
+    if (shape.writing != 0u) {
+        //  Only the last Slots positions, whose slots are their own: the
+        //  ones before would write the same slots as these and land in
+        //  no order, and the host keeps only these.
+        if (t + shape.slots < shape.count) {
+            return;
+        }
+
+        //  The last Taps - 1 inputs, this position's newest: k of them
+        //  is position t - (Taps - 2 - k), out of the batch where that
+        //  is a position of it and out of the memory read where it is
+        //  before it.
+        for (uint c = lane; c < shape.head; c += LANES) {
+            for (uint k = 0u; k < remembered; k++) {
+                int from = int(t) - int(remembered - 1u - k);
+                float held;
+                if (from >= 0) {
+                    held = x[uint(from) * shape.mix + c0 + c];
+                } else {
+                    held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
+                }
+                s[write_at + k * shape.mix + c0 + c] = held;
+            }
+        }
+        return;
+    }
+
+    float sum = 0.0;
+
+    for (uint c = lane; c < shape.head; c += LANES) {
+        float made = 0.0;
+
+        //  Tap m from the newest: the input m positions back, times the
+        //  tap Taps - 1 - m, which is how the host lays the taps out.
+        for (uint m = 0u; m < shape.taps; m++) {
+            int from = int(t) - int(m);
+            float held;
+            if (from >= 0) {
+                held = x[uint(from) * shape.mix + c0 + c];
+            } else {
+                held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
+            }
+            made += held * w[shape.base + (shape.taps - 1u - m) * shape.mix + c0 + c];
+        }
+
+        made = unit(made);
+        y[t * shape.mix + c0 + c] = made;
+        sum += made * made;
+    }
+
+    if (block >= shape.unit_blocks) {
+        return;
+    }
+
+    //  The block's length, folded as the normalization folds.
+    partial[lane] = sum;
+    for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+        barrier();
+        if (lane < reach) {
+            partial[lane] += partial[lane + reach];
+        }
+    }
+    barrier();
+
+    float length = max(sqrt(partial[0]), uintBitsToFloat(shape.epsilon));
+
+    for (uint c = lane; c < shape.head; c += LANES) {
+        y[t * shape.mix + c0 + c] = y[t * shape.mix + c0 + c] / length;
+    }
+}

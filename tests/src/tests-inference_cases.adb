@@ -2175,9 +2175,16 @@ package body Tests.Inference_Cases is
             declare
                Upto : constant Positive := Positive'Min (From + Chunk - 1, Length);
             begin
-               L.Evaluate_Batch
-                 (Session, Model, Tokens (From .. Upto), Answer,
-                  Status => Status);
+               --  A position at a time takes the road a generated token
+               --  takes, which is not the batch's with one position in it.
+               if Chunk = 1 then
+                  L.Evaluate
+                    (Session, Model, Tokens (From), Answer, Status => Status);
+               else
+                  L.Evaluate_Batch
+                    (Session, Model, Tokens (From .. Upto), Answer,
+                     Status => Status);
+               end if;
                Assert (E.Is_Ok (Status),
                        "the batch did not evaluate on "
                        & Model_Runner.Backend.Backend_Name (Backend) & ": "

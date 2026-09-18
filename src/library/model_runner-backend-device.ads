@@ -453,6 +453,61 @@ package Model_Runner.Backend.Device is
       Values   : out Model_Runner.Tensors.Real_Array;
       Ok       : out Boolean);
 
+   --  The activation a layer carried out, brought home: for a caller
+   --  that cannot hand the next layer over after all, whose host copy is
+   --  the layer before's.
+   --
+   --  @param Into Receives the activation, Count positions of its width.
+   --  @param Ok True when it was read.
+   procedure Fetch_Carried
+     (Into : out Model_Runner.Tensors.Real_Array;
+      Ok   : out Boolean);
+
+   --  Whether the device has the kernels a hybrid's linear layer takes
+   --  whole: the convolution and the rule.
+   --
+   --  @return True where the engine made both pipelines.
+   function Runs_Linear return Boolean;
+
+   --  A linear layer's geometry and its place in the ring, as Whole_Layer
+   --  takes it: the products' own type, named here so the engine reads
+   --  no platform package.
+   subtype Linear_Shape is
+     Model_Runner.Platform.Device.Products.Linear_Shape;
+
+   --  Room on the device for a hybrid's linear states and convolution
+   --  memories, kept between calls as the cache is; what is there is
+   --  carried over when it grows. A linear layer taken whole reads and
+   --  writes its slot of it where the caller says, and the host's copy is
+   --  what Get_State brings home.
+   --
+   --  @param Elements How many binary32 values, states and memories
+   --    together.
+   --  @param Ok True when the room is there.
+   procedure Reserve_State
+     (Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Values into that room.
+   --
+   --  @param At_Value Where in the room, in elements.
+   --  @param Values What to write.
+   --  @param Ok False where there is no room or it is too small.
+   procedure Put_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean);
+
+   --  And back out of it.
+   --
+   --  @param At_Value Where in the room, in elements.
+   --  @param Values Receives what is there.
+   --  @param Ok False where there is no room or it is too small.
+   procedure Get_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean);
+
    --  One position attending to the cache the device holds.
    --
    --  Only the queries go over and only the blend comes back. The arguments
@@ -955,6 +1010,23 @@ package Model_Runner.Backend.Device is
    --  @param Shared_Router The row of the width whose score against the
    --    input, through the logistic, scales the shared expert's answer
    --    before it joins the sum.
+   --  @param Linear_Mix A hybrid's linear layer in place of attention:
+   --    the projection to the mixed row, queries, keys and values one
+   --    after another. Present, the layer is the linear one -- the four
+   --    projections, the convolution over the memory the ring keeps, the
+   --    gated delta rule over the state it keeps, and the projection out
+   --    in Weight -- and Query, Key, Value, the cache and the turning go
+   --    unread; the feed-forward follows as for any layer.
+   --  @param Linear_Z The projection to the gate rows.
+   --  @param Linear_Alpha The projection to the alphas, one a value head.
+   --  @param Linear_Beta The projection to the betas, one a value head.
+   --  @param Conv The convolution's taps, Taps rows of Mix.
+   --  @param Numbers A_log a value head, dt's bias a value head, and the
+   --    gain a column, one after another.
+   --  @param Linear The layer's geometry and the ring, as Add_Conv and
+   --    Add_Rule take it, with Region_At the memory's place within a
+   --    slot; the three row steps are filled in here.
+   --  @param Linear_State_At The state's place within a slot.
    --
    --  The two normalization weights are named by reference, as every
    --  weight the device keeps is: the device remembers a weight by its
@@ -1056,7 +1128,20 @@ package Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Shared_Down    : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null);
+      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null;
+      Linear_Mix     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Z       : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Alpha   : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Beta    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Conv           : Model_Runner.Tensors.Real_Array_Access := null;
+      Numbers        : Model_Runner.Tensors.Real_Array_Access := null;
+      Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
+        (others => <>);
+      Linear_State_At : Natural := 0);
 
    --  A gated feed-forward block, whole, in one submission.
    --

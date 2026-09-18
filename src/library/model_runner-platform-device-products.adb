@@ -1882,6 +1882,10 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Bias;
             Picked : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Pick;
+            Conved : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Conv;
+            Ruled  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Rule;
          begin
             Request.Size := Interfaces.C.size_t (Routed'Length * 4);
             Request.Code := Routed'Address;
@@ -1917,6 +1921,24 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Picker := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Conved'Length * 4);
+            Request.Code := Conved'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Conver := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Ruled'Length * 4);
+            Request.Code := Ruled'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Ruler := Made;
             end if;
          end;
 
@@ -2624,6 +2646,26 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Pick_Line := Made;
+            end if;
+         end if;
+
+         if Item.Conver /= Null_Handle then
+            Request.Stage.Module := Item.Conver;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Conv_Line := Made;
+            end if;
+         end if;
+
+         if Item.Ruler /= Null_Handle then
+            Request.Stage.Module := Item.Ruler;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Rule_Line := Made;
             end if;
          end if;
 
@@ -3357,6 +3399,24 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Item.Cache_Bytes := 0;
 
+      --  And the linear states' room, the same way.
+      declare
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      begin
+         if Item.State_At /= Null_Handle
+           and then Unmap /= null
+           and then Item.Logical /= Null_Handle
+           and then Item.State_Memory /= Null_Handle
+         then
+            Unmap (Item.Logical, Item.State_Memory);
+         end if;
+
+         Item.State_At := Null_Handle;
+      end;
+
+      Give_Back_Buffer (Item, Item.State_Buffer, Item.State_Memory);
+      Item.State_Bytes := 0;
+
       Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
       Unmap_Standing (Item, Item.Turn_Memory, Item.Turn_At);
       Unmap_Standing (Item, Item.Turn_Memory_Two, Item.Turn_At_Two);
@@ -3459,6 +3519,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
       Give_Back (Item.Bias_Line, "vkDestroyPipeline");
       Give_Back (Item.Pick_Line, "vkDestroyPipeline");
+      Give_Back (Item.Conv_Line, "vkDestroyPipeline");
+      Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
@@ -3467,6 +3529,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
       Give_Back (Item.Biaser, "vkDestroyShaderModule");
       Give_Back (Item.Picker, "vkDestroyShaderModule");
+      Give_Back (Item.Conver, "vkDestroyShaderModule");
+      Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
@@ -6041,6 +6105,213 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Get_Cache;
 
+   -------------------
+   -- Reserve_State --
+   -------------------
+
+   procedure Reserve_State
+     (Item     : in out Engine;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+
+      Was_Buffer : Address := Item.State_Buffer;
+      Was_Memory : Address := Item.State_Memory;
+      Was_At     : constant Address := Item.State_At;
+      Was_Bytes  : constant Interfaces.Unsigned_64 := Item.State_Bytes;
+
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+      Where : aliased Address := Null_Handle;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item) or else Elements = 0 or else Map = null then
+         return;
+      end if;
+
+      if Over_Limit (Item, Wanted) then
+         return;
+      end if;
+
+      if Item.State_Bytes >= Wanted then
+         Ok := True;
+         return;
+      end if;
+
+      --  The host is about to copy out of a buffer a submission may
+      --  still be writing.
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      Item.State_Buffer := Null_Handle;
+      Item.State_Memory := Null_Handle;
+      Item.State_At := Null_Handle;
+
+      Take (Item, Wanted, Item.State_Buffer, Item.State_Memory, Ok);
+      if not Ok then
+         if Was_At /= Null_Handle and then Unmap /= null then
+            Unmap (Item.Logical, Was_Memory);
+         end if;
+         Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+         Item.State_Bytes := 0;
+         return;
+      end if;
+
+      if Map (Item.Logical, Item.State_Memory, 0, Wanted, 0, Where'Access)
+         /= 0
+      then
+         Ok := False;
+         Give_Back_Buffer (Item, Item.State_Buffer, Item.State_Memory);
+         if Was_At /= Null_Handle and then Unmap /= null then
+            Unmap (Item.Logical, Was_Memory);
+         end if;
+         Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+         Item.State_Bytes := 0;
+         return;
+      end if;
+
+      Item.State_At := Where;
+
+      declare
+         Room : Model_Runner.Bytes.Byte_Array
+           (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
+           with Import, Address => Item.State_At;
+      begin
+         Room := [others => 0];
+      end;
+
+      --  What was there, carried over.
+      if Was_At /= Null_Handle and then Was_Bytes > 0 then
+         declare
+            Was : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Was_Bytes))
+              with Import, Address => Was_At;
+            Now : Model_Runner.Bytes.Byte_Array
+              (1 .. Model_Runner.Bytes.Byte_Count (Was_Bytes))
+              with Import, Address => Item.State_At;
+         begin
+            Now := Was;
+         end;
+
+         if Unmap /= null then
+            Unmap (Item.Logical, Was_Memory);
+         end if;
+      end if;
+
+      Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+      Item.State_Bytes := Wanted;
+      Ok := True;
+   end Reserve_State;
+
+   ---------------
+   -- Put_State --
+   ---------------
+
+   procedure Put_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Values'Length) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_At = Null_Handle
+        or else Values'Length = 0
+        or else At_Byte + Span > Item.State_Bytes
+      then
+         return;
+      end if;
+
+      --  A submission still running may be reading or writing it.
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Numerics.Real_Array (Values'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.State_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Room := Values;
+      end;
+
+      Ok := True;
+   end Put_State;
+
+   ---------------
+   -- Get_State --
+   ---------------
+
+   procedure Get_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Values'Length) * 4;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_At = Null_Handle
+        or else Values'Length = 0
+        or else At_Byte + Span > Item.State_Bytes
+      then
+         return;
+      end if;
+
+      --  What a submission still running would write is what is asked
+      --  for.
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      declare
+         Room : Model_Runner.Numerics.Real_Array (Values'Range)
+           with Import,
+                Address =>
+                  System.Storage_Elements.To_Address
+                    (System.Storage_Elements.To_Integer (Item.State_At)
+                     + System.Storage_Elements.Integer_Address (At_Byte));
+      begin
+         Values := Room;
+      end;
+
+      Ok := True;
+   end Get_State;
+
+   function Runs_Linear (Item : Engine) return Boolean
+   is (Item.Conv_Line /= Null_Handle and then Item.Rule_Line /= Null_Handle);
+
    ------------
    -- Attend --
    ------------
@@ -6512,6 +6783,10 @@ package body Model_Runner.Platform.Device.Products is
             return "bias";
          elsif This.Picks then
             return "pick";
+         elsif This.Convolves then
+            return "conv";
+         elsif This.Rules then
+            return "rule";
          elsif This.Inverts then
             return "invert";
          elsif This.Listed then
@@ -7013,6 +7288,108 @@ package body Model_Runner.Platform.Device.Products is
          others => <>);
       Added := True;
    end Add_Pick;
+
+   --------------
+   -- Add_Conv --
+   --------------
+
+   procedure Add_Conv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Shape     : Linear_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Shape.Mix = 0
+        or else Shape.Head = 0
+        or else Shape.Mix mod Shape.Head /= 0
+        or else Shape.Taps < 2
+        or else Shape.Unit_Blocks > Shape.Mix / Shape.Head
+        or else Shape.Every = 0
+        or else Source not in 1 .. Steps.Held
+        or else Steps.Items (Source).Rows /= Shape.Mix
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte,
+         Packing => Weight_Packing'First,
+         Rows => Shape.Mix, Columns => Shape.Mix,
+         Key => Key, Chained => True, Reads => Source, Kept => Kept,
+         Convolves => True, Linear => Shape,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Conv;
+
+   --------------
+   -- Add_Rule --
+   --------------
+
+   procedure Add_Rule
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Shape     : Linear_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      Wide : constant Natural := Shape.Value_Heads * Shape.Head;
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Shape.Mix = 0
+        or else Shape.Head = 0
+        or else Shape.Key_Heads = 0
+        or else Shape.Value_Heads = 0
+        or else Shape.Value_Heads mod Shape.Key_Heads /= 0
+        or else Shape.Key_Width /= Shape.Key_Heads * Shape.Head
+        or else Shape.Mix /= 2 * Shape.Key_Width + Wide
+        or else Shape.Every = 0
+        or else Source not in 1 .. Steps.Held
+        or else Steps.Items (Source).Rows /= Shape.Mix
+        or else Shape.Z_Step not in 1 .. Steps.Held
+        or else Steps.Items (Shape.Z_Step).Rows /= Wide
+        or else Shape.Alpha_Step not in 1 .. Steps.Held
+        or else Steps.Items (Shape.Alpha_Step).Rows /= Shape.Value_Heads
+        or else Shape.Beta_Step not in 1 .. Steps.Held
+        or else Steps.Items (Shape.Beta_Step).Rows /= Shape.Value_Heads
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte,
+         Packing => Weight_Packing'First,
+         Rows => Wide, Columns => Shape.Mix,
+         Key => Key, Chained => True, Reads => Source, Kept => Kept,
+         Rules => True, Linear => Shape,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Rule;
 
    ---------------------
    -- Add_Combination --
@@ -7583,6 +7960,8 @@ package body Model_Runner.Platform.Device.Products is
                or else Steps.Items (Which).Mixes
                or else Steps.Items (Which).Biases
                or else Steps.Items (Which).Picks
+               or else Steps.Items (Which).Convolves
+               or else Steps.Items (Which).Rules
                or else Steps.Items (Which).Inverts
                or else Steps.Items (Which).Blends));
 
@@ -7920,6 +8299,44 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                Places (Index).Weight := 0;
+            elsif This.Convolves or else This.Rules then
+               --  A convolving step carries the taps and a rule step the
+               --  three rows of the rule's numbers, each as a norm's
+               --  weight is kept; both read the state buffer, which has
+               --  to be there and hold the ring.
+               declare
+                  Held : constant Interfaces.Unsigned_64 :=
+                    (if This.Convolves
+                     then Interfaces.Unsigned_64 (This.Linear.Taps)
+                          * Interfaces.Unsigned_64 (This.Linear.Mix)
+                     else Interfaces.Unsigned_64
+                            (2 * This.Linear.Value_Heads + This.Linear.Head));
+               begin
+                  if This.Rows = 0
+                    or else This.Base = System.Null_Address
+                    or else This.Reads not in 1 .. Index - 1
+                    or else Interfaces.Unsigned_64 (This.Span)
+                            < Interfaces.Unsigned_64 (This.At_Byte) + Held * 4
+                    or else Item.State_At = Null_Handle
+                    or else Interfaces.Unsigned_64 (This.Linear.Slots)
+                            * Interfaces.Unsigned_64 (This.Linear.Every) * 4
+                            > Item.State_Bytes
+                    or else (This.Convolves
+                             and then Item.Conv_Line = Null_Handle)
+                    or else (This.Rules
+                             and then (Item.Rule_Line = Null_Handle
+                                       or else This.Linear.Z_Step
+                                               not in 1 .. Index - 1
+                                       or else This.Linear.Alpha_Step
+                                               not in 1 .. Index - 1
+                                       or else This.Linear.Beta_Step
+                                               not in 1 .. Index - 1))
+                  then
+                     return;
+                  end if;
+
+                  Places (Index).Weight := Held * 4;
+               end;
             elsif This.Blends then
                --  Two arms in and one out. A combination takes the two
                --  steps before it; a join names one of them and takes its
@@ -8103,11 +8520,15 @@ package body Model_Runner.Platform.Device.Products is
               (Item, Held, This.At_Byte, This.Packing,
                (if This.Norms or else This.Rotates or else This.Routes
                   or else This.Readies or else This.Biases
+                  or else This.Convolves or else This.Rules
                 then 1
                 elsif This.Gathers > 0 then This.Stack
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
                 elsif This.Biases then This.Stack * This.Each
+                elsif This.Convolves then This.Linear.Taps * This.Linear.Mix
+                elsif This.Rules
+                then 2 * This.Linear.Value_Heads + This.Linear.Head
                 elsif This.Routes then This.Columns
                 elsif This.Readies then This.Head_Size
                 elsif This.Rotates
@@ -8140,15 +8561,79 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Item.Result_Bytes < Result_Bytes then
-         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
-         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
-         Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
-               Good, Read => True);
-         if not Good then
-            Release_All;
-            return;
-         end if;
-         Item.Result_Bytes := Result_Bytes;
+         --  A sequence carrying in reads its activation from the front
+         --  of this buffer, where the one before left it; a buffer that
+         --  grows here is a new buffer, and the front has to come with
+         --  it. It did not, and a hybrid's linear layer -- whose
+         --  sequence is smaller than the attention layer's after it --
+         --  carried its answer into a buffer the next layer threw away
+         --  on the first batch of a new length: every answer past a
+         --  hundred and twenty-eight positions was noise. The sequence
+         --  before may still be writing the front, so it is waited for.
+         declare
+            Was_Buffer : Address := Item.Result_Buffer;
+            Was_Memory : Address := Item.Result_Memory;
+            Was_At     : Address := Item.Result_At;
+            Was_Bytes  : constant Interfaces.Unsigned_64 := Item.Result_Bytes;
+            Carrying   : constant Boolean :=
+              Carry_In and then Was_Buffer /= Null_Handle
+              and then Was_Bytes >= Vector_Bytes;
+         begin
+            if Carrying then
+               Settle (Item, Good);
+               if Good then
+                  Standing (Item, Was_Memory, Was_At, Was_Bytes, Good);
+               end if;
+               if not Good then
+                  Release_All;
+                  return;
+               end if;
+            else
+               Unmap_Standing (Item, Was_Memory, Was_At);
+               Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+            end if;
+
+            Item.Result_Buffer := Null_Handle;
+            Item.Result_Memory := Null_Handle;
+            Item.Result_At := Null_Handle;
+
+            Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
+                  Good, Read => True);
+            if not Good then
+               if Carrying then
+                  Unmap_Standing (Item, Was_Memory, Was_At);
+                  Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+               end if;
+               Release_All;
+               return;
+            end if;
+            Item.Result_Bytes := Result_Bytes;
+
+            if Carrying then
+               Standing (Item, Item.Result_Memory, Item.Result_At,
+                         Item.Result_Bytes, Good);
+               if Good then
+                  declare
+                     Was : Model_Runner.Bytes.Byte_Array
+                       (1 .. Model_Runner.Bytes.Byte_Count (Vector_Bytes))
+                       with Import, Address => Was_At;
+                     Now : Model_Runner.Bytes.Byte_Array
+                       (1 .. Model_Runner.Bytes.Byte_Count (Vector_Bytes))
+                       with Import, Address => Item.Result_At;
+                  begin
+                     Now := Was;
+                  end;
+               end if;
+
+               Unmap_Standing (Item, Was_Memory, Was_At);
+               Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+
+               if not Good then
+                  Release_All;
+                  return;
+               end if;
+            end if;
+         end;
       end if;
 
       --  Two regions of it, because a gated feed-forward has both its arms
@@ -8449,6 +8934,36 @@ package body Model_Runner.Platform.Device.Products is
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
+
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Index);
+                  Notes (Binding).Binding := C.unsigned (Binding - 1);
+                  Notes (Binding).Buffers := Told (Binding)'Address;
+               end loop;
+
+               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               goto Next_Set;
+            end if;
+
+            if Steps.Items (Index).Convolves or else Steps.Items (Index).Rules
+            then
+               --  The weight, the rows it reads, its own room out, the
+               --  whole of the result buffer for the rule's other rows,
+               --  and the state buffer.
+               Told (1) :=
+                 (Buffer => Places (Index).Buffer, Offset => 0,
+                  Extent => Places (Index).Base + Places (Index).Weight);
+               Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (3) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Index).At_Byte,
+                  Extent => Places (Index).Bytes);
+               Told (4) :=
+                 (Buffer => Item.Result_Buffer, Offset => 0,
+                  Extent => Item.Result_Bytes);
+               Told (5) :=
+                 (Buffer => Item.State_Buffer, Offset => 0,
+                  Extent => Item.State_Bytes);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -9031,9 +9546,19 @@ package body Model_Runner.Platform.Device.Products is
                   --  A gather routed on the device reads the routing
                   --  step's choice as well, which no other field of the
                   --  step says.
+                  --  A rule step reads the gate, alpha and beta rows as
+                  --  well, which its shape names.
+                  Ruled : constant Natural :=
+                    (if This.Rules
+                     then Natural'Max
+                            (This.Linear.Z_Step,
+                             Natural'Max (This.Linear.Alpha_Step,
+                                          This.Linear.Beta_Step))
+                     else 0);
+
                   Source : constant Natural :=
                     Natural'Max
-                      (Natural'Max (Joined, This.Routed),
+                      (Natural'Max (Joined, Natural'Max (This.Routed, Ruled)),
                        Natural'Max
                          (Natural'Max
                             (This.Reads,
@@ -9062,6 +9587,7 @@ package body Model_Runner.Platform.Device.Products is
                        or else This.Readies or else This.Routes
                        or else This.Mixes or else This.Biases
                        or else This.Inverts or else This.Picks
+                       or else This.Convolves or else This.Rules
                      then False
                      else Tiled (Index)
                           and then (Was_From /= Source
@@ -9600,6 +10126,106 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned ((Whole + 255) / 256), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Convolves then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Conv_Line);
+
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     --  The convolution, then the memories, with a
+                     --  barrier between: a position's memory may land in
+                     --  the slot another position is still reading.
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Linear.Mix),
+                        Columns => C.unsigned (This.Linear.Head),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.Linear.First),
+                        Packing => C.unsigned (This.Linear.Taps),
+                        Base    => C.unsigned (Places (Index).Base / 4),
+                        Joins   => 0,
+                        Table   => C.unsigned (This.Linear.Unit_Blocks),
+                        Members =>
+                          [0 => C.unsigned (This.Linear.Region_At),
+                           1 => C.unsigned (This.Linear.Every),
+                           2 => C.unsigned (This.Linear.Slots),
+                           3 => Bits (This.Linear.Epsilon),
+                           others => 0],
+                        others  => <>);
+
+                     Blocks : constant Natural :=
+                       This.Linear.Mix / This.Linear.Head;
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Blocks),
+                               C.unsigned (Count), 1);
+
+                     Barrier
+                       (Item.Buffer, Pipeline_Stage_Compute,
+                        Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+
+                     Shape.Joins := 1;
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Blocks),
+                               C.unsigned (Count), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Rules then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Rule_Line);
+
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Linear.Mix),
+                        Columns => C.unsigned (This.Linear.Head),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (This.Linear.First),
+                        Packing => C.unsigned (This.Linear.Key_Heads),
+                        Base    => C.unsigned (This.Linear.Key_Width),
+                        Joins   => C.unsigned (Places (Index).Base / 4),
+                        Table   => C.unsigned (This.Linear.Value_Heads),
+                        Members =>
+                          [0 => C.unsigned (This.Linear.Region_At),
+                           1 => C.unsigned (This.Linear.Every),
+                           2 => C.unsigned (This.Linear.Slots),
+                           3 => C.unsigned
+                                  (Places (This.Linear.Z_Step).At_Byte / 4),
+                           4 => C.unsigned
+                                  (Places (This.Linear.Alpha_Step).At_Byte
+                                   / 4),
+                           5 => C.unsigned
+                                  (Places (This.Linear.Beta_Step).At_Byte / 4),
+                           6 => Bits (This.Linear.Scale),
+                           7 => Bits (This.Linear.Epsilon),
+                           others => 0],
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer, C.unsigned (This.Linear.Value_Heads),
+                        1, 1);
                   end;
 
                   Bind_Pipeline

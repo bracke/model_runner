@@ -5944,6 +5944,34 @@ package body Checks is
          end if;
       end;
 
+      --  And the two of a hybrid's linear layer: the convolution over the
+      --  memory the ring keeps, and the rule over the state it keeps.
+      for Which in 1 .. 2 loop
+         declare
+            Name : constant String :=
+              (if Which = 1 then "conv" else "rule");
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/" & Name & ".comp", Found);
+            Known : constant Interfaces.Unsigned_64 :=
+              (if Which = 1 then Model_Runner.Shaders.Conv_Digest
+               else Model_Runner.Shaders.Rule_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if not Found then
+               Fail ("src/shaders/" & Name & ".comp is missing, and the "
+                     & "words compiled from it are committed");
+            elsif Digest /= Known then
+               Fail ("src/shaders/" & Name & ".comp has changed since it "
+                     & "was compiled; compile it and run 'tests shader' "
+                     & "again with every shader named");
+            end if;
+         end;
+      end loop;
+
       --  And the one that picks every other stretch of a row apart.
       declare
          Found : Boolean;

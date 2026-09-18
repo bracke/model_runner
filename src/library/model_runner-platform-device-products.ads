@@ -938,6 +938,117 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Kept      : Boolean := True);
 
+   --  What a convolving step and a rule step are told about the linear
+   --  layer they are part of, beyond the step's own rows and columns.
+   type Linear_Shape is record
+      --  Elements a mixed row holds, and the state's width, which is a
+      --  block of the row and a head of the state.
+      Mix        : Natural := 0;
+      Head       : Natural := 0;
+
+      --  The convolution's taps, and the blocks scaled to unit length.
+      Taps       : Natural := 0;
+      Unit_Blocks : Natural := 0;
+
+      --  The key heads and the value heads, and the elements the queries
+      --  or the keys take in a row.
+      Key_Heads   : Natural := 0;
+      Value_Heads : Natural := 0;
+      Key_Width   : Natural := 0;
+
+      --  The ring: where the layer's memory or state begins within a
+      --  slot, how many elements a slot holds, how many slots there are,
+      --  and the position the batch begins at, all in elements of the
+      --  state buffer.
+      Region_At  : Natural := 0;
+      Every      : Natural := 0;
+      Slots      : Positive := 1;
+      First      : Natural := 0;
+
+      --  The rule's other rows, named as steps: the gate, the alphas
+      --  and the betas.
+      Z_Step     : Natural := 0;
+      Alpha_Step : Natural := 0;
+      Beta_Step  : Natural := 0;
+
+      --  The scale on the rule's answer and the stabilizer under its
+      --  mean square, which is the unit length's floor for the front.
+      Scale      : Model_Runner.Numerics.Real := 0.0;
+      Epsilon    : Model_Runner.Numerics.Real := 0.0;
+   end record;
+
+   --  Name the front of a hybrid's linear layer: the causal convolution
+   --  over each position and the ones remembered, the unit, and the
+   --  query and key heads to unit length.
+   --
+   --  The step reads the mixed rows of the step it names, the taps as a
+   --  weight the device keeps -- Taps rows of Mix, the oldest tap first,
+   --  named in Base, Span and At_Byte -- and the memory of Taps - 1 rows
+   --  the layer left in the slot of the state buffer the ring says, and
+   --  writes the convolved rows as its answer and each position's memory
+   --  into the slot the position after it reads. The ring's arithmetic
+   --  is the host's: Slots slots of Every elements, a position's slot
+   --  being the position modulo the slots, the memory of this layer at
+   --  Region_At within one.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the taps lie in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the taps begin.
+   --  @param Shape The layer's geometry and the ring.
+   --  @param Added False when the sequence is full, when the shape does
+   --    not hold together, or when the step named does not hold Mix
+   --    elements a position.
+   --  @param From_Step Step whose rows to convolve, or zero for the step
+   --    before this one.
+   --  @param Key Identifies the taps so the device may keep them.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Conv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Shape     : Linear_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
+
+   --  Name the gated delta rule of a hybrid's linear layer, a value head
+   --  at a time over the batch in order.
+   --
+   --  The step reads the convolved rows of the step it names, the gate,
+   --  alpha and beta rows of the steps Shape names, the weight the
+   --  device keeps -- A_log a value head, dt's bias a value head, then
+   --  the gain a column, in Base, Span and At_Byte -- and the state of
+   --  every value head in the slot of the state buffer the ring says; it
+   --  writes each position's answer, Value_Heads heads of Head, and each
+   --  position's state into the slot the position after it reads. The
+   --  same numbers as the host's chunked rule, associated as the rule
+   --  states them rather than as the triangles do.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the storage the weight lies in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in that storage the weight begins.
+   --  @param Shape The layer's geometry, the ring and the other rows.
+   --  @param Added False when the sequence is full, when the shape does
+   --    not hold together, or when a step named holds the wrong rows.
+   --  @param From_Step Step whose rows the rule reads, or zero for the
+   --    step before this one.
+   --  @param Key Identifies the weight so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Rule
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Shape     : Linear_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
+
    --  Name one product that reads what the product before it produced.
    --
    --  This is the point of a sequence rather than a convenience on top of it.
@@ -1704,6 +1815,49 @@ package Model_Runner.Platform.Device.Products is
       Values   : out Model_Runner.Numerics.Real_Array;
       Ok       : out Boolean);
 
+   --  Make room on the device for a hybrid's linear states and keep it
+   --  between calls, as Reserve does for the cache: what is there is
+   --  carried over when it grows.
+   --
+   --  @param Item Ready engine.
+   --  @param Elements How many binary32 values, states and memories
+   --    together.
+   --  @param Ok True when the room is there.
+   procedure Reserve_State
+     (Item     : in out Engine;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  Write values into that room.
+   --
+   --  @param Item Ready engine with the room reserved.
+   --  @param At_Value Where in the room, in elements.
+   --  @param Values What to write.
+   --  @param Ok False where there is no room or it is too small.
+   procedure Put_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean);
+
+   --  And read them out of it.
+   --
+   --  @param Item Ready engine with the room reserved.
+   --  @param At_Value Where in the room, in elements.
+   --  @param Values Receives what is there.
+   --  @param Ok False where there is no room or it is too small.
+   procedure Get_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Numerics.Real_Array;
+      Ok       : out Boolean);
+
+   --  Whether the engine made the convolving and rule pipelines.
+   --
+   --  @param Item Ready engine.
+   --  @return True where a hybrid's linear layer may go whole.
+   function Runs_Linear (Item : Engine) return Boolean;
+
    --  Attend against the cache the device already holds.
    --
    --  As Attend, without the cache crossing the interface: only the queries
@@ -2188,6 +2342,8 @@ private
       --  answers, for the mixture that carries them.
       Biaser     : System.Address := System.Null_Address;
       Picker     : System.Address := System.Null_Address;
+      Conver     : System.Address := System.Null_Address;
+      Ruler      : System.Address := System.Null_Address;
 
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
@@ -2254,6 +2410,8 @@ private
       Mix_Line    : System.Address := System.Null_Address;
       Bias_Line   : System.Address := System.Null_Address;
       Pick_Line   : System.Address := System.Null_Address;
+      Conv_Line   : System.Address := System.Null_Address;
+      Rule_Line   : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
@@ -2495,6 +2653,15 @@ private
       --  through a standing mapping is seen without a flush. That is the
       --  condition; it is required where the memory kind is picked.
       Cache_At     : System.Address := System.Null_Address;
+
+      --  And where a hybrid's linear states and convolution memories go,
+      --  as the cache does: a buffer grown when it has to be and kept,
+      --  mapped once and left mapped. A convolving step and a rule step
+      --  read and write it where the caller says.
+      State_Buffer : System.Address := System.Null_Address;
+      State_Memory : System.Address := System.Null_Address;
+      State_Bytes  : Interfaces.Unsigned_64 := 0;
+      State_At     : System.Address := System.Null_Address;
    end record;
 
    type Step is record
@@ -2703,6 +2870,14 @@ private
       Picks   : Boolean := False;
       Which   : Natural := 0;
       Among   : Positive := 1;
+
+      --  A convolving step or a rule step, as Add_Conv and Add_Rule
+      --  describe them: the front and the middle of a hybrid's linear
+      --  layer, over the state buffer. The weight is in Base, Span,
+      --  At_Byte and Key as a norm's is; the rest is in Linear.
+      Convolves : Boolean := False;
+      Rules     : Boolean := False;
+      Linear    : Linear_Shape;
 
       --  A product kept off the tile whatever the count: the row kernel
       --  reads its activations in binary32 where the tile's operand is

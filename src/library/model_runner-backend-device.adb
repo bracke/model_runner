@@ -970,6 +970,79 @@ package body Model_Runner.Backend.Device is
       Products.Get_Cache (Engine, At_Value, Values, Ok);
    end Get_Cache;
 
+   -------------------
+   -- Fetch_Carried --
+   -------------------
+
+   procedure Fetch_Carried
+     (Into : out Model_Runner.Tensors.Real_Array;
+      Ok   : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Fetch_Carried (Engine, Into, Ok);
+   end Fetch_Carried;
+
+   -----------------
+   -- Runs_Linear --
+   -----------------
+
+   function Runs_Linear return Boolean
+   is (Ready_Now and then Products.Runs_Linear (Engine));
+
+   -------------------
+   -- Reserve_State --
+   -------------------
+
+   procedure Reserve_State
+     (Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Reserve_State (Engine, Elements, Ok);
+   end Reserve_State;
+
+   ---------------
+   -- Put_State --
+   ---------------
+
+   procedure Put_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Put_State (Engine, At_Value, Values, Ok);
+   end Put_State;
+
+   ---------------
+   -- Get_State --
+   ---------------
+
+   procedure Get_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Values   : out Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Get_State (Engine, At_Value, Values, Ok);
+   end Get_State;
+
    ------------
    -- Attend --
    ------------
@@ -1878,534 +1951,809 @@ package body Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Shared_Down    : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null)
+      Shared_Router  : Model_Runner.Tensors.Real_Array_Access := null;
+      Linear_Mix     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Z       : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Alpha   : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Linear_Beta    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Conv           : Model_Runner.Tensors.Real_Array_Access := null;
+      Numbers        : Model_Runner.Tensors.Real_Array_Access := null;
+      Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
+        (others => <>);
+      Linear_State_At : Natural := 0)
    is
+      --  Whether this is a hybrid's linear layer rather than attention.
+      Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
 
-      --  Whether the second half is a mixture, and the step numbers that
-      --  move when the head normalizations and the mixture are in: the
-      --  recipe below used to be seventeen fixed steps and is now counted
-      --  as it goes.
-      Mixed : constant Boolean := T.Is_Present (Router);
+      Width : constant Model_Runner.Numerics.Element_Count :=
+        (if Linear_Layer then Linear_Mix.Columns else Query.Columns);
 
-      --  Whether the feed-forward has a gate, or is the one projection
-      --  up with a unit on it that Falcon, Phi-2, GPT-2 and Bert state.
-      Gated : constant Boolean := T.Is_Present (Gate);
+      --  Whether the activation the layer before carried out has been
+      --  brought home already, by the road below that runs the sequence
+      --  and finds it refused.
+      Brought_Home : Boolean := False;
 
-      --  Whether the two halves run side by side, both reading the
-      --  normalization on the way in: a layer with no normalization
-      --  before its feed-forward is one that runs it beside attention.
-      Parallel : constant Boolean := not After and then Feed_Norm = null;
+      --  The whole of it: the guards, the sequence built and run, the
+      --  answers read back. Told apart from the recovery below so that
+      --  every refusal, and there are many, leaves through one door.
+      procedure Attempt;
 
-      Step_Norm_In, Step_Q, Step_K, Step_V, Step_Q_Turned, Step_K_Turned,
-      Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
-      Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
+      procedure Attempt is
+         --  Whether the second half is a mixture, and the step numbers that
+         --  move when the head normalizations and the mixture are in: the
+         --  recipe below used to be seventeen fixed steps and is now counted
+         --  as it goes.
+         Mixed : constant Boolean := T.Is_Present (Router);
 
-      --  Whether the mixture has a shared expert beside the chosen ones.
-      Shared : constant Boolean := T.Is_Present (Shared_Gate);
+         --  Whether the feed-forward has a gate, or is the one projection
+         --  up with a unit on it that Falcon, Phi-2, GPT-2 and Bert state.
+         Gated : constant Boolean := T.Is_Present (Gate);
 
-      --  The query rows the heads take: the projection's, or half of them
-      --  where the other half are the gates beside the heads.
-      Q_Rows : constant Model_Runner.Numerics.Element_Count :=
-        (if Head_Gates then Query.Rows / 2 else Query.Rows);
+         --  Whether the two halves run side by side, both reading the
+         --  normalization on the way in: a layer with no normalization
+         --  before its feed-forward is one that runs it beside attention.
+         Parallel : constant Boolean := not After and then Feed_Norm = null;
 
-      Width : constant Model_Runner.Numerics.Element_Count := Query.Columns;
+         Step_Norm_In, Step_Q, Step_K, Step_V, Step_Q_Turned, Step_K_Turned,
+         Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
+         Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
 
-      --  A normalization's weight: the gain, and after it the shift where
-      --  the normalization is the centred one.
-      Norm_Span : constant Model_Runner.Numerics.Element_Count :=
-        (if Shifted then 2 * Width else Width);
+         --  Whether the mixture has a shared expert beside the chosen ones.
+         Shared : constant Boolean := T.Is_Present (Shared_Gate);
 
-      Steps  : Products.Sequence;
-      Added  : Boolean;
-      Ran    : Boolean;
-      Cancelled : Boolean := False;
+         --  The query rows the heads take: the projection's, or half of them
+         --  where the other half are the gates beside the heads.
+         Q_Rows : constant Model_Runner.Numerics.Element_Count :=
+           (if Head_Gates then Query.Rows / 2 else Query.Rows);
 
-      --  Where each step's answer lands in the target, which is every
-      --  step's room in order whether the host reads it or not.
-      At_Values : Model_Runner.Numerics.Element_Count := 0;
-      At_Keys   : Model_Runner.Numerics.Element_Count := 0;
-      At_Out    : Model_Runner.Numerics.Element_Count := 0;
-      Wanted    : Model_Runner.Numerics.Element_Count := 0;
+         --  A normalization's weight: the gain, and after it the shift where
+         --  the normalization is the centred one.
+         Norm_Span : constant Model_Runner.Numerics.Element_Count :=
+           (if Shifted then 2 * Width else Width);
 
-      Packing : Products.Weight_Packing;
-      Gate_P  : Products.Weight_Packing;
-      Up_P    : Products.Weight_Packing;
-      Down_P  : Products.Weight_Packing;
-      Q_P     : Products.Weight_Packing;
-      K_P     : Products.Weight_Packing;
-      V_P     : Products.Weight_Packing;
-      Router_P : Products.Weight_Packing;
-      Shared_Gate_P, Shared_Up_P, Shared_Down_P : Products.Weight_Packing;
-      Known   : Boolean;
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Ran    : Boolean;
+         Cancelled : Boolean := False;
 
-      --  Every step's rows, in order, so the offsets above are a sum rather
-      --  than a tally kept by hand.
-      procedure Step_Room (Rows : Model_Runner.Numerics.Element_Count) is
-      begin
-         Wanted := Wanted + Rows * Slots;
-      end Step_Room;
+         --  Where each step's answer lands in the target, which is every
+         --  step's room in order whether the host reads it or not.
+         At_Values : Model_Runner.Numerics.Element_Count := 0;
+         At_Keys   : Model_Runner.Numerics.Element_Count := 0;
+         At_Out    : Model_Runner.Numerics.Element_Count := 0;
+         Wanted    : Model_Runner.Numerics.Element_Count := 0;
 
-      --  A mixture's expert biases, where the architecture carries them:
-      --  one step a stack, each reading the routing for the expert every
-      --  member is, and each taking the room its source took. The two
-      --  arms' go after both arms, so the combination reads the biased
-      --  pair as the two steps before it; the projection down's goes
-      --  after the downs and becomes what the mix reads.
-      procedure Add_Biases
-        (Gate_Bias, Up_Bias : T.Real_Array_Access;
-         Each, Experts, Route : Natural;
-         Room  : Model_Runner.Numerics.Element_Count;
-         Added : out Boolean)
-      is
-         Gate_Step : constant Natural := Products.Length (Steps) - 1;
-         Up_Step   : constant Natural := Products.Length (Steps);
-      begin
-         Added := True;
+         Packing : Products.Weight_Packing;
+         Gate_P  : Products.Weight_Packing;
+         Up_P    : Products.Weight_Packing;
+         Down_P  : Products.Weight_Packing;
+         Q_P     : Products.Weight_Packing;
+         K_P     : Products.Weight_Packing;
+         V_P     : Products.Weight_Packing;
+         Router_P : Products.Weight_Packing;
+         Shared_Gate_P, Shared_Up_P, Shared_Down_P : Products.Weight_Packing;
+         Mix_P, Z_P, Alpha_P, Beta_P : Products.Weight_Packing;
+         Known   : Boolean;
 
-         if Gate_Bias = null and then Up_Bias = null then
-            return;
-         end if;
-
-         --  Both or neither: a combination reads the two steps before
-         --  it, and one arm biased and the other not would put an arm
-         --  two steps back.
-         if Gate_Bias = null or else Up_Bias = null then
-            Added := False;
-            return;
-         end if;
-
-         Products.Add_Bias
-           (Steps, Gate_Bias.all (Gate_Bias.all'First)'Address,
-            Model_Runner.Bytes.Byte_Count (Gate_Bias.all'Length) * 4, 0,
-            Experts, Each, Gate_Step, Route, Added,
-            Key => Gate_Bias.all (Gate_Bias.all'First)'Address,
-            Kept => False);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Room);
-
-         Products.Add_Bias
-           (Steps, Up_Bias.all (Up_Bias.all'First)'Address,
-            Model_Runner.Bytes.Byte_Count (Up_Bias.all'Length) * 4, 0,
-            Experts, Each, Up_Step, Route, Added,
-            Key => Up_Bias.all (Up_Bias.all'First)'Address,
-            Kept => False);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Room);
-      end Add_Biases;
-
-      --  A projection's bias, added to the step just named where the
-      --  layer carries one: the step's number then becomes the biased
-      --  step's, so what read the projection reads it biased.
-      procedure Add_Projection_Bias
-        (Bias  : T.Real_Array_Access;
-         Rows  : Model_Runner.Numerics.Element_Count;
-         Which : in out Natural;
-         Added : out Boolean;
-         Kept  : Boolean := False) is
-      begin
-         Added := True;
-
-         if Bias = null then
-            return;
-         end if;
-
-         Products.Add_Bias
-           (Steps, Bias.all (Bias.all'First)'Address,
-            Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4, 0,
-            1, Natural (Rows), Which, 0, Added,
-            Key => Bias.all (Bias.all'First)'Address, Kept => Kept);
-         if not Added then
-            return;
-         end if;
-         Which := Products.Length (Steps);
-         Step_Room (Rows);
-      end Add_Projection_Bias;
-
-      --  A normalization of the step just named, where the architecture
-      --  puts one before a residual join: the step's number then becomes
-      --  the normalized step's, so the join reads it normalized.
-      procedure Add_Post_Norm
-        (Gain  : T.Real_Array_Access;
-         Rows  : Model_Runner.Numerics.Element_Count;
-         Which : in out Natural;
-         Added : out Boolean;
-         Kept  : Boolean := False) is
-      begin
-         Added := True;
-
-         if Gain = null then
-            return;
-         end if;
-
-         declare
-            At_Weight : constant System.Address :=
-              Gain.all (Gain.all'First)'Address;
+         --  Every step's rows, in order, so the offsets above are a sum rather
+         --  than a tally kept by hand.
+         procedure Step_Room (Rows : Model_Runner.Numerics.Element_Count) is
          begin
-            Products.Add_Norm
-              (Steps, At_Weight,
-               Model_Runner.Bytes.Byte_Count (Gain.all'Length) * 4, 0,
-               Natural (Rows), Epsilon, Added,
-               From_Step => Which, Key => At_Weight, Kept => Kept,
-               Shift => Shifted);
-         end;
-         if not Added then
-            return;
-         end if;
-         Which := Products.Length (Steps);
-         Step_Room (Rows);
-      end Add_Post_Norm;
+            Wanted := Wanted + Rows * Slots;
+         end Step_Room;
 
-      --  A projection of the layer's input: of the normalization on the
-      --  way in, or -- for an architecture that normalizes on the way out
-      --  and has none -- of the activation the caller handed over, which
-      --  a product not chained to any step reads.
-      procedure Add_Input_Product
-        (Matrix : T.View;
-         P      : Products.Weight_Packing;
-         Kept   : Boolean;
-         Added  : out Boolean) is
+         --  A mixture's expert biases, where the architecture carries them:
+         --  one step a stack, each reading the routing for the expert every
+         --  member is, and each taking the room its source took. The two
+         --  arms' go after both arms, so the combination reads the biased
+         --  pair as the two steps before it; the projection down's goes
+         --  after the downs and becomes what the mix reads.
+         procedure Add_Biases
+           (Gate_Bias, Up_Bias : T.Real_Array_Access;
+            Each, Experts, Route : Natural;
+            Room  : Model_Runner.Numerics.Element_Count;
+            Added : out Boolean)
+         is
+            Gate_Step : constant Natural := Products.Length (Steps) - 1;
+            Up_Step   : constant Natural := Products.Length (Steps);
+         begin
+            Added := True;
+
+            if Gate_Bias = null and then Up_Bias = null then
+               return;
+            end if;
+
+            --  Both or neither: a combination reads the two steps before
+            --  it, and one arm biased and the other not would put an arm
+            --  two steps back.
+            if Gate_Bias = null or else Up_Bias = null then
+               Added := False;
+               return;
+            end if;
+
+            Products.Add_Bias
+              (Steps, Gate_Bias.all (Gate_Bias.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Gate_Bias.all'Length) * 4, 0,
+               Experts, Each, Gate_Step, Route, Added,
+               Key => Gate_Bias.all (Gate_Bias.all'First)'Address,
+               Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Room);
+
+            Products.Add_Bias
+              (Steps, Up_Bias.all (Up_Bias.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Up_Bias.all'Length) * 4, 0,
+               Experts, Each, Up_Step, Route, Added,
+               Key => Up_Bias.all (Up_Bias.all'First)'Address,
+               Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Room);
+         end Add_Biases;
+
+         --  A projection's bias, added to the step just named where the
+         --  layer carries one: the step's number then becomes the biased
+         --  step's, so what read the projection reads it biased.
+         procedure Add_Projection_Bias
+           (Bias  : T.Real_Array_Access;
+            Rows  : Model_Runner.Numerics.Element_Count;
+            Which : in out Natural;
+            Added : out Boolean;
+            Kept  : Boolean := False) is
+         begin
+            Added := True;
+
+            if Bias = null then
+               return;
+            end if;
+
+            Products.Add_Bias
+              (Steps, Bias.all (Bias.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4, 0,
+               1, Natural (Rows), Which, 0, Added,
+               Key => Bias.all (Bias.all'First)'Address, Kept => Kept);
+            if not Added then
+               return;
+            end if;
+            Which := Products.Length (Steps);
+            Step_Room (Rows);
+         end Add_Projection_Bias;
+
+         --  A normalization of the step just named, where the architecture
+         --  puts one before a residual join: the step's number then becomes
+         --  the normalized step's, so the join reads it normalized.
+         procedure Add_Post_Norm
+           (Gain  : T.Real_Array_Access;
+            Rows  : Model_Runner.Numerics.Element_Count;
+            Which : in out Natural;
+            Added : out Boolean;
+            Kept  : Boolean := False) is
+         begin
+            Added := True;
+
+            if Gain = null then
+               return;
+            end if;
+
+            declare
+               At_Weight : constant System.Address :=
+                 Gain.all (Gain.all'First)'Address;
+            begin
+               Products.Add_Norm
+                 (Steps, At_Weight,
+                  Model_Runner.Bytes.Byte_Count (Gain.all'Length) * 4, 0,
+                  Natural (Rows), Epsilon, Added,
+                  From_Step => Which, Key => At_Weight, Kept => Kept,
+                  Shift => Shifted);
+            end;
+            if not Added then
+               return;
+            end if;
+            Which := Products.Length (Steps);
+            Step_Room (Rows);
+         end Add_Post_Norm;
+
+         --  A projection of the layer's input: of the normalization on the
+         --  way in, or -- for an architecture that normalizes on the way out
+         --  and has none -- of the activation the caller handed over, which
+         --  a product not chained to any step reads.
+         procedure Add_Input_Product
+           (Matrix : T.View;
+            P      : Products.Weight_Packing;
+            Kept   : Boolean;
+            Added  : out Boolean) is
+         begin
+            if Step_Norm_In = 0 then
+               Products.Add_Product
+                 (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
+                  Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
+                  Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept);
+            else
+               Products.Add_Chained_Product
+                 (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
+                  Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
+                  Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept,
+                  From_Step => Step_Norm_In);
+            end if;
+         end Add_Input_Product;
+
+         procedure Add_Down_Bias
+           (Down_Bias : T.Real_Array_Access;
+            Each, Experts, Route : Natural;
+            Room  : Model_Runner.Numerics.Element_Count;
+            Added : out Boolean) is
+         begin
+            Added := True;
+
+            if Down_Bias = null then
+               return;
+            end if;
+
+            Products.Add_Bias
+              (Steps, Down_Bias.all (Down_Bias.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Down_Bias.all'Length) * 4, 0,
+               Experts, Each, Step_Downs, Route, Added,
+               Key => Down_Bias.all (Down_Bias.all'First)'Address,
+               Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Downs := Products.Length (Steps);
+            Step_Room (Room);
+         end Add_Down_Bias;
       begin
-         if Step_Norm_In = 0 then
-            Products.Add_Product
-              (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
-               Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
-               Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept);
-         else
-            Products.Add_Chained_Product
-              (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
-               Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
-               Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => Kept,
-               From_Step => Step_Norm_In);
-         end if;
-      end Add_Input_Product;
+         Ok := False;
 
-      procedure Add_Down_Bias
-        (Down_Bias : T.Real_Array_Access;
-         Each, Experts, Route : Natural;
-         Room  : Model_Runner.Numerics.Element_Count;
-         Added : out Boolean) is
-      begin
-         Added := True;
-
-         if Down_Bias = null then
-            return;
-         end if;
-
-         Products.Add_Bias
-           (Steps, Down_Bias.all (Down_Bias.all'First)'Address,
-            Model_Runner.Bytes.Byte_Count (Down_Bias.all'Length) * 4, 0,
-            Experts, Each, Step_Downs, Route, Added,
-            Key => Down_Bias.all (Down_Bias.all'First)'Address,
-            Kept => False);
-         if not Added then
-            return;
-         end if;
-         Step_Downs := Products.Length (Steps);
-         Step_Room (Room);
-      end Add_Down_Bias;
-   begin
-      Ok := False;
-
-      if not Ready_Now
-        or else Width = 0
-        or else Head_Size = 0
-        --  No rotation at all is an architecture that learned a row a
-        --  position, GPT-2's and Bert's, and turns nothing.
-        or else Rotary > Head_Size
-        or else Rotary mod 2 /= 0
-        or else Heads = 0
-        or else Keys = null or else Values = null or else Into = null
-        --  The normalizations, as the architecture arranges them: one on
-        --  the way in and one before the feed-forward, the second absent
-        --  where the two halves run side by side, both absent and the
-        --  two after the joins present where it normalizes on the way
-        --  out. Each of the width, or twice it with a shift.
-        or else (Attention_Norm = null) /= After
-        or else (Attention_Norm /= null
-                 and then Attention_Norm.all'Length /= Norm_Span)
-        or else (Feed_Norm /= null and then Feed_Norm.all'Length /= Norm_Span)
-        or else (After
-                 and then (Feed_Norm /= null
-                           or else Post_Attention_Norm = null
-                           or else Post_Feed_Norm = null))
-        --  A feed-forward without a gate takes a unit alone on its one
-        --  arm, and a mixture is gated by its stacks.
-        or else (not Gated and then not Mixed and then Unit not in 0 | 1)
-        --  A gate beside each head is elementwise over the blend, so
-        --  the value heads are as wide as the query heads; the query
-        --  rows are then two a head, and the heads are a whole number.
-        or else (Head_Gates
-                 and then (Value_Size /= Head_Size
-                           or else Query.Rows mod 2 /= 0
-                           or else Natural (Q_Rows) mod Head_Size /= 0))
-        --  A shared expert is a mixture's, all four parts or none.
-        or else (Shared
-                 and then (not Mixed
-                           or else not T.Is_Present (Shared_Up)
-                           or else not T.Is_Present (Shared_Down)
-                           or else Shared_Router = null
-                           or else Shared_Router.all'Length /= Width
-                           or else Shared_Gate.Columns /= Width
-                           or else Shared_Up.Columns /= Width
-                           or else Shared_Up.Rows /= Shared_Gate.Rows
-                           or else Shared_Down.Rows /= Width
-                           or else Shared_Down.Columns /= Shared_Gate.Rows))
-        or else Residual'Length < Slots * Width
-        or else Query.Columns /= Width
-        or else Key.Columns /= Width
-        or else Value.Columns /= Width
-        or else Turns'Length
-                  /= Slots * Model_Runner.Numerics.Element_Count (Rotary)
-        or else Keys.all'Length < Slots * Key.Rows
-        or else Values.all'Length < Slots * Value.Rows
-        or else Into.all'Length < Slots * Width
-        --  A post-norm is a gain of the width; and a mixture's sum joins
-        --  the residual as it sums, with no room for one before it --
-        --  the one after the sum is Bert's, which the mix leaves for it.
-        or else (Post_Attention_Norm /= null
-                 and then Post_Attention_Norm.all'Length /= Norm_Span)
-        or else (Post_Feed_Norm /= null
-                 and then (Post_Feed_Norm.all'Length /= Norm_Span
-                           or else (Experts > 0 and then not After)))
-        --  The expert biases are a mixture's; a plain feed-forward's
-        --  are the one slice each on its two projections.
-        or else (not Mixed
-                 and then (Gate_Bias /= null
-                           or else (Up_Bias /= null
-                                    and then (Gated
-                                              or else Up_Bias.all'Length
-                                                      /= Up.Rows))
-                           or else (Down_Bias /= null
-                                    and then Down_Bias.all'Length /= Width)))
-      then
-         return;
-      end if;
-
-      Packing_Of (Query.Format, Q_P, Known);
-      if not Known then
-         return;
-      end if;
-      Packing_Of (Key.Format, K_P, Known);
-      if not Known then
-         return;
-      end if;
-      Packing_Of (Value.Format, V_P, Known);
-      if not Known then
-         return;
-      end if;
-      Packing_Of (Weight.Format, Packing, Known);
-      if not Known then
-         return;
-      end if;
-
-      if Mixed then
-         --  The router and the stacks, and the shape they have to hold
-         --  together in: one slice of each stack a member, over the
-         --  width the layer has.
-         Packing_Of (Router.Format, Router_P, Known);
-         if not Known then
-            return;
-         end if;
-         Packing_Of (Gate_Stack.Format, Gate_P, Known);
-         if not Known then
-            return;
-         end if;
-         Packing_Of (Up_Stack.Format, Up_P, Known);
-         if not Known then
-            return;
-         end if;
-         Packing_Of (Down_Stack.Format, Down_P, Known);
-         if not Known then
-            return;
-         end if;
-
-         if Shared then
-            Packing_Of (Shared_Gate.Format, Shared_Gate_P, Known);
-            if not Known then
-               return;
-            end if;
-            Packing_Of (Shared_Up.Format, Shared_Up_P, Known);
-            if not Known then
-               return;
-            end if;
-            Packing_Of (Shared_Down.Format, Shared_Down_P, Known);
-            if not Known then
-               return;
-            end if;
-         end if;
-
-         if Feed = 0 or else Used = 0 or else Experts < Used
-           or else Used > Products.Max_Gather
-           or else Router.Columns /= Width
-           or else Natural (Router.Rows) /= Experts
-           or else Gate_Stack.Columns /= Width
-           or else Up_Stack.Columns /= Width
-           or else Natural (Down_Stack.Columns) /= Feed
-           or else Natural (Gate_Stack.Rows) /= Experts * Feed
-           or else Natural (Up_Stack.Rows) /= Experts * Feed
-           or else Down_Stack.Rows /= Model_Runner.Numerics.Element_Count
-                                          (Experts) * Width
-           or else (Router_Bias /= null
-                    and then Natural (Router_Bias.all'Length) /= Experts)
+         if not Ready_Now
+           or else Width = 0
+           or else Into = null
+           --  A linear layer's four projections, its taps and its numbers
+           --  hold together with the shape; attention's have the cache.
+           or else (if Linear_Layer
+                    then Linear_Mix.Columns /= Width
+                         or else Linear_Z.Columns /= Width
+                         or else Linear_Alpha.Columns /= Width
+                         or else Linear_Beta.Columns /= Width
+                         or else Natural (Linear_Mix.Rows) /= Linear.Mix
+                         or else Natural (Linear_Z.Rows)
+                                 /= Linear.Value_Heads * Linear.Head
+                         or else Natural (Linear_Alpha.Rows) /= Linear.Value_Heads
+                         or else Natural (Linear_Beta.Rows) /= Linear.Value_Heads
+                         or else Conv = null
+                         or else Natural (Conv.all'Length)
+                                 /= Linear.Taps * Linear.Mix
+                         or else Numbers = null
+                         or else Natural (Numbers.all'Length)
+                                 /= 2 * Linear.Value_Heads + Linear.Head
+                         or else Natural (Weight.Columns)
+                                 /= Linear.Value_Heads * Linear.Head
+                         or else Head_Gates or else After
+                    else Head_Size = 0
+                         --  No rotation at all is an architecture that
+                         --  learned a row a position, GPT-2's and Bert's,
+                         --  and turns nothing.
+                         or else Rotary > Head_Size
+                         or else Rotary mod 2 /= 0
+                         or else Heads = 0
+                         or else Keys = null or else Values = null)
+           --  The normalizations, as the architecture arranges them: one on
+           --  the way in and one before the feed-forward, the second absent
+           --  where the two halves run side by side, both absent and the
+           --  two after the joins present where it normalizes on the way
+           --  out. Each of the width, or twice it with a shift.
+           or else (Attention_Norm = null) /= After
+           or else (Attention_Norm /= null
+                    and then Attention_Norm.all'Length /= Norm_Span)
+           or else (Feed_Norm /= null and then Feed_Norm.all'Length /= Norm_Span)
+           or else (After
+                    and then (Feed_Norm /= null
+                              or else Post_Attention_Norm = null
+                              or else Post_Feed_Norm = null))
+           --  A feed-forward without a gate takes a unit alone on its one
+           --  arm, and a mixture is gated by its stacks.
+           or else (not Gated and then not Mixed and then Unit not in 0 | 1)
+           --  A gate beside each head is elementwise over the blend, so
+           --  the value heads are as wide as the query heads; the query
+           --  rows are then two a head, and the heads are a whole number.
+           or else (Head_Gates
+                    and then (Value_Size /= Head_Size
+                              or else Query.Rows mod 2 /= 0
+                              or else Natural (Q_Rows) mod Head_Size /= 0))
+           --  A shared expert is a mixture's, all four parts or none.
+           or else (Shared
+                    and then (not Mixed
+                              or else not T.Is_Present (Shared_Up)
+                              or else not T.Is_Present (Shared_Down)
+                              or else Shared_Router = null
+                              or else Shared_Router.all'Length /= Width
+                              or else Shared_Gate.Columns /= Width
+                              or else Shared_Up.Columns /= Width
+                              or else Shared_Up.Rows /= Shared_Gate.Rows
+                              or else Shared_Down.Rows /= Width
+                              or else Shared_Down.Columns /= Shared_Gate.Rows))
+           or else Residual'Length < Slots * Width
+           or else (not Linear_Layer
+                    and then (Query.Columns /= Width
+                              or else Key.Columns /= Width
+                              or else Value.Columns /= Width
+                              or else Turns'Length
+                                      /= Slots
+                                         * Model_Runner.Numerics.Element_Count
+                                             (Rotary)
+                              or else Keys.all'Length < Slots * Key.Rows
+                              or else Values.all'Length < Slots * Value.Rows))
+           or else Into.all'Length < Slots * Width
+           --  A post-norm is a gain of the width; and a mixture's sum joins
+           --  the residual as it sums, with no room for one before it --
+           --  the one after the sum is Bert's, which the mix leaves for it.
+           or else (Post_Attention_Norm /= null
+                    and then Post_Attention_Norm.all'Length /= Norm_Span)
+           or else (Post_Feed_Norm /= null
+                    and then (Post_Feed_Norm.all'Length /= Norm_Span
+                              or else (Experts > 0 and then not After)))
+           --  The expert biases are a mixture's; a plain feed-forward's
+           --  are the one slice each on its two projections.
+           or else (not Mixed
+                    and then (Gate_Bias /= null
+                              or else (Up_Bias /= null
+                                       and then (Gated
+                                                 or else Up_Bias.all'Length
+                                                         /= Up.Rows))
+                              or else (Down_Bias /= null
+                                       and then Down_Bias.all'Length /= Width)))
          then
             return;
          end if;
-      else
-         if Gated then
-            Packing_Of (Gate.Format, Gate_P, Known);
+
+         if Linear_Layer then
+            Packing_Of (Linear_Mix.Format, Mix_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Linear_Z.Format, Z_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Linear_Alpha.Format, Alpha_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Linear_Beta.Format, Beta_P, Known);
+            if not Known then
+               return;
+            end if;
+         else
+            Packing_Of (Query.Format, Q_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Key.Format, K_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Value.Format, V_P, Known);
             if not Known then
                return;
             end if;
          end if;
-         Packing_Of (Up.Format, Up_P, Known);
+         Packing_Of (Weight.Format, Packing, Known);
          if not Known then
             return;
          end if;
-         Packing_Of (Down.Format, Down_P, Known);
-         if not Known then
+
+         if Mixed then
+            --  The router and the stacks, and the shape they have to hold
+            --  together in: one slice of each stack a member, over the
+            --  width the layer has.
+            Packing_Of (Router.Format, Router_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Gate_Stack.Format, Gate_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Up_Stack.Format, Up_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Down_Stack.Format, Down_P, Known);
+            if not Known then
+               return;
+            end if;
+
+            if Shared then
+               Packing_Of (Shared_Gate.Format, Shared_Gate_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (Shared_Up.Format, Shared_Up_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (Shared_Down.Format, Shared_Down_P, Known);
+               if not Known then
+                  return;
+               end if;
+            end if;
+
+            if Feed = 0 or else Used = 0 or else Experts < Used
+              or else Used > Products.Max_Gather
+              or else Router.Columns /= Width
+              or else Natural (Router.Rows) /= Experts
+              or else Gate_Stack.Columns /= Width
+              or else Up_Stack.Columns /= Width
+              or else Natural (Down_Stack.Columns) /= Feed
+              or else Natural (Gate_Stack.Rows) /= Experts * Feed
+              or else Natural (Up_Stack.Rows) /= Experts * Feed
+              or else Down_Stack.Rows /= Model_Runner.Numerics.Element_Count
+                                             (Experts) * Width
+              or else (Router_Bias /= null
+                       and then Natural (Router_Bias.all'Length) /= Experts)
+            then
+               return;
+            end if;
+         else
+            if Gated then
+               Packing_Of (Gate.Format, Gate_P, Known);
+               if not Known then
+                  return;
+               end if;
+            end if;
+            Packing_Of (Up.Format, Up_P, Known);
+            if not Known then
+               return;
+            end if;
+            Packing_Of (Down.Format, Down_P, Known);
+            if not Known then
+               return;
+            end if;
+         end if;
+
+         --  A head normalization's weight is one head wide, and both are
+         --  read at the head size the queries and keys are projected in.
+         if (Query_Norm /= null
+             and then Natural (Query_Norm.all'Length) /= Head_Size)
+           or else (Key_Norm /= null
+                    and then Natural (Key_Norm.all'Length) /= Head_Size)
+         then
             return;
          end if;
-      end if;
 
-      --  A head normalization's weight is one head wide, and both are
-      --  read at the head size the queries and keys are projected in.
-      if (Query_Norm /= null
-          and then Natural (Query_Norm.all'Length) /= Head_Size)
-        or else (Key_Norm /= null
-                 and then Natural (Key_Norm.all'Length) /= Head_Size)
-      then
-         return;
-      end if;
+         Products.Open_Sequence (Steps);
 
-      Products.Open_Sequence (Steps);
+         --  One: the normalization on the way in, of what the caller handed
+         --  us -- where the architecture has one. Bert's projections read
+         --  the input as it is.
+         if not After then
+            declare
+               At_Norm : constant System.Address :=
+                 Attention_Norm.all (Attention_Norm.all'First)'Address;
+            begin
+               Products.Add_Norm
+                 (Steps, At_Norm,
+                  Model_Runner.Bytes.Byte_Count (Attention_Norm.all'Length) * 4,
+                  0,
+                  Natural (Width), Epsilon, Added,
+                  Key => At_Norm, Kept => False, Shift => Shifted);
+            end;
+            if not Added then
+               return;
+            end if;
+            Step_Norm_In := Products.Length (Steps);
+            Step_Room (Width);
+         end if;
 
-      --  One: the normalization on the way in, of what the caller handed
-      --  us -- where the architecture has one. Bert's projections read
-      --  the input as it is.
-      if not After then
-         declare
-            At_Norm : constant System.Address :=
-              Attention_Norm.all (Attention_Norm.all'First)'Address;
-         begin
-            Products.Add_Norm
-              (Steps, At_Norm,
-               Model_Runner.Bytes.Byte_Count (Attention_Norm.all'Length) * 4,
-               0,
-               Natural (Width), Epsilon, Added,
-               Key => At_Norm, Kept => False, Shift => Shifted);
-         end;
+         --  A linear layer's front: the four projections of the
+         --  normalization, the convolution of the mixed rows over the memory
+         --  the ring keeps, and the rule over the state it keeps, whose
+         --  answer the projection out reads as it reads attention's blend.
+         if Linear_Layer then
+            declare
+               Shape : Products.Linear_Shape := Linear;
+               Step_Mix, Step_Conv : Natural := 0;
+
+               procedure Add_Row_Product
+                 (Matrix : T.View; P : Products.Weight_Packing;
+                  Which  : out Natural; Added : out Boolean) is
+               begin
+                  Products.Add_Chained_Product
+                    (Steps, Matrix.Base, Matrix.Span, Matrix.Offset, P,
+                     Natural (Matrix.Rows), Natural (Matrix.Columns), Added,
+                     Key => At_Offset (Matrix.Base, Matrix.Offset), Kept => False,
+                     From_Step => Step_Norm_In);
+                  Which := Products.Length (Steps);
+                  Step_Room (Matrix.Rows);
+               end Add_Row_Product;
+            begin
+               Add_Row_Product (Linear_Mix, Mix_P, Step_Mix, Added);
+               if not Added then
+                  return;
+               end if;
+               Add_Row_Product (Linear_Z, Z_P, Shape.Z_Step, Added);
+               if not Added then
+                  return;
+               end if;
+               Add_Row_Product (Linear_Alpha, Alpha_P, Shape.Alpha_Step, Added);
+               if not Added then
+                  return;
+               end if;
+               Add_Row_Product (Linear_Beta, Beta_P, Shape.Beta_Step, Added);
+               if not Added then
+                  return;
+               end if;
+
+               Products.Add_Conv
+                 (Steps, Conv.all (Conv.all'First)'Address,
+                  Model_Runner.Bytes.Byte_Count (Conv.all'Length) * 4, 0,
+                  Shape, Added, From_Step => Step_Mix,
+                  Key => Conv.all (Conv.all'First)'Address, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Conv := Products.Length (Steps);
+               Step_Room (Linear_Mix.Rows);
+
+               --  The state lies elsewhere in a slot than the memory.
+               Shape.Region_At := Linear_State_At;
+               Products.Add_Rule
+                 (Steps, Numbers.all (Numbers.all'First)'Address,
+                  Model_Runner.Bytes.Byte_Count (Numbers.all'Length) * 4, 0,
+                  Shape, Added, From_Step => Step_Conv,
+                  Key => Numbers.all (Numbers.all'First)'Address, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Attend := Products.Length (Steps);
+               Step_Room (Weight.Columns);
+            end;
+
+            goto Attended;
+         end if;
+
+         --  The queries, the keys and the values, each reading the
+         --  normalization rather than the step before it.
+         Add_Input_Product (Query, Q_P, False, Added);
          if not Added then
             return;
          end if;
-         Step_Norm_In := Products.Length (Steps);
-         Step_Room (Width);
-      end if;
 
-      --  The queries, the keys and the values, each reading the
-      --  normalization rather than the step before it.
-      Add_Input_Product (Query, Q_P, False, Added);
-      if not Added then
-         return;
-      end if;
+         Step_Q := Products.Length (Steps);
+         Step_Room (Query.Rows);
 
-      Step_Q := Products.Length (Steps);
-      Step_Room (Query.Rows);
+         --  The hybrid's queries and the gates beside its heads, picked
+         --  apart: the heads read the queries, and the gates wait for the
+         --  blend.
+         if Head_Gates then
+            declare
+               Step_Full : constant Natural := Step_Q;
+            begin
+               Products.Add_Pick
+                 (Steps, Natural (Q_Rows), Head_Size, 0, 2, Added,
+                  From_Step => Step_Full, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Q := Products.Length (Steps);
+               Step_Room (Q_Rows);
 
-      --  The hybrid's queries and the gates beside its heads, picked
-      --  apart: the heads read the queries, and the gates wait for the
-      --  blend.
-      if Head_Gates then
-         declare
-            Step_Full : constant Natural := Step_Q;
-         begin
-            Products.Add_Pick
-              (Steps, Natural (Q_Rows), Head_Size, 0, 2, Added,
-               From_Step => Step_Full, Kept => False);
+               Products.Add_Pick
+                 (Steps, Natural (Q_Rows), Head_Size, 1, 2, Added,
+                  From_Step => Step_Full, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Gates := Products.Length (Steps);
+               Step_Room (Q_Rows);
+            end;
+         end if;
+
+         Add_Projection_Bias (Query_Bias, Q_Rows, Step_Q, Added);
+         if not Added then
+            return;
+         end if;
+
+         --  The keys go back to a caller that wants them (Mirror) from the
+         --  turning, or from here where there is none.
+         At_Keys := Wanted;
+         Add_Input_Product
+           (Key, K_P, Mirror and then Rotary = 0 and then Key_Bias = null,
+            Added);
+         if not Added then
+            return;
+         end if;
+         Step_K := Products.Length (Steps);
+         Step_Room (Key.Rows);
+
+         if Key_Bias /= null then
+            At_Keys := Wanted;
+         end if;
+         Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added,
+                              Kept => Mirror and then Rotary = 0);
+         if not Added then
+            return;
+         end if;
+
+         Add_Input_Product (Value, V_P, Mirror and then Value_Bias = null, Added);
+         if not Added then
+            return;
+         end if;
+         Step_V := Products.Length (Steps);
+         if Value_Bias = null then
+            At_Values := Wanted;
+         end if;
+         Step_Room (Value.Rows);
+
+         --  The values' bias; the host then reads the values back from the
+         --  biased step.
+         if Value_Bias /= null then
+            At_Values := Wanted;
+         end if;
+         Add_Projection_Bias (Value_Bias, Value.Rows, Step_V, Added,
+                              Kept => Mirror);
+         if not Added then
+            return;
+         end if;
+
+         --  The heads made ready in two dispatches where the device has the
+         --  kernel: the queries normalized and turned into their own room,
+         --  the keys normalized and turned into the cache with the values
+         --  placed beside them. Six steps otherwise -- and six still where
+         --  the caller wants the keys and values back (Mirror), because the
+         --  fused step leaves them only in the cache.
+         if Products.Readies_Heads (Engine)
+           and then Rotary > 0
+           and then not Mirror
+           and then Table_At = 0
+           and then Head_Size <= 256
+           and then Natural (Key.Rows) = Natural (Value.Rows)
+           and then Natural (Key.Rows) mod Head_Size = 0
+         then
+            declare
+               At_Turn : constant System.Address := Turns (Turns'First)'Address;
+
+               Span : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
+
+               Pairing : constant Products.Rotary_Pairing :=
+                 (if Split then Products.Split else Products.Interleaved);
+
+               function Weight_Of (Norm : T.Real_Array_Access)
+                 return System.Address
+               is (if Norm = null then System.Null_Address
+                   else Norm.all (Norm.all'First)'Address);
+
+               function Span_Of (Norm : T.Real_Array_Access)
+                 return Model_Runner.Bytes.Byte_Count
+               is (if Norm = null then 0
+                   else Model_Runner.Bytes.Byte_Count (Norm.all'Length) * 4);
+            begin
+               Products.Add_Heads
+                 (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
+                  Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+                  Weight => Weight_Of (Query_Norm),
+                  Weight_Span => Span_Of (Query_Norm),
+                  Key => Weight_Of (Query_Norm), Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Q_Turned := Products.Length (Steps);
+               Step_Room (Q_Rows);
+
+               --  A packed session's keys are turned into their own room
+               --  and packed from there, with the values, by the two steps
+               --  after: the fused step writes the exact cache and no other.
+               if Packed.K_Bits /= 0 then
+                  Products.Add_Heads
+                    (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
+                     Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+                     Weight => Weight_Of (Key_Norm),
+                     Weight_Span => Span_Of (Key_Norm),
+                     Key => Weight_Of (Key_Norm), Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_K_Turned := Products.Length (Steps);
+                  Step_Room (Key.Rows);
+
+                  Products.Add_Place
+                    (Steps, Natural (Key.Rows), KV_Width, 0, Added,
+                     From_Step => Step_K_Turned, Packed => Pack_Keys);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Key.Rows);
+
+                  Products.Add_Place
+                    (Steps, Natural (Value.Rows), V_Width, 0, Added,
+                     From_Step => Step_V, Packed => Pack_Values);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Value.Rows);
+
+                  goto Attend;
+               end if;
+
+               Products.Add_Heads
+                 (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
+                  Rotary, Pairing, At_Turn, Span, Epsilon, Added,
+                  Weight => Weight_Of (Key_Norm),
+                  Weight_Span => Span_Of (Key_Norm),
+                  Key => Weight_Of (Key_Norm),
+                  Into_Cache => True, At_First => At_Key, Stride => KV_Width,
+                  V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
+                  Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Key.Rows);
+            end;
+
+            goto Attend;
+         end if;
+
+         --  The head normalizations, where the architecture has them: each
+         --  head of the queries and of the keys over its own mean square, by
+         --  a weight one head wide, before the turning reads them.
+         if Query_Norm /= null then
+            declare
+               At_Weight : constant System.Address :=
+                 Query_Norm.all (Query_Norm.all'First)'Address;
+            begin
+               Products.Add_Norm
+                 (Steps, At_Weight,
+                  Model_Runner.Bytes.Byte_Count (Query_Norm.all'Length) * 4, 0,
+                  Natural (Q_Rows), Epsilon, Added,
+                  From_Step => Step_Q, Key => At_Weight, Kept => False,
+                  Groups => Natural (Q_Rows) / Head_Size);
+            end;
             if not Added then
                return;
             end if;
             Step_Q := Products.Length (Steps);
             Step_Room (Q_Rows);
+         end if;
 
-            Products.Add_Pick
-              (Steps, Natural (Q_Rows), Head_Size, 1, 2, Added,
-               From_Step => Step_Full, Kept => False);
+         if Key_Norm /= null then
+            declare
+               At_Weight : constant System.Address :=
+                 Key_Norm.all (Key_Norm.all'First)'Address;
+            begin
+               Products.Add_Norm
+                 (Steps, At_Weight,
+                  Model_Runner.Bytes.Byte_Count (Key_Norm.all'Length) * 4, 0,
+                  Natural (Key.Rows), Epsilon, Added,
+                  From_Step => Step_K, Key => At_Weight, Kept => False,
+                  Groups => Natural (Key.Rows) / Head_Size);
+            end;
             if not Added then
                return;
             end if;
-            Step_Gates := Products.Length (Steps);
-            Step_Room (Q_Rows);
-         end;
-      end if;
+            Step_K := Products.Length (Steps);
+            Step_Room (Key.Rows);
+         end if;
 
-      Add_Projection_Bias (Query_Bias, Q_Rows, Step_Q, Added);
-      if not Added then
-         return;
-      end if;
+         --  No turning where the architecture turns nothing: the queries
+         --  and the keys are placed and attended as the projections made
+         --  them.
+         if Rotary = 0 then
+            Step_Q_Turned := Step_Q;
+            Step_K_Turned := Step_K;
+            goto Place;
+         end if;
 
-      --  The keys go back to a caller that wants them (Mirror) from the
-      --  turning, or from here where there is none.
-      At_Keys := Wanted;
-      Add_Input_Product
-        (Key, K_P, Mirror and then Rotary = 0 and then Key_Bias = null,
-         Added);
-      if not Added then
-         return;
-      end if;
-      Step_K := Products.Length (Steps);
-      Step_Room (Key.Rows);
-
-      if Key_Bias /= null then
-         At_Keys := Wanted;
-      end if;
-      Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added,
-                           Kept => Mirror and then Rotary = 0);
-      if not Added then
-         return;
-      end if;
-
-      Add_Input_Product (Value, V_P, Mirror and then Value_Bias = null, Added);
-      if not Added then
-         return;
-      end if;
-      Step_V := Products.Length (Steps);
-      if Value_Bias = null then
-         At_Values := Wanted;
-      end if;
-      Step_Room (Value.Rows);
-
-      --  The values' bias; the host then reads the values back from the
-      --  biased step.
-      if Value_Bias /= null then
-         At_Values := Wanted;
-      end if;
-      Add_Projection_Bias (Value_Bias, Value.Rows, Step_V, Added,
-                           Kept => Mirror);
-      if not Added then
-         return;
-      end if;
-
-      --  The heads made ready in two dispatches where the device has the
-      --  kernel: the queries normalized and turned into their own room,
-      --  the keys normalized and turned into the cache with the values
-      --  placed beside them. Six steps otherwise -- and six still where
-      --  the caller wants the keys and values back (Mirror), because the
-      --  fused step leaves them only in the cache.
-      if Products.Readies_Heads (Engine)
-        and then Rotary > 0
-        and then not Mirror
-        and then Table_At = 0
-        and then Head_Size <= 256
-        and then Natural (Key.Rows) = Natural (Value.Rows)
-        and then Natural (Key.Rows) mod Head_Size = 0
-      then
+         --  The turning, of the queries and of the keys.
          declare
             At_Turn : constant System.Address := Turns (Turns'First)'Address;
 
@@ -2414,584 +2762,532 @@ package body Model_Runner.Backend.Device is
 
             Pairing : constant Products.Rotary_Pairing :=
               (if Split then Products.Split else Products.Interleaved);
-
-            function Weight_Of (Norm : T.Real_Array_Access)
-              return System.Address
-            is (if Norm = null then System.Null_Address
-                else Norm.all (Norm.all'First)'Address);
-
-            function Span_Of (Norm : T.Real_Array_Access)
-              return Model_Runner.Bytes.Byte_Count
-            is (if Norm = null then 0
-                else Model_Runner.Bytes.Byte_Count (Norm.all'Length) * 4);
          begin
-            Products.Add_Heads
-              (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
-               Rotary, Pairing, At_Turn, Span, Epsilon, Added,
-               Weight => Weight_Of (Query_Norm),
-               Weight_Span => Span_Of (Query_Norm),
-               Key => Weight_Of (Query_Norm), Kept => False);
+            Products.Add_Rotation
+              (Steps, At_Turn, Span, 0, Natural (Q_Rows),
+               Natural (Q_Rows) / Head_Size, Rotary, Pairing, Added,
+               From_Step => Step_Q, Kept => False);
             if not Added then
                return;
             end if;
             Step_Q_Turned := Products.Length (Steps);
             Step_Room (Q_Rows);
 
-            --  A packed session's keys are turned into their own room
-            --  and packed from there, with the values, by the two steps
-            --  after: the fused step writes the exact cache and no other.
-            if Packed.K_Bits /= 0 then
-               Products.Add_Heads
-                 (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
-                  Rotary, Pairing, At_Turn, Span, Epsilon, Added,
-                  Weight => Weight_Of (Key_Norm),
-                  Weight_Span => Span_Of (Key_Norm),
-                  Key => Weight_Of (Key_Norm), Kept => False);
-               if not Added then
-                  return;
-               end if;
-               Step_K_Turned := Products.Length (Steps);
-               Step_Room (Key.Rows);
-
-               Products.Add_Place
-                 (Steps, Natural (Key.Rows), KV_Width, 0, Added,
-                  From_Step => Step_K_Turned, Packed => Pack_Keys);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Key.Rows);
-
-               Products.Add_Place
-                 (Steps, Natural (Value.Rows), V_Width, 0, Added,
-                  From_Step => Step_V, Packed => Pack_Values);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Value.Rows);
-
-               goto Attend;
-            end if;
-
-            Products.Add_Heads
-              (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
-               Rotary, Pairing, At_Turn, Span, Epsilon, Added,
-               Weight => Weight_Of (Key_Norm),
-               Weight_Span => Span_Of (Key_Norm),
-               Key => Weight_Of (Key_Norm),
-               Into_Cache => True, At_First => At_Key, Stride => KV_Width,
-               V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
-               Kept => False);
+            Products.Add_Rotation
+              (Steps, At_Turn, Span, 0, Natural (Key.Rows),
+               Natural (Key.Rows) / Head_Size, Rotary, Pairing, Added,
+               From_Step => Step_K, Kept => Mirror);
             if not Added then
                return;
             end if;
+            Step_K_Turned := Products.Length (Steps);
+            At_Keys := Wanted;
             Step_Room (Key.Rows);
          end;
 
-         goto Attend;
-      end if;
+         <<Place>>
 
-      --  The head normalizations, where the architecture has them: each
-      --  head of the queries and of the keys over its own mean square, by
-      --  a weight one head wide, before the turning reads them.
-      if Query_Norm /= null then
-         declare
-            At_Weight : constant System.Address :=
-              Query_Norm.all (Query_Norm.all'First)'Address;
-         begin
-            Products.Add_Norm
-              (Steps, At_Weight,
-               Model_Runner.Bytes.Byte_Count (Query_Norm.all'Length) * 4, 0,
-               Natural (Q_Rows), Epsilon, Added,
-               From_Step => Step_Q, Key => At_Weight, Kept => False,
-               Groups => Natural (Q_Rows) / Head_Size);
-         end;
+         --  Into the cache, before anything attends to it -- packed, for a
+         --  packed session's block.
+         Products.Add_Place
+           (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
+            From_Step => Step_K_Turned, Table_At => Table_At,
+            Packed => Pack_Keys);
          if not Added then
             return;
          end if;
-         Step_Q := Products.Length (Steps);
-         Step_Room (Q_Rows);
-      end if;
-
-      if Key_Norm /= null then
-         declare
-            At_Weight : constant System.Address :=
-              Key_Norm.all (Key_Norm.all'First)'Address;
-         begin
-            Products.Add_Norm
-              (Steps, At_Weight,
-               Model_Runner.Bytes.Byte_Count (Key_Norm.all'Length) * 4, 0,
-               Natural (Key.Rows), Epsilon, Added,
-               From_Step => Step_K, Key => At_Weight, Kept => False,
-               Groups => Natural (Key.Rows) / Head_Size);
-         end;
-         if not Added then
-            return;
-         end if;
-         Step_K := Products.Length (Steps);
          Step_Room (Key.Rows);
-      end if;
 
-      --  No turning where the architecture turns nothing: the queries
-      --  and the keys are placed and attended as the projections made
-      --  them.
-      if Rotary = 0 then
-         Step_Q_Turned := Step_Q;
-         Step_K_Turned := Step_K;
-         goto Place;
-      end if;
-
-      --  The turning, of the queries and of the keys.
-      declare
-         At_Turn : constant System.Address := Turns (Turns'First)'Address;
-
-         Span : constant Model_Runner.Bytes.Byte_Count :=
-           Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
-
-         Pairing : constant Products.Rotary_Pairing :=
-           (if Split then Products.Split else Products.Interleaved);
-      begin
-         Products.Add_Rotation
-           (Steps, At_Turn, Span, 0, Natural (Q_Rows),
-            Natural (Q_Rows) / Head_Size, Rotary, Pairing, Added,
-            From_Step => Step_Q, Kept => False);
+         Products.Add_Place
+           (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
+            From_Step => Step_V, Table_At => Table_At,
+            Packed => Pack_Values);
          if not Added then
             return;
          end if;
-         Step_Q_Turned := Products.Length (Steps);
-         Step_Room (Q_Rows);
+         Step_Room (Value.Rows);
 
-         Products.Add_Rotation
-           (Steps, At_Turn, Span, 0, Natural (Key.Rows),
-            Natural (Key.Rows) / Head_Size, Rotary, Pairing, Added,
-            From_Step => Step_K, Kept => Mirror);
-         if not Added then
-            return;
+         <<Attend>>
+
+         --  A packed session's batch through the matrix instruction, where
+         --  that is the kernel the batch would take: the layer's packed keys
+         --  and values unpacked into the copy first, after the step that
+         --  packed them, and the attention then reads the copy as an exact
+         --  session's does, from the bases the caller says.
+         if Packed.K_Bits /= 0
+           and then Through_Matrix (Unpacked, Positions, Head_Size, Value_Size)
+         then
+            Add_Unpacking
+              (Steps, Unpacked, KV_Width, V_Width,
+               From => Products.Length (Steps), Added => Added);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Model_Runner.Numerics.Element_Count (KV_Width));
+            Step_Room (Model_Runner.Numerics.Element_Count (V_Width));
+
+            Products.Add_Attention
+              (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
+               Unpacked.K_Base, Unpacked.V_Base, KV_Width, V_Width, Scale, Cap,
+               Added,
+               Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+               Chained => True, From_Step => Step_Q_Turned, Kept => False,
+               Sinks_At => Sinks_At);
+            if not Added then
+               return;
+            end if;
+            Step_Attend := Products.Length (Steps);
+            goto Attended;
          end if;
-         Step_K_Turned := Products.Length (Steps);
-         At_Keys := Wanted;
-         Step_Room (Key.Rows);
-      end;
 
-      <<Place>>
-
-      --  Into the cache, before anything attends to it -- packed, for a
-      --  packed session's block.
-      Products.Add_Place
-        (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
-         From_Step => Step_K_Turned, Table_At => Table_At,
-         Packed => Pack_Keys);
-      if not Added then
-         return;
-      end if;
-      Step_Room (Key.Rows);
-
-      Products.Add_Place
-        (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
-         From_Step => Step_V, Table_At => Table_At,
-         Packed => Pack_Values);
-      if not Added then
-         return;
-      end if;
-      Step_Room (Value.Rows);
-
-      <<Attend>>
-
-      --  A packed session's batch through the matrix instruction, where
-      --  that is the kernel the batch would take: the layer's packed keys
-      --  and values unpacked into the copy first, after the step that
-      --  packed them, and the attention then reads the copy as an exact
-      --  session's does, from the bases the caller says.
-      if Packed.K_Bits /= 0
-        and then Through_Matrix (Unpacked, Positions, Head_Size, Value_Size)
-      then
-         Add_Unpacking
-           (Steps, Unpacked, KV_Width, V_Width,
-            From => Products.Length (Steps), Added => Added);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Model_Runner.Numerics.Element_Count (KV_Width));
-         Step_Room (Model_Runner.Numerics.Element_Count (V_Width));
-
+         --  Attention, against the turned queries.
          Products.Add_Attention
            (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
-            Unpacked.K_Base, Unpacked.V_Base, KV_Width, V_Width, Scale, Cap,
-            Added,
+            K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
             Window => Window, Causal => Causal, Max_Bias => Max_Bias,
             Chained => True, From_Step => Step_Q_Turned, Kept => False,
-            Sinks_At => Sinks_At);
+            Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At);
          if not Added then
             return;
          end if;
          Step_Attend := Products.Length (Steps);
-         goto Attended;
-      end if;
 
-      --  Attention, against the turned queries.
-      Products.Add_Attention
-        (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
-         K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
-         Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Chained => True, From_Step => Step_Q_Turned, Kept => False,
-         Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At);
-      if not Added then
-         return;
-      end if;
-      Step_Attend := Products.Length (Steps);
-
-      <<Attended>>
-      Step_Room
-        (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
-
-      --  Each head's blend through the logistic of its gate, where the
-      --  query projection carried one, before the projection out reads
-      --  it.
-      if Head_Gates then
-         Products.Add_Combination
-           (Steps, 6, Added, Kept => False,
-            From_Step => Step_Gates, Other_Step => Step_Attend);
-         if not Added then
-            return;
+         <<Attended>>
+         if not Linear_Layer then
+            Step_Room
+              (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
          end if;
-         Step_Attend := Products.Length (Steps);
-         Step_Room
-           (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
-      end if;
 
-      --  The second half, as Attend_And_Feed builds it, with the residual
-      --  coming from the front of the activation rather than the back of
-      --  it -- there is nothing else in it now.
-      Products.Add_Chained_Product
-        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
-         Natural (Weight.Rows), Natural (Weight.Columns), Added,
-         Key => At_Offset (Weight.Base, Weight.Offset), Kept => False,
-         From_Step => Step_Attend);
-      if not Added then
-         return;
-      end if;
-      Step_Out := Products.Length (Steps);
-      Step_Room (Weight.Rows);
-
-      --  The bias on the way out, and the normalization Gemma puts on
-      --  what attention produced, before the join reads it.
-      Add_Projection_Bias (Out_Bias, Weight.Rows, Step_Out, Added);
-      if not Added then
-         return;
-      end if;
-      if not After then
-         Add_Post_Norm (Post_Attention_Norm, Weight.Rows, Step_Out, Added);
-         if not Added then
-            return;
+         --  Each head's blend through the logistic of its gate, where the
+         --  query projection carried one, before the projection out reads
+         --  it.
+         if Head_Gates then
+            Products.Add_Combination
+              (Steps, 6, Added, Kept => False,
+               From_Step => Step_Gates, Other_Step => Step_Attend);
+            if not Added then
+               return;
+            end if;
+            Step_Attend := Products.Length (Steps);
+            Step_Room
+              (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
          end if;
-      end if;
 
-      Products.Add_Join (Steps, Added, From_Step => Step_Out, Kept => False);
-      if not Added then
-         return;
-      end if;
-      Step_Join := Products.Length (Steps);
-      Step_Room (Width);
-
-      --  And the normalization Bert puts on the sum, which is then what
-      --  the feed-forward reads and what its join adds to.
-      if After then
-         Add_Post_Norm (Post_Attention_Norm, Width, Step_Join, Added);
-         if not Added then
-            return;
-         end if;
-      end if;
-
-      --  The normalization before the feed-forward, of the residual as
-      --  it now stands -- or, where the two halves run side by side, the
-      --  one on the way in read again; and Bert's feed-forward reads the
-      --  normalized sum.
-      if Parallel then
-         Step_Norm_Feed := Step_Norm_In;
-      elsif After then
-         Step_Norm_Feed := Step_Join;
-      else
-         declare
-            At_Feed : constant System.Address :=
-              Feed_Norm.all (Feed_Norm.all'First)'Address;
-         begin
-            Products.Add_Norm
-              (Steps, At_Feed,
-               Model_Runner.Bytes.Byte_Count (Feed_Norm.all'Length) * 4, 0,
-               Natural (Width), Epsilon, Added,
-               From_Step => Step_Join, Key => At_Feed,
-               Kept => False, Shift => Shifted);
-         end;
-         if not Added then
-            return;
-         end if;
-         Step_Norm_Feed := Products.Length (Steps);
-         Step_Room (Width);
-      end if;
-
-      if Mixed then
-         --  The router, the choosing, the chosen experts' three
-         --  projections gathered, the unit between them, and the sum by
-         --  shares with the residual added: a mixture layer, whole.
+         --  The second half, as Attend_And_Feed builds it, with the residual
+         --  coming from the front of the activation rather than the back of
+         --  it -- there is nothing else in it now.
          Products.Add_Chained_Product
-           (Steps, Router.Base, Router.Span, Router.Offset, Router_P,
-            Natural (Router.Rows), Natural (Router.Columns), Added,
-            Key => At_Offset (Router.Base, Router.Offset), Kept => False,
-            From_Step => Step_Norm_Feed);
+           (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+            Natural (Weight.Rows), Natural (Weight.Columns), Added,
+            Key => At_Offset (Weight.Base, Weight.Offset), Kept => False,
+            From_Step => Step_Attend);
          if not Added then
             return;
          end if;
-         Step_Router := Products.Length (Steps);
-         Step_Room (Router.Rows);
+         Step_Out := Products.Length (Steps);
+         Step_Room (Weight.Rows);
 
-         if Router_Bias = null then
-            Products.Add_Route
-              (Steps, Experts, Used, Added, From_Step => Step_Router,
-               Kept => False);
+         --  The bias on the way out, and the normalization Gemma puts on
+         --  what attention produced, before the join reads it.
+         Add_Projection_Bias (Out_Bias, Weight.Rows, Step_Out, Added);
+         if not Added then
+            return;
+         end if;
+         if not After then
+            Add_Post_Norm (Post_Attention_Norm, Weight.Rows, Step_Out, Added);
+            if not Added then
+               return;
+            end if;
+         end if;
+
+         Products.Add_Join (Steps, Added, From_Step => Step_Out, Kept => False);
+         if not Added then
+            return;
+         end if;
+         Step_Join := Products.Length (Steps);
+         Step_Room (Width);
+
+         --  And the normalization Bert puts on the sum, which is then what
+         --  the feed-forward reads and what its join adds to.
+         if After then
+            Add_Post_Norm (Post_Attention_Norm, Width, Step_Join, Added);
+            if not Added then
+               return;
+            end if;
+         end if;
+
+         --  The normalization before the feed-forward, of the residual as
+         --  it now stands -- or, where the two halves run side by side, the
+         --  one on the way in read again; and Bert's feed-forward reads the
+         --  normalized sum.
+         if Parallel then
+            Step_Norm_Feed := Step_Norm_In;
+         elsif After then
+            Step_Norm_Feed := Step_Join;
          else
-            Products.Add_Route
-              (Steps, Experts, Used, Added, From_Step => Step_Router,
-               Kept => False,
-               Bias => Router_Bias.all (Router_Bias.all'First)'Address,
-               Bias_Span =>
-                 Model_Runner.Bytes.Byte_Count (Router_Bias.all'Length) * 4,
-               Bias_At => 0);
-         end if;
-         if not Added then
-            return;
-         end if;
-         Step_Route := Products.Length (Steps);
-         Step_Room (Model_Runner.Numerics.Element_Count (2 * Used));
-
-         if Slots > 1 then
-            --  A batch: the routing inverted, and every expert run over
-            --  the positions that chose it as one dispatch a matrix,
-            --  the answers by slot until the mix puts each position's
-            --  back together. A token gathers its few experts straight
-            --  from the routing, below. The slots a position take room
-            --  for the padding of the runs, as Add_Listed_Product sizes
-            --  it.
             declare
-               Padded : constant Natural :=
-                 Used
-                 + (15 * Natural'Min (Experts, Natural (Slots) * Used)
-                    + Natural (Slots) - 1)
-                   / Natural (Slots);
+               At_Feed : constant System.Address :=
+                 Feed_Norm.all (Feed_Norm.all'First)'Address;
             begin
-               Products.Add_Invert
-                 (Steps, Experts, Used, Step_Route, Added, Kept => False);
-               if not Added then
-                  return;
-               end if;
-               Step_Route := Products.Length (Steps);
-               Step_Room
-                 (Model_Runner.Numerics.Element_Count
-                    (32 * Experts + 3 * Used));
+               Products.Add_Norm
+                 (Steps, At_Feed,
+                  Model_Runner.Bytes.Byte_Count (Feed_Norm.all'Length) * 4, 0,
+                  Natural (Width), Epsilon, Added,
+                  From_Step => Step_Join, Key => At_Feed,
+                  Kept => False, Shift => Shifted);
+            end;
+            if not Added then
+               return;
+            end if;
+            Step_Norm_Feed := Products.Length (Steps);
+            Step_Room (Width);
+         end if;
 
-               Products.Add_Listed_Product
+         if Mixed then
+            --  The router, the choosing, the chosen experts' three
+            --  projections gathered, the unit between them, and the sum by
+            --  shares with the residual added: a mixture layer, whole.
+            Products.Add_Chained_Product
+              (Steps, Router.Base, Router.Span, Router.Offset, Router_P,
+               Natural (Router.Rows), Natural (Router.Columns), Added,
+               Key => At_Offset (Router.Base, Router.Offset), Kept => False,
+               From_Step => Step_Norm_Feed);
+            if not Added then
+               return;
+            end if;
+            Step_Router := Products.Length (Steps);
+            Step_Room (Router.Rows);
+
+            if Router_Bias = null then
+               Products.Add_Route
+                 (Steps, Experts, Used, Added, From_Step => Step_Router,
+                  Kept => False);
+            else
+               Products.Add_Route
+                 (Steps, Experts, Used, Added, From_Step => Step_Router,
+                  Kept => False,
+                  Bias => Router_Bias.all (Router_Bias.all'First)'Address,
+                  Bias_Span =>
+                    Model_Runner.Bytes.Byte_Count (Router_Bias.all'Length) * 4,
+                  Bias_At => 0);
+            end if;
+            if not Added then
+               return;
+            end if;
+            Step_Route := Products.Length (Steps);
+            Step_Room (Model_Runner.Numerics.Element_Count (2 * Used));
+
+            if Slots > 1 then
+               --  A batch: the routing inverted, and every expert run over
+               --  the positions that chose it as one dispatch a matrix,
+               --  the answers by slot until the mix puts each position's
+               --  back together. A token gathers its few experts straight
+               --  from the routing, below. The slots a position take room
+               --  for the padding of the runs, as Add_Listed_Product sizes
+               --  it.
+               declare
+                  Padded : constant Natural :=
+                    Used
+                    + (15 * Natural'Min (Experts, Natural (Slots) * Used)
+                       + Natural (Slots) - 1)
+                      / Natural (Slots);
+               begin
+                  Products.Add_Invert
+                    (Steps, Experts, Used, Step_Route, Added, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Route := Products.Length (Steps);
+                  Step_Room
+                    (Model_Runner.Numerics.Element_Count
+                       (32 * Experts + 3 * Used));
+
+                  Products.Add_Listed_Product
+                    (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
+                     Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
+                     Experts, Used, Step_Route, Positive (Slots), Added,
+                     Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
+                     Kept => False, From_Step => Step_Norm_Feed);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+
+                  Products.Add_Listed_Product
+                    (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
+                     Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
+                     Experts, Used, Step_Route, Positive (Slots), Added,
+                     Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
+                     Kept => False, From_Step => Step_Norm_Feed);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+
+                  --  The two arms' biases, where the architecture carries
+                  --  them, each read for the expert its slot belongs to;
+                  --  the combination then reads the biased pair, which are
+                  --  the two steps before it.
+                  Add_Biases
+                    (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
+                     Model_Runner.Numerics.Element_Count (Padded * Feed), Added);
+                  if not Added then
+                     return;
+                  end if;
+
+                  Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                           Alpha => Alpha, Limit => Limit);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+
+                  Products.Add_Listed_Product
+                    (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
+                     Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
+                     Experts, Used, Step_Route, Positive (Slots), Added,
+                     Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
+                     Kept => False, By_Slot => True);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Downs := Products.Length (Steps);
+                  Step_Room (Model_Runner.Numerics.Element_Count (Padded) * Width);
+
+                  Add_Down_Bias
+                    (Down_Bias, Natural (Width), Experts, Step_Route,
+                     Model_Runner.Numerics.Element_Count (Padded) * Width, Added);
+                  if not Added then
+                     return;
+                  end if;
+               end;
+            else
+               Products.Add_Gathered_Product
                  (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
                   Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
-                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  [others => 0], Used, Added,
                   Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
-                  Kept => False, From_Step => Step_Norm_Feed);
+                  Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+                  Routed => Step_Route);
                if not Added then
                   return;
                end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-               Products.Add_Listed_Product
+               Products.Add_Gathered_Product
                  (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
                   Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
-                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  [others => 0], Used, Added,
                   Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
-                  Kept => False, From_Step => Step_Norm_Feed);
+                  Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+                  Routed => Step_Route);
                if not Added then
                   return;
                end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-               --  The two arms' biases, where the architecture carries
-               --  them, each read for the expert its slot belongs to;
-               --  the combination then reads the biased pair, which are
-               --  the two steps before it.
                Add_Biases
                  (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
-                  Model_Runner.Numerics.Element_Count (Padded * Feed), Added);
+                  Model_Runner.Numerics.Element_Count (Used * Feed), Added);
                if not Added then
                   return;
                end if;
 
                Products.Add_Combination (Steps, Unit, Added, Kept => False,
-                                        Alpha => Alpha, Limit => Limit);
+                                           Alpha => Alpha, Limit => Limit);
                if not Added then
                   return;
                end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
+               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-               Products.Add_Listed_Product
+               Products.Add_Gathered_Product
                  (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
                   Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
-                  Experts, Used, Step_Route, Positive (Slots), Added,
+                  [others => 0], Used, Added,
                   Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
-                  Kept => False, By_Slot => True);
+                  Kept => False, Chained => True, Apart => Feed,
+                  Routed => Step_Route);
                if not Added then
                   return;
                end if;
                Step_Downs := Products.Length (Steps);
-               Step_Room (Model_Runner.Numerics.Element_Count (Padded) * Width);
+               Step_Room (Model_Runner.Numerics.Element_Count (Used) * Width);
 
                Add_Down_Bias
                  (Down_Bias, Natural (Width), Experts, Step_Route,
-                  Model_Runner.Numerics.Element_Count (Padded) * Width, Added);
+                  Model_Runner.Numerics.Element_Count (Used) * Width, Added);
                if not Added then
                   return;
                end if;
-            end;
-         else
-            Products.Add_Gathered_Product
-              (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
-               Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
-               [others => 0], Used, Added,
-               Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
-               Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-               Routed => Step_Route);
+            end if;
+
+            Products.Add_Mix
+              (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
+               Residual_Step => Step_Join,
+               Kept => not Carry_Out and then not After and then not Shared);
             if not Added then
                return;
             end if;
-            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
-
-            Products.Add_Gathered_Product
-              (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
-               Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
-               [others => 0], Used, Added,
-               Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
-               Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-               Routed => Step_Route);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
-
-            Add_Biases
-              (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
-               Model_Runner.Numerics.Element_Count (Used * Feed), Added);
-            if not Added then
-               return;
-            end if;
-
-            Products.Add_Combination (Steps, Unit, Added, Kept => False,
-                                        Alpha => Alpha, Limit => Limit);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
-
-            Products.Add_Gathered_Product
-              (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
-               Down_P, Natural (Down_Stack.Rows), Natural (Width), Feed,
-               [others => 0], Used, Added,
-               Key => At_Offset (Down_Stack.Base, Down_Stack.Offset),
-               Kept => False, Chained => True, Apart => Feed,
-               Routed => Step_Route);
-            if not Added then
-               return;
-            end if;
-            Step_Downs := Products.Length (Steps);
-            Step_Room (Model_Runner.Numerics.Element_Count (Used) * Width);
-
-            Add_Down_Bias
-              (Down_Bias, Natural (Width), Experts, Step_Route,
-               Model_Runner.Numerics.Element_Count (Used) * Width, Added);
-            if not Added then
-               return;
-            end if;
-         end if;
-
-         Products.Add_Mix
-           (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
-            Residual_Step => Step_Join,
-            Kept => not Carry_Out and then not After and then not Shared);
-         if not Added then
-            return;
-         end if;
-         Step_Mix := Products.Length (Steps);
-         At_Out := Wanted;
-         Step_Room (Width);
-
-         --  And the shared expert, where the mixture has one: the same
-         --  gated block an expert is, over the normalized input every
-         --  position, scaled by the logistic of its router's one score
-         --  a position, and joined to the sum.
-         if Shared then
-            Products.Add_Chained_Product
-              (Steps, Shared_Gate.Base, Shared_Gate.Span, Shared_Gate.Offset,
-               Shared_Gate_P, Natural (Shared_Gate.Rows),
-               Natural (Shared_Gate.Columns), Added,
-               Key => At_Offset (Shared_Gate.Base, Shared_Gate.Offset),
-               Kept => False, From_Step => Step_Norm_Feed);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Shared_Gate.Rows);
-
-            Products.Add_Chained_Product
-              (Steps, Shared_Up.Base, Shared_Up.Span, Shared_Up.Offset,
-               Shared_Up_P, Natural (Shared_Up.Rows),
-               Natural (Shared_Up.Columns), Added,
-               Key => At_Offset (Shared_Up.Base, Shared_Up.Offset),
-               Kept => False, From_Step => Step_Norm_Feed);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Shared_Up.Rows);
-
-            Products.Add_Combination (Steps, 0, Added, Kept => False);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Shared_Gate.Rows);
-
-            Products.Add_Chained_Product
-              (Steps, Shared_Down.Base, Shared_Down.Span, Shared_Down.Offset,
-               Shared_Down_P, Natural (Shared_Down.Rows),
-               Natural (Shared_Down.Columns), Added,
-               Key => At_Offset (Shared_Down.Base, Shared_Down.Offset),
-               Kept => False);
-            if not Added then
-               return;
-            end if;
+            Step_Mix := Products.Length (Steps);
+            At_Out := Wanted;
             Step_Room (Width);
 
-            declare
-               Step_Shared : constant Natural := Products.Length (Steps);
-
-               --  The router's row as a matrix of one row, resident as
-               --  a norm's weight is.
-               At_Row : constant System.Address :=
-                 Shared_Router.all (Shared_Router.all'First)'Address;
-            begin
+            --  And the shared expert, where the mixture has one: the same
+            --  gated block an expert is, over the normalized input every
+            --  position, scaled by the logistic of its router's one score
+            --  a position, and joined to the sum.
+            if Shared then
                Products.Add_Chained_Product
-                 (Steps, At_Row,
-                  Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
-                  0, Products.Values_F32, 1, Natural (Width), Added,
-                  Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
+                 (Steps, Shared_Gate.Base, Shared_Gate.Span, Shared_Gate.Offset,
+                  Shared_Gate_P, Natural (Shared_Gate.Rows),
+                  Natural (Shared_Gate.Columns), Added,
+                  Key => At_Offset (Shared_Gate.Base, Shared_Gate.Offset),
+                  Kept => False, From_Step => Step_Norm_Feed);
                if not Added then
                   return;
                end if;
-               Step_Room (1);
+               Step_Room (Shared_Gate.Rows);
 
-               Products.Add_Combination
-                 (Steps, 7, Added, Kept => False,
-                  From_Step => Step_Shared,
-                  Other_Step => Products.Length (Steps));
+               Products.Add_Chained_Product
+                 (Steps, Shared_Up.Base, Shared_Up.Span, Shared_Up.Offset,
+                  Shared_Up_P, Natural (Shared_Up.Rows),
+                  Natural (Shared_Up.Columns), Added,
+                  Key => At_Offset (Shared_Up.Base, Shared_Up.Offset),
+                  Kept => False, From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Shared_Up.Rows);
+
+               Products.Add_Combination (Steps, 0, Added, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Shared_Gate.Rows);
+
+               Products.Add_Chained_Product
+                 (Steps, Shared_Down.Base, Shared_Down.Span, Shared_Down.Offset,
+                  Shared_Down_P, Natural (Shared_Down.Rows),
+                  Natural (Shared_Down.Columns), Added,
+                  Key => At_Offset (Shared_Down.Base, Shared_Down.Offset),
+                  Kept => False);
                if not Added then
                   return;
                end if;
                Step_Room (Width);
-            end;
+
+               declare
+                  Step_Shared : constant Natural := Products.Length (Steps);
+
+                  --  The router's row as a matrix of one row, resident as
+                  --  a norm's weight is.
+                  At_Row : constant System.Address :=
+                    Shared_Router.all (Shared_Router.all'First)'Address;
+               begin
+                  Products.Add_Chained_Product
+                    (Steps, At_Row,
+                     Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
+                     0, Products.Values_F32, 1, Natural (Width), Added,
+                     Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (1);
+
+                  Products.Add_Combination
+                    (Steps, 7, Added, Kept => False,
+                     From_Step => Step_Shared,
+                     Other_Step => Products.Length (Steps));
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Width);
+               end;
+
+               Products.Add_Join
+                 (Steps, Added, From_Step => Products.Length (Steps),
+                  Residual_Step => Step_Mix,
+                  Kept => not Carry_Out and then not After);
+               if not Added then
+                  return;
+               end if;
+               At_Out := Wanted;
+               Step_Room (Width);
+            end if;
+         else
+            if Gated then
+               Products.Add_Chained_Product
+                 (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
+                  Natural (Gate.Rows), Natural (Gate.Columns), Added,
+                  Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+                  From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Gate.Rows);
+            end if;
+
+            Products.Add_Chained_Product
+              (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+               Natural (Up.Rows), Natural (Up.Columns), Added,
+               Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+               From_Step => Step_Norm_Feed);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Up.Rows);
+
+            --  Gated, the unit on the gate arm multiplied by the up arm;
+            --  not, the unit alone on the one projection up, with its bias
+            --  added first because the bias is the projection's.
+            if Gated then
+               Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                         Alpha => Alpha, Limit => Limit);
+            else
+               declare
+                  Step_Up : Natural := Products.Length (Steps);
+               begin
+                  Add_Projection_Bias (Up_Bias, Up.Rows, Step_Up, Added);
+                  if not Added then
+                     return;
+                  end if;
+               end;
+
+               Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
+            end if;
+            if not Added then
+               return;
+            end if;
+            Step_Room (Up.Rows);
+
+            Products.Add_Chained_Product
+              (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
+               Natural (Down.Rows), Natural (Down.Columns), Added,
+               Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+            if not Added then
+               return;
+            end if;
+            Step_Downs := Products.Length (Steps);
+            Step_Room (Down.Rows);
+
+            --  The projection down's bias, gated or not: the one gated
+            --  architecture that shifts what it projects down is jina-bert-v2.
+            Add_Projection_Bias (Down_Bias, Down.Rows, Step_Downs, Added);
+            if not Added then
+               return;
+            end if;
+
+            --  And the normalization Gemma puts on what the feed-forward
+            --  produced, before the second join reads it.
+            if not After then
+               Add_Post_Norm (Post_Feed_Norm, Down.Rows, Step_Downs, Added);
+               if not Added then
+                  return;
+               end if;
+            end if;
 
             Products.Add_Join
-              (Steps, Added, From_Step => Products.Length (Steps),
-               Residual_Step => Step_Mix,
+              (Steps, Added, From_Step => Step_Downs, Residual_Step => Step_Join,
                Kept => not Carry_Out and then not After);
             if not Added then
                return;
@@ -2999,165 +3295,107 @@ package body Model_Runner.Backend.Device is
             At_Out := Wanted;
             Step_Room (Width);
          end if;
-      else
-         if Gated then
-            Products.Add_Chained_Product
-              (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
-               Natural (Gate.Rows), Natural (Gate.Columns), Added,
-               Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
-               From_Step => Step_Norm_Feed);
-            if not Added then
-               return;
-            end if;
-            Step_Room (Gate.Rows);
-         end if;
 
-         Products.Add_Chained_Product
-           (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
-            Natural (Up.Rows), Natural (Up.Columns), Added,
-            Key => At_Offset (Up.Base, Up.Offset), Kept => False,
-            From_Step => Step_Norm_Feed);
-         if not Added then
-            return;
-         end if;
-         Step_Room (Up.Rows);
-
-         --  Gated, the unit on the gate arm multiplied by the up arm;
-         --  not, the unit alone on the one projection up, with its bias
-         --  added first because the bias is the projection's.
-         if Gated then
-            Products.Add_Combination (Steps, Unit, Added, Kept => False,
-                                      Alpha => Alpha, Limit => Limit);
-         else
+         --  Bert's second, over the sum the join or the mix made: the
+         --  layer's answer.
+         if After then
             declare
-               Step_Up : Natural := Products.Length (Steps);
+               Step_Sum : Natural := Products.Length (Steps);
             begin
-               Add_Projection_Bias (Up_Bias, Up.Rows, Step_Up, Added);
+               At_Out := Wanted;
+               Add_Post_Norm (Post_Feed_Norm, Width, Step_Sum, Added,
+                              Kept => not Carry_Out);
                if not Added then
                   return;
                end if;
             end;
-
-            Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
-         end if;
-         if not Added then
-            return;
-         end if;
-         Step_Room (Up.Rows);
-
-         Products.Add_Chained_Product
-           (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
-            Natural (Down.Rows), Natural (Down.Columns), Added,
-            Key => At_Offset (Down.Base, Down.Offset), Kept => False);
-         if not Added then
-            return;
-         end if;
-         Step_Downs := Products.Length (Steps);
-         Step_Room (Down.Rows);
-
-         --  The projection down's bias, gated or not: the one gated
-         --  architecture that shifts what it projects down is jina-bert-v2.
-         Add_Projection_Bias (Down_Bias, Down.Rows, Step_Downs, Added);
-         if not Added then
-            return;
          end if;
 
-         --  And the normalization Gemma puts on what the feed-forward
-         --  produced, before the second join reads it.
-         if not After then
-            Add_Post_Norm (Post_Feed_Norm, Down.Rows, Step_Downs, Added);
-            if not Added then
+         if Landing = null or else Landing.all'Length < Wanted then
+            T.Free (Landing);
+            T.Allocate (Wanted, Landing);
+            if Landing = null then
                return;
             end if;
          end if;
 
-         Products.Add_Join
-           (Steps, Added, From_Step => Step_Downs, Residual_Step => Step_Join,
-            Kept => not Carry_Out and then not After);
-         if not Added then
+         Products.Run
+           (Engine, Steps,
+            Residual (Residual'First .. Residual'First + Slots * Width - 1),
+            Positive (Slots),
+            Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+            Ran, Cancelled, Cancel, Carry_In, Carry_Out);
+
+         if Cancelled or else not Ran then
+            --  A layer handed back to the host after the one before carried
+            --  its answer out starts from that answer, read back from where
+            --  the device left it; the host's copy is a layer old.
+            if not Cancelled and then Carry_In then
+               declare
+                  Fetched : Boolean;
+               begin
+                  Products.Fetch_Carried
+                    (Engine,
+                     Into.all (Into.all'First
+                               .. Into.all'First + Slots * Width - 1),
+                     Fetched);
+                  Brought_Home := True;
+                  if not Fetched then
+                     return;
+                  end if;
+               end;
+            end if;
             return;
          end if;
-         At_Out := Wanted;
-         Step_Room (Width);
-      end if;
 
-      --  Bert's second, over the sum the join or the mix made: the
-      --  layer's answer.
-      if After then
+         Note_Timeline (Steps, Positive (Slots));
+
+         --  The keys and the values, where the caller wants them here rather
+         --  than out of the device's own cache afterwards.
+         if Mirror then
+            Values.all (Values.all'First
+                        .. Values.all'First + Slots * Value.Rows - 1) :=
+              Landing.all (Landing.all'First + At_Values
+                           .. Landing.all'First + At_Values
+                              + Slots * Value.Rows - 1);
+
+            Keys.all (Keys.all'First .. Keys.all'First + Slots * Key.Rows - 1) :=
+              Landing.all (Landing.all'First + At_Keys
+                           .. Landing.all'First + At_Keys
+                              + Slots * Key.Rows - 1);
+         end if;
+
+         --  The answer, where the host is the one that reads it next. Carried
+         --  out it stays on the device and Landing holds nothing for it.
+         if not Carry_Out then
+            Into.all (Into.all'First .. Into.all'First + Slots * Width - 1) :=
+              Landing.all (Landing.all'First + At_Out
+                           .. Landing.all'First + At_Out + Slots * Width - 1);
+         end if;
+
+         Ok := True;
+      end Attempt;
+   begin
+      Attempt;
+
+      --  A layer refused after the one before carried its answer out
+      --  leaves the host's copy a layer old: the answer is where the
+      --  device left it, and comes home so the host goes on from it. It
+      --  did not, and a nibble-cached hybrid whose attention layer the
+      --  device would not take went on from the linear layer's input.
+      if not Ok and then Carry_In and then not Brought_Home
+        and then Into /= null
+      then
          declare
-            Step_Sum : Natural := Products.Length (Steps);
+            Back : Boolean;
          begin
-            At_Out := Wanted;
-            Add_Post_Norm (Post_Feed_Norm, Width, Step_Sum, Added,
-                           Kept => not Carry_Out);
-            if not Added then
-               return;
-            end if;
+            Products.Fetch_Carried
+              (Engine,
+               Into.all (Into.all'First
+                         .. Into.all'First + Slots * Width - 1),
+               Back);
          end;
       end if;
-
-      if Landing = null or else Landing.all'Length < Wanted then
-         T.Free (Landing);
-         T.Allocate (Wanted, Landing);
-         if Landing = null then
-            return;
-         end if;
-      end if;
-
-      Products.Run
-        (Engine, Steps,
-         Residual (Residual'First .. Residual'First + Slots * Width - 1),
-         Positive (Slots),
-         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
-         Ran, Cancelled, Cancel, Carry_In, Carry_Out);
-
-      if Cancelled or else not Ran then
-         --  A layer handed back to the host after the one before carried
-         --  its answer out starts from that answer, read back from where
-         --  the device left it; the host's copy is a layer old.
-         if not Cancelled and then Carry_In then
-            declare
-               Fetched : Boolean;
-            begin
-               Products.Fetch_Carried
-                 (Engine,
-                  Into.all (Into.all'First
-                            .. Into.all'First + Slots * Width - 1),
-                  Fetched);
-               if not Fetched then
-                  return;
-               end if;
-            end;
-         end if;
-         return;
-      end if;
-
-      Note_Timeline (Steps, Positive (Slots));
-
-      --  The keys and the values, where the caller wants them here rather
-      --  than out of the device's own cache afterwards.
-      if Mirror then
-         Values.all (Values.all'First
-                     .. Values.all'First + Slots * Value.Rows - 1) :=
-           Landing.all (Landing.all'First + At_Values
-                        .. Landing.all'First + At_Values
-                           + Slots * Value.Rows - 1);
-
-         Keys.all (Keys.all'First .. Keys.all'First + Slots * Key.Rows - 1) :=
-           Landing.all (Landing.all'First + At_Keys
-                        .. Landing.all'First + At_Keys
-                           + Slots * Key.Rows - 1);
-      end if;
-
-      --  The answer, where the host is the one that reads it next. Carried
-      --  out it stays on the device and Landing holds nothing for it.
-      if not Carry_Out then
-         Into.all (Into.all'First .. Into.all'First + Slots * Width - 1) :=
-           Landing.all (Landing.all'First + At_Out
-                        .. Landing.all'First + At_Out + Slots * Width - 1);
-      end if;
-
-      Ok := True;
    end Whole_Layer;
 
    --------------------

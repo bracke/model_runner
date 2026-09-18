@@ -8,6 +8,7 @@ with AUnit.Assertions;
 with Interfaces;
 
 with Model_Runner.Kernels;
+with Model_Runner.Delta_Rule;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -4654,6 +4655,360 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says;
 
+   ---------------------------------------------------------------
+   -- The_Linear_Layer_On_The_Device_Says_What_The_Host_Says --
+   ---------------------------------------------------------------
+
+   --  The front and the middle of a hybrid's linear layer on the device
+   --  -- the convolution over the memory a ring of slots keeps, and the
+   --  gated delta rule over the state the ring keeps -- against the host's
+   --  own: the convolution as the engine's front computes it, written
+   --  here again from the same description, and the rule as the host's
+   --  chunked kernel computes it, called on the same numbers. Over a ring
+   --  of three slots beginning at a position that wraps it, and a batch
+   --  longer than the ring, so a slot written is a slot read.
+   procedure The_Linear_Layer_On_The_Device_Says_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Head      : constant := 4;
+      Key_Heads : constant := 2;
+      Val_Heads : constant := 2;
+      Key_Width : constant := Key_Heads * Head;
+      Val_Width : constant := Val_Heads * Head;
+      Mix       : constant := 2 * Key_Width + Val_Width;
+      Taps      : constant := 4;
+      Count     : constant := 5;
+      Slots     : constant := 3;
+      First     : constant := 4;
+      Epsilon   : constant N.Real := 1.0E-6;
+
+      --  A slot: the memory of Taps - 1 rows, then the state a head.
+      Memory_At : constant := 0;
+      State_At  : constant := (Taps - 1) * Mix;
+      Every     : constant := State_At + Val_Heads * Head * Head;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Identity : N.Real_Array (0 .. Mix * Mix - 1) := [others => 0.0];
+      Z_Matrix : N.Real_Array (0 .. Val_Width * Mix - 1);
+      A_Matrix : N.Real_Array (0 .. Val_Heads * Mix - 1);
+      B_Matrix : N.Real_Array (0 .. Val_Heads * Mix - 1);
+      Taps_W   : N.Real_Array (0 .. Taps * Mix - 1);
+      Numbers  : N.Real_Array (0 .. 2 * Val_Heads + Head - 1);
+      Input    : N.Real_Array (0 .. Count * Mix - 1);
+      Ring     : N.Real_Array (0 .. Slots * Every - 1);
+      Landing  : N.Real_Array
+        (0 .. Count * (Mix + Val_Width + 2 * Val_Heads + Mix + Val_Width) - 1)
+        := [others => 0.0];
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      function Sigmoid (X : N.Real) return N.Real
+      is (1.0 / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                  (Float (-X)))));
+      function Softplus (X : N.Real) return N.Real
+      is (if X > 20.0 then X
+          else N.Real (Ada.Numerics.Elementary_Functions.Log
+                         (1.0 + Ada.Numerics.Elementary_Functions.Exp
+                                  (Float (X)))));
+
+      --  A row of a small matrix against a position's input.
+      function Product
+        (Matrix : N.Real_Array; Row : N.Element_Count; Slot : N.Element_Count)
+        return N.Real
+      is
+         Sum : N.Real := 0.0;
+      begin
+         for C in 0 .. N.Element_Count (Mix) - 1 loop
+            Sum := Sum + Matrix (Row * Mix + C) * Input (Slot * Mix + C);
+         end loop;
+         return Sum;
+      end Product;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in 0 .. N.Element_Count (Mix) - 1 loop
+         Identity (Index * Mix + Index) := 1.0;
+      end loop;
+      for Index in Z_Matrix'Range loop
+         Z_Matrix (Index) := N.Real ((Index * 7) mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in A_Matrix'Range loop
+         A_Matrix (Index) := N.Real ((Index * 5) mod 9) / 18.0 - 0.2;
+         B_Matrix (Index) := N.Real ((Index * 3) mod 7) / 14.0 - 0.2;
+      end loop;
+      for Index in Taps_W'Range loop
+         Taps_W (Index) := N.Real ((Index * 11) mod 13) / 13.0 - 0.5;
+      end loop;
+      --  A_log negative, dt's bias small, the gain around one.
+      for H in 0 .. N.Element_Count (Val_Heads) - 1 loop
+         Numbers (H) := -0.5 - N.Real (H) * 0.3;
+         Numbers (Val_Heads + H) := 0.1 * N.Real (H + 1);
+      end loop;
+      for J in 0 .. N.Element_Count (Head) - 1 loop
+         Numbers (2 * Val_Heads + J) := 0.8 + N.Real (J) / 10.0;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
+      end loop;
+      --  The ring as the layer left it: memories and states with numbers
+      --  in them, not zeros, so a slot read wrong shows.
+      for Index in Ring'Range loop
+         Ring (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
+      end loop;
+
+      Products.Reserve_State (Engine, Ring'Length, Ok);
+      Assert (Ok, "no room for the ring");
+      Products.Put_State (Engine, 0, Ring, Ok);
+      Assert (Ok, "the ring would not be written");
+
+      --  One: the rows through the identity. Two: the gate rows. Three
+      --  and four: the alphas and the betas. Five: the convolution.
+      --  Six: the rule.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+         Products.Values_F32, Mix, Mix, Added, Kept => False);
+      Assert (Added, "the identity product was refused");
+      Products.Add_Chained_Product
+        (Steps, Z_Matrix (Z_Matrix'First)'Address, Bytes_Of (Z_Matrix), 0,
+         Products.Values_F32, Val_Width, Mix, Added, From_Step => 1,
+         Kept => False);
+      Assert (Added, "the gate product was refused");
+      Products.Add_Chained_Product
+        (Steps, A_Matrix (A_Matrix'First)'Address, Bytes_Of (A_Matrix), 0,
+         Products.Values_F32, Val_Heads, Mix, Added, From_Step => 1,
+         Kept => False);
+      Assert (Added, "the alpha product was refused");
+      Products.Add_Chained_Product
+        (Steps, B_Matrix (B_Matrix'First)'Address, Bytes_Of (B_Matrix), 0,
+         Products.Values_F32, Val_Heads, Mix, Added, From_Step => 1,
+         Kept => False);
+      Assert (Added, "the beta product was refused");
+
+      declare
+         Shape : constant Products.Linear_Shape :=
+           (Mix => Mix, Head => Head, Taps => Taps,
+            Unit_Blocks => 2 * Key_Heads,
+            Key_Heads => Key_Heads, Value_Heads => Val_Heads,
+            Key_Width => Key_Width,
+            Region_At => Memory_At, Every => Every, Slots => Slots,
+            First => First, Z_Step => 2, Alpha_Step => 3, Beta_Step => 4,
+            Scale => 0.5, Epsilon => Epsilon);
+      begin
+         Products.Add_Conv
+           (Steps, Taps_W (Taps_W'First)'Address, Bytes_Of (Taps_W), 0,
+            Shape, Added, From_Step => 1,
+            Key => Taps_W (Taps_W'First)'Address);
+         Assert (Added, "the convolution was refused");
+
+         declare
+            Ruled : Products.Linear_Shape := Shape;
+         begin
+            Ruled.Region_At := State_At;
+            Products.Add_Rule
+              (Steps, Numbers (Numbers'First)'Address, Bytes_Of (Numbers), 0,
+               Ruled, Added, From_Step => 5,
+               Key => Numbers (Numbers'First)'Address);
+            Assert (Added, "the rule was refused");
+         end;
+      end;
+
+      Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+      Assert (Ok, "the linear layer's sequence was refused");
+
+      --  The host's own, over the same ring.
+      declare
+         Convolved : N.Real_Array (0 .. Count * Mix - 1);
+         Z_Rows    : N.Real_Array (0 .. Count * Val_Width - 1);
+         Alphas    : N.Real_Array (0 .. Count * Val_Heads - 1);
+         Betas     : N.Real_Array (0 .. Count * Val_Heads - 1);
+         Blend     : N.Real_Array (0 .. Count * Val_Width - 1) :=
+           [others => 0.0];
+         Mine      : N.Real_Array := Ring;
+         Worst     : N.Real := 0.0;
+
+         --  The input m positions before position t, out of the batch or
+         --  the memory the batch began with.
+         function Before (T, M, C : N.Element_Count) return N.Real is
+            From : constant Integer := Integer (T) - Integer (M);
+         begin
+            if From >= 0 then
+               return Input (N.Element_Count (From) * Mix + C);
+            end if;
+            return Ring
+              ((First mod Slots) * Every + Memory_At
+               + N.Element_Count (Integer (Taps - 1) + From) * Mix + C);
+         end Before;
+      begin
+         for T in 0 .. N.Element_Count (Count) - 1 loop
+            for R in 0 .. N.Element_Count (Val_Width) - 1 loop
+               Z_Rows (T * Val_Width + R) := Product (Z_Matrix, R, T);
+            end loop;
+            for H in 0 .. N.Element_Count (Val_Heads) - 1 loop
+               Alphas (T * Val_Heads + H) := Product (A_Matrix, H, T);
+               Betas (T * Val_Heads + H) := Product (B_Matrix, H, T);
+            end loop;
+
+            for B in 0 .. N.Element_Count (Mix / Head) - 1 loop
+               declare
+                  Sum : N.Real := 0.0;
+               begin
+                  for C in B * Head .. (B + 1) * Head - 1 loop
+                     declare
+                        Made : N.Real := 0.0;
+                     begin
+                        for M in 0 .. N.Element_Count (Taps) - 1 loop
+                           Made := Made
+                             + Before (T, M, C) * Taps_W ((Taps - 1 - M) * Mix + C);
+                        end loop;
+                        Made := Made * Sigmoid (Made);
+                        Convolved (T * Mix + C) := Made;
+                        Sum := Sum + Made * Made;
+                     end;
+                  end loop;
+
+                  if B < 2 * Key_Heads then
+                     declare
+                        Length : constant N.Real :=
+                          N.Real'Max
+                            (N.Real (Ada.Numerics.Elementary_Functions.Sqrt
+                                       (Float (Sum))),
+                             Epsilon);
+                     begin
+                        for C in B * Head .. (B + 1) * Head - 1 loop
+                           Convolved (T * Mix + C) :=
+                             Convolved (T * Mix + C) / Length;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end loop;
+
+         for Index in 0 .. N.Element_Count (Count * Mix) - 1 loop
+            Worst := N.Real'Max
+              (Worst,
+               abs (Landing (N.Element_Count (Count * (Mix + Val_Width
+                                                       + 2 * Val_Heads))
+                             + Index)
+                    - Convolved (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-5,
+                 "the device's convolution differs from the host's by "
+                 & N.Real'Image (Worst));
+
+         --  The rule a head at a time, every position's state written.
+         for H in 0 .. N.Element_Count (Val_Heads) - 1 loop
+            declare
+               Decay, Rate : N.Real_Array (0 .. Count - 1);
+               Written : Model_Runner.Delta_Rule.Slot_Origins :=
+                 [others => Model_Runner.Delta_Rule.Nowhere];
+            begin
+               for T in 0 .. N.Element_Count (Count) - 1 loop
+                  Decay (T) := N.Real
+                    (Ada.Numerics.Elementary_Functions.Exp
+                       (Float (Numbers (H)
+                               * Softplus (Alphas (T * Val_Heads + H)
+                                           + Numbers (Val_Heads + H)))));
+                  Rate (T) := Sigmoid (Betas (T * Val_Heads + H));
+                  Written (T) :=
+                    ((First + T + 1) mod Slots) * Every + State_At
+                    + H * Head * Head;
+               end loop;
+
+               Model_Runner.Delta_Rule.Chunk
+                 (State => Mine,
+                  From => (First mod Slots) * Every + State_At + H * Head * Head,
+                  Written => Written, Head => Head, Count => Count,
+                  Mixed => Convolved, Stride => Mix,
+                  Key_At => Key_Width + (H mod Key_Heads) * Head,
+                  Query_At => (H mod Key_Heads) * Head,
+                  Value_At => 2 * Key_Width + H * Head,
+                  Decay => Decay, Rate => Rate,
+                  Z_Gate => Z_Rows, Z_At => H * Head, Z_Stride => Val_Width,
+                  Blend => Blend, Blend_At => H * Head,
+                  Blend_Stride => Val_Width,
+                  State_Norm => Numbers (2 * Val_Heads .. Numbers'Last),
+                  Epsilon => Epsilon, Scale => 0.5);
+            end;
+         end loop;
+
+         Worst := 0.0;
+         for Index in Blend'Range loop
+            Worst := N.Real'Max
+              (Worst,
+               abs (Landing (N.Element_Count
+                               (Count * (Mix + Val_Width + 2 * Val_Heads + Mix))
+                             + Index)
+                    - Blend (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-4,
+                 "the device's rule differs from the host's by "
+                 & N.Real'Image (Worst));
+
+         --  And the ring as both left it: the memories and the states of
+         --  every slot, which the host wrote for the positions it keeps
+         --  and the device for all of them -- the same slots.
+         declare
+            Theirs : N.Real_Array (Ring'Range);
+         begin
+            Products.Get_State (Engine, 0, Theirs, Ok);
+            Assert (Ok, "the ring would not be read back");
+
+            --  The host's memories, from the same description.
+            for T in 0 .. N.Element_Count (Count) - 1 loop
+               declare
+                  Slot : constant N.Element_Count :=
+                    ((First + T + 1) mod Slots) * Every + Memory_At;
+               begin
+                  for K in 0 .. N.Element_Count (Taps) - 2 loop
+                     for C in 0 .. N.Element_Count (Mix) - 1 loop
+                        Mine (Slot + K * Mix + C) := Before (T, Taps - 2 - K, C);
+                     end loop;
+                  end loop;
+               end;
+            end loop;
+
+            Worst := 0.0;
+            for Index in Ring'Range loop
+               Worst := N.Real'Max (Worst, abs (Theirs (Index) - Mine (Index)));
+            end loop;
+            Assert (Worst <= 1.0E-4,
+                    "the ring the device left differs from the host's by "
+                    & N.Real'Image (Worst));
+         end;
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end The_Linear_Layer_On_The_Device_Says_What_The_Host_Says;
+
    -----------------------------------------------
    -- A_Cache_Past_The_Storage_Bound_Is_Refused --
    -----------------------------------------------
@@ -7767,6 +8122,11 @@ package body Tests.Backend_Cases is
          & "blend through the logistic of its gate, and an answer scaled by "
          & "the logistic of one score a position -- what a hybrid's "
          & "attention layer needs -- say what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Linear_Layer_On_The_Device_Says_What_The_Host_Says'Access,
+         "the convolution over the memory a ring keeps and the gated delta "
+         & "rule over the state it keeps -- a hybrid's linear layer on the "
+         & "device -- say what the host's own say, the ring included");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Past_The_Storage_Bound_Is_Refused'Access,
          "a cache past what the device says one storage buffer may hold "

@@ -983,7 +983,7 @@ therefore cannot be common to both.
 
 ```
 conformance: sequences 56775, logits compared 1872344,
-             worst absolute 6.04463587507986E-05,
+             worst absolute 7.09428850864668E-05,
              worst relative 5.51705186852182E-02,
              rounded logits compared 166360,
              rounded worst absolute 1.67488891391300E-01,

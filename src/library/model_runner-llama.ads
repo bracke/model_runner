@@ -1907,6 +1907,11 @@ private
       State_Norm : Model_Runner.Tensors.Real_Array_Access;
       Linear_Out : aliased Model_Runner.Tensors.View;
 
+      --  A_Log, DT_Bias and State_Norm laid end to end, which is how the
+      --  device's rule step takes the three: one resident weight. Built
+      --  as the block resolves, for a linear layer; null otherwise.
+      Linear_Numbers : Model_Runner.Tensors.Real_Array_Access;
+
       --  The expert every position of a mixture goes through as well,
       --  with the row that gates it; absent where the mixture has none.
       Shared_Gate   : aliased Model_Runner.Tensors.View;
@@ -2332,6 +2337,14 @@ private
       --  still hold what was written there and a later rewind's slot is
       --  intact only if nothing has come round to it.
       Kept_Newest : Natural := 0;
+
+      --  Whether the device's copy of the ring is the newer: a linear
+      --  layer taken whole on the device wrote its slots there, and the
+      --  host's copy above is brought home before anything here reads
+      --  it. The device holds one session's ring at a time, and a
+      --  session that takes the room from another brings that one's
+      --  home first.
+      State_On_Device : Boolean := False;
 
       --  Room a linear layer's answers take on the way through: the
       --  mixed projections, the gate, the decays and rates, the blend;
