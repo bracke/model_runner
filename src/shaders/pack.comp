@@ -41,8 +41,17 @@
 //  A workgroup a position. For bytes, the lanes find the row's largest
 //  together and each then writes a word of four bytes; for nibbles, a lane
 //  takes a block of thirty-two and writes its four words, since a block's
-//  scale is its own and the blocks of a row are few. A row begins on a
-//  word, which the engine's layout gives and the caller holds it to.
+//  scale is its own and the blocks of a row are few.
+//
+//  A row need not fill whole words. A model whose heads are narrow -- four
+//  elements a head in nibbles is two bytes a row -- leaves a row sharing a
+//  word with the row after it, and the row after it is another workgroup
+//  writing at the same time: a whole word written by each is each writing
+//  the other's nibbles away. Where a word is partly this row's, the bits
+//  that are go in by two atomic operations, one clearing them and one
+//  setting them, which the workgroup beside it neither reads nor writes.
+//  The caller used to refuse such a layer instead, and every narrow-headed
+//  model with a packed cache took the road of pieces for it.
 
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -54,7 +63,7 @@ layout(local_size_x = LANES) in;
 
 layout(std430, binding = 0) readonly  buffer Kept   { uint kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
-layout(std430, binding = 2) writeonly buffer Words  { uint  kvw[]; };
+layout(std430, binding = 2) buffer Words  { uint  kvw[]; };
 layout(std430, binding = 2) writeonly buffer Scales { float kvf[]; };
 
 layout(push_constant) uniform Shape {
@@ -125,6 +134,24 @@ float whole_max (float mine) {
 }
 #endif
 
+//  One word of a row's packed bytes or nibbles, written where the whole of
+//  it is the row's and merged where it is not: the bits that are not this
+//  row's belong to the row before or after, which is another workgroup
+//  writing them now.
+//
+//  @param at Word of the cache buffer.
+//  @param word What this row puts there, in its own bits.
+//  @param mask Which bits of the word are this row's.
+void put_word (uint at, uint word, uint mask) {
+    if (mask == 0xFFFFFFFFu) {
+        kvw[at] = word;
+        return;
+    }
+
+    atomicAnd (kvw[at], ~mask);
+    atomicOr (kvw[at], word & mask);
+}
+
 //  Real'Rounding: to the nearest whole number, halves away from zero.
 float rounded (float v) {
     float r = floor (v);
@@ -162,18 +189,33 @@ void main() {
             kvf[scale_at] = scale;
         }
 
-        for (uint w = lane; w * 4u < shape.width; w += LANES) {
+        //  A word of the cache at a time, over the words the row's bytes
+        //  fall in: a row that begins or ends inside a word shares it
+        //  with its neighbour, and only the bytes that are this row's go
+        //  in. A lane a word.
+        int first = int (row_at) >> 2;
+        int last = int (row_at + shape.width - 1u) >> 2;
+
+        for (int wi = first + int (lane); wi <= last; wi += int (LANES)) {
             uint word = 0u;
-            for (uint j = 0u; j < 4u; j++) {
-                uint c = w * 4u + j;
-                float step = c < shape.width
-                             ? rounded (float (double (x[from + c]) / double (scale)))
-                             : 0.0;
-                float held = max (-127.0, min (127.0, step));
-                uint byte = uint (int (held) + 128);
-                word |= byte << (8u * j);
+            uint mask = 0u;
+
+            for (uint k = 0u; k < 4u; k++) {
+                int c = wi * 4 + int (k) - int (row_at);
+
+                if (c >= 0 && c < int (shape.width)) {
+                    float step =
+                      rounded (float (double (x[from + uint (c)])
+                                      / double (scale)));
+                    float held = max (-127.0, min (127.0, step));
+                    uint byte = uint (int (held) + 128);
+
+                    word |= byte << (8u * k);
+                    mask |= 0xFFu << (8u * k);
+                }
             }
-            kvw[(row_at >> 2u) + w] = word;
+
+            put_word (uint (wi), word, mask);
         }
         return;
     }
@@ -196,23 +238,33 @@ void main() {
         float inverse = scale != 0.0 ? float (1.0lf / double (scale)) : 0.0;
         kvf[scale_at + b] = scale;
 
-        //  The words the block's own elements fill and no more: a block
-        //  cut short by the row's end -- a row of sixteen, or of eighty
-        //  -- has words past it that belong to the next row, and writing
-        //  the block's four whole wrote the next row's first over with
-        //  nothing.
-        for (uint w = 0u; w * 8u < span; w++) {
+        //  A word of the cache at a time, over the words the block's
+        //  nibbles fall in: the nibbles of a word this block begins or
+        //  ends inside belong to the block or the row beside it, and only
+        //  this block's go in. A row of four elements in nibbles is two
+        //  bytes, so half of its one word is the row after it.
+        uint block_at = row_at + start / 2u;
+        int first = int (block_at) >> 2;
+        int last = int (block_at + (span + 1u) / 2u - 1u) >> 2;
+
+        for (int wi = first; wi <= last; wi++) {
             uint word = 0u;
-            for (uint j = 0u; j < 8u; j++) {
-                uint i = w * 8u + j;
-                uint nibble = 0u;
-                if (i < span) {
-                    precise float level = floor (x[from + start + i] * inverse + 8.5);
-                    nibble = uint (int (max (0.0, min (15.0, level))));
+            uint mask = 0u;
+
+            for (uint k = 0u; k < 8u; k++) {
+                int i = (wi * 4 - int (block_at)) * 2 + int (k);
+
+                if (i >= 0 && i < int (span)) {
+                    precise float level =
+                      floor (x[from + start + uint (i)] * inverse + 8.5);
+                    uint nibble = uint (int (max (0.0, min (15.0, level))));
+
+                    word |= nibble << (4u * k);
+                    mask |= 0xFu << (4u * k);
                 }
-                word |= nibble << (4u * j);
             }
-            kvw[((row_at + start / 2u) >> 2u) + w] = word;
+
+            put_word (uint (wi), word, mask);
         }
     }
 }

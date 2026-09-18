@@ -6327,15 +6327,7 @@ package body Model_Runner.Platform.Device.Products is
       Value_Size : Natural;
       KV_Width   : Natural;
       V_Width    : Natural) return Boolean
-   is (Packed_Fits (Item, Packed, Head_Size, Value_Size, KV_Width, V_Width)
-
-       --  And what Add_Place holds a packed row to, which is the other
-       --  half of a packed layer: a row is written a word at a time, so
-       --  its elements are eight to the word in nibbles and four in
-       --  bytes. A key row of four elements -- two nibble heads of a
-       --  fixture -- is half a word and is refused here.
-       and then KV_Width mod (if Packed.K_Bits = 4 then 8 else 4) = 0
-       and then V_Width mod (if Packed.V_Bits = 4 then 8 else 4) = 0);
+   is (Packed_Fits (Item, Packed, Head_Size, Value_Size, KV_Width, V_Width));
 
    ------------
    -- Attend --
@@ -7586,18 +7578,28 @@ package body Model_Runner.Platform.Device.Products is
         or else (Source = 0 and then not Unpack)
         or else Source > Steps.Held
         or else (Unpack and then (Packed.Bits = 0 or else Cells = 0))
-        --  A packed row begins on a word and is read four elements at a
-        --  time by the attention that follows, and eight to a word by the
-        --  nibble packing; a round's rows go each to its own block, which
-        --  the packing kernel looks up in the table as place.comp does and
-        --  the unpacking kernel does not.
+        --  A packed row is read four elements at a time by the attention
+        --  that follows, which reads them out of one word: four elements
+        --  are four bytes or two, so a row of a whole number of fours
+        --  keeps them together wherever the row begins -- for bytes on a
+        --  word, for nibbles on an even byte. The packing writes a word
+        --  at a time and merges where a word is partly another row's, so
+        --  a row narrower than a word is taken now rather than refused;
+        --  what it may not be is a row that leaves the next one's four
+        --  straddling a word, which is a count of elements that is not a
+        --  multiple of four. A round's rows go each to its own block,
+        --  which the packing kernel looks up in the table as place.comp
+        --  does and the unpacking kernel does not.
         or else (Packed.Bits /= 0
                  and then (Packed.Bits not in 4 | 8
                            or else (Unpack and then Table_At /= 0)
-                           or else Width mod (if Packed.Bits = 4 then 8 else 4)
-                                   /= 0
-                           or else Packed.Row_Bytes mod 4 /= 0
-                           or else Packed.At_Byte mod 4 /= 0))
+                           or else Width mod 4 /= 0
+                           or else Packed.Row_Bytes
+                                   /= (if Packed.Bits = 4 then Width / 2
+                                       else Width)
+                           or else Packed.At_Byte
+                                   mod (if Packed.Bits = 4 then 2 else 4)
+                                   /= 0))
       then
          Added := False;
          return;

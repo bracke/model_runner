@@ -3056,14 +3056,15 @@ package body Tests.Inference_Cases is
    --  refused while every one of those numbers looked exactly as it does
    --  when the whole model runs there.
    --
-   --  The fixture's keys and values are four elements a head, which is
-   --  half a word of nibbles, and the step that places a packed row
-   --  writes a word at a time. So a nibble-cached session of this fixture
-   --  is the case: the counts say how much of it went over whole, and the
-   --  reason names the packed block rather than leaving a reader to
-   --  guess. The same fixture in bytes is four to the word and goes over
-   --  whole, which is the other half of the claim -- a reason that is
-   --  always there says nothing.
+   --  The fixture is the case both ways round. Its keys and values are
+   --  four elements a head, which is half a word of nibbles and was
+   --  refused for it until the packing learned to merge a word two rows
+   --  share, so both packings go over whole and the counts say so. The
+   --  same fixture with heads as wide as Gemma's is past the room the
+   --  device's attention keeps: every layer of it comes back, and the
+   --  reason names the shape rather than leaving a reader to guess -- a
+   --  reason that is always there says nothing, and so does a count that
+   --  is always whole.
    --
    --  What this exercises through the engine is the whole chain: the
    --  layer loop calls Note_Layer at each layer's end with what became of
@@ -3078,20 +3079,27 @@ package body Tests.Inference_Cases is
 
       use type Model_Runner.Backend.Device.Handing;
 
-      Prompt : constant array (1 .. 3) of Vocab.Token_Id := [4, 5, 6];
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
 
       Image : B.Byte_Array_Access;
 
-      --  What the device's counts say of one session, a token at a time.
+      --  What the device's counts say of one session, a token at a time
+      --  where the model generates and over a batch where it answers
+      --  with states.
       procedure Counted
         (Under  : in out Harness;
          Cache  : L.Cache_Precision;
          Whole  : out Natural;
-         Handed : out Natural)
+         Handed : out Natural;
+         Batch  : Boolean := False)
       is
          Live   : L.Session;
          Status : E.Error_Info;
          Logits : Logit_Vector;
+         States : Model_Runner.Tensors.Real_Array_Access := null;
+
+         --  A model that answers with states has no logits to ask for.
+         None   : N.Real_Array (1 .. 0);
 
          Was_Whole : constant Natural :=
            Model_Runner.Backend.Device.Layers_Whole;
@@ -3104,14 +3112,27 @@ package body Tests.Inference_Cases is
                  & L.Cache_Precision'Image (Cache) & ": "
                  & E.Error_Code'Image (Status.Code));
 
-         for Index in Prompt'Range loop
-            L.Evaluate
-              (Live, Under.Ready, Prompt (Index), Logits, Status => Status);
+         if Batch then
+            Model_Runner.Tensors.Allocate
+              (N.Element_Count (Prompt'Length)
+               * N.Element_Count (Tiny_Model.Embedding), States);
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, None, States => States,
+               Status => Status);
             Assert (E.Is_Ok (Status),
-                    "the device refused a position with the cache "
-                    & L.Cache_Precision'Image (Cache) & ": "
+                    "the device refused the batch: "
                     & E.Error_Code'Image (Status.Code));
-         end loop;
+            Model_Runner.Tensors.Free (States);
+         else
+            for Index in Prompt'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Logits, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the device refused a position with the cache "
+                       & L.Cache_Precision'Image (Cache) & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+         end if;
 
          L.Close (Live);
 
@@ -3147,28 +3168,67 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
-         --  In bytes: four elements to the word, so every layer goes over
-         --  whole and nothing is handed back.
-         Counted (Under, L.Eighth, Whole, Handed);
-         Assert (Whole > 0,
-                 "no layer of a byte-cached session went over whole");
-         Assert (Handed = 0,
-                 "a byte-cached session left" & Natural'Image (Handed)
-                 & " layers off the whole road, and its rows are a word "
-                 & "wide");
+         --  In bytes, four elements to the word, and in nibbles, two --
+         --  half a word a row, which the packing merges -- so every layer
+         --  goes over whole either way.
+         for Cache in L.Eighth .. L.Fourth loop
+            Counted (Under, Cache, Whole, Handed);
+            Assert (Whole > 0,
+                    "no layer of a session cached "
+                    & L.Cache_Precision'Image (Cache) & " went over whole");
+            Assert (Handed = 0,
+                    "a session cached " & L.Cache_Precision'Image (Cache)
+                    & " left" & Natural'Image (Handed)
+                    & " layers off the whole road");
+         end loop;
 
-         --  In nibbles: half a word a row, so the layers come back -- and
-         --  the run says how many and what refused them.
-         Counted (Under, L.Fourth, Whole, Handed);
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      --  And jina-bert-v2's code variant, whose three normalizations more
+      --  -- over the whole of the queries and the keys, and the attention
+      --  sublayer's residual joined again -- are not steps of the
+      --  sequence: every layer of it comes back, the run says so, and it
+      --  says the layer's shape rather than anything the device refused.
+      B.Free (Image);
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Jina_Bert_V2, Code_Norms => True);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Whole, Handed : Natural;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         Counted (Under, L.Exact, Whole, Handed, Batch => True);
          Assert (Handed > 0,
-                 "a nibble-cached session took every layer whole on the "
-                 & "device, which the fixture's four-wide rows cannot");
+                 "the code variant took every layer whole on the device, "
+                 & "and three of its normalizations are not steps of the "
+                 & "sequence");
          Assert (Model_Runner.Backend.Device.First_Handing
-                 = Model_Runner.Backend.Device.Packed_Handed,
-                 "the layers were refused for "
+                 = Model_Runner.Backend.Device.Shape_Handed,
+                 "the layers came back for "
                  & Model_Runner.Backend.Device.Handing'Image
                      (Model_Runner.Backend.Device.First_Handing)
-                 & " rather than the packed block's shape");
+                 & " rather than the layer's shape");
 
          Model_Runner.Backend.Device.Close;
       end;

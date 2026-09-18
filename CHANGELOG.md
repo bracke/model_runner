@@ -55,6 +55,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A packed cache whose rows are narrower than a word kept every layer
+  off the device's whole road.** The step that packs a layer's keys and
+  values into the cache writes a word at a time, and a row that does not
+  fill whole words shares one with the row after it -- which another
+  workgroup is writing at that moment, so each wrote the other's nibbles
+  away. The engine refused such a layer rather than corrupt it, and
+  every model with narrow heads and `--kv-cache q4` or `q8` went over in
+  pieces for it, a submission a step with its activation home between
+  them. The packing merges a shared word now, by two atomic operations
+  that touch only the bits that are this row's, and the refusal is gone:
+  the tiny fixture's four-element rows -- two bytes in nibbles, half a
+  word -- take the whole road in both packings and say the same bytes
+  as the processor packs.
+
 - **A round of hybrid sessions read the first member's state for every
   row.** The batch ran the rule over all of a round's rows as one
   session's chunk, and every member after the first went on from the

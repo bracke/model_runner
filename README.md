@@ -2026,6 +2026,16 @@ narrower than a word, the context not on the device at all, no room for the
 layer's weights, a shape the sequence does not take, or the sequence
 refused.
 
+The first thing that number found was the refusal it was written to
+explain. The step that packs a layer's keys and values writes the cache a
+word at a time, and a row narrower than a word shares one with the row
+after it -- another workgroup, writing at that moment, so each wrote the
+other's nibbles away. The engine refused such a layer rather than corrupt
+it, which is right, and nothing said so, which is what left every
+narrow-headed model with a packed cache going over in pieces. The packing
+merges a shared word now, with two atomic operations that touch only the
+bits that are this row's, and those layers go over whole.
+
 What it was: a buffer the processor reads was being allocated out of memory
 the device owns. This engine asked for one kind of memory for everything it
 shares with the device -- the first kind that is host-visible, coherent and
