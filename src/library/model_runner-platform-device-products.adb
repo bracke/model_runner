@@ -6561,6 +6561,66 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Reserve_State;
 
+   -----------------
+   -- Clear_State --
+   -----------------
+
+   procedure Clear_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Count) * 4;
+
+      Reset_Buffer : constant Reset_Buffer_Call :=
+        To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+      Start : constant Begin_Call :=
+        To_Begin (Point ("vkBeginCommandBuffer"));
+      Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+      Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
+
+      Began : aliased Command_Begin_Info;
+
+      Good, Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_Buffer = Null_Handle
+        or else Count = 0
+        or else At_Byte + Span > Item.State_Bytes
+        or else Reset_Buffer = null or else Start = null
+        or else Stop = null or else Fill = null
+      then
+         return;
+      end if;
+
+      --  A kernel in flight may be reading the room.
+      Settle (Item, Good);
+
+      if not Good
+        or else Reset_Buffer (Item.Buffer, 0) /= 0
+        or else Start (Item.Buffer, Began'Address) /= 0
+      then
+         return;
+      end if;
+
+      Fill (Item.Buffer, Item.State_Buffer, At_Byte, Span, 0);
+
+      if Stop (Item.Buffer) /= 0 then
+         return;
+      end if;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      Ok := Good;
+   end Clear_State;
+
    -------------------------
    -- Release_State_Room --
    -------------------------

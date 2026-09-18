@@ -403,6 +403,18 @@ package Model_Runner.Backend.Device is
    --  that grew to hold every seated ring and never shrank.
    procedure Release_State_Room;
 
+   --  Zero a run of that room, on the device: a seat taken again holds
+   --  the ring the session before it left, and a session with nothing
+   --  committed has a ring of nothing to put there.
+   --
+   --  @param At_Value Where the run begins, in elements.
+   --  @param Count How many elements.
+   --  @param Ok True when it was zeroed.
+   procedure Clear_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  How many bytes of one storage buffer a context of this many
    --  elements would take on the device: four an element, the cache
    --  proper being one buffer and its half-precision copy another of two

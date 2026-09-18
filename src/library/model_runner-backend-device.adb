@@ -910,6 +910,23 @@ package body Model_Runner.Backend.Device is
    end Release_State_Room;
 
    -----------------
+   -- Clear_State --
+   -----------------
+
+   procedure Clear_State
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Clear_State (Engine, At_Value, Count, Ok);
+   end Clear_State;
+
+   -----------------
    -- Cache_Bound --
    -----------------
 

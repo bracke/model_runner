@@ -267,6 +267,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A ring of nothing is no longer written across the bus to say so.** A
+  session's first linear layer sent its whole ring of states to the seat
+  it had taken, because a seat given up is taken again holding the ring
+  the session before it left. A fresh session's ring is nothing, and
+  writing twenty megabytes of nothing at 3.2 gigabytes a second is six
+  milliseconds -- measured by timing the send -- which a round of eight
+  members paid eight times. The seat is zeroed on the device when it is
+  taken, and a session with nothing committed sends nothing into it; one
+  that has committed something sends its ring as before, and so does one
+  returning to a seat it already had.
 - **A buffer that grows carries what it held on the device.** The cache
   is dealt out in blocks a session apiece and the room of rings in seats,
   so a wider buffer that came up empty would make every session write

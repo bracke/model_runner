@@ -5040,11 +5040,14 @@ package body Model_Runner.Llama is
    --  Give a session a seat: the first gap past the table that its ring
    --  fits, or the end of what is taken, with the room grown to reach
    --  it.
-   procedure Seat_State (Item : Session_Access; Ok : out Boolean) is
+   procedure Seat_State
+     (Item : Session_Access; Ok : out Boolean; Cleared : out Boolean)
+   is
       Span : constant Element_Count := Device_Ring_Span (Item.all);
       Free : Integer := -1;
       Place : Element_Count := State_Table_Room;
    begin
+      Cleared := False;
       Ok := Item.State_Seated;
       if Ok then
          return;
@@ -5097,6 +5100,14 @@ package body Model_Runner.Llama is
       Item.State_Base := Place;
       Item.State_Seated := True;
       Item.State_On_Device := False;
+
+      --  The seat zeroed on the device, which the session that had it
+      --  before did not leave it: a ring is what it was written with,
+      --  and a seat taken again holds the last session's. Zeroed here,
+      --  a session with nothing committed has nothing to send -- twenty
+      --  megabytes of nothing across the bus, six milliseconds a
+      --  session, for a room the device can zero itself.
+      Model_Runner.Backend.Device.Clear_State (Place, Span, Cleared);
    end Seat_State;
 
    --  Put a session's ring on the device, where the host's copy is the
@@ -5111,14 +5122,27 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Seat_State (Item, Ok);
-      if not Ok then
-         return;
-      end if;
+      declare
+         Cleared : Boolean;
+      begin
+         Seat_State (Item, Ok, Cleared);
+         if not Ok then
+            return;
+         end if;
 
-      if Item.State_On_Device then
-         return;
-      end if;
+         if Item.State_On_Device then
+            return;
+         end if;
+
+         --  A ring of nothing into a seat the device has just zeroed:
+         --  nothing to send. A session that has committed something has
+         --  a ring that says so, and a seat it was already in holds
+         --  whatever it left there, so both are sent as before.
+         if Cleared and then Item.Committed = 0 then
+            Item.State_On_Device := True;
+            return;
+         end if;
+      end;
 
       declare
          Settings   : Configuration renames Item.Owner.Settings;

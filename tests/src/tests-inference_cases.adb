@@ -957,7 +957,9 @@ package body Tests.Inference_Cases is
             --  megabytes of the machine's own memory on the device
             --  until the engine closed. The engine calls
             --  Release_State_Room where the last seat is given up, as it
-            --  calls Release_Cache where the last block is. Nothing on
+            --  calls Release_Cache where the last block is; and
+            --  Clear_State where a seat is taken, so that a session with
+            --  nothing committed has nothing to send into it. Nothing on
             --  the processor takes a room at all, so this says nothing
             --  there.
             Assert (Model_Runner.Backend.Device.State_Room_Bytes = 0,

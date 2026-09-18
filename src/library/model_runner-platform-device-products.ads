@@ -1882,6 +1882,29 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Zero a run of that room, on the device.
+   --
+   --  A seat is a stretch of the room a session's ring lives in, and a
+   --  seat given up is taken again by the next session that needs one --
+   --  holding the ring the session before it left. A session with
+   --  nothing committed has a ring of nothing, and writing twenty
+   --  megabytes of nothing across the bus to say so is six milliseconds
+   --  a session here; the device writes its own memory instead, and the
+   --  ring is not sent at all.
+   --
+   --  Waits for what is in flight, since a kernel may be reading the
+   --  room.
+   --
+   --  @param Item Engine with a room reserved.
+   --  @param At_Value Where the run begins, in elements.
+   --  @param Count How many elements.
+   --  @param Ok True when it was zeroed.
+   procedure Clear_State
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  Give that room back, once no session is seated in it.
    --
    --  As the cache is: a room grows to hold every seated session's ring
