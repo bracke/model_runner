@@ -2230,6 +2230,26 @@ package body Model_Runner.CLI.Execute is
       --  for its workers.
 
       procedure Run_With (Team : Workers_CPU.Pool_Reference) is
+
+         --  Why the first layer that did not go over whole did not, as a
+         --  message key, or the empty string where every layer did.
+         function Handed_Key return String is
+         begin
+            case Model_Runner.Backend.Device.First_Handing is
+               when Model_Runner.Backend.Device.Not_Handed =>
+                  return "";
+               when Model_Runner.Backend.Device.Shape_Handed =>
+                  return "statistics.handed.shape";
+               when Model_Runner.Backend.Device.Packed_Handed =>
+                  return "statistics.handed.packed";
+               when Model_Runner.Backend.Device.Cache_Handed =>
+                  return "statistics.handed.cache";
+               when Model_Runner.Backend.Device.Room_Handed =>
+                  return "statistics.handed.room";
+               when Model_Runner.Backend.Device.Refused_Handed =>
+                  return "statistics.handed.refused";
+            end case;
+         end Handed_Key;
       begin
          Status := E.Exit_Success;
 
@@ -3581,7 +3601,12 @@ package body Model_Runner.CLI.Execute is
                        Model_Runner.Backend.Device.Resident_Bytes,
                      Given_Back     => Model_Runner.Backend.Device.Given_Back,
                      Cached_Bytes   =>
-                       Model_Runner.Backend.Device.Cached_Bytes);
+                       Model_Runner.Backend.Device.Cached_Bytes,
+                     Layers_Whole   =>
+                       Model_Runner.Backend.Device.Layers_Whole,
+                     Layers_Handed  =>
+                       Model_Runner.Backend.Device.Layers_Handed,
+                     Handed_Why     => Handed_Key);
                else
                   Pres.Put_Statistics (Screen, Outcome);
                end if;

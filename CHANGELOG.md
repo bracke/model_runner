@@ -232,6 +232,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device run says how much of the model went over whole.** A layer
+  the device will not take as one sequence goes over in pieces instead
+  -- a submission a step, its activation home between them -- or on the
+  processor, and the statistics said nothing about it: a session whose
+  keys are packed four bits wide and whose rows are narrower than the
+  word the packing writes had every layer refused, while the run
+  reported a device, the matrices on it and the bytes of context on it,
+  exactly as it does when the whole model runs there. `--show-stats`
+  now reports `layers whole on the device N of M`, and where any were
+  refused the reason for the first: the packed context's rows narrower
+  than a word, the context not on the device at all, no room for the
+  layer's weights, a shape the sequence does not take, or the sequence
+  refused. The tiny fixture's four-wide rows are the packed case and
+  are tested as one, and the same fixture in bytes goes over whole --
+  a reason that is always there says nothing.
 - **The device's rule takes a prompt in chunks.** `rule.comp` ran the
   gated delta rule a position at a time, reading and writing a head's
   state for each -- a square of the head through the cache twice for a

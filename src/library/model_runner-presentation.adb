@@ -526,7 +526,10 @@ package body Model_Runner.Presentation is
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
-      Cached_Bytes   : Interfaces.Unsigned_64 := 0)
+      Cached_Bytes   : Interfaces.Unsigned_64 := 0;
+      Layers_Whole   : Natural := 0;
+      Layers_Handed  : Natural := 0;
+      Handed_Why     : String := "")
    is
       function Seconds (Value : Model_Runner.Clocks.Nanoseconds) return String
       is (Message
@@ -624,6 +627,30 @@ package body Model_Runner.Presentation is
          Put_Field
            (Item, "statistics.cached_bytes",
             T.Image (Long_Long_Integer (Cached_Bytes)), Diagnostic);
+
+         --  And how much of the model went over as one sequence. A layer
+         --  refused goes over in pieces instead, or on the processor,
+         --  and the lines above say nothing about it: a session whose
+         --  keys are packed four bits wide had every layer refused --
+         --  its rows are narrower than the word the packing writes --
+         --  while the report showed a device holding the weights and
+         --  the context, as it does when the whole model runs there.
+         --  The reason is the first refused layer's, which is every one
+         --  of them in practice: the shapes of a model's layers do not
+         --  differ from token to token.
+         if Layers_Whole + Layers_Handed > 0 then
+            Put_Field
+              (Item, "statistics.layers_whole",
+               T.Image (Long_Long_Integer (Layers_Whole)) & " of "
+               & T.Image (Long_Long_Integer (Layers_Whole + Layers_Handed)),
+               Diagnostic);
+
+            if Layers_Handed > 0 and then Handed_Why /= "" then
+               Put_Field
+                 (Item, "statistics.layers_handed",
+                  Message (Item, Handed_Why), Diagnostic);
+            end if;
+         end if;
       end if;
 
       Put_Field

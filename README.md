@@ -983,7 +983,7 @@ therefore cannot be common to both.
 
 ```
 conformance: sequences 56775, logits compared 1872344,
-             worst absolute 7.09428850864668E-05,
+             worst absolute 7.66649309849043E-05,
              worst relative 5.51705186852182E-02,
              rounded logits compared 166360,
              rounded worst absolute 1.67488891391300E-01,
@@ -2011,6 +2011,20 @@ twice, binary32 and half precision, for the reason `### Attention through
 the matrix instruction` below gives. With the processor fallback compiled out entirely, so that it could
 not run at all, the run still took 1.692 s. Attention was on the device
 throughout.
+
+That reporting has a second half now, added for the same reason and after
+the same kind of afternoon. The context can be on the device and the
+weights with it while the layers themselves go over in pieces: a layer the
+sequence will not take is a submission a step with the activation home
+between them, which costs what the whole road was built to save, and every
+number in the report reads exactly as it does when the model runs there
+whole. A session whose keys are packed four bits wide and whose rows are
+narrower than the word the packing writes had every layer refused that way.
+`--show-stats` says **layers whole on the device N of M**, and where any
+were not it names the first one's reason -- the packed context's rows
+narrower than a word, the context not on the device at all, no room for the
+layer's weights, a shape the sequence does not take, or the sequence
+refused.
 
 What it was: a buffer the processor reads was being allocated out of memory
 the device owns. This engine asked for one kind of memory for everything it

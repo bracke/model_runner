@@ -1867,6 +1867,52 @@ package Model_Runner.Platform.Device.Products is
    --  @return True where a hybrid's linear layer may go whole.
    function Runs_Linear (Item : Engine) return Boolean;
 
+   --  Why the last sequence was refused, where it was: its shape is not
+   --  one the steps take; an attention step's packed block is not a
+   --  shape the packed kernel reads -- a row, a head or a scale run that
+   --  is not a whole number of the words it reads at a time -- or the
+   --  context is not on the device at all; or the room for it was not
+   --  there. A refusal says False and nothing else at every one of its
+   --  many doors, and a layer handed back to the processor for a reason
+   --  nobody could read was the whole of a token's cost on a fixture
+   --  whose keys are four nibbles wide.
+   type Refusal is
+     (Not_Refused, Shape_Refused, Packed_Refused, Cache_Refused,
+      Room_Refused);
+
+   --  @param Item Engine.
+   --  @return Why the last Run said False, or Not_Refused after one that
+   --    said True.
+   function Last_Refusal (Item : Engine) return Refusal;
+
+   --  Forget it, before a caller builds a sequence it may not get to run:
+   --  a sequence refused while it is built never reaches Run, and the
+   --  answer standing there is the one before's.
+   --
+   --  @param Item Engine.
+   procedure Forget_Refusal (Item : in out Engine);
+
+   --  Whether the packed kernel reads a block of this shape -- the rows,
+   --  the heads and the scale runs each a whole number of the words it
+   --  reads at a time. A caller that finds it does not knows its layer
+   --  will be refused and why, which is the one refusal a reader can act
+   --  on: the cache was asked for in a shape this device will not read.
+   --
+   --  @param Item Engine.
+   --  @param Packed How the block is packed.
+   --  @param Head_Size Elements a key head holds.
+   --  @param Value_Size Elements a value head holds.
+   --  @param KV_Width Elements a position's keys hold.
+   --  @param V_Width Elements a position's values hold.
+   --  @return True where the packed kernel takes it.
+   function Takes_Packed
+     (Item       : Engine;
+      Packed     : Packed_Cache;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural) return Boolean;
+
    --  Attend against the cache the device already holds.
    --
    --  As Attend, without the cache crossing the interface: only the queries
@@ -2204,6 +2250,9 @@ private
       Queue   : System.Address := System.Null_Address;
       Family  : Natural := 0;
       Upload  : Natural := 0;
+
+      --  Why the last sequence was refused, as Last_Refusal says.
+      Refused : Refusal := Not_Refused;
 
       --  The kind a buffer the processor reads back is allocated out of.
       --  What the context chose, and the same as Upload on a device with no

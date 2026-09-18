@@ -12629,6 +12629,15 @@ package body Model_Runner.Llama is
             --  step below is then already done.
             Fused     : Boolean := False;
 
+            --  Whether the device was asked for this layer at all, so
+            --  that a layer the engine kept back is told apart from a
+            --  layer the device refused; and whether the whole of it went
+            --  over when it was asked -- which is not what Fused says,
+            --  since a refused layer falls to the road that fuses its
+            --  second half and sets that. Noted at the layer's end.
+            Asked      : Boolean := False;
+            Went_Whole : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -12682,6 +12691,7 @@ package body Model_Runner.Llama is
                      end if;
 
                      if Sent then
+                        Asked := True;
                         Model_Runner.Backend.Device.Whole_Layer
                           (Item.Activation.all,
                            Device_Norm (Current.Attention_Norm,
@@ -12752,6 +12762,7 @@ package body Model_Runner.Llama is
                              Linear_Shape_Of (Item, Natural (Index), 1),
                            Linear_State_At =>
                              Linear_State_At (Item, Natural (Index)));
+                        Went_Whole := Fused;
                      end if;
                   end;
 
@@ -12824,6 +12835,7 @@ package body Model_Runner.Llama is
                         end loop;
                      end if;
 
+                     Asked := True;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Item.Activation.all,
                         Device_Norm (Current.Attention_Norm,
@@ -12938,6 +12950,7 @@ package body Model_Runner.Llama is
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
                         Shared_Router => Current.Shared_Router);
+                     Went_Whole := Fused;
                   end if;
                end if;
 
@@ -13419,6 +13432,15 @@ package body Model_Runner.Llama is
             Charge (Item, Joining, Mark);
 
             <<Layer_Done>>
+
+            --  What became of this layer, for the run's report: the whole
+            --  of it over as one sequence, or not -- and, where the device
+            --  was asked and said no, what it said no to.
+            if Model_Runner.Backend."="
+                 (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+            then
+               Model_Runner.Backend.Device.Note_Layer (Went_Whole, Asked);
+            end if;
          end;
       end loop;
 
@@ -14415,6 +14437,13 @@ package body Model_Runner.Llama is
             --  Every step below is then already done.
             Fused : Boolean := False;
 
+            --  Whether the device was asked for this layer at all, so
+            --  that a layer the engine kept back is told apart from a
+            --  layer the device refused; and whether the whole of it went
+            --  over when it was asked. Noted at the layer's end.
+            Asked      : Boolean := False;
+            Went_Whole : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -14706,6 +14735,7 @@ package body Model_Runner.Llama is
                   end if;
 
                   if Sent then
+                     Asked := True;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,
@@ -14776,6 +14806,7 @@ package body Model_Runner.Llama is
                                            Linear_Runs),
                         Linear_State_At =>
                           Linear_State_At (Item, Natural (Index)));
+                     Went_Whole := Whole_Layer_Done;
                   end if;
                end;
 
@@ -14931,6 +14962,7 @@ package body Model_Runner.Llama is
                     and then Whole_Layer_Fits (Current, Natural (Index))
                     and then not Has_Runs
                   then
+                     Asked := True;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,
@@ -15090,6 +15122,7 @@ package body Model_Runner.Llama is
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
                         Shared_Router => Current.Shared_Router);
+                     Went_Whole := Whole_Layer_Done;
                   end if;
 
                   Deferred (Index) := Deferring and then Whole_Layer_Done;
@@ -15959,6 +15992,13 @@ package body Model_Runner.Llama is
 
                Charge (Item, Joining, Mark);
 
+            end if;
+
+            --  What became of this layer, for the run's report.
+            if Model_Runner.Backend."="
+                 (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+            then
+               Model_Runner.Backend.Device.Note_Layer (Went_Whole, Asked);
             end if;
          end;
       end loop;

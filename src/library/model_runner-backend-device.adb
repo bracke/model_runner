@@ -29,6 +29,17 @@ package body Model_Runner.Backend.Device is
 
    Ready_Now : Boolean := False;
 
+   --  The layers' outcomes, as Note_Layer counts them.
+   Whole_Count  : Natural := 0;
+   Handed_Count : Natural := 0;
+   Handed_First : Handing := Not_Handed;
+
+   --  What the last whole layer asked for that this device will not do,
+   --  found before the sequence is built: a sequence refused while it is
+   --  built never reaches the engine's Run, so what Run says of it is the
+   --  layer before's.
+   Layer_Refusal : Handing := Not_Handed;
+
    --  Room for what a fused half-layer hands the device and takes back: a
    --  row's queries and a row's residual, for every row of the call.
    --
@@ -502,6 +513,9 @@ package body Model_Runner.Backend.Device is
       Ready_Now := False;
       Sharing := False;
       Named_Last := 0;
+      Whole_Count := 0;
+      Handed_Count := 0;
+      Handed_First := Not_Handed;
    end Close;
 
    --------------
@@ -545,6 +559,41 @@ package body Model_Runner.Backend.Device is
    -----------------
 
    function Given_Back return Natural is (Products.Given_Back (Engine));
+
+   ----------------
+   -- Note_Layer --
+   ----------------
+
+   procedure Note_Layer (Whole : Boolean; Asked : Boolean := False) is
+   begin
+      if Whole then
+         Whole_Count := Whole_Count + 1;
+         return;
+      end if;
+
+      Handed_Count := Handed_Count + 1;
+
+      if Handed_First = Not_Handed then
+         Handed_First :=
+           (if not Asked then Shape_Handed
+            elsif Layer_Refusal /= Not_Handed then Layer_Refusal
+            else (case Products.Last_Refusal (Engine) is
+                     when Products.Packed_Refused => Packed_Handed,
+                     when Products.Cache_Refused  => Cache_Handed,
+                     when Products.Room_Refused   => Room_Handed,
+                     when Products.Shape_Refused  => Refused_Handed,
+
+                     --  A sequence that never reached Run: what refused
+                     --  it is one of the shapes it is built from.
+                     when Products.Not_Refused    => Shape_Handed));
+      end if;
+   end Note_Layer;
+
+   function Layers_Whole return Natural is (Whole_Count);
+
+   function Layers_Handed return Natural is (Handed_Count);
+
+   function First_Handing return Handing is (Handed_First);
 
    function Cached_Bytes return Interfaces.Unsigned_64
    is (Products.Cached_Bytes (Engine));
@@ -3376,6 +3425,23 @@ package body Model_Runner.Backend.Device is
          Ok := True;
       end Attempt;
    begin
+      --  What this layer asks for that the device will not do, before the
+      --  sequence is built: the packed block's shape, which is the one
+      --  refusal a reader can act on -- a cache asked for in a shape this
+      --  device's attention does not read -- and which refuses the layer
+      --  where the sequence is built rather than where it is run, so that
+      --  Run never sees it. Everything else the sequence finds for itself.
+      Layer_Refusal := Not_Handed;
+      Products.Forget_Refusal (Engine);
+
+      if Packed.K_Bits /= 0
+        and then not Products.Takes_Packed
+                       (Engine, Packed, Head_Size, Value_Size,
+                        KV_Width, V_Width)
+      then
+         Layer_Refusal := Packed_Handed;
+      end if;
+
       Attempt;
 
       --  A layer refused after the one before carried its answer out

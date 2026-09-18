@@ -201,6 +201,35 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices released to make room.
    function Given_Back return Natural;
 
+   --  How many layers went over as one sequence and how many did not,
+   --  and why the first of those did not.
+   --
+   --  A layer the device will not take whole goes over in pieces instead
+   --  -- a submission a step, its activation home between them -- or on
+   --  the processor, and nothing said so: a session whose rows are
+   --  narrower than the word the packing writes had every layer refused,
+   --  and the run reported a device with the weights and the context on
+   --  it, which is what it reports when the whole model runs there. The
+   --  engine notes every layer's outcome; the run's report shows the
+   --  counts, and the reason where any were refused.
+   type Handing is
+     (Not_Handed, Shape_Handed, Packed_Handed, Cache_Handed, Room_Handed,
+      Refused_Handed);
+
+   --  @param Whole True where the whole layer went over as one sequence.
+   --  @param Asked True where the device was asked, False where the
+   --    engine's own check kept the layer back.
+   procedure Note_Layer (Whole : Boolean; Asked : Boolean := False);
+
+   --  @return Layers noted whole since the device was opened.
+   function Layers_Whole return Natural;
+
+   --  @return Layers noted not whole since then.
+   function Layers_Handed return Natural;
+
+   --  @return Why the first of those was, or Not_Handed for none.
+   function First_Handing return Handing;
+
    --  Attend a generated token out of the half-precision copy of the
    --  cache, or out of the cache proper.
    --

@@ -6312,6 +6312,31 @@ package body Model_Runner.Platform.Device.Products is
    function Runs_Linear (Item : Engine) return Boolean
    is (Item.Conv_Line /= Null_Handle and then Item.Rule_Line /= Null_Handle);
 
+   function Last_Refusal (Item : Engine) return Refusal
+   is (Item.Refused);
+
+   procedure Forget_Refusal (Item : in out Engine) is
+   begin
+      Item.Refused := Not_Refused;
+   end Forget_Refusal;
+
+   function Takes_Packed
+     (Item       : Engine;
+      Packed     : Packed_Cache;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      KV_Width   : Natural;
+      V_Width    : Natural) return Boolean
+   is (Packed_Fits (Item, Packed, Head_Size, Value_Size, KV_Width, V_Width)
+
+       --  And what Add_Place holds a packed row to, which is the other
+       --  half of a packed layer: a row is written a word at a time, so
+       --  its elements are eight to the word in nibbles and four in
+       --  bytes. A key row of four elements -- two nibble heads of a
+       --  fixture -- is half a word and is refused here.
+       and then KV_Width mod (if Packed.K_Bits = 4 then 8 else 4) = 0
+       and then V_Width mod (if Packed.V_Bits = 4 then 8 else 4) = 0);
+
    ------------
    -- Attend --
    ------------
@@ -8048,6 +8073,10 @@ package body Model_Runner.Platform.Device.Products is
       Ok := False;
       Cancelled := False;
 
+      --  Until the shapes are through, a refusal is a shape's; the
+      --  attention step names its own two below.
+      Item.Refused := Shape_Refused;
+
       if Steps.Held = 0 or else not Is_Ready (Item) then
          return;
       end if;
@@ -8194,15 +8223,24 @@ package body Model_Runner.Platform.Device.Products is
                --  sequence recorded against a cache the engine does not
                --  hold would dispatch against whatever the binding last
                --  named, which is an answer and a wrong one.
+               if Item.Cache_Buffer = Null_Handle then
+                  Item.Refused := Cache_Refused;
+                  return;
+               end if;
+
+               --  A packed block needs the kernel that reads one, and a
+               --  shape that kernel takes.
+               if This.Packed.K_Bits /= 0
+                 and then not Packed_Fits
+                                (Item, This.Packed, This.Head_Size,
+                                 This.Value_Size, This.KV_Width,
+                                 This.V_Width)
+               then
+                  Item.Refused := Packed_Refused;
+                  return;
+               end if;
+
                if This.Rows = 0
-                 or else Item.Cache_Buffer = Null_Handle
-                 --  A packed block needs the kernel that reads one, and
-                 --  a shape that kernel takes.
-                 or else (This.Packed.K_Bits /= 0
-                          and then not Packed_Fits
-                                         (Item, This.Packed, This.Head_Size,
-                                          This.Value_Size, This.KV_Width,
-                                          This.V_Width))
                  or else (not This.Chained
                           and then Model_Runner.Numerics.Element_Count
                                      (This.Columns)
@@ -8468,6 +8506,9 @@ package body Model_Runner.Platform.Device.Products is
             Places (Steps.Held - 1).At_Byte := 0;
          end if;
       end if;
+
+      --  The shapes are through: what refuses from here is room.
+      Item.Refused := Room_Refused;
 
       Item.Clock := Item.Clock + 1;
       Item.Began := Item.Clock;
@@ -10828,6 +10869,7 @@ package body Model_Runner.Platform.Device.Products is
       end;
 
       Release_All;
+      Item.Refused := Not_Refused;
       Ok := True;
    end Run;
 

@@ -313,6 +313,13 @@ package Model_Runner.Presentation is
    --    weights: a device with the model and not the context computes the
    --    products there and hands attention back, and processor time a run
    --    should not have needed was the only sign of it.
+   --  @param Layers_Whole How many layers went over whole.
+   --  @param Layers_Handed How many the processor took instead. A layer
+   --    handed back runs with the device idle and a fetch a token, and
+   --    the run reported the same device and the same context whether
+   --    every layer went over or none did.
+   --  @param Handed_Why The message key naming why the first of those was
+   --    handed back, or the empty string where none were.
    procedure Put_Statistics
      (Item           : in out Console;
       Outcome        : Model_Runner.Generation.Result;
@@ -322,7 +329,10 @@ package Model_Runner.Presentation is
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
-      Cached_Bytes   : Interfaces.Unsigned_64 := 0);
+      Cached_Bytes   : Interfaces.Unsigned_64 := 0;
+      Layers_Whole   : Natural := 0;
+      Layers_Handed  : Natural := 0;
+      Handed_Why     : String := "");
 
    --  Somewhere for per-token explanations to go: standard error, one line
    --  a token, in a shape a program can read.
