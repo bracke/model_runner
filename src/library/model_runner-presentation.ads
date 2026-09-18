@@ -324,6 +324,13 @@ package Model_Runner.Presentation is
    --    every layer went over or none did.
    --  @param Handed_Why The message key naming why the first of those was
    --    handed back, or the empty string where none were.
+   --  @param Blocks_Turned How often a session was turned out of a block
+   --    of the device's cache to give it to another, and
+   --  @param Rings_Turned the same for a seat in the room of rings. There
+   --    are sixteen of each; a run that turns one over now and again pays
+   --    a cache written across the bus for it, and a run that turns one
+   --    over every token pays it every token. Said only where it happened,
+   --    which for one session is never.
    procedure Put_Statistics
      (Item           : in out Console;
       Outcome        : Model_Runner.Generation.Result;
@@ -337,7 +344,9 @@ package Model_Runner.Presentation is
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
-      Handed_Why     : String := "");
+      Handed_Why     : String := "";
+      Blocks_Turned  : Natural := 0;
+      Rings_Turned   : Natural := 0);
 
    --  Somewhere for per-token explanations to go: standard error, one line
    --  a token, in a shape a program can read.

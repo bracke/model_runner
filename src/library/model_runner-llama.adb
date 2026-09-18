@@ -4941,6 +4941,10 @@ package body Model_Runner.Llama is
    Block_Clock : Natural := 0;
    Block_Used  : array (Block_Holder'Range) of Natural := [others => 0];
 
+   --  Who asked last, which is how a session's run of asks -- one a layer,
+   --  through a token -- is told from the token before it.
+   Last_Asker : Session_Access := null;
+
    --  Which sessions hold a seat in the device's state room: a ring
    --  each, Kept_States + 1 slots of every linear layer's memories and
    --  states, laid one after another past the runs' table at the front.
@@ -4949,6 +4953,12 @@ package body Model_Runner.Llama is
    --  a new one takes the first gap that fits, or the end.
    State_Seats : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
+
+   --  And when each seat was last asked for, on the same clock the blocks
+   --  are stamped with, for the same reason: a session that finds every
+   --  seat taken takes the one gone longest unasked, where it used to run
+   --  every linear layer on the processor for the rest of its life.
+   State_Used : array (State_Seats'Range) of Natural := [others => 0];
 
    --  The runs' table at the front of the room: five words a run, one
    --  run a session of a round at most, in a stretch rounded up to the
@@ -5055,10 +5065,29 @@ package body Model_Runner.Llama is
       Span : constant Element_Count := Device_Ring_Span (Item.all);
       Free : Integer := -1;
       Place : Element_Count := State_Table_Room;
+
+      --  What this session asked at its previous token, as a block's
+      --  guard reads.
+      Asked_Last : Natural := 0;
    begin
       Cleared := False;
+
+      Block_Clock := Block_Clock + 1;
+      if Last_Asker /= Item then
+         Item.Asked_Before := Item.Asked_At;
+         Item.State_Asked_Before := Item.State_Asked_At;
+         Last_Asker := Item;
+      end if;
+      Asked_Last := Item.State_Asked_Before;
+      Item.State_Asked_At := Block_Clock;
+
       Ok := Item.State_Seated;
       if Ok then
+         for Seat in State_Seats'Range loop
+            if State_Seats (Seat) = Item then
+               State_Used (Seat) := Item.State_Asked_At;
+            end if;
+         end loop;
          return;
       end if;
 
@@ -5068,6 +5097,52 @@ package body Model_Runner.Llama is
             exit;
          end if;
       end loop;
+
+      --  None free: the seat gone longest unasked is taken from the
+      --  session sitting in it, as a block of the cache is, and under the
+      --  same guard -- only from a session that has gone unasked since
+      --  before this one's last ask, so that seventeen hybrids reading a
+      --  token apiece in turn do not carry their rings back and forth
+      --  every token. The ring in that seat comes home first: the host's
+      --  copy is what the session writes back into the seat it is given
+      --  next, and a seat given up holds whatever the session before it
+      --  left there.
+      if Free < 0 then
+         declare
+            Oldest : Natural := 0;
+            Found  : Integer := -1;
+         begin
+            for Seat in State_Seats'Range loop
+               if State_Seats (Seat) /= null
+                 and then State_Seats (Seat) /= Item
+                 and then (Found < 0 or else State_Used (Seat) < Oldest)
+               then
+                  Found  := Seat;
+                  Oldest := State_Used (Seat);
+               end if;
+            end loop;
+
+            if Found < 0 or else State_Used (Found) >= Asked_Last then
+               return;
+            end if;
+
+            declare
+               Turned : constant Session_Access := State_Seats (Found);
+            begin
+               Fetch_States (Turned);
+
+               if Turned.State_On_Device then
+                  return;
+               end if;
+
+               State_Seats (Found) := null;
+               Turned.State_Seated := False;
+               Free := Found;
+
+               Model_Runner.Backend.Device.Note_Turned (Ring => True);
+            end;
+         end;
+      end if;
 
       if Free < 0 then
          return;
@@ -5106,6 +5181,7 @@ package body Model_Runner.Llama is
       end if;
 
       State_Seats (Free) := Item;
+      State_Used (Free) := Item.State_Asked_At;
       Item.State_Base := Place;
       Item.State_Seated := True;
       Item.State_On_Device := False;
@@ -5465,6 +5541,9 @@ package body Model_Runner.Llama is
       use type Model_Runner.Backend.Backend_Kind;
 
       Seat : Natural := 0;
+
+      --  When this session last asked for a block before this call.
+      Asked_Last : Natural := 0;
    begin
       Ok := False;
 
@@ -5506,13 +5585,25 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  This ask, and the run of asks before it: what the session asked
+      --  at its previous token is what says whether it may turn another
+      --  session out, below. Its own last ask says nothing -- that was
+      --  the layer before, a tick ago.
+      Block_Clock := Block_Clock + 1;
+      if Last_Asker /= Item then
+         Item.Asked_Before := Item.Asked_At;
+         Item.State_Asked_Before := Item.State_Asked_At;
+         Last_Asker := Item;
+      end if;
+      Asked_Last := Item.Asked_Before;
+      Item.Asked_At := Block_Clock;
+
       --  Already this session's, which is every call after the first:
       --  there is nothing to ask the device and nothing to write. Stamped
       --  as it goes, so that the block another session takes where every
       --  one is held is the one nobody has read for longest.
       if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
-         Block_Clock := Block_Clock + 1;
-         Block_Used (Item.Seat) := Block_Clock;
+         Block_Used (Item.Seat) := Item.Asked_At;
          Ok := True;
          return;
       end if;
@@ -5561,6 +5652,20 @@ package body Model_Runner.Llama is
                return;
             end if;
 
+            --  And only from a session that has gone unasked since before
+            --  this one's last ask. Seventeen sessions reading a token
+            --  apiece in turn are all as warm as each other: taking the
+            --  coldest block would have each of them turn the next out
+            --  every token and write its cache across the bus again,
+            --  where the seventeenth doing without costs that one session
+            --  its speed and leaves the sixteen alone. A session new to
+            --  the device is warmer than anything asked before it was
+            --  opened, which is what lets it in where a block has gone
+            --  cold.
+            if Block_Used (Found) >= Asked_Last then
+               return;
+            end if;
+
             declare
                Turned : constant Session_Access := Block_Holder (Found);
             begin
@@ -5573,6 +5678,8 @@ package body Model_Runner.Llama is
                Block_Holder (Found) := null;
                Turned.Seat := -1;
                Seat := Found;
+
+               Model_Runner.Backend.Device.Note_Turned;
             end;
          end;
       end if;
@@ -5699,8 +5806,7 @@ package body Model_Runner.Llama is
 
          Item.Seat := Seat;
          Block_Holder (Seat) := Item;
-         Block_Clock := Block_Clock + 1;
-         Block_Used (Seat) := Block_Clock;
+         Block_Used (Seat) := Item.Asked_At;
          Ok := True;
       end;
    end Take_Block;
@@ -10467,6 +10573,17 @@ package body Model_Runner.Llama is
          --  One entry a layer of the stack, and one more for each block
          --  past it, which attends in full over the same context and
          --  keeps its keys and values here like a layer of the stack.
+         --  New to the device, and warmer for it than anything asked
+         --  before it was opened: a session opened where every block of
+         --  the cache and every seat in the room of rings is held takes
+         --  one that has gone cold, and takes none where they are all as
+         --  warm as it is.
+         Block_Clock := Block_Clock + 1;
+         Item.Asked_At := Block_Clock;
+         Item.Asked_Before := Block_Clock;
+         Item.State_Asked_At := Block_Clock;
+         Item.State_Asked_Before := Block_Clock;
+
          Item.Cells := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
          Item.At_Keys := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
          Item.At_Values := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
@@ -14570,6 +14687,7 @@ package body Model_Runner.Llama is
                  and then Block_Holder (Member.Seat) = Member
                then
                   Block_Clock := Block_Clock + 1;
+                  Member.Asked_At := Block_Clock;
                   Block_Used (Member.Seat) := Block_Clock;
                end if;
             end;

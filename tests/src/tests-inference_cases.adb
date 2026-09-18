@@ -3385,12 +3385,20 @@ package body Tests.Inference_Cases is
    --  record, which is what makes turning one out safe. A seventeenth
    --  used to be refused the device's cache for the rest of its life.
    --
-   --  So this opens seventeen sessions of a few tokens each and asks two
+   --  A block is taken only from a session that has gone unasked since
+   --  before the asking session's own last ask, so that seventeen
+   --  sessions reading a token apiece in turn do not turn each other out
+   --  every token: the first, asking again after it was turned out, is
+   --  colder than the sixteen and does without.
+   --
+   --  So this opens seventeen sessions of a few tokens each and asks four
    --  things of them: that the seventeenth has its layers go over whole,
-   --  which is the block it was given; and that the first, run again
-   --  after it was turned out of its own, says what the same sequence
-   --  says to a session that never left one. What it carries back into
-   --  the block it is given has to be what it left in the block it had.
+   --  which is the block it was given; that one block was turned over and
+   --  said to have been; that the first, asking again, turns nobody out;
+   --  and that when one of the sixteen closes, the first takes the block
+   --  it leaves and says what the same sequence says to a session that
+   --  never left one. What it carries back into the block it is given has
+   --  to be what it left in the block it had.
    procedure A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3480,12 +3488,45 @@ package body Tests.Inference_Cases is
             end;
          end loop;
 
-         --  And the first again, which has to write its cache into a
-         --  block anew and say what it said before of the same token.
+         Assert (Model_Runner.Backend.Device.Blocks_Turned = 1,
+                 "blocks turned over:"
+                 & Natural'Image
+                     (Model_Runner.Backend.Device.Blocks_Turned)
+                 & ", wanted one");
+
+         --  The first again, which is now the coldest session on the
+         --  device: it asks, finds every block held by one warmer than
+         --  itself, and attends on the processor rather than turning
+         --  another out and being turned out again next token.
          L.Evaluate (First, Under.Ready, 7, After, Status => Status);
          Assert (E.Is_Ok (Status),
                  "the turned-out session did not evaluate: "
                  & E.Error_Code'Image (Status.Code));
+
+         Assert (Model_Runner.Backend.Device.Blocks_Turned = 1,
+                 "a session as cold as the one holding a block turned it"
+                 & " out anyway:"
+                 & Natural'Image
+                     (Model_Runner.Backend.Device.Blocks_Turned));
+
+         --  And once one of the sixteen closes, the block it gives back
+         --  is the first's again -- which is where its cache is written
+         --  into a block anew, a layer at a time and only the cells each
+         --  layer holds.
+         L.Close (Beside (Beside'First));
+
+         declare
+            Whole : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Whole;
+         begin
+            L.Evaluate (First, Under.Ready, 8, After, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the session did not evaluate after a block came free: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
+                    "the block a closing session gave back went to nobody");
+         end;
 
          declare
             Host   : L.Session;
@@ -3496,6 +3537,8 @@ package body Tests.Inference_Cases is
             Says (Under, Host, Wanted);
             L.Evaluate (Host, Under.Ready, 7, Wanted, Status => Status);
             Assert (E.Is_Ok (Status), "the comparison did not evaluate");
+            L.Evaluate (Host, Under.Ready, 8, Wanted, Status => Status);
+            Assert (E.Is_Ok (Status), "the comparison did not evaluate again");
 
             declare
                Worst : N.Real := 0.0;
@@ -3513,7 +3556,7 @@ package body Tests.Inference_Cases is
             L.Close (Host);
          end;
 
-         for Index in Beside'Range loop
+         for Index in Beside'First + 1 .. Beside'Last loop
             L.Close (Beside (Index));
          end loop;
 
@@ -3523,6 +3566,268 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said;
+
+   ------------------------------------------------------------
+   -- A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up --
+   ------------------------------------------------------------
+
+   --  Every session sharing the device's cache buffer must agree on how
+   --  wide a block of it is, so a session of another shape -- another
+   --  model, or the same one with another context -- is refused the
+   --  cache while any block is held, and attends on the processor. The
+   --  width is the buffer's rather than a session's, and is forgotten
+   --  with the last block given back: a session refused it asks again at
+   --  every layer, so the one that was refused takes the cache as soon as
+   --  the last block of the first width goes.
+   --
+   --  This holds both halves of that: refused while the first session
+   --  holds a block, and taken once it closes.
+   procedure A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+
+         Wide, Narrow : L.Session;
+
+         Answer : Logit_Vector;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (Wide, Under.Ready, Context => 16, Status => Status);
+         Assert (E.Is_Ok (Status), "the first session did not open");
+         Says (Under, Wide, Answer);
+
+         L.Open (Narrow, Under.Ready, Context => 8, Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+
+         declare
+            Whole : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Whole;
+         begin
+            Says (Under, Narrow, Answer);
+
+            Assert (Model_Runner.Backend.Device.Layers_Whole = Whole,
+                    "a session of another width was given a block of a"
+                    & " cache dealt out in blocks of the first's");
+         end;
+
+         --  The last block of the first width given back, and with it the
+         --  width itself.
+         L.Close (Wide);
+
+         declare
+            Whole : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Whole;
+         begin
+            L.Evaluate (Narrow, Under.Ready, 7, Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the second session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+
+            Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
+                    "a session refused the cache for its width never asked"
+                    & " again once the width was forgotten");
+         end;
+
+         L.Close (Narrow);
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up;
+
+   ----------------------------------------------------------
+   -- A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said --
+   ----------------------------------------------------------
+
+   --  The room a hybrid's rings of states are seated in holds sixteen
+   --  seats, as the cache holds sixteen blocks, and a seventeenth hybrid
+   --  session used to be refused a seat and run every linear layer on the
+   --  processor for the rest of its life. It takes the seat gone longest
+   --  unasked now: the ring in it comes home to the host first, and the
+   --  session turned out writes its ring into whatever seat it is given
+   --  next -- which is what Rings_Turned counts and Note_Turned records.
+   --
+   --  Seventeen sessions of a few tokens each, then: the seventeenth has
+   --  to turn a ring out, and the first, run again once a seat comes
+   --  free, has to say what the same tokens say to a session that never
+   --  left one.
+   procedure A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Seats  : constant := 16;
+      Room   : constant := 64;
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a hybrid session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+
+         First  : L.Session;
+         Beside : array (1 .. Seats) of L.Session;
+
+         Alone, After : Logit_Vector;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (First, Under.Ready, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status), "the first hybrid session did not open");
+         Says (Under, First, Alone);
+
+         for Index in Beside'Range loop
+            L.Open (Beside (Index), Under.Ready, Context => Room,
+                    Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a hybrid session did not open:" & Integer'Image (Index));
+
+            declare
+               Ignored : Logit_Vector;
+            begin
+               Says (Under, Beside (Index), Ignored);
+            end;
+         end loop;
+
+         --  A device with no room of rings at all -- no linear kernel,
+         --  or a ring too large for it -- seats nobody and turns nobody
+         --  out, and this says nothing about such a device.
+         if Interfaces.">"
+              (Model_Runner.Backend.Device.State_Room_Bytes, 0)
+         then
+            Assert (Model_Runner.Backend.Device.Rings_Turned > 0,
+                    "the seventeenth hybrid session was refused a seat"
+                    & " rather than given one");
+         end if;
+
+         --  The first again, once a seat comes free: it writes its ring
+         --  into the seat it is given and has to say what it would have
+         --  said had it never left one.
+         L.Close (Beside (Beside'First));
+
+         L.Evaluate (First, Under.Ready, 7, After, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the turned-out hybrid did not evaluate: "
+                 & E.Error_Code'Image (Status.Code));
+
+         declare
+            Host   : L.Session;
+            Wanted : Logit_Vector;
+         begin
+            L.Open (Host, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the comparison session did not open");
+            Says (Under, Host, Wanted);
+            L.Evaluate (Host, Under.Ready, 7, Wanted, Status => Status);
+            Assert (E.Is_Ok (Status), "the comparison did not evaluate");
+
+            declare
+               Worst : N.Real := 0.0;
+            begin
+               for Index in Wanted'Range loop
+                  Worst :=
+                    N.Real'Max (Worst, abs (Wanted (Index) - After (Index)));
+               end loop;
+
+               Assert (Worst <= 2.0E-3,
+                       "a hybrid turned out of its ring and back says"
+                       & N.Real'Image (Worst) & " away from one that kept it");
+            end;
+
+            L.Close (Host);
+         end;
+
+         for Index in Beside'First + 1 .. Beside'Last loop
+            L.Close (Beside (Index));
+         end loop;
+
+         L.Close (First);
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said;
 
    ---------------------------------------------------------
    -- A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State --
@@ -12255,6 +12560,15 @@ package body Tests.Inference_Cases is
         (T, A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said'Access,
          "a session turned out of its block of the device's cache writes "
          & "it back and says what it said before");
+      Register_Routine
+        (T, A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up'Access,
+         "a session of another width is refused the device's cache while a "
+         & "block of the first width is held, and takes it when the last "
+         & "one is given back");
+      Register_Routine
+        (T, A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said'Access,
+         "a hybrid turned out of its seat in the device's room of rings "
+         & "writes its ring back and says what it said before");
       Register_Routine
         (T, A_Run_Says_Which_Layers_The_Device_Took'Access,
          "a run on the device says how many layers went over whole and "

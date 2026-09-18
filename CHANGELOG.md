@@ -267,6 +267,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A seventeenth hybrid session is dealt a seat in the room of rings, and
+  no session turns another out while both are busy.** The room a hybrid's
+  rings of states are seated in holds sixteen seats as the cache holds
+  sixteen blocks, and a seventeenth hybrid was refused a seat and ran every
+  linear layer on the processor for the rest of its life; it takes the seat
+  gone longest unasked now, the ring in it read home to the host first and
+  written back into whatever seat that session is given next. Both are under
+  one guard: a block or a seat is taken only from a session that has gone
+  unasked since before the asking session's own previous token. Seventeen
+  sessions reading a token apiece in turn are all as warm as each other and
+  would otherwise turn each other out every token, each paying a cache
+  written across the bus for it, where the seventeenth doing without costs
+  one session its speed and leaves the sixteen alone. A session new to the
+  device is warmer than anything asked before it was opened, so it takes a
+  block that has gone cold and none that has not.
+- **`--show-stats` says how often a session was turned out.** A run that
+  turns a block or a seat over now and again and one that turns one over
+  every token read alike in every line of the report. Two lines say so now,
+  each only where it happened -- which for a single session is never.
 - **A seventeenth session is dealt a block of the device's cache instead of
   being refused one for life.** The cache is dealt out in blocks a session
   apiece and there are sixteen; a session that found every one held was told

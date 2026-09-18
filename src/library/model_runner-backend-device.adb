@@ -34,6 +34,11 @@ package body Model_Runner.Backend.Device is
    Handed_Count : Natural := 0;
    Handed_First : Handing := Not_Handed;
 
+   --  And how often a session was turned out of a block of the cache or a
+   --  seat in the room of rings to give it to another.
+   Turned_Blocks : Natural := 0;
+   Turned_Rings  : Natural := 0;
+
    --  What the last whole layer asked for that this device will not do,
    --  found before the sequence is built: a sequence refused while it is
    --  built never reaches the engine's Run, so what Run says of it is the
@@ -516,6 +521,8 @@ package body Model_Runner.Backend.Device is
       Whole_Count := 0;
       Handed_Count := 0;
       Handed_First := Not_Handed;
+      Turned_Blocks := 0;
+      Turned_Rings := 0;
    end Close;
 
    --------------
@@ -598,6 +605,23 @@ package body Model_Runner.Backend.Device is
    function Layers_Handed return Natural is (Handed_Count);
 
    function First_Handing return Handing is (Handed_First);
+
+   -----------------
+   -- Note_Turned --
+   -----------------
+
+   procedure Note_Turned (Ring : Boolean := False) is
+   begin
+      if Ring then
+         Turned_Rings := Turned_Rings + 1;
+      else
+         Turned_Blocks := Turned_Blocks + 1;
+      end if;
+   end Note_Turned;
+
+   function Blocks_Turned return Natural is (Turned_Blocks);
+
+   function Rings_Turned return Natural is (Turned_Rings);
 
    function Cached_Bytes return Interfaces.Unsigned_64
    is (Products.Cached_Bytes (Engine));

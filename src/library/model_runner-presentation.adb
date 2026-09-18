@@ -530,7 +530,9 @@ package body Model_Runner.Presentation is
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
-      Handed_Why     : String := "")
+      Handed_Why     : String := "";
+      Blocks_Turned  : Natural := 0;
+      Rings_Turned   : Natural := 0)
    is
       function Seconds (Value : Model_Runner.Clocks.Nanoseconds) return String
       is (Message
@@ -660,6 +662,23 @@ package body Model_Runner.Presentation is
                  (Item, "statistics.layers_handed",
                   Message (Item, Handed_Why), Diagnostic);
             end if;
+         end if;
+
+         --  And what the device's sixteen blocks and sixteen seats cost
+         --  where more than sixteen sessions want them: said only where a
+         --  session was turned out of one, which is never for a run of one
+         --  session and is the difference between a server that is
+         --  computing and one that is carrying caches back and forth.
+         if Blocks_Turned > 0 then
+            Put_Field
+              (Item, "statistics.blocks_turned",
+               T.Image (Long_Long_Integer (Blocks_Turned)), Diagnostic);
+         end if;
+
+         if Rings_Turned > 0 then
+            Put_Field
+              (Item, "statistics.rings_turned",
+               T.Image (Long_Long_Integer (Rings_Turned)), Diagnostic);
          end if;
       end if;
 

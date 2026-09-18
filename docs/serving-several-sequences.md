@@ -244,7 +244,14 @@ copy alike.
 A seventeenth session turns out whichever block has gone longest unasked --
 the session holding it reads back whatever the device owes its copy, gives
 the block up, and writes its keys and values into whatever block it is given
-next. That write was the whole of its cache, which is the room it has rather
+next -- and a seventeenth hybrid does the same to a seat in the room of
+rings, whose ring comes home first. Neither happens between two sessions as
+warm as each other: a block or a seat is taken only from a session that has
+gone unasked since before the asking session's previous token, so seventeen
+sessions reading a token apiece in turn leave each other alone and the
+seventeenth does without, which costs one session its speed rather than all
+seventeen a cache carried back and forth every token. `--show-stats` says how
+often either happened. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
 that layer still holds. A round stamps every member before any of them asks,

@@ -3662,7 +3662,11 @@ package body Model_Runner.CLI.Execute is
                        Model_Runner.Backend.Device.Layers_Whole,
                      Layers_Handed  =>
                        Model_Runner.Backend.Device.Layers_Handed,
-                     Handed_Why     => Handed_Key);
+                     Handed_Why     => Handed_Key,
+                     Blocks_Turned  =>
+                       Model_Runner.Backend.Device.Blocks_Turned,
+                     Rings_Turned   =>
+                       Model_Runner.Backend.Device.Rings_Turned);
                else
                   Pres.Put_Statistics (Screen, Outcome);
                end if;

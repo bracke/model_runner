@@ -2033,7 +2033,12 @@ narrower than the word the packing writes had every layer refused that way.
 were not it names the first one's reason -- the packed context's rows
 narrower than a word, the context not on the device at all, no room for the
 layer's weights, a shape the sequence does not take, or the sequence
-refused.
+refused. It also says **blocks of the device's cache turned over to another
+session** and **seats in the device's room of rings turned over**, where
+either happened: there are sixteen of each, a seventeenth session takes the
+one gone longest unasked, and the session turned out writes what it holds
+back into whatever it is given next. A run that turns one over now and again
+and a run that turns one over every token used to read alike.
 
 The same question gets the same answer where the shape is the model's
 rather than the context's: the packed attention reads four elements of a
