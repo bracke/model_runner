@@ -3568,21 +3568,23 @@ package body Tests.Inference_Cases is
    end A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said;
 
    ------------------------------------------------------------
-   -- A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up --
+   -- A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One --
    ------------------------------------------------------------
 
-   --  Every session sharing the device's cache buffer must agree on how
-   --  wide a block of it is, so a session of another shape -- another
-   --  model, or the same one with another context -- is refused the
-   --  cache while any block is held, and attends on the processor. The
-   --  width is the buffer's rather than a session's, and is forgotten
-   --  with the last block given back: a session refused it asks again at
-   --  every layer, so the one that was refused takes the cache as soon as
-   --  the last block of the first width goes.
+   --  The device's cache buffer is dealt out in blocks of one width --
+   --  the width the first session to take one asked for -- and a block
+   --  has to hold what the session keeps in it. A session that keeps less
+   --  takes a block and leaves the rest of it unread; a session that
+   --  keeps more is refused and attends on the processor, until the last
+   --  block goes and the width is forgotten with it. A session refused
+   --  asks again at every layer, so it takes the cache as soon as that
+   --  happens.
    --
-   --  This holds both halves of that: refused while the first session
-   --  holds a block, and taken once it closes.
-   procedure A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up
+   --  This holds all three: the narrower session seated beside the wider
+   --  one, the wider session refused where the narrower set the width,
+   --  and the wider one taking the cache once the last narrow block is
+   --  given back.
+   procedure A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
@@ -3637,6 +3639,7 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
+         --  A wide session first, which deals the buffer in its width.
          L.Open (Wide, Under.Ready, Context => 16, Status => Status);
          Assert (E.Is_Ok (Status), "the first session did not open");
          Says (Under, Wide, Answer);
@@ -3650,35 +3653,63 @@ package body Tests.Inference_Cases is
          begin
             Says (Under, Narrow, Answer);
 
-            Assert (Model_Runner.Backend.Device.Layers_Whole = Whole,
-                    "a session of another width was given a block of a"
-                    & " cache dealt out in blocks of the first's");
-         end;
-
-         --  The last block of the first width given back, and with it the
-         --  width itself.
-         L.Close (Wide);
-
-         declare
-            Whole : constant Natural :=
-              Model_Runner.Backend.Device.Layers_Whole;
-         begin
-            L.Evaluate (Narrow, Under.Ready, 7, Answer, Status => Status);
-            Assert (E.Is_Ok (Status),
-                    "the second session did not evaluate: "
-                    & E.Error_Code'Image (Status.Code));
-
             Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
-                    "a session refused the cache for its width never asked"
-                    & " again once the width was forgotten");
+                    "a session that keeps less than a block holds was"
+                    & " refused one");
          end;
 
+         L.Close (Wide);
          L.Close (Narrow);
+
+         --  And the other way about: a narrow session deals the buffer in
+         --  its width, and a wider one does not fit until the last narrow
+         --  block is given back.
+         declare
+            Short, Long : L.Session;
+         begin
+            L.Open (Short, Under.Ready, Context => 8, Status => Status);
+            Assert (E.Is_Ok (Status), "the narrow session did not open");
+            Says (Under, Short, Answer);
+
+            L.Open (Long, Under.Ready, Context => 16, Status => Status);
+            Assert (E.Is_Ok (Status), "the wide session did not open");
+
+            declare
+               Whole : constant Natural :=
+                 Model_Runner.Backend.Device.Layers_Whole;
+            begin
+               Says (Under, Long, Answer);
+
+               Assert (Model_Runner.Backend.Device.Layers_Whole = Whole,
+                       "a session that keeps more than a block holds was"
+                       & " given one anyway");
+            end;
+
+            --  The last block of the narrow width given back, and with it
+            --  the width itself.
+            L.Close (Short);
+
+            declare
+               Whole : constant Natural :=
+                 Model_Runner.Backend.Device.Layers_Whole;
+            begin
+               L.Evaluate (Long, Under.Ready, 7, Answer, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the wide session did not evaluate: "
+                       & E.Error_Code'Image (Status.Code));
+
+               Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
+                       "a session refused the cache for its width never"
+                       & " asked again once the width was forgotten");
+            end;
+
+            L.Close (Long);
+         end;
          Model_Runner.Backend.Device.Close;
       end;
 
       B.Free (Image);
-   end A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up;
+   end A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One;
 
    ----------------------------------------------------------
    -- A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said --
@@ -12561,10 +12592,10 @@ package body Tests.Inference_Cases is
          "a session turned out of its block of the device's cache writes "
          & "it back and says what it said before");
       Register_Routine
-        (T, A_Second_Width_Takes_The_Cache_When_The_First_Gives_It_Up'Access,
-         "a session of another width is refused the device's cache while a "
-         & "block of the first width is held, and takes it when the last "
-         & "one is given back");
+        (T, A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One'Access,
+         "a session that keeps less than a block of the device's cache "
+         & "holds is seated in one beside a wider session, and one that "
+         & "keeps more waits for the width to be forgotten");
       Register_Routine
         (T, A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said'Access,
          "a hybrid turned out of its seat in the device's room of rings "

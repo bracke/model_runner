@@ -251,7 +251,18 @@ gone unasked since before the asking session's previous token, so seventeen
 sessions reading a token apiece in turn leave each other alone and the
 seventeenth does without, which costs one session its speed rather than all
 seventeen a cache carried back and forth every token. `--show-stats` says how
-often either happened. That write was the whole of its cache, which is the room it has rather
+often either happened, and `tests speed --turns N` measures it: N sessions
+taking turns a token apiece, which is the shape the sixteen blocks are a
+limit on where a round is not. On TinyLlama-1.1B Q8_0 at a context of 512,
+sixteen sessions read 49.2 tokens a second and turn no block over, seventeen
+read 47.9 and turn one, and thirty-two read 43.4 and turn sixteen. Take the
+guard away and the same thirty-two turn a block over 528 times instead of
+sixteen; at a 1,419-token context, twenty sessions read 7.8 tokens a second
+without the guard against 42.2 with it, which is a 64-megabyte cache written
+across the bus every token against four writes in the run. Where a session
+holds little the churn is nearly free and the guard costs about three per
+cent -- the unguarded thirty-two read 45.0 against 43.4 at a context of 512
+-- which is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
 that layer still holds. A round stamps every member before any of them asks,

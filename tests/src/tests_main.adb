@@ -2726,6 +2726,26 @@ begin
             return;
          end if;
 
+         --  Several sessions taking turns rather than stepped together,
+         --  which is where the device's sixteen blocks of cache are a
+         --  limit: seventeen sessions is sixteen blocks and one session
+         --  without, and more than that is a block turned over for every
+         --  one turned into.
+         if Option ("--turns", "") /= "" then
+            Speed_Run.Turns
+              (Path        => Option ("--model", ""),
+               Prompt_Path =>
+                 Option ("--prompt-file",
+                         "../tests/fixtures/speed-prompt-short.txt"),
+               Tokens      => Number ("--max-tokens", 12),
+               Threads     => Number ("--threads",
+                                      Model_Runner.Platform.Core_Count - 1),
+               Sessions    => Number ("--turns", 1),
+               Context     => Whole ("--context-size"),
+               Backend     => Backend_Of (Option ("--backend", "cpu")));
+            return;
+         end if;
+
          if Option ("--round", "") /= "" then
             Speed_Run.Round
               (Path        => Option ("--model", ""),

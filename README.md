@@ -2040,6 +2040,40 @@ one gone longest unasked, and the session turned out writes what it holds
 back into whatever it is given next. A run that turns one over now and again
 and a run that turns one over every token used to read alike.
 
+What that costs is measured by `tests speed --turns N`, which opens N
+sessions and has them take turns a token apiece -- the shape the sixteen
+blocks are a limit on, where a round of at most sixteen members is not. On
+the same TinyLlama-1.1B Q8_0 at a context of 512:
+
+| Sessions taking turns | tokens a second | blocks turned over |
+| --- | ---: | ---: |
+| 8 | 49.2 | 0 |
+| 16 | **49.2** | 0 |
+| 17 | 47.9 | 1 |
+| 20 | 46.4 | 4 |
+| 32 | 43.4 | 16 |
+
+A block is taken only from a session that has gone unasked since before the
+asking session's own previous token, so thirty-two sessions turn sixteen
+blocks over in the whole run rather than one a token. **Without that guard
+the same run turns a block over 528 times**, and where the cache is long the
+difference is the measurement: twenty sessions of a 1,419-token context read
+**7.8 tokens a second unguarded against 42.2 guarded**, a 64-megabyte cache
+written across the bus every token (84 turnovers in 80 tokens) against four
+writes in the run. The guard costs something in the other corner -- where a
+session holds twenty-odd positions the churn is nearly free, and the
+unguarded thirty-two above read 45.0 against 43.4 -- and three per cent there
+is what not falling off the cliff is worth. The unguarded readings were taken
+with the guard disabled in a build made for the purpose, which is the only
+way to take them.
+
+A block also holds a session that keeps less than it does: the buffer is
+dealt in blocks of the first session's width, and a shorter context, or a
+second model with a smaller cache, sits at the front of a block and leaves
+the rest unread rather than being refused the device. Only a session that
+keeps more waits, and it waits for the last block of the narrower width to
+be given back.
+
 The same question gets the same answer where the shape is the model's
 rather than the context's: the packed attention reads four elements of a
 row at a time out of one word, so it reads heads a whole number of fours

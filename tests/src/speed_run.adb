@@ -1287,4 +1287,263 @@ package body Speed_Run is
       Shards.Close (Source);
    end Round;
 
+   -----------
+   -- Turns --
+   -----------
+
+   procedure Turns
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Sessions    : Positive;
+      Context     : Natural := 0;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+      Source    : aliased Shards.Shard_Set;
+      Container : Containers.Container;
+      Engine    : aliased L.Model;
+      Status    : E.Error_Info;
+
+      function Said (Value : Duration) return String
+      is (T.Image (Long_Float (Value), 3) & " s");
+
+      procedure Say (Text : String);
+
+      procedure Say (Text : String) is
+      begin
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Text);
+      end Say;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         Say ("no model at that path; nothing measured");
+         return;
+      end if;
+
+      Shards.Open_Model (Source, Container, Path, Status => Status);
+      if E.Is_Error (Status) then
+         Shards.Close (Source);
+         Say ("the model would not parse");
+         return;
+      end if;
+
+      if Backend = Model_Runner.Backend.Backend_Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            if not Ready then
+               Containers.Close (Container);
+               Shards.Close (Source);
+               Say ("no device answered");
+               return;
+            end if;
+         end;
+      end if;
+
+      L.Prepare
+        (Engine, Container, Source, Backend => Backend,
+         Threads => Threads, Status => Status);
+      if E.Is_Error (Status) then
+         Containers.Close (Container);
+         Shards.Close (Source);
+         Say ("the model would not prepare");
+         return;
+      end if;
+
+      declare
+         Settings : constant L.Configuration := L.Config (Engine);
+         Width    : constant N.Element_Count :=
+           N.Element_Count (Settings.Vocabulary);
+
+         Text : constant String :=
+           (if Prompt_Path = "" then "The capital of France is"
+            else Project_Tools.Files.Read_Raw_File (Prompt_Path));
+
+         Held : Vocab.Token_Array (1 .. 4096);
+         Last : Natural;
+
+         type Session_Room is array (1 .. Sessions) of aliased L.Session;
+
+         Live : Session_Room;
+         Next : Vocab.Token_Array (1 .. Sessions) := [others => 0];
+
+         Row   : Room_Of.Real_Array_Access := null;
+         Aside : Room_Of.Real_Array_Access := null;
+
+         Started  : Ada.Real_Time.Time;
+         Spent    : Duration := 0.0;
+         Produced : Natural := 0;
+
+         Mark : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+
+         Team  : aliased CPU.Pool (CPU.Worker_Count (Threads));
+         Where : constant CPU.Pool_Reference :=
+           (if Threads = 1 then null else Team'Unchecked_Access);
+
+         Watching : constant Boolean :=
+           Backend = Model_Runner.Backend.Backend_Device
+           and then Device_Clock.Offered;
+
+         Watch : Device_Clock.Watcher;
+         Clock : Device_Clock.Reading;
+
+         --  What the sessions cost each other: blocks of the device's
+         --  cache, and seats in its room of rings, turned over from one
+         --  session to another. Read before and after, because a device
+         --  opened once for a whole sitting counts from its open.
+         Blocks_Before : constant Natural :=
+           Model_Runner.Backend.Device.Blocks_Turned;
+         Rings_Before  : constant Natural :=
+           Model_Runner.Backend.Device.Rings_Turned;
+      begin
+         Vocab.Encode
+           (L.Vocabulary (Engine).all, Text,
+            Add_Beginning => True, Add_End => False,
+            Target => Held, Last => Last, Status => Status);
+
+         if E.Is_Error (Status) or else Last = 0 then
+            Say ("the prompt would not encode");
+            L.Close (Engine, Status);
+            Containers.Close (Container);
+            Shards.Close (Source);
+            return;
+         end if;
+
+         Room_Of.Allocate (Width, Row);
+         Room_Of.Allocate (Width, Aside);
+
+         --  Each session opened and given the prompt, a token shorter for
+         --  each after the first so that they sit at different positions,
+         --  as a server's callers do.
+         for Index in Live'Range loop
+            L.Open (Live (Index), Engine, Context => Context,
+                    Workers => Where, Status => Status);
+            exit when E.Is_Error (Status);
+
+            declare
+               At_Token : Natural := 1;
+            begin
+               while At_Token <= Last loop
+                  declare
+                     Upto : constant Natural :=
+                       Natural'Min (At_Token + 127, Last);
+                  begin
+                     L.Evaluate_Batch
+                       (Live (Index), Engine,
+                        Held (At_Token
+                              + (if At_Token = 1
+                                 then Natural'Min (Index - 1, Last - 1)
+                                 else 0)
+                              .. Upto),
+                        Aside.all, Status => Status);
+                     exit when E.Is_Error (Status);
+                     At_Token := Upto + 1;
+                  end;
+               end loop;
+            end;
+
+            exit when E.Is_Error (Status);
+
+            --  The first token this session will say, greedily off its
+            --  own prompt.
+            declare
+               Best : N.Element_Count := 0;
+            begin
+               for Place in 1 .. Width - 1 loop
+                  if Aside.all (Place) > Aside.all (Best) then
+                     Best := Place;
+                  end if;
+               end loop;
+
+               Next (Index) := Vocab.Token_Id (Best);
+            end;
+         end loop;
+
+         Watch.Start (Watching);
+
+         if E.Is_Error (Status) then
+            Say ("a session would not read the prompt: "
+                 & E.Error_Code'Image (Status.Code));
+         else
+            Started := Ada.Real_Time.Clock;
+
+            for Turn in 1 .. Tokens loop
+               for Index in Live'Range loop
+                  L.Evaluate
+                    (Live (Index), Engine, Next (Index), Row.all,
+                     Status => Status);
+                  exit when E.Is_Error (Status);
+
+                  Produced := Produced + 1;
+
+                  declare
+                     Best : N.Element_Count := 0;
+                  begin
+                     for Place in 1 .. Width - 1 loop
+                        if Row.all (Place) > Row.all (Best) then
+                           Best := Place;
+                        end if;
+                     end loop;
+
+                     Next (Index) := Vocab.Token_Id (Best);
+
+                     Mark :=
+                       (Mark xor Interfaces.Unsigned_64 (Best))
+                       * 16#0000_0100_0000_01B3#;
+                  end;
+               end loop;
+
+               exit when E.Is_Error (Status);
+            end loop;
+
+            Spent :=
+              Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+         end if;
+
+         Watch.Stop (Clock);
+
+         if E.Is_Error (Status) then
+            Say ("a turn failed: " & E.Error_Code'Image (Status.Code));
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "sessions" & Integer'Image (Sessions)
+               & ", prompt" & Integer'Image (Last)
+               & " tokens, " & Integer'Image (Produced)
+               & " taken in turn in " & Said (Spent) & " -- "
+               & Said (Spent / Duration (Natural'Max (Produced, 1)))
+               & " a token, "
+               & T.Image
+                   (Long_Float (Produced) / Long_Float (Spent), 1)
+               & " a second, blocks turned over"
+               & Integer'Image
+                   (Model_Runner.Backend.Device.Blocks_Turned
+                    - Blocks_Before)
+               & ", rings"
+               & Integer'Image
+                   (Model_Runner.Backend.Device.Rings_Turned - Rings_Before)
+               & ", mark " & Shown (Mark)
+               & Device_Clock.Shown (Clock));
+         end if;
+
+         for Index in Live'Range loop
+            L.Close (Live (Index));
+         end loop;
+
+         if Where /= null then
+            CPU.Close (Team);
+         end if;
+
+         Room_Of.Free (Row);
+         Room_Of.Free (Aside);
+      end;
+
+      L.Close (Engine, Status);
+      Containers.Close (Container);
+      Shards.Close (Source);
+   end Turns;
+
 end Speed_Run;

@@ -83,6 +83,44 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False);
 
+   --  Several sessions taking turns, a token each, rather than stepped
+   --  together.
+   --
+   --  What Round measures is a round: every member's token in one pass,
+   --  which is what a server does when its callers arrive together. This
+   --  measures the other shape -- callers whose turns do not line up, each
+   --  asking for a token of its own -- and it is the one the device's
+   --  sixteen blocks of cache are a limit on. Seventeen sessions taking
+   --  turns is sixteen blocks and a session without one; more than that is
+   --  a session turned out of a block for every one turned into it, and
+   --  what that costs is a cache written across the bus.
+   --
+   --  Greedy, each session on its own answer, so a session says the same
+   --  thing whatever the others do and the digest holds every turn.
+   --
+   --  Task safety: run from one task.
+   --
+   --  @param Path The model file.
+   --  @param Prompt_Path The prompt every session is given, or the empty
+   --    string for a short one built in.
+   --  @param Tokens Turns each session takes.
+   --  @param Threads Workers the sessions share.
+   --  @param Sessions How many take turns.
+   --  @param Context How long a context each session keeps, or zero for
+   --    the model's own. Sixteen blocks of a long context is memory the
+   --    device may not have, and this is how a measurement of the turns
+   --    asks for less of it.
+   --  @param Backend Which backend runs the products.
+   procedure Turns
+     (Path        : String;
+      Prompt_Path : String;
+      Tokens      : Positive;
+      Threads     : Positive;
+      Sessions    : Positive;
+      Context     : Natural := 0;
+      Backend     : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU);
+
    --  Serve several callers from one model, arriving and leaving.
    --
    --  What Round measures is the primitive: a fixed set of members stepped

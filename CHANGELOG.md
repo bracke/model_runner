@@ -267,6 +267,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A block of the device's cache holds a session that keeps less than it
+  does.** The buffer is dealt out in blocks of one width, and a session of
+  another width -- a second model, or the same one asked for a shorter
+  context -- was refused the cache and attended every layer on the processor
+  for as long as any session of the first width was open, however idle that
+  session was. A block has to hold what a session keeps in it, so a session
+  that keeps less takes one and leaves the rest of it unread; only a session
+  that keeps more still waits for the width to be forgotten with the last
+  block. A round's rows read the layer offsets of the member the round is
+  made on, so a round whose members are not laid out alike now goes to the
+  processor rather than reading each other's layers.
+- **A measurement of what the sixteen blocks cost when more than sixteen
+  sessions want them.** `tests speed --turns N` opens N sessions, gives each
+  the prompt, and has them take turns a token apiece -- which is the shape
+  the blocks are a limit on, where a round is not. On TinyLlama-1.1B Q8_0 at
+  a context of 512, sixteen sessions read 49.2 tokens a second with no block
+  turned over, seventeen read 47.9 with one, and thirty-two read 43.4 with
+  sixteen. The guard is what keeps those numbers flat: without it the same
+  thirty-two sessions turn a block over 528 times rather than 16, and at a
+  1,419-token context twenty sessions read **7.8 tokens a second against
+  42.2** -- a 64-megabyte cache written across the bus every token against
+  four writes in the whole run. Where a session's cache is small the churn
+  is nearly free and doing without a block costs a little: at a context of
+  512 the unguarded thirty-two read 45.0 against 43.4. The guard keeps the
+  cliff away and pays the three per cent.
 - **A seventeenth hybrid session is dealt a seat in the room of rings, and
   no session turns another out while both are busy.** The room a hybrid's
   rings of states are seated in holds sixteen seats as the cache holds

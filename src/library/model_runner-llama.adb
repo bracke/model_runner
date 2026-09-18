@@ -5608,13 +5608,23 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  Every session sharing the buffer must agree on how wide a block
-      --  is. One that does not -- another model, or the same one with
-      --  another context -- is refused the device's cache and attends on
-      --  the host, which is the answer it would have got there anyway.
+      --  A block has to hold what this session keeps in it. The buffer is
+      --  dealt in blocks of one width -- the width the first session to
+      --  take one asked for -- and a session that wants more than that is
+      --  refused the device's cache and attends on the host, until the
+      --  last block goes and the width is forgotten with it.
+      --
+      --  A session that wants less takes a block and leaves the rest of it
+      --  unread, which is what a second model of a smaller context, or the
+      --  same model asked for a shorter one, gets. It used to be refused
+      --  for the width not matching, and to stay refused for as long as
+      --  any session of the first width was open, however idle: a server
+      --  holding one long conversation served every short one on the
+      --  processor.
+      --
       --  Asked before a block is looked for, because a session that cannot
       --  use one must not turn another out of one.
-      if Block_Span /= 0 and then Block_Span /= Block_Span_Of (Item.all) then
+      if Block_Span /= 0 and then Block_Span_Of (Item.all) > Block_Span then
          return;
       end if;
 
@@ -5685,16 +5695,21 @@ package body Model_Runner.Llama is
       end if;
 
       declare
-         Span : constant Element_Count := Block_Span_Of (Item.all);
+         --  What this session keeps, and what a block holds: the same for
+         --  the session that set the width and less for any narrower one
+         --  after it.
+         Span  : constant Element_Count := Block_Span_Of (Item.all);
+         Dealt : constant Element_Count :=
+           (if Block_Span = 0 then Span else Block_Span);
 
          --  Room for the blocks dealt out so far, for the table a round
          --  reads at the end of them, and for a layer's sinks after that.
          Wanted : constant Element_Count :=
-           Element_Count (Seat + 1) * Span
+           Element_Count (Seat + 1) * Dealt
            + Element_Count (Model_Runner.Backend.Device.Table_Room)
            + Element_Count (Model_Runner.Backend.Device.Sink_Room);
 
-         Base : constant Element_Count := Element_Count (Seat) * Span;
+         Base : constant Element_Count := Element_Count (Seat) * Dealt;
 
          Written : Boolean := True;
       begin
@@ -5867,9 +5882,13 @@ package body Model_Runner.Llama is
    end Sinks_Ready;
 
    --  Where a session's cache begins in the device's buffer.
+   --  Where a session's block begins, in elements: its seat times the
+   --  width the buffer is dealt in, which is the widest session's rather
+   --  than this one's. A session narrower than that sits at the front of
+   --  its block and leaves the rest of it unread.
    function Block_Base (Item : Session) return Element_Count
    is (if Item.Seat < 0 then 0
-       else Element_Count (Item.Seat) * Block_Span_Of (Item));
+       else Element_Count (Item.Seat) * Block_Span);
 
    --  A layer's rows of a packed session, read back out of the device's
    --  block into the host's copy: the bytes the device packed and their
@@ -14658,12 +14677,23 @@ package body Model_Runner.Llama is
       --  row that could not be seated sends the whole round to the host,
       --  and the layer has to know that before it starts rather than after
       --  it has written half a round's positions to a device.
+      --  And every member laid out alike. The table says where each row's
+      --  block begins and where in its layer the row sits; where a layer's
+      --  rows begin inside a block it does not say, that being the layer's
+      --  offset and the same for every row -- so two members of different
+      --  contexts, which the cache now seats side by side, would read each
+      --  other's layers. A round of members that are not laid out alike
+      --  goes to the host, which answers the same and says so nowhere.
       if Rounding
         and then Item.Held in Exact | Eighth | Fourth
         and then Members <= Element_Count (Model_Runner.Backend.Device
                                              .Block_Limit)
         and then Count * Element_Count (Item.Owner.Settings.Layers)
                  <= Element_Count (Model_Runner.Backend.Device.Table_Rows)
+        and then (for all Which in 0 .. Count - 1 =>
+                    Held_By (Which) /= null
+                    and then Block_Span_Of (Held_By (Which).all)
+                             = Block_Span_Of (Item))
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
