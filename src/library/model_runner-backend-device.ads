@@ -451,6 +451,14 @@ package Model_Runner.Backend.Device is
    function Attends_Packed_Heads
      (Head_Size : Natural; Value_Size : Natural) return Boolean;
 
+   --  The widest head the device's attention keeps room for, packed or
+   --  exact. A model whose heads are wider attends on the processor,
+   --  every layer, whatever its cache is kept in -- a kernel that wrote
+   --  past what it kept would be worse than one that says no.
+   --
+   --  @return The width in elements, or zero where no device is open.
+   function Attention_Head_Room return Natural;
+
    --  Attend over a cache kept packed on the device -- a byte an element
    --  with a scale a row, or a nibble an element with a scale a block of
    --  thirty-two -- as Attend does over the exact one. The rows' bases

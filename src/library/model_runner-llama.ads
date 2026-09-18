@@ -1734,6 +1734,29 @@ package Model_Runner.Llama is
       Value_Size : out Natural;
       Fits       : out Boolean);
 
+   --  And whether the device's attention keeps room for this model's
+   --  heads at all, which is asked of every session rather than only a
+   --  packed one: a value head wider than the room the kernels keep is
+   --  attended on the processor, every layer, however the cache is kept
+   --  -- a kernel that wrote past what it kept would be worse than one
+   --  that says no. The products stay on the device and the run is
+   --  slower than one whose heads fit, with nothing else to show for it.
+   --
+   --  The sizes are zero and Fits is True where the backend is not the
+   --  device: nothing is refused there.
+   --
+   --  @param Item Open session.
+   --  @param Head_Size Receives the elements a key head holds.
+   --  @param Value_Size Receives the elements a value head holds.
+   --  @param Room Receives the widest head the device keeps room for.
+   --  @param Fits Receives False only where the heads are wider.
+   procedure Attention_Heads_Room
+     (Item       : Session;
+      Head_Size  : out Natural;
+      Value_Size : out Natural;
+      Room       : out Natural;
+      Fits       : out Boolean);
+
    --  Whether the model carries a block past its stack for drafting the
    --  token after the next, and the session can run it: a hybrid file's
    --  nextn block, and a session holding its cache exactly.

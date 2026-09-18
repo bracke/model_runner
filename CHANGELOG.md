@@ -246,6 +246,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Heads the device's attention keeps no room for are said at open as
+  well.** A value head wider than the room the kernels keep -- 256
+  elements -- is attended on the processor, every layer, whatever the
+  cache is kept in: a kernel that wrote past what it kept would be
+  worse than one that says no. The products stay on the device, so such
+  a run is slower than one whose heads fit with nothing else to show
+  for it, and now it says how wide the heads are against how wide a
+  head the device keeps room for.
 - **A packed context the device's attention will not read is said at
   open too, and no longer takes a block of its cache.** That kernel
   reads four elements of a row at a time out of one word, so a head is a

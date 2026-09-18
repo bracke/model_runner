@@ -5331,6 +5331,38 @@ package body Model_Runner.Llama is
    -- Context_Room --
    ------------------
 
+   ---------------------------
+   -- Attention_Heads_Room --
+   ---------------------------
+
+   procedure Attention_Heads_Room
+     (Item       : Session;
+      Head_Size  : out Natural;
+      Value_Size : out Natural;
+      Room       : out Natural;
+      Fits       : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Head_Size := 0;
+      Value_Size := 0;
+      Room := 0;
+      Fits := True;
+
+      if Item.Owner = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+      then
+         return;
+      end if;
+
+      Head_Size := Item.Owner.Settings.Head_Size;
+      Value_Size := Item.Owner.Settings.Value_Size;
+      Room := Model_Runner.Backend.Device.Attention_Head_Room;
+      Fits :=
+        Room = 0
+        or else (Head_Size <= Room and then Value_Size <= Room);
+   end Attention_Heads_Room;
+
    ------------------------
    -- Packed_Heads_Room --
    ------------------------

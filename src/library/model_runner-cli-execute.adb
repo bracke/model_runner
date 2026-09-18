@@ -2384,6 +2384,33 @@ package body Model_Runner.CLI.Execute is
             end if;
          end;
 
+         --  And heads the device's attention keeps no room for at all,
+         --  whatever the cache is kept in: a kernel that wrote past what
+         --  it kept would be worse than one that says no, so such a
+         --  model attends on the processor every layer while its
+         --  products stay on the device -- and the run is slower than
+         --  one whose heads fit with nothing else to show for it.
+         declare
+            Head_Size, Value_Size, Room : Natural;
+            Fits                        : Boolean;
+         begin
+            L.Attention_Heads_Room
+              (Session, Head_Size, Value_Size, Room, Fits);
+
+            if not Fits then
+               Screen.Put_Message
+                 ("cli.note.heads_off_device",
+                  [Loc.Named
+                     ("value",
+                      Model_Runner.Text.Image
+                        (Long_Long_Integer
+                           (Natural'Max (Head_Size, Value_Size)))),
+                   Loc.Named
+                     ("total",
+                      Model_Runner.Text.Image (Long_Long_Integer (Room)))]);
+            end if;
+         end;
+
          --  And a packed context the device's attention will not read,
          --  which is the model's shape rather than the context's size:
          --  the kernel takes four elements of a row at a time out of one

@@ -984,6 +984,9 @@ package body Model_Runner.Backend.Device is
    is (Ready_Now
        and then Products.Takes_Packed_Heads (Engine, Head_Size, Value_Size));
 
+   function Attention_Head_Room return Natural
+   is (if Ready_Now then Products.Attention_Room else 0);
+
    -------------------
    -- Attend_Packed --
    -------------------

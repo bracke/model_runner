@@ -3185,6 +3185,61 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Close;
       end;
 
+      --  And heads wider than the room the device's attention keeps: it
+      --  attends on the processor for them, every layer, while the
+      --  products stay on the device, and the run says how wide they are
+      --  against how wide a head it keeps room for.
+      B.Free (Image);
+      Tiny_Model.Build (Image, Tiny_Model.Q4_K, Head_Factor => 3);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Live   : L.Session;
+         Status : E.Error_Info;
+
+         Head_Size, Value_Size, Room : Natural;
+         Fits                        : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a session of a wide-headed model did not open: "
+                 & E.Error_Code'Image (Status.Code));
+
+         L.Attention_Heads_Room (Live, Head_Size, Value_Size, Room, Fits);
+
+         Assert (Head_Size > Room,
+                 "the wide fixture's heads" & Natural'Image (Head_Size)
+                 & " are inside the room the device keeps,"
+                 & Natural'Image (Room) & ", so this says nothing");
+         Assert (not Fits,
+                 "a model whose heads are" & Natural'Image (Head_Size)
+                 & " wide says they fit the device's attention, which "
+                 & "keeps room for" & Natural'Image (Room));
+
+         L.Close (Live);
+         Model_Runner.Backend.Device.Close;
+      end;
+
       --  And jina-bert-v2's code variant, whose three normalizations more
       --  -- over the whole of the queries and the keys, and the attention
       --  sublayer's residual joined again -- are not steps of the
@@ -3247,6 +3302,23 @@ package body Tests.Inference_Cases is
                Reads                 : Boolean;
             begin
                L.Packed_Heads_Room (Live, Head_Size, Value_Size, Reads);
+
+               --  And the room the device's attention keeps, which this
+               --  fixture's four-wide heads are far inside.
+               declare
+                  Wide_Head, Wide_Value, Room : Natural;
+                  Inside                      : Boolean;
+               begin
+                  L.Attention_Heads_Room
+                    (Live, Wide_Head, Wide_Value, Room, Inside);
+                  Assert (Room > 0,
+                          "the device's attention says it keeps room for no "
+                          & "head at all");
+                  Assert (Inside,
+                          "the fixture's heads" & Natural'Image (Wide_Head)
+                          & " wide are past the room the device keeps,"
+                          & Natural'Image (Room));
+               end;
                Assert (Head_Size = Tiny_Model.Head_Size
                        and then Value_Size = Tiny_Model.Head_Size,
                        "a packed session says its heads are"
