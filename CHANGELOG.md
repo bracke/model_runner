@@ -55,6 +55,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Ten lines of `help embed` were their own names in angle brackets.**
+  The rotation options, the yarn options and the three device options
+  are taken by `embed` as well as by `run`, and the catalog had lines
+  for them only under `run`: a message the runtime cannot find renders
+  as `<help.embed.device>` and the rest, which is the diagnostic for a
+  diagnostic that failed. The lines are there now, and a repository
+  check asks the other direction as well -- every key the help will ask
+  for exists -- so the next option added to a second command fails the
+  gate rather than printing its own name.
 - **A packed cache whose rows are narrower than a word kept every layer
   off the device's whole road.** The step that packs a layer's keys and
   values into the cache writes a word at a time, and a row that does not
@@ -247,7 +256,10 @@ Keep a Changelog and the project uses semantic versioning.
 ### Added
 
 - **What the device will not do with a model is one question with one
-  answer.** The three things that keep a session's attention off the
+  answer, asked by every command that opens a session.** `embed` opened
+  one and said nothing, so a model whose attention the device will not
+  run said so under `run` and not under `embed`; the answer is one
+  procedure now and both ask it. The three things that keep a session's attention off the
   device -- heads wider than the room a kernel keeps, a packed cache
   whose rows that kernel does not read, and a context past what one
   storage buffer holds -- were asked one at a time, and a model that

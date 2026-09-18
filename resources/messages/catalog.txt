@@ -164,6 +164,16 @@ en.help.embed.verbose =   --verbose               report progress and detail on 
 en.help.embed.locale =   --locale NAME           locale for program messages
 en.help.embed.color =   --color=MODE            colour output: {value}
 en.help.embed.streams = The vector goes to standard output, one component a line. Diagnostics go to standard error.
+en.help.embed.rope_scaling =   --rope-scaling NAME     stretch the rotation: none, linear, yarn
+en.help.embed.rope_scale =   --rope-scale N          stretch it by this; 2 is twice the context
+en.help.embed.rope_freq_base =   --rope-freq-base N      the angle the first pair turns by
+en.help.embed.yarn_orig_context =   --yarn-orig-context N   the context the model was trained on
+en.help.embed.yarn_attn_factor =   --yarn-attn-factor N    what yarn attenuates the whole by
+en.help.embed.yarn_beta_fast =   --yarn-beta-fast N      the fast end of the band yarn mixes across
+en.help.embed.yarn_beta_slow =   --yarn-beta-slow N      the slow end of it
+en.help.embed.device_memory =   --device-memory SIZE    device memory for the weights; 0 reads them where they lie
+en.help.embed.device_patience =   --device-patience N     seconds to wait for one product before giving up on the device
+en.help.embed.device =   --device N              which of the host's devices to compute on; inspect lists them
 
 en.help.help.usage = Usage: model_runner help [COMMAND]
 en.help.help.summary = Show help for the program or for one command.
@@ -679,6 +689,16 @@ da.help.embed.verbose = --verbose               rapportér fremdrift og detaljer
 da.help.embed.locale = --locale NAVN           sprog for programmets meddelelser
 da.help.embed.color = --color=TILSTAND        farvelæg output: {value}
 da.help.embed.streams = Vektoren går til standard ud, én komponent pr. linje. Diagnostik går til standard fejl.
+da.help.embed.rope_scaling = --rope-scaling NAVN     stræk rotationen: none, linear, yarn
+da.help.embed.rope_scale = --rope-scale N          stræk den med dette; 2 er dobbelt kontekst
+da.help.embed.rope_freq_base = --rope-freq-base N      vinklen det første par drejer med
+da.help.embed.yarn_orig_context = --yarn-orig-context N   den kontekst modellen blev trænet på
+da.help.embed.yarn_attn_factor = --yarn-attn-factor N    hvad yarn dæmper det hele med
+da.help.embed.yarn_beta_fast = --yarn-beta-fast N      den hurtige ende af det bånd yarn blander over
+da.help.embed.yarn_beta_slow = --yarn-beta-slow N      den langsomme ende af det
+da.help.embed.device_memory = --device-memory STØRRELSE  enhedshukommelse til vægtene; 0 læser dem hvor de ligger
+da.help.embed.device_patience = --device-patience N     sekunder at vente på ét produkt før enheden opgives
+da.help.embed.device = --device N              hvilken af maskinens enheder der regnes på; inspect viser dem
 
 da.help.help.usage = Brug: model_runner help [KOMMANDO]
 da.help.help.summary = Vis hjælp til programmet eller til en enkelt kommando.
@@ -1280,6 +1300,16 @@ qps.help.embed.verbose = ⟦  --verbose               réþórŧ þrógréßß �
 qps.help.embed.locale = ⟦  --locale NAME           ĺóçáĺé fór þrógrám méßßágéß⟧
 qps.help.embed.color = ⟦  --color=MODE            çóĺóúr óúŧþúŧ: {value}⟧
 qps.help.embed.streams = ⟦Ŧhé véçŧór góéß ŧó ßŧáñðárð óúŧþúŧ, óñé çómþóñéñŧ á ĺíñé.⟧
+qps.help.embed.rope_scaling = ⟦  --rope-scaling NAME     ßŧŕéŧçh ŧhé ŕóŧáŧíóñ: ñóñé, ĺíñéáŕ, ýáŕñ⟧
+qps.help.embed.rope_scale = ⟦  --rope-scale N          ßŧŕéŧçh íŧ bý ŧhíß; 2 íß ŧwíçé ŧhé çóñŧéxŧ⟧
+qps.help.embed.rope_freq_base = ⟦  --rope-freq-base N      ŧhé áñgĺé ŧhé fíŕßŧ páíŕ ŧúŕñß bý⟧
+qps.help.embed.yarn_orig_context = ⟦  --yarn-orig-context N   ŧhé çóñŧéxŧ ŧhé móðéĺ wáß ŧŕáíñéð óñ⟧
+qps.help.embed.yarn_attn_factor = ⟦  --yarn-attn-factor N    wháŧ ýáŕñ áŧŧéñúáŧéß ŧhé whóĺé bý⟧
+qps.help.embed.yarn_beta_fast = ⟦  --yarn-beta-fast N      ŧhé fáßŧ éñð óf ŧhé báñð ýáŕñ míxéß áçŕóßß⟧
+qps.help.embed.yarn_beta_slow = ⟦  --yarn-beta-slow N      ŧhé ßĺów éñð óf íŧ⟧
+qps.help.embed.device_memory = ⟦  --device-memory ŠÍZÉ    ðévíçé mémóŕý fóŕ ŧhé wéíghŧß; 0 ŕéáðß ŧhém whéŕé ŧhéy ĺíé⟧
+qps.help.embed.device_patience = ⟦  --device-patience Ñ     ßéçóñðß ŧó wáíŧ fóŕ óñé próðúçŧ ßéfóŕé gíviñg úp óñ ŧhé ðévíçé⟧
+qps.help.embed.device = ⟦  --device N              whíçh óf ŧhé hóßŧ'ß ðévíçéß ŧó çómpúŧé óñ; íñßpéçŧ ĺíßŧß ŧhém⟧
 
 qps.help.help.usage = ⟦Úßágé: model_runner héĺp [ÇÓMMÁÑÐ]⟧
 qps.help.help.summary = ⟦Šhów héĺp fóŕ ŧhé pŕógŕám óŕ fóŕ óñé çómmáñð.⟧

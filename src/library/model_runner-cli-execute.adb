@@ -1039,6 +1039,58 @@ package body Model_Runner.CLI.Execute is
       return Result;
    end Session_Bounds;
 
+   --  What the device will not do with this session, said as it opens
+   --  rather than left to be inferred from a run that was slower than it
+   --  looked: three things keep a session's attention off the device --
+   --  heads wider than the room a kernel keeps, a packed cache whose
+   --  rows that kernel does not read, and a context past what one
+   --  storage buffer holds -- and the products stay there through all of
+   --  them, so every other number the run reports reads as it does when
+   --  the whole model runs on the device.
+   --
+   --  Said for every session a command opens for the model it was given:
+   --  a run's and an embedding's alike, the answer being the same
+   --  question about the same device. Nothing is said for a session that
+   --  opened on another backend, or for one the device takes whole.
+   --
+   --  @param Screen Where notes go.
+   --  @param Session Session just opened.
+   procedure Say_Device_Room
+     (Screen  : in out Pres.Console;
+      Session : L.Session)
+   is
+      Why         : L.Device_Limit;
+      Asked, Kept : Interfaces.Unsigned_64;
+
+      function Shown (Value : Interfaces.Unsigned_64) return String
+      is (Model_Runner.Text.Image (Long_Long_Integer (Value)));
+   begin
+      L.Device_Room (Session, Why, Asked, Kept);
+
+      case Why is
+         when L.Device_Takes_All =>
+            null;
+
+         when L.Heads_Past_Room =>
+            Screen.Put_Message
+              ("cli.note.heads_off_device",
+               [Loc.Named ("value", Shown (Asked)),
+                Loc.Named ("total", Shown (Kept))]);
+
+         when L.Packed_Heads_Unread =>
+            Screen.Put_Message
+              ("cli.note.packed_heads_off_device",
+               [Loc.Named ("value", Shown (Asked)),
+                Loc.Named ("total", Shown (Kept))]);
+
+         when L.Context_Past_Bound =>
+            Screen.Put_Message
+              ("cli.note.context_off_device",
+               [Loc.Named ("value", Shown (Asked)),
+                Loc.Named ("total", Shown (Kept))]);
+      end case;
+   end Say_Device_Room;
+
    --  What the chosen backend says it can do. Asked of the backend rather
    --  than taken from the CPU pool's constants, so that a second backend's
    --  numbers are the numbers used -- for the worker count and for whether a
@@ -2359,47 +2411,7 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
-         --  What the device will not do with this model, said before the
-         --  run rather than left to be inferred from one that was slower
-         --  than it looked. Three things keep attention off it -- heads
-         --  wider than the room a kernel keeps, a packed cache whose rows
-         --  that kernel does not read, and a context past what one
-         --  storage buffer holds -- and the products stay there through
-         --  all of them, so every other number the run reports reads as
-         --  it does when the whole model runs on the device. The engine
-         --  says which of the three decides, and one line says it.
-         declare
-            Why         : L.Device_Limit;
-            Asked, Kept : Interfaces.Unsigned_64;
-
-            function Shown (Value : Interfaces.Unsigned_64) return String
-            is (Model_Runner.Text.Image (Long_Long_Integer (Value)));
-         begin
-            L.Device_Room (Session, Why, Asked, Kept);
-
-            case Why is
-               when L.Device_Takes_All =>
-                  null;
-
-               when L.Heads_Past_Room =>
-                  Screen.Put_Message
-                    ("cli.note.heads_off_device",
-                     [Loc.Named ("value", Shown (Asked)),
-                      Loc.Named ("total", Shown (Kept))]);
-
-               when L.Packed_Heads_Unread =>
-                  Screen.Put_Message
-                    ("cli.note.packed_heads_off_device",
-                     [Loc.Named ("value", Shown (Asked)),
-                      Loc.Named ("total", Shown (Kept))]);
-
-               when L.Context_Past_Bound =>
-                  Screen.Put_Message
-                    ("cli.note.context_off_device",
-                     [Loc.Named ("value", Shown (Asked)),
-                      Loc.Named ("total", Shown (Kept))]);
-            end case;
-         end;
+         Say_Device_Room (Screen, Session);
 
          --  An option that cannot do anything here says so rather than
          --  being accepted and forgotten -- and whether it can is known only
@@ -3864,6 +3876,8 @@ package body Model_Runner.CLI.Execute is
             Fail (Condition);
             return;
          end if;
+
+         Say_Device_Room (Screen, Session);
 
          case Item.Prompt_Kind is
             when Opt.Prompt_Inline =>

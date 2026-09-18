@@ -908,6 +908,23 @@ package body Checks is
             end loop;
          end Reached;
 
+         --  Whether the catalog holds a key at all, which is the other
+         --  direction: Reached says a key nobody reads, this says a key
+         --  somebody reads and nobody wrote. A message the runtime cannot
+         --  find renders as its own name in angle brackets, so the help
+         --  for a command missing ten of them printed ten lines of
+         --  <help.embed.something> -- the diagnostic for a diagnostic
+         --  that failed, which is what this check exists to catch.
+         function Has_Key (Key : String) return Boolean is
+         begin
+            for Index in 1 .. Count loop
+               if Keys (Index).Text (1 .. Keys (Index).Last) = Key then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Has_Key;
+
          --  Mark every key a source names as a literal.
          procedure Visit_Keys (Relative : String) is
             Text : constant String := Contents (Relative);
@@ -1051,6 +1068,67 @@ package body Checks is
             if not Keys (Index).Read then
                Fail ("nothing reads the catalog key "
                      & Keys (Index).Text (1 .. Keys (Index).Last));
+            end if;
+         end loop;
+
+         --  And the other direction, for the help screens: every option a
+         --  command's help lists has a line, and every command has its
+         --  usage and summary. The registry says which options each
+         --  command takes, so the keys the help will ask for are known
+         --  here without running it.
+         --
+         --  The two commands whose help is a usage and a summary and no
+         --  options -- help and version, which take the global options
+         --  and list none of them -- are left out of the option loop,
+         --  because their screens never ask.
+         for Index in 1 .. Opt.Option_Count loop
+            if Opt.Option_Help (Index) /= "" then
+               for Kind in Opt.Command_Kind loop
+                  if Kind not in Opt.Command_None | Opt.Command_Help
+                                 | Opt.Command_Version
+                    and then Opt.Option_Commands (Index) (Kind)
+                  then
+                     declare
+                        Key : constant String :=
+                          "help." & Opt.Command_Word (Kind) & "."
+                          & Opt.Option_Help (Index);
+                     begin
+                        Result.Performed := Result.Performed + 1;
+                        if not Has_Key (Key) then
+                           Fail ("the catalog has no " & Key
+                                 & ", so that option's line in the help "
+                                 & "renders as its own name");
+                        end if;
+                     end;
+                  end if;
+               end loop;
+            end if;
+         end loop;
+
+         for Kind in Opt.Command_Kind loop
+            if Kind /= Opt.Command_None then
+               declare
+                  Word : constant String := Opt.Command_Word (Kind);
+
+                  --  Ask for one, count it, and say so where it is not
+                  --  there.
+                  procedure Wants (Key : String) is
+                  begin
+                     Result.Performed := Result.Performed + 1;
+                     if not Has_Key (Key) then
+                        Fail ("the catalog has no " & Key
+                              & ", so that line of the help renders as its "
+                              & "own name");
+                     end if;
+                  end Wants;
+               begin
+                  Wants ("help." & Word & ".usage");
+                  Wants ("help." & Word & ".summary");
+
+                  if Kind not in Opt.Command_Help | Opt.Command_Version then
+                     Wants ("help." & Word & ".options");
+                  end if;
+               end;
             end if;
          end loop;
       end;
