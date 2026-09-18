@@ -1775,6 +1775,23 @@ package Model_Runner.Platform.Device.Products is
    --  @return True when Attend_Packed can run.
    function Attends_Packed (Item : Engine) return Boolean;
 
+   --  Whether the packed kernel reads heads of this shape, which is the
+   --  part of its rule a model decides rather than a session's layout:
+   --  it reads four elements of a row at a time out of one word, so a
+   --  head is a whole number of fours, and it keeps room for a value
+   --  head of Attention_Room at most. A caller that asks before it packs
+   --  a cache knows the answer for every layer of the model, since a
+   --  model's heads are one shape.
+   --
+   --  @param Item Engine.
+   --  @param Head_Size Elements a key head holds.
+   --  @param Value_Size Elements a value head holds.
+   --  @return True where the kernel is here and reads them.
+   function Takes_Packed_Heads
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean;
+
    --  Write whole numbers into that cache.
    --
    --  A round's per-row table, which a kernel reads back with

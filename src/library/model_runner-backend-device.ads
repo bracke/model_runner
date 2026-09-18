@@ -437,6 +437,20 @@ package Model_Runner.Backend.Device is
    --  @return True when Attend_Packed can run.
    function Attends_Packed return Boolean;
 
+   --  And whether that kernel reads heads of this shape. It reads four
+   --  elements of a row at a time out of one word, so a head is a whole
+   --  number of fours, and it keeps room for a value head of 256 at
+   --  most. A model whose heads are another shape keeps its packed cache
+   --  on the processor and attends there: the answer is the same for
+   --  every layer, since a model's heads are one shape, so a caller may
+   --  ask once rather than find out a layer at a time.
+   --
+   --  @param Head_Size Elements a key head holds.
+   --  @param Value_Size Elements a value head holds.
+   --  @return True where the kernel is here and reads them.
+   function Attends_Packed_Heads
+     (Head_Size : Natural; Value_Size : Natural) return Boolean;
+
    --  Attend over a cache kept packed on the device -- a byte an element
    --  with a scale a row, or a nibble an element with a scale a block of
    --  thirty-two -- as Attend does over the exact one. The rows' bases

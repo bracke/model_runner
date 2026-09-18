@@ -5331,6 +5331,36 @@ package body Model_Runner.Llama is
    -- Context_Room --
    ------------------
 
+   ------------------------
+   -- Packed_Heads_Room --
+   ------------------------
+
+   procedure Packed_Heads_Room
+     (Item       : Session;
+      Head_Size  : out Natural;
+      Value_Size : out Natural;
+      Fits       : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Head_Size := 0;
+      Value_Size := 0;
+      Fits := True;
+
+      if Item.Owner = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else Item.Held not in Eighth | Fourth
+      then
+         return;
+      end if;
+
+      Head_Size := Item.Owner.Settings.Head_Size;
+      Value_Size := Item.Owner.Settings.Value_Size;
+      Fits :=
+        Model_Runner.Backend.Device.Attends_Packed_Heads
+          (Head_Size, Value_Size);
+   end Packed_Heads_Room;
+
    procedure Context_Room
      (Item   : Session;
       Wanted : out Interfaces.Unsigned_64;
@@ -5378,7 +5408,20 @@ package body Model_Runner.Llama is
                  and then (Item.Byte_Keys = null or else Item.Byte_Values = null
                            or else Item.Key_Scales = null
                            or else Item.Value_Scales = null
-                           or else not Model_Runner.Backend.Device.Attends_Packed))
+                           or else not Model_Runner.Backend.Device.Attends_Packed
+                           --  And a shape that kernel reads: it takes four
+                           --  elements of a row at a time out of one word,
+                           --  so a head is a whole number of fours. A model
+                           --  whose heads are another shape used to take a
+                           --  block of the device's cache, have it written
+                           --  every position, and have every layer's
+                           --  sequence built and refused at its attention
+                           --  step -- the uploads of a cache nothing there
+                           --  would read.
+                           or else not
+                             Model_Runner.Backend.Device.Attends_Packed_Heads
+                               (Item.Owner.Settings.Head_Size,
+                                Item.Owner.Settings.Value_Size)))
       then
          return;
       end if;

@@ -1679,14 +1679,16 @@ package body Checks is
       --  towards saying an operation is used. This check is for the ones
       --  nothing uses at all.
       declare
-         --  Raised from four hundred when the count reached it. That it
-         --  reached it was found the hard way: the collector stopped taking
-         --  names and the check then reported that an operation declared in
-         --  plain sight was declared nowhere. A bound that is silently full
+         --  Raised from four hundred when the count reached it, and from
+         --  eight hundred when it reached that. That it reached the first
+         --  was found the hard way: the collector stopped taking names and
+         --  the check then reported that an operation declared in plain
+         --  sight was declared nowhere. A bound that is silently full
          --  makes a check weaker as a project grows, which is the opposite
          --  of what a check is for, so overflowing it is now a failure that
-         --  names itself.
-         Room  : constant := 800;
+         --  names itself, and the second time it was raised the failure is
+         --  what said so.
+         Room  : constant := 1_200;
          Width : constant := 64;
          Named : constant := 64;
 

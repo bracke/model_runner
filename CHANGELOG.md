@@ -246,6 +246,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A packed context the device's attention will not read is said at
+  open too, and no longer takes a block of its cache.** That kernel
+  reads four elements of a row at a time out of one word, so a head is a
+  whole number of fours and a value head is 256 at most; a model of
+  another shape had its packed cache uploaded to the device a position
+  at a time all the same, and every layer's sequence built and refused
+  at its attention step -- the uploads of a cache nothing there would
+  read. The session is refused the block now, which is what it would
+  have got a layer later, and a run says at open how wide the model's
+  heads are and that an exact `--kv-cache` goes on the device. The
+  reason the layer counts give for a packed refusal says the same thing
+  rather than the narrow rows it used to mean, those being taken now.
 - **A context the device will not hold is said at open, by name and with
   both numbers.** The cache is one storage buffer there -- binary32 with
   a half-precision copy after it, six bytes an element -- and a device

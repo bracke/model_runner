@@ -2026,6 +2026,16 @@ narrower than a word, the context not on the device at all, no room for the
 layer's weights, a shape the sequence does not take, or the sequence
 refused.
 
+The same question gets the same answer where the shape is the model's
+rather than the context's: the packed attention reads four elements of a
+row at a time out of one word, so it reads heads a whole number of fours
+wide and value heads of 256 at most, and a model of another shape keeps
+its packed cache on the processor. It used to take a block of the
+device's cache anyway, have it written every position, and have every
+layer refused at its attention step; it is refused the block at open
+now, and the run says how wide the heads are and that an exact
+`--kv-cache` goes over.
+
 The first thing that number found was the refusal it was written to
 explain. The step that packs a layer's keys and values writes the cache a
 word at a time, and a row narrower than a word shares one with the row

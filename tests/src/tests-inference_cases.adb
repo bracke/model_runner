@@ -3230,10 +3230,34 @@ package body Tests.Inference_Cases is
             Wanted, Bound : Interfaces.Unsigned_64;
             Fits          : Boolean;
          begin
-            L.Open (Live, Under.Ready, Status => Status);
+            --  Packed, so that both halves of the question are the
+            --  session's own: what its context would take, and whether
+            --  the kernel reads the model's heads.
+            L.Open (Live, Under.Ready, Cache => L.Fourth, Status => Status);
             Assert (E.Is_Ok (Status), "a session did not open for its room");
 
             L.Context_Room (Live, Wanted, Bound, Fits);
+
+            --  And the other half of the same question, which a packed
+            --  session asks of the model's heads rather than the
+            --  context's size: this fixture's are four wide, a whole
+            --  number of fours, so the kernel reads them.
+            declare
+               Head_Size, Value_Size : Natural;
+               Reads                 : Boolean;
+            begin
+               L.Packed_Heads_Room (Live, Head_Size, Value_Size, Reads);
+               Assert (Head_Size = Tiny_Model.Head_Size
+                       and then Value_Size = Tiny_Model.Head_Size,
+                       "a packed session says its heads are"
+                       & Natural'Image (Head_Size) & " and"
+                       & Natural'Image (Value_Size)
+                       & " wide, and the fixture's are"
+                       & Natural'Image (Tiny_Model.Head_Size));
+               Assert (Reads,
+                       "the device's packed attention will not read the "
+                       & "fixture's heads");
+            end;
 
             Assert (Wanted > 0,
                     "a session on the device says its context takes nothing");

@@ -5690,6 +5690,16 @@ package body Model_Runner.Platform.Device.Products is
    function Attends_Packed (Item : Engine) return Boolean
    is (Packed_Pipeline (Item) /= Null_Handle);
 
+   function Takes_Packed_Heads
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Packed_Pipeline (Item) /= Null_Handle
+       and then Head_Size in 4 .. 256
+       and then Head_Size mod 4 = 0
+       and then Value_Size in 4 .. Attention_Room
+       and then Value_Size mod 4 = 0);
+
    --  Whether the packed kernel takes this shape over this block: the
    --  kernel reads a row a word at a time, four elements of it, and a
    --  head's four never straddle a word only where every base and width

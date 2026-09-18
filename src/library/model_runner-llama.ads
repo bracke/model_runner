@@ -1711,6 +1711,29 @@ package Model_Runner.Llama is
       Bound  : out Interfaces.Unsigned_64;
       Fits   : out Boolean);
 
+   --  And whether the device's packed attention reads this model's heads,
+   --  for a session holding its cache packed.
+   --
+   --  That kernel reads four elements of a row at a time out of one word,
+   --  so a head is a whole number of fours, and it keeps room for a value
+   --  head of 256 at most. A model of another shape keeps its packed
+   --  cache on the processor and attends there -- correct, and worth
+   --  saying, since the same model with an exact cache would have gone
+   --  over whole.
+   --
+   --  The sizes are zero and Fits is True where the backend is not the
+   --  device or the cache is not packed: nothing is refused there.
+   --
+   --  @param Item Open session.
+   --  @param Head_Size Receives the elements a key head holds.
+   --  @param Value_Size Receives the elements a value head holds.
+   --  @param Fits Receives False only where the kernel will not read them.
+   procedure Packed_Heads_Room
+     (Item       : Session;
+      Head_Size  : out Natural;
+      Value_Size : out Natural;
+      Fits       : out Boolean);
+
    --  Whether the model carries a block past its stack for drafting the
    --  token after the next, and the session can run it: a hybrid file's
    --  nextn block, and a session holding its cache exactly.

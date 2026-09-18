@@ -2384,6 +2384,32 @@ package body Model_Runner.CLI.Execute is
             end if;
          end;
 
+         --  And a packed context the device's attention will not read,
+         --  which is the model's shape rather than the context's size:
+         --  the kernel takes four elements of a row at a time out of one
+         --  word, so a head is a whole number of fours. Said here for the
+         --  same reason -- the same model with an exact cache would have
+         --  gone over whole, and nothing else in the run says why this
+         --  one did not.
+         declare
+            Head_Size, Value_Size : Natural;
+            Fits                  : Boolean;
+         begin
+            L.Packed_Heads_Room (Session, Head_Size, Value_Size, Fits);
+
+            if not Fits then
+               Screen.Put_Message
+                 ("cli.note.packed_heads_off_device",
+                  [Loc.Named
+                     ("value",
+                      Model_Runner.Text.Image (Long_Long_Integer (Head_Size))),
+                   Loc.Named
+                     ("total",
+                      Model_Runner.Text.Image
+                        (Long_Long_Integer (Value_Size)))]);
+            end if;
+         end;
+
          --  An option that cannot do anything here says so rather than
          --  being accepted and forgotten -- and whether it can is known only
          --  now, once the model has said whether it carries a next-token

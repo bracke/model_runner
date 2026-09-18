@@ -979,6 +979,11 @@ package body Model_Runner.Backend.Device is
    function Attends_Packed return Boolean
    is (Ready_Now and then Products.Attends_Packed (Engine));
 
+   function Attends_Packed_Heads
+     (Head_Size : Natural; Value_Size : Natural) return Boolean
+   is (Ready_Now
+       and then Products.Takes_Packed_Heads (Engine, Head_Size, Value_Size));
+
    -------------------
    -- Attend_Packed --
    -------------------

@@ -4659,6 +4659,76 @@ package body Tests.Backend_Cases is
    -- The_Linear_Layer_On_The_Device_Says_What_The_Host_Says --
    ---------------------------------------------------------------
 
+   --  Which head shapes the packed attention says it reads, which is the
+   --  part of its rule a model decides rather than a session's layout: it
+   --  reads four elements of a row at a time out of one word, so a head
+   --  is a whole number of fours, and it keeps room for a value head of
+   --  two hundred and fifty-six at most.
+   --
+   --  Asked here rather than through a session, because no fixture has
+   --  heads of another shape -- every architecture this program reads
+   --  states a head a multiple of four -- and the answer decides whether
+   --  a packed session takes a block of the device's cache at all. It
+   --  took one before, had it written every position, and had every
+   --  layer's sequence built and refused at its attention step.
+   procedure The_Packed_Attention_Says_Which_Heads_It_Reads
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready : Boolean;
+
+      --  The shapes the architectures this program reads have.
+      Sizes : constant array (1 .. 6) of Natural := [4, 64, 80, 96, 128, 256];
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready or else not Products.Attends_Packed (Engine) then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Size of Sizes loop
+         Assert (Products.Takes_Packed_Heads (Engine, Size, Size),
+                 "the packed attention says it will not read heads"
+                 & Natural'Image (Size) & " wide, which is a shape a model "
+                 & "this program reads has");
+      end loop;
+
+      --  And the ones it does not: a head that is not a whole number of
+      --  fours, either side, and a value head past the room it keeps.
+      Assert (not Products.Takes_Packed_Heads (Engine, 6, 6),
+              "the packed attention says it reads heads six wide, whose "
+              & "four elements straddle a word");
+      Assert (not Products.Takes_Packed_Heads (Engine, 64, 6),
+              "the packed attention says it reads value heads six wide");
+      Assert (not Products.Takes_Packed_Heads (Engine, 64, 320),
+              "the packed attention says it reads value heads past the "
+              & "room it keeps for one");
+      Assert (not Products.Takes_Packed_Heads (Engine, 0, 0),
+              "the packed attention says it reads heads of nothing");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end The_Packed_Attention_Says_Which_Heads_It_Reads;
+
+   ---------------------------------------------------------------
+
    --  The front and the middle of a hybrid's linear layer on the device
    --  -- the convolution over the memory a ring of slots keeps, and the
    --  gated delta rule over the state the ring keeps -- against the host's
@@ -8135,6 +8205,10 @@ package body Tests.Backend_Cases is
          & "blend through the logistic of its gate, and an answer scaled by "
          & "the logistic of one score a position -- what a hybrid's "
          & "attention layer needs -- say what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,
+         "the packed attention says which head shapes it reads: a whole "
+         & "number of fours, and a value head within the room it keeps");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Linear_Layer_On_The_Device_Says_What_The_Host_Says'Access,
          "the convolution over the memory a ring keeps and the gated delta "
