@@ -4781,10 +4781,22 @@ package body Tests.Backend_Cases is
          Ring (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
       end loop;
 
-      Products.Reserve_State (Engine, Ring'Length, Ok);
+      Products.Reserve_State (Engine, Ring'Length + 5, Ok);
       Assert (Ok, "no room for the ring");
       Products.Put_State (Engine, 0, Ring, Ok);
       Assert (Ok, "the ring would not be written");
+
+      --  The one run the batch is, in the table past the ring: the
+      --  ring's base, the position it begins at, the rows, the first
+      --  row, and the slots, each as the bits of a float.
+      declare
+         Table : constant N.Real_Array (0 .. 4) :=
+           [N.From_Bits (0), N.From_Bits (First), N.From_Bits (Count),
+            N.From_Bits (0), N.From_Bits (Slots)];
+      begin
+         Products.Put_State (Engine, Ring'Length, Table, Ok);
+         Assert (Ok, "the runs' table would not be written");
+      end;
 
       --  One: the rows through the identity. Two: the gate rows. Three
       --  and four: the alphas and the betas. Five: the convolution.
@@ -4816,8 +4828,9 @@ package body Tests.Backend_Cases is
             Unit_Blocks => 2 * Key_Heads,
             Key_Heads => Key_Heads, Value_Heads => Val_Heads,
             Key_Width => Key_Width,
-            Region_At => Memory_At, Every => Every, Slots => Slots,
-            First => First, Z_Step => 2, Alpha_Step => 3, Beta_Step => 4,
+            Region_At => Memory_At, Every => Every,
+            Table_At => Ring'Length, Runs => 1,
+            Z_Step => 2, Alpha_Step => 3, Beta_Step => 4,
             Scale => 0.5, Epsilon => Epsilon);
       begin
          Products.Add_Conv

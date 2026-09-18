@@ -8318,8 +8318,9 @@ package body Model_Runner.Platform.Device.Products is
                     or else Interfaces.Unsigned_64 (This.Span)
                             < Interfaces.Unsigned_64 (This.At_Byte) + Held * 4
                     or else Item.State_At = Null_Handle
-                    or else Interfaces.Unsigned_64 (This.Linear.Slots)
-                            * Interfaces.Unsigned_64 (This.Linear.Every) * 4
+                    or else (Interfaces.Unsigned_64 (This.Linear.Table_At)
+                             + Interfaces.Unsigned_64 (This.Linear.Runs) * 5)
+                            * 4
                             > Item.State_Bytes
                     or else (This.Convolves
                              and then Item.Conv_Line = Null_Handle)
@@ -10149,7 +10150,7 @@ package body Model_Runner.Platform.Device.Products is
                        (Rows    => C.unsigned (This.Linear.Mix),
                         Columns => C.unsigned (This.Linear.Head),
                         Count   => C.unsigned (Count),
-                        First   => C.unsigned (This.Linear.First),
+                        First   => C.unsigned (This.Linear.Table_At),
                         Packing => C.unsigned (This.Linear.Taps),
                         Base    => C.unsigned (Places (Index).Base / 4),
                         Joins   => 0,
@@ -10157,7 +10158,7 @@ package body Model_Runner.Platform.Device.Products is
                         Members =>
                           [0 => C.unsigned (This.Linear.Region_At),
                            1 => C.unsigned (This.Linear.Every),
-                           2 => C.unsigned (This.Linear.Slots),
+                           2 => C.unsigned (This.Linear.Runs),
                            3 => Bits (This.Linear.Epsilon),
                            others => 0],
                         others  => <>);
@@ -10200,7 +10201,7 @@ package body Model_Runner.Platform.Device.Products is
                        (Rows    => C.unsigned (This.Linear.Mix),
                         Columns => C.unsigned (This.Linear.Head),
                         Count   => C.unsigned (Count),
-                        First   => C.unsigned (This.Linear.First),
+                        First   => C.unsigned (This.Linear.Table_At),
                         Packing => C.unsigned (This.Linear.Key_Heads),
                         Base    => C.unsigned (This.Linear.Key_Width),
                         Joins   => C.unsigned (Places (Index).Base / 4),
@@ -10208,7 +10209,7 @@ package body Model_Runner.Platform.Device.Products is
                         Members =>
                           [0 => C.unsigned (This.Linear.Region_At),
                            1 => C.unsigned (This.Linear.Every),
-                           2 => C.unsigned (This.Linear.Slots),
+                           2 => C.unsigned (This.Linear.Runs),
                            3 => C.unsigned
                                   (Places (This.Linear.Z_Step).At_Byte / 4),
                            4 => C.unsigned
@@ -10225,7 +10226,7 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Linear.Value_Heads),
-                        1, 1);
+                        C.unsigned (This.Linear.Runs), 1);
                   end;
 
                   Bind_Pipeline

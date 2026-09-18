@@ -957,13 +957,20 @@ package Model_Runner.Platform.Device.Products is
       Key_Width   : Natural := 0;
 
       --  The ring: where the layer's memory or state begins within a
-      --  slot, how many elements a slot holds, how many slots there are,
-      --  and the position the batch begins at, all in elements of the
+      --  slot, and how many elements a slot holds, in elements of the
       --  state buffer.
       Region_At  : Natural := 0;
       Every      : Natural := 0;
-      Slots      : Positive := 1;
-      First      : Natural := 0;
+
+      --  The runs of the batch, each one session's: where the table
+      --  begins in the state buffer, in elements, and how many runs it
+      --  names. Five words a run, as the bits of floats: where the
+      --  session's ring begins, the position the run starts at, how
+      --  many rows it has, which row of the batch is its first, and how
+      --  many slots the ring has. A batch is one run; a round of
+      --  sessions is one a member.
+      Table_At   : Natural := 0;
+      Runs       : Positive := 1;
 
       --  The rule's other rows, named as steps: the gate, the alphas
       --  and the betas.
@@ -987,9 +994,9 @@ package Model_Runner.Platform.Device.Products is
    --  the layer left in the slot of the state buffer the ring says, and
    --  writes the convolved rows as its answer and each position's memory
    --  into the slot the position after it reads. The ring's arithmetic
-   --  is the host's: Slots slots of Every elements, a position's slot
-   --  being the position modulo the slots, the memory of this layer at
-   --  Region_At within one.
+   --  is the host's: a run's ring is slots of Every elements from the
+   --  base the table names, a position's slot being the position modulo
+   --  the slots, the memory of this layer at Region_At within one.
    --
    --  @param Steps Sequence to add to.
    --  @param Base First byte of the storage the taps lie in.

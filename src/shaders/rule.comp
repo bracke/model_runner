@@ -27,7 +27,9 @@
 //  key-major: row i holds S (i, j) for every j, so a lane is a j and a
 //  row read is one read a lane, in step.
 //
-//  A workgroup a value head, its lanes over the columns of the state.
+//  The batch is runs of positions, each run one session's, as the
+//  convolution's table says: a workgroup a value head and a run, its
+//  lanes over the columns of the state, the run's positions in order.
 
 const uint LANES = 128u;
 
@@ -39,14 +41,21 @@ layout(std430, binding = 2) buffer Target { float y[]; };
 layout(std430, binding = 3) readonly  buffer Rooms  { float r[]; };
 layout(std430, binding = 4) buffer State { float s[]; };
 
+//  And the same buffer as words, read only, for the runs' table: a
+//  table read as floats' bits through a buffer this kernel also writes
+//  cost a fifth of the kernel, since the compiler could not tell the
+//  reads were the same for every lane and made vector loads of them.
+layout(std430, binding = 4) readonly buffer Table { uint tab[]; };
+
 layout(push_constant) uniform Shape {
     //  Elements a mixed row holds, and the state's width.
     uint mix;
     uint head;
 
-    //  Positions in this batch, and the position it begins at.
+    //  Positions in this batch, and where the runs' table begins in the
+    //  state buffer, in elements: five words a run.
     uint count;
-    uint first;
+    uint table_at;
 
     //  Key heads, and elements the queries or the keys take in a row.
     uint key_heads;
@@ -60,10 +69,10 @@ layout(push_constant) uniform Shape {
     uint value_heads;
 
     //  Where this layer's state begins within a slot, in elements; how
-    //  many elements a slot holds; how many slots the ring has.
+    //  many elements a slot holds; how many runs the table names.
     uint state_at;
     uint every;
-    uint slots;
+    uint runs;
 
     //  Where the gate rows, the alphas and the betas lie in the rooms
     //  buffer, in elements: a row of Value_Heads * Head, of Value_Heads
@@ -92,11 +101,19 @@ float softplus(float v) {
 
 void main() {
     uint h = gl_WorkGroupID.x;
+    uint run = gl_WorkGroupID.y;
     uint lane = gl_LocalInvocationID.x;
 
-    if (h >= shape.value_heads) {
+    if (h >= shape.value_heads || run >= shape.runs) {
         return;
     }
+
+    uint at = shape.table_at + run * 5u;
+    uint base = tab[at];
+    uint first = tab[at + 1u];
+    uint run_count = tab[at + 2u];
+    uint row0 = tab[at + 3u];
+    uint slots = tab[at + 4u];
 
     uint head = shape.head;
     uint square = head * head;
@@ -106,16 +123,23 @@ void main() {
     float scale = uintBitsToFloat(shape.scale);
     float epsilon = uintBitsToFloat(shape.epsilon);
 
-    for (uint t = 0u; t < shape.count; t++) {
+    //  The slot read walks the ring a position at a time, and the slot
+    //  written is the one after it: counted rather than divided, since
+    //  a remainder by a number nobody knows at compile time is a long
+    //  instruction sequence, twice a position.
+    uint read_slot = first % slots;
+    uint head_at = base + shape.state_at + h * square;
+
+    for (uint p = 0u; p < run_count; p++) {
+        uint t = row0 + p;
         uint row = t * shape.mix;
         uint q_at = row + kh * head;
         uint k_at = row + shape.key_width + kh * head;
         uint v_at = row + 2u * shape.key_width + h * head;
 
-        uint read_at = ((shape.first + t) % shape.slots) * shape.every
-                       + shape.state_at + h * square;
-        uint write_at = ((shape.first + t + 1u) % shape.slots) * shape.every
-                        + shape.state_at + h * square;
+        uint write_slot = read_slot + 1u == slots ? 0u : read_slot + 1u;
+        uint read_at = head_at + read_slot * shape.every;
+        uint write_at = head_at + write_slot * shape.every;
 
         float alpha = r[shape.alpha_at + t * shape.value_heads + h];
         float beta = r[shape.beta_at + t * shape.value_heads + h];
@@ -171,5 +195,7 @@ void main() {
         //  one -- and every lane wrote rows every other lane reads.
         memoryBarrierBuffer();
         barrier();
+
+        read_slot = write_slot;
     }
 }

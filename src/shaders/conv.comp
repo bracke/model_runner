@@ -16,6 +16,13 @@
 //  and each query and key head -- the first blocks of the row -- is
 //  scaled to unit length, held away from nothing by the epsilon.
 //
+//  The batch is runs of positions, each run one session's: a batch is
+//  one run, and a round of sessions one a member, whose rows lie one
+//  member after another. A table in the state buffer says, for each
+//  run, where the session's ring begins, the position the run starts
+//  at, how many rows it has, which row is its first, and how many slots
+//  its ring has; a workgroup finds its run by its row.
+//
 //  Two passes, told apart by a word of the shape: the first convolves and
 //  writes the rows, reading the memory; the second writes the memories.
 //  The two are one dispatch each with a barrier between, because a
@@ -35,6 +42,12 @@ layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) buffer Target { float y[]; };
 layout(std430, binding = 4) buffer State { float s[]; };
 
+//  And the same buffer as words, read only, for the runs' table: a
+//  table read as floats' bits through a buffer this kernel also writes
+//  cost a fifth of the kernel, since the compiler could not tell the
+//  reads were the same for every lane and made vector loads of them.
+layout(std430, binding = 4) readonly buffer Table { uint tab[]; };
+
 layout(push_constant) uniform Shape {
     //  Elements a mixed row holds.
     uint mix;
@@ -45,8 +58,9 @@ layout(push_constant) uniform Shape {
     //  Positions in this batch.
     uint count;
 
-    //  The position the batch begins at, for the ring.
-    uint first;
+    //  Where the runs' table begins in the state buffer, in elements:
+    //  five words a run.
+    uint table_at;
 
     //  Taps of the convolution.
     uint taps;
@@ -62,11 +76,11 @@ layout(push_constant) uniform Shape {
     uint unit_blocks;
 
     //  Where this layer's memory begins within a slot, in elements; how
-    //  many elements a slot holds; how many slots the ring has; and the
-    //  epsilon by its bits.
+    //  many elements a slot holds; how many runs the table names; and
+    //  the epsilon by its bits.
     uint memory_at;
     uint every;
-    uint slots;
+    uint runs;
     uint epsilon;
 
     uint unused[12];
@@ -91,18 +105,38 @@ void main() {
     uint c0 = block * shape.head;
     uint remembered = shape.taps - 1u;
 
-    //  Where the memory this batch begins with lies, and where this
+    //  The run this row is in, and where it stands in it.
+    uint base = 0u;
+    uint first = 0u;
+    uint run_count = shape.count;
+    uint row0 = 0u;
+    uint slots = 1u;
+    for (uint r = 0u; r < shape.runs; r++) {
+        uint at = shape.table_at + r * 5u;
+        uint r_row0 = tab[at + 3u];
+        uint r_count = tab[at + 2u];
+        if (t >= r_row0 && t < r_row0 + r_count) {
+            base = tab[at];
+            first = tab[at + 1u];
+            run_count = r_count;
+            row0 = r_row0;
+            slots = tab[at + 4u];
+        }
+    }
+    uint p = t - row0;
+
+    //  Where the memory this run begins with lies, and where this
     //  position's goes.
-    uint read_slot = shape.first % shape.slots;
-    uint write_slot = (shape.first + t + 1u) % shape.slots;
-    uint read_at = read_slot * shape.every + shape.memory_at;
-    uint write_at = write_slot * shape.every + shape.memory_at;
+    uint read_slot = first % slots;
+    uint write_slot = (first + p + 1u) % slots;
+    uint read_at = base + read_slot * shape.every + shape.memory_at;
+    uint write_at = base + write_slot * shape.every + shape.memory_at;
 
     if (shape.writing != 0u) {
-        //  Only the last Slots positions, whose slots are their own: the
-        //  ones before would write the same slots as these and land in
-        //  no order, and the host keeps only these.
-        if (t + shape.slots < shape.count) {
+        //  Only the run's last Slots positions, whose slots are their
+        //  own: the ones before would write the same slots as these and
+        //  land in no order, and the host keeps only these.
+        if (p + slots < run_count) {
             return;
         }
 
@@ -112,10 +146,10 @@ void main() {
         //  before it.
         for (uint c = lane; c < shape.head; c += LANES) {
             for (uint k = 0u; k < remembered; k++) {
-                int from = int(t) - int(remembered - 1u - k);
+                int from = int(p) - int(remembered - 1u - k);
                 float held;
                 if (from >= 0) {
-                    held = x[uint(from) * shape.mix + c0 + c];
+                    held = x[(row0 + uint(from)) * shape.mix + c0 + c];
                 } else {
                     held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
                 }
@@ -133,10 +167,10 @@ void main() {
         //  Tap m from the newest: the input m positions back, times the
         //  tap Taps - 1 - m, which is how the host lays the taps out.
         for (uint m = 0u; m < shape.taps; m++) {
-            int from = int(t) - int(m);
+            int from = int(p) - int(m);
             float held;
             if (from >= 0) {
-                held = x[uint(from) * shape.mix + c0 + c];
+                held = x[(row0 + uint(from)) * shape.mix + c0 + c];
             } else {
                 held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
             }

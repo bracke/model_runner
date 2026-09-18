@@ -4932,18 +4932,34 @@ package body Model_Runner.Llama is
    Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
-   --  And which session's ring of linear states the device's state room
-   --  holds, or null. One session at a time: a ring is Kept_States + 1
-   --  slots of every linear layer's memories and states, and a session
-   --  that takes the room from another brings that one's ring home
-   --  first. A round of sessions keeps its rule on the host for that
-   --  reason, since its rows would take turns.
-   State_Holder : Session_Access := null;
+   --  Which sessions hold a seat in the device's state room: a ring
+   --  each, Kept_States + 1 slots of every linear layer's memories and
+   --  states, laid one after another past the runs' table at the front.
+   --  A seat is taken the first time a session's linear layer goes over
+   --  and given back when the session closes or its ring changes size;
+   --  a new one takes the first gap that fits, or the end.
+   State_Seats : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
+     of Session_Access := [others => null];
+
+   --  The runs' table at the front of the room: five words a run, one
+   --  run a session of a round at most, in a stretch rounded up to the
+   --  alignment below.
+   --
+   --  Every ring begins on a kilobyte. A ring that began forty floats
+   --  in -- right after the table -- had every row of its states
+   --  straddling a cache line more than it needs, and the rule read a
+   --  third slower for it.
+   State_Alignment : constant Element_Count := 256;
+   State_Table_Room : constant Element_Count := State_Alignment;
 
    --  How many elements one slot of the ring takes on the device: the
    --  memories of every linear layer, then the states.
    function Device_Slot_Span (Item : Session) return Element_Count
    is (Conv_Room (Item.Owner.Settings) + State_Room (Item.Owner.Settings));
+
+   --  How many elements a session's whole ring takes.
+   function Device_Ring_Span (Item : Session) return Element_Count
+   is ((Element_Count (Item.Kept_States) + 1) * Device_Slot_Span (Item));
 
    --  Bring a session's ring home from the device, where the device's
    --  copy is the newer. A no-op otherwise, so it is asked wherever the
@@ -4952,6 +4968,7 @@ package body Model_Runner.Llama is
       Read : Boolean := True;
    begin
       if Item = null or else not Item.State_On_Device
+        or else not Item.State_Seated
         or else Item.Delta_State = null or else Item.Conv_State = null
       then
          return;
@@ -4967,13 +4984,13 @@ package body Model_Runner.Llama is
       begin
          for Slot in 0 .. Slots - 1 loop
             Model_Runner.Backend.Device.Get_State
-              (Slot * Every,
+              (Item.State_Base + Slot * Every,
                Item.Conv_State.all
                  (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1),
                Read);
             exit when not Read;
             Model_Runner.Backend.Device.Get_State
-              (Slot * Every + Every_Conv,
+              (Item.State_Base + Slot * Every + Every_Conv,
                Item.Delta_State.all
                  (Slot * Every_State .. (Slot + 1) * Every_State - 1),
                Read);
@@ -4987,8 +5004,93 @@ package body Model_Runner.Llama is
       Item.State_On_Device := False;
    end Fetch_States;
 
+   --  Give a session's seat back: at its close, and when its ring
+   --  changes size. What the device held is not brought home here: a
+   --  closing session's ring is nobody's, and a ring about to change
+   --  size is fetched by the caller that will read it. Reading fifty
+   --  megabytes back through the mapping at every close left the device
+   --  idle long enough to drop its clock, and the next session's prompt
+   --  ran a third slower for it.
+   procedure Release_State_Room (Item : Session_Access) is
+   begin
+      if Item = null then
+         return;
+      end if;
+
+      for Seat in State_Seats'Range loop
+         if State_Seats (Seat) = Item then
+            State_Seats (Seat) := null;
+         end if;
+      end loop;
+
+      Item.State_Seated := False;
+      Item.State_On_Device := False;
+   end Release_State_Room;
+
+   --  Give a session a seat: the first gap past the table that its ring
+   --  fits, or the end of what is taken, with the room grown to reach
+   --  it.
+   procedure Seat_State (Item : Session_Access; Ok : out Boolean) is
+      Span : constant Element_Count := Device_Ring_Span (Item.all);
+      Free : Integer := -1;
+      Place : Element_Count := State_Table_Room;
+   begin
+      Ok := Item.State_Seated;
+      if Ok then
+         return;
+      end if;
+
+      for Seat in State_Seats'Range loop
+         if State_Seats (Seat) = null then
+            Free := Seat;
+            exit;
+         end if;
+      end loop;
+
+      if Free < 0 then
+         return;
+      end if;
+
+      --  The first gap: from the table's end, moved past every seated
+      --  ring that overlaps, until nothing does.
+      loop
+         declare
+            Moved : Boolean := False;
+         begin
+            for Seat in State_Seats'Range loop
+               declare
+                  Other : constant Session_Access := State_Seats (Seat);
+               begin
+                  if Other /= null
+                    and then Place < Other.State_Base
+                                  + Device_Ring_Span (Other.all)
+                    and then Other.State_Base < Place + Span
+                  then
+                     Place := Other.State_Base + Device_Ring_Span (Other.all);
+                     Moved := True;
+                  end if;
+               end;
+            end loop;
+            exit when not Moved;
+         end;
+      end loop;
+
+      Place :=
+        (Place + State_Alignment - 1) / State_Alignment * State_Alignment;
+
+      Model_Runner.Backend.Device.Reserve_State (Place + Span, Ok);
+      if not Ok then
+         return;
+      end if;
+
+      State_Seats (Free) := Item;
+      Item.State_Base := Place;
+      Item.State_Seated := True;
+      Item.State_On_Device := False;
+   end Seat_State;
+
    --  Put a session's ring on the device, where the host's copy is the
-   --  newer, taking the room from whoever holds it.
+   --  newer, in the seat it holds or takes.
    procedure Send_States (Item : Session_Access; Ok : out Boolean) is
    begin
       Ok := False;
@@ -4999,14 +5101,12 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if State_Holder /= Item then
-         Fetch_States (State_Holder);
-         State_Holder := Item;
-         Item.State_On_Device := False;
+      Seat_State (Item, Ok);
+      if not Ok then
+         return;
       end if;
 
       if Item.State_On_Device then
-         Ok := True;
          return;
       end if;
 
@@ -5019,39 +5119,64 @@ package body Model_Runner.Llama is
            Element_Count (Item.Kept_States) + 1;
          Written    : Boolean;
       begin
-         Model_Runner.Backend.Device.Reserve_State (Slots * Every, Written);
-         if not Written then
-            return;
-         end if;
-
          for Slot in 0 .. Slots - 1 loop
             Model_Runner.Backend.Device.Put_State
-              (Slot * Every,
+              (Item.State_Base + Slot * Every,
                Item.Conv_State.all
                  (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1),
                Written);
             if not Written then
+               Ok := False;
                return;
             end if;
             Model_Runner.Backend.Device.Put_State
-              (Slot * Every + Every_Conv,
+              (Item.State_Base + Slot * Every + Every_Conv,
                Item.Delta_State.all
                  (Slot * Every_State .. (Slot + 1) * Every_State - 1),
                Written);
             if not Written then
+               Ok := False;
                return;
             end if;
          end loop;
       end;
 
       Item.State_On_Device := True;
-      Ok := True;
    end Send_States;
+
+   --  One run of a batch: a session's rows, one after another.
+   type State_Run is record
+      Whose : Session_Access := null;
+      First : Natural := 0;
+      Count : Natural := 0;
+      Row   : Natural := 0;
+   end record;
+   type State_Runs is array (Positive range <>) of State_Run;
+
+   --  Write the runs' table at the front of the room, as the kernels
+   --  read it: five words a run, each a number as the bits of a float.
+   procedure Write_Runs (Runs : State_Runs; Ok : out Boolean) is
+      Words : Real_Array (0 .. Element_Count (Runs'Length) * 5 - 1);
+      Place : Element_Count := 0;
+   begin
+      for Run of Runs loop
+         Words (Place) :=
+           N.From_Bits (Interfaces.Unsigned_32 (Run.Whose.State_Base));
+         Words (Place + 1) := N.From_Bits (Interfaces.Unsigned_32 (Run.First));
+         Words (Place + 2) := N.From_Bits (Interfaces.Unsigned_32 (Run.Count));
+         Words (Place + 3) := N.From_Bits (Interfaces.Unsigned_32 (Run.Row));
+         Words (Place + 4) :=
+           N.From_Bits (Interfaces.Unsigned_32 (Run.Whose.Kept_States + 1));
+         Place := Place + 5;
+      end loop;
+
+      Model_Runner.Backend.Device.Put_State (0, Words, Ok);
+   end Write_Runs;
 
    --  A linear layer's geometry and its place in the ring, as the
    --  device's steps take them; the row steps are filled in there.
    function Linear_Shape_Of
-     (Item : Session; Index : Natural; First : Natural)
+     (Item : Session; Index : Natural; Runs : Positive)
       return Model_Runner.Backend.Device.Linear_Shape
    is
       Settings : Configuration renames Item.Owner.Settings;
@@ -5066,8 +5191,8 @@ package body Model_Runner.Llama is
          Key_Width   => Key_Width (Settings),
          Region_At   => Natural (Conv_At (Settings, Index)),
          Every       => Natural (Device_Slot_Span (Item)),
-         Slots       => Item.Kept_States + 1,
-         First       => First,
+         Table_At    => 0,
+         Runs        => Runs,
          Z_Step      => 0,
          Alpha_Step  => 0,
          Beta_Step   => 0,
@@ -5081,17 +5206,6 @@ package body Model_Runner.Llama is
    function Linear_State_At (Item : Session; Index : Natural) return Natural
    is (Natural (Conv_Room (Item.Owner.Settings)
                 + State_At (Item.Owner.Settings, Index)));
-
-   --  Let go of the room, at a session's close.
-   procedure Release_State_Room (Item : Session_Access) is
-   begin
-      if State_Holder = Item then
-         State_Holder := null;
-      end if;
-      if Item /= null then
-         Item.State_On_Device := False;
-      end if;
-   end Release_State_Room;
 
    --  Give a session a block of the device's cache, and keep it there.
    --
@@ -11061,7 +11175,10 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  The ring on the device, home, and its seat given back: the
+      --  ring made anew is another size.
       Fetch_States (Item'Unchecked_Access);
+      Release_State_Room (Item'Unchecked_Access);
 
       --  The ring made anew with Count + 1 slots, the state as it is
       --  now carried into the slot the committed count reads; what was
@@ -12017,6 +12134,12 @@ package body Model_Runner.Llama is
       Deferred : array (Source.Layers.all'Range) of Boolean :=
         [others => False];
 
+      --  Whether the session's ring is on the device and the runs'
+      --  table says where this position goes in it, which every linear
+      --  layer of this token then reads: sent and written once here,
+      --  not once a layer, since the writing waits for the device.
+      Linear_Ready : Boolean := False;
+
       --  Whether a layer is one the device takes whole. Asked of the next
       --  layer as well as of this one: a layer that falls back reads the
       --  host's copy of the activation, and the host's copy is what
@@ -12041,10 +12164,11 @@ package body Model_Runner.Llama is
                    <= Model_Runner.Backend.Device.Max_Members);
 
       --  A hybrid's linear layer goes whole where the device has the
-      --  rule and the convolution, the session a ring, and the
-      --  feed-forward behind it is a shape the sequence takes.
+      --  rule and the convolution, the session a ring that is over, and
+      --  the feed-forward behind it is a shape the sequence takes.
       function Linear_Layer_Fits (L : Layer) return Boolean
-      is (Item.Delta_State /= null
+      is (Linear_Ready
+          and then Item.Delta_State /= null
           and then Item.Conv_State /= null
           and then Model_Runner.Backend.Device.Runs_Linear
           and then T.Is_Present (L.Mix)
@@ -12448,6 +12572,23 @@ package body Model_Runner.Llama is
       --  Room for this position in the layers that slide a window.
       Make_Room (Item, Settings, Reserved);
 
+      --  The ring over, and the one run this position is.
+      if Hybrid (Settings.Kind)
+        and then Item.Delta_State /= null
+        and then Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind,
+                    Model_Runner.Backend.Backend_Device)
+        and then Model_Runner.Backend.Device.Runs_Linear
+      then
+         Send_States (Item'Unchecked_Access, Linear_Ready);
+         if Linear_Ready then
+            Write_Runs
+              ([1 => (Whose => Item'Unchecked_Access,
+                      First => Natural (Reserved), Count => 1, Row => 0)],
+               Linear_Ready);
+         end if;
+      end if;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  The reserved position was never committed, so the cache still
@@ -12523,10 +12664,9 @@ package body Model_Runner.Llama is
                  and then Linear_Layer_Fits (Current)
                then
                   declare
-                     Sent, Back : Boolean;
+                     Sent : constant Boolean := Linear_Ready;
+                     Back : Boolean;
                   begin
-                     Send_States (Item'Unchecked_Access, Sent);
-
                      --  No ring on the device is no layer on it; the
                      --  activation the layer before carried out comes
                      --  home for the host to go on from.
@@ -12609,8 +12749,7 @@ package body Model_Runner.Llama is
                            Conv          => Current.Conv,
                            Numbers       => Current.Linear_Numbers,
                            Linear        =>
-                             Linear_Shape_Of (Item, Natural (Index),
-                                              Natural (Reserved)),
+                             Linear_Shape_Of (Item, Natural (Index), 1),
                            Linear_State_At =>
                              Linear_State_At (Item, Natural (Index)));
                      end if;
@@ -13606,6 +13745,13 @@ package body Model_Runner.Llama is
       Deferred : array (Source.Layers.all'Range) of Boolean :=
         [others => False];
 
+      --  Whether the session's ring is on the device and the runs'
+      --  table says where this position goes in it, which every linear
+      --  layer of this token then reads: sent and written once here,
+      --  not once a layer, since the writing waits for the device.
+      Linear_Ready : Boolean := False;
+      Linear_Runs  : Natural := 1;
+
       --  Whether a layer is one the device takes whole. Asked of the next
       --  layer as well as of this one, because a layer that hands its
       --  answer on must know that the layer it hands to will be there to
@@ -13632,7 +13778,8 @@ package body Model_Runner.Llama is
 
       --  As the token's.
       function Linear_Layer_Fits (L : Layer) return Boolean
-      is (Item.Delta_State /= null
+      is (Linear_Ready
+          and then Item.Delta_State /= null
           and then Item.Conv_State /= null
           and then Model_Runner.Backend.Device.Runs_Linear
           and then T.Is_Present (L.Mix)
@@ -14169,6 +14316,62 @@ package body Model_Runner.Llama is
          Make_Room (Held_By (Which).all, Settings, Sits_At (Which));
       end loop;
 
+      --  Every member's ring over, and the runs' table: one run a
+      --  member, its rows one after another, where a batch is one run.
+      --  Not for a batch with a picture's rows in it, which attends on
+      --  the host.
+      if Hybrid (Settings.Kind)
+        and then Item.Delta_State /= null
+        and then Count > 0
+        and then not Has_Runs
+        --  A round's attention layers go whole only with every member
+        --  seated, and a linear layer carrying into one that will not
+        --  would carry into nothing.
+        and then (not Rounding or else Seated)
+        and then Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind,
+                    Model_Runner.Backend.Backend_Device)
+        and then Model_Runner.Backend.Device.Runs_Linear
+      then
+         declare
+            Runs  : State_Runs (1 .. Natural (Count));
+            Many  : Natural := 0;
+            Start : Element_Count := 0;
+         begin
+            Linear_Ready := True;
+
+            while Start < Count loop
+               declare
+                  Owner  : constant Element_Count := Row_Owner (Start);
+                  Finish : Element_Count := Start;
+                  Sent   : Boolean;
+               begin
+                  while Finish + 1 < Count
+                    and then Row_Owner (Finish + 1) = Owner
+                  loop
+                     Finish := Finish + 1;
+                  end loop;
+
+                  Send_States (Held_By (Start), Sent);
+                  Linear_Ready := Linear_Ready and then Sent;
+
+                  Many := Many + 1;
+                  Runs (Many) :=
+                    (Whose => Held_By (Start),
+                     First => Natural (Sits_At (Start)),
+                     Count => Natural (Finish - Start + 1),
+                     Row   => Natural (Start));
+                  Start := Finish + 1;
+               end;
+            end loop;
+
+            if Linear_Ready then
+               Write_Runs (Runs (1 .. Many), Linear_Ready);
+            end if;
+            Linear_Runs := Many;
+         end;
+      end if;
+
       for Index in Source.Layers.all'Range loop
          if C.Is_Cancelled (Cancel) then
             --  Nothing was committed, so the cache still describes exactly
@@ -14484,15 +14687,12 @@ package body Model_Runner.Llama is
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
               and then Is_Linear
-              and then not Rounding
-              and then not Has_Runs
               and then Linear_Layer_Fits (Current)
             then
                declare
-                  Sent, Back : Boolean;
+                  Sent : constant Boolean := Linear_Ready;
+                  Back : Boolean;
                begin
-                  Send_States (Item'Unchecked_Access, Sent);
-
                   if not Sent and then Carried then
                      Model_Runner.Backend.Device.Fetch_Carried
                        (Acts.all (0 .. Count * Width - 1), Back);
@@ -14573,7 +14773,7 @@ package body Model_Runner.Llama is
                         Numbers       => Current.Linear_Numbers,
                         Linear        =>
                           Linear_Shape_Of (Item, Natural (Index),
-                                           Natural (Sits_At (0))),
+                                           Linear_Runs),
                         Linear_State_At =>
                           Linear_State_At (Item, Natural (Index)));
                   end if;
@@ -14590,9 +14790,12 @@ package body Model_Runner.Llama is
                              Natural (Index) + 1);
 
                if Whole_Layer_Done then
-                  Item.Kept_Newest :=
-                    Natural'Max (Item.Kept_Newest,
-                                 Natural (Sits_At (0)) + Natural (Count));
+                  --  Each member's ring reaches to the end of its rows.
+                  for Which in 0 .. Count - 1 loop
+                     Held_By (Which).Kept_Newest :=
+                       Natural'Max (Held_By (Which).Kept_Newest,
+                                    Natural (Sits_At (Which)) + 1);
+                  end loop;
                   Projected := True;
                   Rotated := True;
                   Fused := True;
@@ -14611,9 +14814,14 @@ package body Model_Runner.Llama is
                          and then Current.Query_Bias = null
                          and then Source.Settings.Kind not in Falcon | Phi2)
                         or else (Item.Held in Exact | Eighth | Fourth
-                                 and then not Rounding
-                                 and then Whole_Layer_Fits (Current, Natural (Index))
-                                 and then Has_Block (Item'Unchecked_Access)))
+                                 and then Whole_Layer_Fits
+                                            (Current, Natural (Index))
+                                 --  A round's members all seated, with
+                                 --  the table its steps read; a batch
+                                 --  with its block.
+                                 and then (if Rounding then Seated
+                                           else Has_Block
+                                                  (Item'Unchecked_Access))))
             then
                Charge (Item, Normalizing, Mark);
 
@@ -14987,18 +15195,49 @@ package body Model_Runner.Llama is
 
                Charge (Item, Attending, Mark);
 
-               Linear_Chunk
-                 (Item, Source, Current, Natural (Index),
-                  Natural (Sits_At (0)),
-                  (First => (Mixed => Mix_Rows, Z_Gate => Z_Rows,
-                             Alpha => Alpha_Rows, Beta => Beta_Rows,
-                             Blend => Blend_Rows, others => 0),
-                   Count => Count,
-                   Mix_Stride => Mix_Wide,
-                   Z_Stride => Value_Wide,
-                   Head_Stride => Value_Heads,
-                   Blend_Stride => Value_Wide),
-                  Status);
+               --  The rule over each member's own run of rows and its
+               --  own ring: a round's rows are different sessions', and
+               --  a chunk over all of them as one session's read the
+               --  first member's state for every row -- which is what
+               --  the second member of a hybrid round got until the
+               --  round was tested for it.
+               declare
+                  Start : Element_Count := 0;
+               begin
+                  while Start < Count loop
+                     declare
+                        Owner  : constant Element_Count := Row_Owner (Start);
+                        Finish : Element_Count := Start;
+                     begin
+                        while Finish + 1 < Count
+                          and then Row_Owner (Finish + 1) = Owner
+                        loop
+                           Finish := Finish + 1;
+                        end loop;
+
+                        Linear_Chunk
+                          (Held_By (Start).all, Source, Current,
+                           Natural (Index), Natural (Sits_At (Start)),
+                           (First => (Mixed => Mix_Rows, Z_Gate => Z_Rows,
+                                      Alpha => Alpha_Rows, Beta => Beta_Rows,
+                                      Blend => Blend_Rows,
+                                      M0 => Start * Mix_Wide,
+                                      Z0 => Start * Value_Wide,
+                                      A0 => Start * Value_Heads,
+                                      B0 => Start * Value_Heads,
+                                      O0 => Start * Value_Wide),
+                            Count => Finish - Start + 1,
+                            Mix_Stride => Mix_Wide,
+                            Z_Stride => Value_Wide,
+                            Head_Stride => Value_Heads,
+                            Blend_Stride => Value_Wide),
+                           Status);
+                        exit when E.Is_Error (Status);
+
+                        Start := Finish + 1;
+                     end;
+                  end loop;
+               end;
                exit when E.Is_Error (Status);
 
                Charge (Item, Projecting, Mark);

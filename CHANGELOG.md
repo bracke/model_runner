@@ -55,6 +55,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A round of hybrid sessions read the first member's state for every
+  row.** The batch ran the rule over all of a round's rows as one
+  session's chunk, and every member after the first went on from the
+  first member's ring: the second member of a round of two disagreed
+  with the same sequence alone by whole logits, on the processor and on
+  the device alike. The rule runs over each member's own run of rows
+  and its own ring now, and a round of hybrids is tested for it, a row
+  each and with a run of two.
 - **A layer's answer carried out on the device was lost when the next
   layer refused it before running.** A whole layer refused by its own
   guards -- a shape its sequence does not take, which the layer before
@@ -224,6 +232,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A round of hybrid sessions runs its rule on the device, a ring a
+  member.** The device's state room seats every session's ring, one
+  after another past a table of runs at its front -- a session takes
+  the first gap its ring fits and gives it back at its close or when
+  its ring changes size -- and the convolution and the rule read the
+  table: one run a session, its rows one after another, so a round's
+  members go over side by side and a batch is one run. A round of two
+  hybrids on the device says what each member says alone, a row each
+  and with a run of two.
 - **A hybrid's linear layers go over whole, ring and all.** The gated
   delta rule and the convolution before it ran on the host under the
   device backend, with the layer's five products going over one
@@ -241,9 +258,7 @@ Keep a Changelog and the project uses semantic versioning.
   a layer from the first to the last: it reads a 101-token prompt and
   generates 64 on the device in 1.115 s against 1.383 with the rule on
   the host, 0.104 s evaluating against 0.106 and 1.019 s generating
-  against 1.240, the same text. A round of sessions keeps its
-  rule on the host, since its rows would take turns with the one ring
-  the device holds.
+  against 1.240, the same text.
 - **A hybrid's attention layers go over whole.** Qwen3.5's attention
   layers project each head's queries and a gate for the head in one
   tensor and multiply the blend by the logistic of the gate, and its

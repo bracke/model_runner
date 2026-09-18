@@ -2346,6 +2346,13 @@ private
       --  home first.
       State_On_Device : Boolean := False;
 
+      --  Where the session's ring lies in the device's state room, in
+      --  elements, while it holds a seat there; every session seated has
+      --  a ring of its own, so a round's members run their rule on the
+      --  device side by side.
+      State_Base   : Model_Runner.Numerics.Element_Count := 0;
+      State_Seated : Boolean := False;
+
       --  Room a linear layer's answers take on the way through: the
       --  mixed projections, the gate, the decays and rates, the blend;
       --  and a mixture's shared expert's arms.

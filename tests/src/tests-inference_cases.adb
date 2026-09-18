@@ -3009,6 +3009,203 @@ package body Tests.Inference_Cases is
       Stepped (3);
    end Round_Members_Get_What_They_Would_Alone;
 
+   ---------------------------------------------------------
+   -- A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State --
+   ---------------------------------------------------------
+
+   --  The same claim for the hybrid, whose linear layers keep a state a
+   --  session rather than keys and values: two members stepped as a round
+   --  say what each says alone, on the processor and on the device, where
+   --  the rule runs over a ring of states a member and a round's rows
+   --  are different members' -- and again with one member given two rows
+   --  a step, which is a run of two positions of one ring beside one of
+   --  the other.
+   procedure A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Steps : constant := 4;
+
+      First_Prompt  : constant array (1 .. Steps) of Vocab.Token_Id :=
+        [4, 5, 6, 7];
+      Second_Prompt : constant array (1 .. Steps) of Vocab.Token_Id :=
+        [9, 8, 7, 6];
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Image : B.Byte_Array_Access;
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind) is
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Able  : Boolean;
+
+         Alone_First, Alone_Second : Trail := [others => [others => 0.0]];
+         Status : E.Error_Info;
+
+         Name : constant String :=
+           Model_Runner.Backend.Backend_Name (Backend);
+
+         --  The processor's round is the same arithmetic in the same
+         --  order and answers to a ten-thousandth; the device's round
+         --  attends through a kernel of its own and its ring is read a
+         --  run at a time, and answers to a thousandth.
+         Bound : constant N.Real :=
+           (if Model_Runner.Backend."=" (Backend,
+                                         Model_Runner.Backend.Backend_CPU)
+            then 1.0E-4 else 2.0E-3);
+
+         function Worst_Of
+           (Both : Model_Runner.Tensors.Real_Array_Access;
+            Row  : Natural;
+            Want : Logit_Vector) return N.Real
+         is
+            Worst : N.Real := 0.0;
+         begin
+            for Index in Logit_Vector'Range loop
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Both.all (Both.all'First
+                                 + N.Element_Count (Row)
+                                   * N.Element_Count (Tiny_Model.Vocabulary)
+                                 + Index)
+                       - Want (Index)));
+            end loop;
+            return Worst;
+         end Worst_Of;
+      begin
+         Start (Under, Backend, Able);
+         if not Able then
+            return;
+         end if;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the first session did not open on " & Name);
+            for Step in First_Prompt'Range loop
+               L.Evaluate (Live, Under.Ready, First_Prompt (Step),
+                           Alone_First (Step), Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the first sequence failed on " & Name);
+            end loop;
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the second session did not open on " & Name);
+            for Step in Second_Prompt'Range loop
+               L.Evaluate (Live, Under.Ready, Second_Prompt (Step),
+                           Alone_Second (Step), Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the second sequence failed on " & Name);
+            end loop;
+            L.Close (Live);
+         end;
+
+         --  A row each, a step at a time.
+         declare
+            One, Two : aliased L.Session;
+            Both : Model_Runner.Tensors.Real_Array_Access := null;
+         begin
+            L.Open (One, Under.Ready, Status => Status);
+            L.Open (Two, Under.Ready, Status => Status);
+            Model_Runner.Tensors.Allocate
+              (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
+
+            for Step in First_Prompt'Range loop
+               L.Evaluate_Round
+                 (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+                  Source  => Under.Ready,
+                  Tokens  => [First_Prompt (Step), Second_Prompt (Step)],
+                  Logits  => Both,
+                  Status  => Status);
+               Assert (E.Is_Ok (Status),
+                       "a round of two hybrids failed at step"
+                       & Integer'Image (Step) & " on " & Name & ": "
+                       & E.Error_Code'Image (Status.Code));
+
+               Assert (Worst_Of (Both, 0, Alone_First (Step)) <= Bound,
+                       "the first member of a hybrid round differs from "
+                       & "the same sequence alone at step"
+                       & Integer'Image (Step) & " on " & Name & " by "
+                       & N.Real'Image
+                           (Worst_Of (Both, 0, Alone_First (Step))));
+               Assert (Worst_Of (Both, 1, Alone_Second (Step)) <= Bound,
+                       "the second member of a hybrid round differs from "
+                       & "the same sequence alone at step"
+                       & Integer'Image (Step) & " on " & Name & " by "
+                       & N.Real'Image
+                           (Worst_Of (Both, 1, Alone_Second (Step))));
+            end loop;
+
+            L.Close (One);
+            L.Close (Two);
+            Model_Runner.Tensors.Free (Both);
+         end;
+
+         --  The first member given two rows at once, the second one: two
+         --  steps of the first prompt and one of the second in one round.
+         declare
+            One, Two : aliased L.Session;
+            Both : Model_Runner.Tensors.Real_Array_Access := null;
+         begin
+            L.Open (One, Under.Ready, Status => Status);
+            L.Open (Two, Under.Ready, Status => Status);
+            Model_Runner.Tensors.Allocate
+              (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
+
+            L.Evaluate_Round
+              (Members => [One'Unchecked_Access, Two'Unchecked_Access],
+               Source  => Under.Ready,
+               Tokens  =>
+                 [First_Prompt (1), First_Prompt (2), Second_Prompt (1)],
+               Logits  => Both,
+               Shares  => [2, 1],
+               Status  => Status);
+            Assert (E.Is_Ok (Status),
+                    "a round with a run of two failed on " & Name & ": "
+                    & E.Error_Code'Image (Status.Code));
+            --  A member's logits are its last row's.
+            Assert (Worst_Of (Both, 0, Alone_First (2)) <= Bound,
+                    "the first member's run of two differs from the same "
+                    & "sequence alone on " & Name & " by "
+                    & N.Real'Image (Worst_Of (Both, 0, Alone_First (2))));
+            Assert (Worst_Of (Both, 1, Alone_Second (1)) <= Bound,
+                    "the second member beside a run of two differs from "
+                    & "the same sequence alone on " & Name & " by "
+                    & N.Real'Image (Worst_Of (Both, 1, Alone_Second (1))));
+
+            L.Close (One);
+            L.Close (Two);
+            Model_Runner.Tensors.Free (Both);
+         end;
+      end On;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
+
+      On (Model_Runner.Backend.Backend_CPU);
+
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if Awake then
+            On (Model_Runner.Backend.Backend_Device);
+            Model_Runner.Backend.Device.Close;
+         end if;
+      end;
+
+      B.Free (Image);
+   end A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State;
+
    --  Members of a round may bring pictures: rows given at the prompt's
    --  marker tokens, each member's read by its own rows alone. Two members
    --  with pictures -- one a run of two rows, one of three, the runs
@@ -11539,6 +11736,11 @@ package body Tests.Inference_Cases is
         (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
          "a model whose matrices are larger than the device will hold is "
          & "refused while it loads, with both numbers");
+      Register_Routine
+        (T, A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State'Access,
+         "a round of hybrid sessions gives each member what it would get "
+         & "alone, each over its own ring of states, on the processor and "
+         & "on the device, a row each and with a run of two");
       Register_Routine
         (T, Two_Backends_Agree_On_A_Long_Prompt'Access,
          "the processor and the device agree on a prompt long enough to "
