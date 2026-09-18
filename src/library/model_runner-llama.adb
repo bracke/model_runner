@@ -5331,23 +5331,21 @@ package body Model_Runner.Llama is
    -- Context_Room --
    ------------------
 
-   ---------------------------
-   -- Attention_Heads_Room --
-   ---------------------------
+   -----------------
+   -- Device_Room --
+   -----------------
 
-   procedure Attention_Heads_Room
-     (Item       : Session;
-      Head_Size  : out Natural;
-      Value_Size : out Natural;
-      Room       : out Natural;
-      Fits       : out Boolean)
+   procedure Device_Room
+     (Item  : Session;
+      Why   : out Device_Limit;
+      Asked : out Interfaces.Unsigned_64;
+      Kept  : out Interfaces.Unsigned_64)
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
-      Head_Size := 0;
-      Value_Size := 0;
-      Room := 0;
-      Fits := True;
+      Why := Device_Takes_All;
+      Asked := 0;
+      Kept := 0;
 
       if Item.Owner = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
@@ -5355,72 +5353,55 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Head_Size := Item.Owner.Settings.Head_Size;
-      Value_Size := Item.Owner.Settings.Value_Size;
-      Room := Model_Runner.Backend.Device.Attention_Head_Room;
-      Fits :=
-        Room = 0
-        or else (Head_Size <= Room and then Value_Size <= Room);
-   end Attention_Heads_Room;
+      declare
+         Settings : Configuration renames Item.Owner.Settings;
 
-   ------------------------
-   -- Packed_Heads_Room --
-   ------------------------
+         Head_Size  : constant Natural := Settings.Head_Size;
+         Value_Size : constant Natural := Settings.Value_Size;
 
-   procedure Packed_Heads_Room
-     (Item       : Session;
-      Head_Size  : out Natural;
-      Value_Size : out Natural;
-      Fits       : out Boolean)
-   is
-      use type Model_Runner.Backend.Backend_Kind;
-   begin
-      Head_Size := 0;
-      Value_Size := 0;
-      Fits := True;
+         Room : constant Natural :=
+           Model_Runner.Backend.Device.Attention_Head_Room;
 
-      if Item.Owner = null
-        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-        or else Item.Held not in Eighth | Fourth
-      then
-         return;
-      end if;
+         Wanted : constant Interfaces.Unsigned_64 :=
+           Model_Runner.Backend.Device.Cache_Bytes_For
+             (Block_Span_Of (Item)
+              + Element_Count (Model_Runner.Backend.Device.Table_Room)
+              + Element_Count (Model_Runner.Backend.Device.Sink_Room));
 
-      Head_Size := Item.Owner.Settings.Head_Size;
-      Value_Size := Item.Owner.Settings.Value_Size;
-      Fits :=
-        Model_Runner.Backend.Device.Attends_Packed_Heads
-          (Head_Size, Value_Size);
-   end Packed_Heads_Room;
+         Bound : constant Interfaces.Unsigned_64 :=
+           Model_Runner.Backend.Device.Cache_Bound;
+      begin
+         --  A head wider than the room a kernel keeps is attended on the
+         --  processor whatever the cache holds, so it is asked first and
+         --  the rest is not asked at all.
+         if Room > 0
+           and then (Head_Size > Room or else Value_Size > Room)
+         then
+            Why := Heads_Past_Room;
+            Asked := Interfaces.Unsigned_64 (Natural'Max (Head_Size, Value_Size));
+            Kept := Interfaces.Unsigned_64 (Room);
+            return;
+         end if;
 
-   procedure Context_Room
-     (Item   : Session;
-      Wanted : out Interfaces.Unsigned_64;
-      Bound  : out Interfaces.Unsigned_64;
-      Fits   : out Boolean)
-   is
-      use type Model_Runner.Backend.Backend_Kind;
-   begin
-      Wanted := 0;
-      Bound := 0;
-      Fits := True;
+         --  Then the packed kernel's own rule, for a session that packs.
+         if Item.Held in Eighth | Fourth
+           and then not Model_Runner.Backend.Device.Attends_Packed_Heads
+                          (Head_Size, Value_Size)
+         then
+            Why := Packed_Heads_Unread;
+            Asked := Interfaces.Unsigned_64 (Head_Size);
+            Kept := Interfaces.Unsigned_64 (Value_Size);
+            return;
+         end if;
 
-      if Item.Owner = null
-        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-      then
-         return;
-      end if;
-
-      --  What Take_Block will ask for: this session's block, the table a
-      --  round reads past it and a layer's sinks after that.
-      Wanted :=
-        Model_Runner.Backend.Device.Cache_Bytes_For
-          (Block_Span_Of (Item)
-           + Element_Count (Model_Runner.Backend.Device.Table_Room)
-           + Element_Count (Model_Runner.Backend.Device.Sink_Room));
-      Bound := Model_Runner.Backend.Device.Cache_Bound;
-      Fits := Bound = 0 or else Wanted <= Bound;
-   end Context_Room;
+         --  Then the size rather than the shape.
+         if Bound > 0 and then Wanted > Bound then
+            Why := Context_Past_Bound;
+            Asked := Wanted;
+            Kept := Bound;
+         end if;
+      end;
+   end Device_Room;
 
    procedure Take_Block (Item : Session_Access; Ok : out Boolean)
    is
@@ -5436,6 +5417,16 @@ package body Model_Runner.Llama is
         or else (Item.Held = Exact
                  and then (Item.Keys = null or else Item.Values = null))
         or else Item.Held = Halved
+        --  A head wider than the room the device's attention keeps is
+        --  attended on the processor whatever the cache holds, so the
+        --  cache is not put there: it was, and written every position,
+        --  for kernels that would refuse every layer that read it.
+        or else (Model_Runner.Backend.Device.Attention_Head_Room > 0
+                 and then
+                   (Item.Owner.Settings.Head_Size
+                    > Model_Runner.Backend.Device.Attention_Head_Room
+                    or else Item.Owner.Settings.Value_Size
+                            > Model_Runner.Backend.Device.Attention_Head_Room))
         or else (Item.Held in Eighth | Fourth
                  and then (Item.Byte_Keys = null or else Item.Byte_Values = null
                            or else Item.Key_Scales = null

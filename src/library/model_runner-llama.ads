@@ -1685,77 +1685,47 @@ package Model_Runner.Llama is
    --    rewind reaches anywhere.
    function States_Kept (Item : Session) return Natural;
 
-   --  What this session's context would take on the device, and whether
-   --  the device will hold it.
+   --  What the device will not do with this session, and the two numbers
+   --  that say why.
    --
-   --  The cache is one storage buffer -- binary32 with a half-precision
-   --  copy after it -- and a device states how much of one buffer a
-   --  shader may be given. A context past that is refused rather than
-   --  bound, and the session keeps its cache on the host and attends
-   --  there while its products stay on the device: correct, and slower
-   --  than it looks from outside, since every other number a run reports
-   --  is what it is when the whole model runs there. Phi-3 mini at its
-   --  own 4,096 asks for 4.8 GB on a part that holds 4 GiB of one
-   --  buffer. A caller that asks this before the run can say so.
+   --  Three things keep a session's attention off the device, and a run
+   --  that meets one is slower than it looks from outside: the products
+   --  stay there, every number the run reports reads as it does when the
+   --  whole model runs there, and the attention it is waiting on is on
+   --  the processor. They are asked as one because they are one question
+   --  -- what will the device not do with this model -- and because a
+   --  model that meets two should be told the one that decides.
    --
-   --  Wanted and Bound are zero, and Fits is True, where the backend is
-   --  not the device or none is open: nothing is refused there.
+   --  Heads_Past_Room first: a head wider than the room the kernels keep
+   --  is attended on the processor whatever the cache is kept in, so
+   --  nothing else about the cache matters. Then Packed_Heads_Unread,
+   --  which is the packed kernel's own rule -- it reads four elements of
+   --  a row at a time out of one word, so a head is a whole number of
+   --  fours -- and asked only of a session holding its cache packed.
+   --  Then Context_Past_Bound, which is the size rather than the shape:
+   --  the cache is one storage buffer there and a device states how much
+   --  of one a shader may be given.
    --
-   --  @param Item Open session.
-   --  @param Wanted Receives the bytes the context would take.
-   --  @param Bound Receives what one buffer may hold.
-   --  @param Fits Receives False only where the device will refuse it.
-   procedure Context_Room
-     (Item   : Session;
-      Wanted : out Interfaces.Unsigned_64;
-      Bound  : out Interfaces.Unsigned_64;
-      Fits   : out Boolean);
+   --  Device_Takes_All where the backend is not the device, or where it
+   --  will do all three.
+   type Device_Limit is
+     (Device_Takes_All, Heads_Past_Room, Packed_Heads_Unread,
+      Context_Past_Bound);
 
-   --  And whether the device's packed attention reads this model's heads,
-   --  for a session holding its cache packed.
-   --
-   --  That kernel reads four elements of a row at a time out of one word,
-   --  so a head is a whole number of fours, and it keeps room for a value
-   --  head of 256 at most. A model of another shape keeps its packed
-   --  cache on the processor and attends there -- correct, and worth
-   --  saying, since the same model with an exact cache would have gone
-   --  over whole.
-   --
-   --  The sizes are zero and Fits is True where the backend is not the
-   --  device or the cache is not packed: nothing is refused there.
-   --
    --  @param Item Open session.
-   --  @param Head_Size Receives the elements a key head holds.
-   --  @param Value_Size Receives the elements a value head holds.
-   --  @param Fits Receives False only where the kernel will not read them.
-   procedure Packed_Heads_Room
-     (Item       : Session;
-      Head_Size  : out Natural;
-      Value_Size : out Natural;
-      Fits       : out Boolean);
-
-   --  And whether the device's attention keeps room for this model's
-   --  heads at all, which is asked of every session rather than only a
-   --  packed one: a value head wider than the room the kernels keep is
-   --  attended on the processor, every layer, however the cache is kept
-   --  -- a kernel that wrote past what it kept would be worse than one
-   --  that says no. The products stay on the device and the run is
-   --  slower than one whose heads fit, with nothing else to show for it.
-   --
-   --  The sizes are zero and Fits is True where the backend is not the
-   --  device: nothing is refused there.
-   --
-   --  @param Item Open session.
-   --  @param Head_Size Receives the elements a key head holds.
-   --  @param Value_Size Receives the elements a value head holds.
-   --  @param Room Receives the widest head the device keeps room for.
-   --  @param Fits Receives False only where the heads are wider.
-   procedure Attention_Heads_Room
-     (Item       : Session;
-      Head_Size  : out Natural;
-      Value_Size : out Natural;
-      Room       : out Natural;
-      Fits       : out Boolean);
+   --  @param Why Receives which of them, or Device_Takes_All.
+   --  @param Asked Receives what this model or session asks for: the
+   --    wider of the two head widths for the first two, and the bytes
+   --    the context would take for the third.
+   --  @param Kept Receives what the device keeps: the room for a head
+   --    for the first, the value head's width for the second -- the two
+   --    a reader needs to see the rule -- and the bytes one buffer holds
+   --    for the third.
+   procedure Device_Room
+     (Item  : Session;
+      Why   : out Device_Limit;
+      Asked : out Interfaces.Unsigned_64;
+      Kept  : out Interfaces.Unsigned_64);
 
    --  Whether the model carries a block past its stack for drafting the
    --  token after the next, and the session can run it: a hybrid file's

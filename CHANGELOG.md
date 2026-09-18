@@ -246,6 +246,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the device will not do with a model is one question with one
+  answer.** The three things that keep a session's attention off the
+  device -- heads wider than the room a kernel keeps, a packed cache
+  whose rows that kernel does not read, and a context past what one
+  storage buffer holds -- were asked one at a time, and a model that
+  met two said two lines that did not say which decided. They are one
+  question now, answered in the order that decides: a head past the
+  room is attended on the processor whatever the cache holds, so
+  nothing about the cache is asked after it. And a model whose heads
+  are past that room no longer takes a block of the device's cache
+  either, which was written every position for kernels that would
+  refuse every layer that read it -- the same waste the packed shapes
+  had.
 - **Heads the device's attention keeps no room for are said at open as
   well.** A value head wider than the room the kernels keep -- 256
   elements -- is attended on the processor, every layer, whatever the

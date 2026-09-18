@@ -3201,8 +3201,11 @@ package body Tests.Inference_Cases is
          Live   : L.Session;
          Status : E.Error_Info;
 
-         Head_Size, Value_Size, Room : Natural;
-         Fits                        : Boolean;
+         use type Interfaces.Unsigned_64;
+         use type L.Device_Limit;
+
+         Why         : L.Device_Limit;
+         Asked, Kept : Interfaces.Unsigned_64;
       begin
          Model_Runner.Backend.Device.Open (Awake);
 
@@ -3225,16 +3228,17 @@ package body Tests.Inference_Cases is
                  "a session of a wide-headed model did not open: "
                  & E.Error_Code'Image (Status.Code));
 
-         L.Attention_Heads_Room (Live, Head_Size, Value_Size, Room, Fits);
+         L.Device_Room (Live, Why, Asked, Kept);
 
-         Assert (Head_Size > Room,
-                 "the wide fixture's heads" & Natural'Image (Head_Size)
+         Assert (Why = L.Heads_Past_Room,
+                 "a model whose heads are three times the deep fixture's "
+                 & "says the device will take it: "
+                 & L.Device_Limit'Image (Why));
+         Assert (Asked > Kept,
+                 "the wide fixture's heads" & Interfaces.Unsigned_64'Image (Asked)
                  & " are inside the room the device keeps,"
-                 & Natural'Image (Room) & ", so this says nothing");
-         Assert (not Fits,
-                 "a model whose heads are" & Natural'Image (Head_Size)
-                 & " wide says they fit the device's attention, which "
-                 & "keeps room for" & Natural'Image (Room));
+                 & Interfaces.Unsigned_64'Image (Kept)
+                 & ", so this says nothing");
 
          L.Close (Live);
          Model_Runner.Backend.Device.Close;
@@ -3281,65 +3285,29 @@ package body Tests.Inference_Cases is
             Status : E.Error_Info;
 
             use type Interfaces.Unsigned_64;
+            use type L.Device_Limit;
 
-            Wanted, Bound : Interfaces.Unsigned_64;
-            Fits          : Boolean;
+            Why         : L.Device_Limit;
+            Asked, Kept : Interfaces.Unsigned_64;
          begin
-            --  Packed, so that both halves of the question are the
-            --  session's own: what its context would take, and whether
-            --  the kernel reads the model's heads.
+            --  Packed, so that every one of the three is the session's
+            --  own question: the heads against the room a kernel keeps,
+            --  the packed rows against what that kernel reads, and the
+            --  context against what one storage buffer holds. This
+            --  fixture is inside all three.
             L.Open (Live, Under.Ready, Cache => L.Fourth, Status => Status);
             Assert (E.Is_Ok (Status), "a session did not open for its room");
 
-            L.Context_Room (Live, Wanted, Bound, Fits);
+            L.Device_Room (Live, Why, Asked, Kept);
 
-            --  And the other half of the same question, which a packed
-            --  session asks of the model's heads rather than the
-            --  context's size: this fixture's are four wide, a whole
-            --  number of fours, so the kernel reads them.
-            declare
-               Head_Size, Value_Size : Natural;
-               Reads                 : Boolean;
-            begin
-               L.Packed_Heads_Room (Live, Head_Size, Value_Size, Reads);
-
-               --  And the room the device's attention keeps, which this
-               --  fixture's four-wide heads are far inside.
-               declare
-                  Wide_Head, Wide_Value, Room : Natural;
-                  Inside                      : Boolean;
-               begin
-                  L.Attention_Heads_Room
-                    (Live, Wide_Head, Wide_Value, Room, Inside);
-                  Assert (Room > 0,
-                          "the device's attention says it keeps room for no "
-                          & "head at all");
-                  Assert (Inside,
-                          "the fixture's heads" & Natural'Image (Wide_Head)
-                          & " wide are past the room the device keeps,"
-                          & Natural'Image (Room));
-               end;
-               Assert (Head_Size = Tiny_Model.Head_Size
-                       and then Value_Size = Tiny_Model.Head_Size,
-                       "a packed session says its heads are"
-                       & Natural'Image (Head_Size) & " and"
-                       & Natural'Image (Value_Size)
-                       & " wide, and the fixture's are"
-                       & Natural'Image (Tiny_Model.Head_Size));
-               Assert (Reads,
-                       "the device's packed attention will not read the "
-                       & "fixture's heads");
-            end;
-
-            Assert (Wanted > 0,
-                    "a session on the device says its context takes nothing");
-            Assert (Bound > 0,
-                    "the device states no bound on one storage buffer");
-            Assert (Fits,
-                    "a fixture's context does not fit on the device, which "
-                    & "holds" & Interfaces.Unsigned_64'Image (Bound)
-                    & " bytes of one buffer against its"
-                    & Interfaces.Unsigned_64'Image (Wanted));
+            Assert (Why = L.Device_Takes_All,
+                    "the device will not take the fixture whole: "
+                    & L.Device_Limit'Image (Why) & ", asked"
+                    & Interfaces.Unsigned_64'Image (Asked) & " against"
+                    & Interfaces.Unsigned_64'Image (Kept));
+            Assert (Asked = 0 and then Kept = 0,
+                    "a session the device takes whole says numbers about "
+                    & "what it would not take");
 
             L.Close (Live);
          end;

@@ -2359,82 +2359,46 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
-         --  A context the device will not hold, said before the run
-         --  rather than left to be inferred from one that was slower than
-         --  it looked: the cache is one storage buffer there, a device
-         --  states how much of one a shader may be given, and a context
-         --  past that keeps to the processor and attends there while the
-         --  products stay on the device. Every other number the run
-         --  reports reads as it does when the whole model runs there.
+         --  What the device will not do with this model, said before the
+         --  run rather than left to be inferred from one that was slower
+         --  than it looked. Three things keep attention off it -- heads
+         --  wider than the room a kernel keeps, a packed cache whose rows
+         --  that kernel does not read, and a context past what one
+         --  storage buffer holds -- and the products stay there through
+         --  all of them, so every other number the run reports reads as
+         --  it does when the whole model runs on the device. The engine
+         --  says which of the three decides, and one line says it.
          declare
-            Wanted, Bound : Interfaces.Unsigned_64;
-            Fits          : Boolean;
+            Why         : L.Device_Limit;
+            Asked, Kept : Interfaces.Unsigned_64;
+
+            function Shown (Value : Interfaces.Unsigned_64) return String
+            is (Model_Runner.Text.Image (Long_Long_Integer (Value)));
          begin
-            L.Context_Room (Session, Wanted, Bound, Fits);
+            L.Device_Room (Session, Why, Asked, Kept);
 
-            if not Fits then
-               Screen.Put_Message
-                 ("cli.note.context_off_device",
-                  [Loc.Named
-                     ("value",
-                      Model_Runner.Text.Image (Long_Long_Integer (Wanted))),
-                   Loc.Named
-                     ("total",
-                      Model_Runner.Text.Image (Long_Long_Integer (Bound)))]);
-            end if;
-         end;
+            case Why is
+               when L.Device_Takes_All =>
+                  null;
 
-         --  And heads the device's attention keeps no room for at all,
-         --  whatever the cache is kept in: a kernel that wrote past what
-         --  it kept would be worse than one that says no, so such a
-         --  model attends on the processor every layer while its
-         --  products stay on the device -- and the run is slower than
-         --  one whose heads fit with nothing else to show for it.
-         declare
-            Head_Size, Value_Size, Room : Natural;
-            Fits                        : Boolean;
-         begin
-            L.Attention_Heads_Room
-              (Session, Head_Size, Value_Size, Room, Fits);
+               when L.Heads_Past_Room =>
+                  Screen.Put_Message
+                    ("cli.note.heads_off_device",
+                     [Loc.Named ("value", Shown (Asked)),
+                      Loc.Named ("total", Shown (Kept))]);
 
-            if not Fits then
-               Screen.Put_Message
-                 ("cli.note.heads_off_device",
-                  [Loc.Named
-                     ("value",
-                      Model_Runner.Text.Image
-                        (Long_Long_Integer
-                           (Natural'Max (Head_Size, Value_Size)))),
-                   Loc.Named
-                     ("total",
-                      Model_Runner.Text.Image (Long_Long_Integer (Room)))]);
-            end if;
-         end;
+               when L.Packed_Heads_Unread =>
+                  Screen.Put_Message
+                    ("cli.note.packed_heads_off_device",
+                     [Loc.Named ("value", Shown (Asked)),
+                      Loc.Named ("total", Shown (Kept))]);
 
-         --  And a packed context the device's attention will not read,
-         --  which is the model's shape rather than the context's size:
-         --  the kernel takes four elements of a row at a time out of one
-         --  word, so a head is a whole number of fours. Said here for the
-         --  same reason -- the same model with an exact cache would have
-         --  gone over whole, and nothing else in the run says why this
-         --  one did not.
-         declare
-            Head_Size, Value_Size : Natural;
-            Fits                  : Boolean;
-         begin
-            L.Packed_Heads_Room (Session, Head_Size, Value_Size, Fits);
-
-            if not Fits then
-               Screen.Put_Message
-                 ("cli.note.packed_heads_off_device",
-                  [Loc.Named
-                     ("value",
-                      Model_Runner.Text.Image (Long_Long_Integer (Head_Size))),
-                   Loc.Named
-                     ("total",
-                      Model_Runner.Text.Image
-                        (Long_Long_Integer (Value_Size)))]);
-            end if;
+               when L.Context_Past_Bound =>
+                  Screen.Put_Message
+                    ("cli.note.context_off_device",
+                     [Loc.Named ("value", Shown (Asked)),
+                      Loc.Named ("total", Shown (Kept))]);
+            end case;
          end;
 
          --  An option that cannot do anything here says so rather than
