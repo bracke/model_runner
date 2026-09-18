@@ -232,6 +232,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's rule takes a prompt in chunks.** `rule.comp` ran the
+  gated delta rule a position at a time, reading and writing a head's
+  state for each -- a square of the head through the cache twice for a
+  few thousand multiplications -- and a prompt's rule was most of a
+  linear layer's time on the device: 6.5 ms a layer of Qwen3.5-0.8B at
+  a hundred and one positions, against 1.2 for the five products
+  around it. It takes a run in chunks of sixteen positions now,
+  unrolled from the state the chunk began with as the host's kernel
+  unrolls them -- the state read once for every key and query of the
+  chunk, the corrections and the answers out of two triangles, the
+  state read once more and written for the positions the ring keeps --
+  and a chunk's count is a compile-time constant, the run taken in
+  whole chunks and then in halves so that each is its own copy of the
+  kernel with its loops unrolled. 0.85 ms a layer, and 40 microseconds
+  for the single position a token generated against 79; Qwen3.5-0.8B
+  reads the prompt in 0.058 s against 0.077 and generates sixty-four in
+  1.05 s against 1.12. The same numbers as the host's, associated as
+  its triangles are.
 - **A round of hybrid sessions runs its rule on the device, a ring a
   member.** The device's state room seats every session's ring, one
   after another past a table of runs at its front -- a session takes
@@ -248,10 +266,8 @@ Keep a Changelog and the project uses semantic versioning.
   and most of a token. `conv.comp` convolves each position over the
   memory a ring of slots keeps and writes the memory each position
   leaves; `rule.comp` runs the rule a value head at a time over the
-  batch in order, reading and writing the state once a position -- the
-  same numbers as the host's chunked kernel, associated as the rule
-  states them, held to it within a ten-thousandth over a ring that
-  wraps. The ring lives in a room of the device's the session takes,
+  batch in order, held to the host's chunked kernel within a
+  ten-thousandth over a ring that wraps. The ring lives in a room of the device's the session takes,
   goes over once and comes home when the host is about to read it -- a
   snapshot, a change of how many states are kept, a layer the device
   will not take -- so a token of Qwen3.5-0.8B is one chained sequence

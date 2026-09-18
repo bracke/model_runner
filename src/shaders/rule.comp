@@ -1,5 +1,7 @@
 #version 450
 
+#extension GL_EXT_control_flow_attributes : enable
+
 //  The gated delta rule of a hybrid's linear layer, a head at a time,
 //  over a batch of positions in order.
 //
@@ -7,12 +9,41 @@
 //  a_t S_(t-1) + k_t u_t', with u_t = b_t (v_t - a_t S_(t-1)' k_t), and
 //  its answer is S_t' q_t, scaled, normalized over the head by its own
 //  mean square and a gain, and gated by the logistic-weighted unit of z.
-//  The host unrolls a chunk of this into triangles so that the state is
-//  read once for the chunk; here the state is read and written once a
-//  position, which is a head's square twice through the cache for each
-//  -- and the same numbers, associated in the order the rule states them
-//  rather than the order the triangles do, which the sweep holds to its
-//  tolerance.
+//
+//  Unrolled over a chunk of positions from the state S_0 the chunk began
+//  with, as the host unrolls it, with g_t the product of the decays up
+//  to t and g_(s..t) the product from s + 1 to t:
+//
+//    S_t = g_t S_0 + sum over s <= t of g_(s..t) k_s u_s'
+//    u_s = b_s (v_s - g_s S_0' k_s - sum over r < s of g_(r..s) (k_r . k_s) u_r)
+//    o_t = g_t S_0' q_t + sum over s <= t of g_(s..t) (k_s . q_t) u_s
+//
+//  So the state is read once for every key and query of the chunk, the
+//  corrections come out of a triangle of the keys against each other,
+//  the answers out of a triangle of the keys against the queries, and
+//  the state is read once more and written for the states the chunk
+//  leaves. A position at a time, the state went through the cache twice
+//  a position -- a head's square, read and written, for a few thousand
+//  multiplications -- and a prompt's rule was most of a linear layer's
+//  time: 6.5 milliseconds a layer of Qwen3.5-0.8B at a hundred and one
+//  positions. A chunk reads it twice for sixteen positions and writes
+//  it for the one or two the ring keeps, and each row read feeds
+//  thirty-two independent products, which is what a lane needs to have
+//  something to do while the next rows are on their way: 0.85
+//  milliseconds a layer, and the same numbers as the host's chunk,
+//  associated as its triangles are.
+//
+//  A workgroup is two waves of a head and a run, and a prompt's layer
+//  is sixteen of them, so the device has a wave or two a unit and
+//  nothing to switch to while one waits; what the kernel is shaped by
+//  is the waits it exposes rather than the work it issues. The rows
+//  are loaded sixteen at a time before any is used, the keys and
+//  queries go through shared memory as vectors, the roots are folded
+//  as a tree, and a chunk's count is a compile-time constant -- the
+//  run is taken in whole chunks and then in halves, each its own copy
+//  of the kernel, so a chunk's loops unroll and a lane's numbers stay
+//  in registers; the single position a token generated is the copy
+//  made for one.
 //
 //  The decay is exp(A_log times the softplus of alpha plus dt's bias)
 //  and the rate the logistic of beta, one number a head a position, as
@@ -20,18 +51,26 @@
 //  another in the weight the device keeps for this step.
 //
 //  The state the batch begins with is in a slot of the ring, and each
-//  position's goes to the slot the position after it reads -- every
-//  position's, where the host writes only the ones it may rewind to,
-//  which leaves the slots the same, since a slot holds the last of the
-//  positions that map to it. A head's state is Head rows of Head,
-//  key-major: row i holds S (i, j) for every j, so a lane is a j and a
-//  row read is one read a lane, in step.
+//  position's goes to the slot the position after it reads: the ones
+//  the host keeps, which are a run's last Slots positions, since a slot
+//  holds the last of the positions that map to it; and each chunk's
+//  last, which the chunk after it begins from. A head's state is Head
+//  rows of Head, key-major: row i holds S (i, j) for every j, so a lane
+//  is a j and a row read is one read a lane, in step.
 //
 //  The batch is runs of positions, each run one session's, as the
 //  convolution's table says: a workgroup a value head and a run, its
 //  lanes over the columns of the state, the run's positions in order.
 
 const uint LANES = 128u;
+
+//  Positions a chunk takes at once. A lane holds a chunk's numbers for
+//  its column in registers -- what the state says of each key and each
+//  query, and each correction -- so this is bounded by what a lane can
+//  hold without spilling.
+const uint CHUNK = 16u;
+
+const uint NOWHERE = 0xFFFFFFFFu;
 
 layout(local_size_x = LANES) in;
 
@@ -89,7 +128,47 @@ layout(push_constant) uniform Shape {
     uint unused[8];
 } shape;
 
-shared float partial[LANES];
+//  The state's rows a lane takes at once: four, which is a vector of
+//  the keys, so a step over the rows reads a position's keys as one.
+//  A row at a time, a lane waited out the memory for every row and
+//  The state's rows a lane takes at once, in vectors of four, which is
+//  how the keys are staged: the loads of a step are on their way
+//  together, and a row at a time a lane waited out the memory for
+//  every row.
+const uint ROWS = 16u;
+const uint VECS = ROWS / 4u;
+
+//  Columns of a head the chunk's keys and queries are staged in shared
+//  memory at a time, and the stride between positions there, in
+//  vectors: one past the piece, so that the lanes reading different
+//  positions are in different banks.
+const uint PIECE = LANES;
+const uint STRIDE = PIECE / 4u + 1u;
+
+//  The chunk's numbers every lane reads: the decay and the rate a
+//  position, the products of decays from one position to another, the
+//  two triangles, where each position's state is written, and the root
+//  of each position's mean square.
+shared float decay[CHUNK];
+shared float rate[CHUNK];
+shared float between[CHUNK * CHUNK];
+shared float gram[CHUNK * CHUNK];
+shared float cross[CHUNK * CHUNK];
+shared uint written[CHUNK];
+shared float root[CHUNK];
+
+//  A piece of the chunk's keys and queries, in vectors of four columns.
+//  Read from the rows where they lie, a lane's reads of the keys were
+//  the same for every lane, which the compiler made scalar loads --
+//  thirty-two a row of the state, more than the scalar registers hold
+//  on their way, so each waited for the one before; and the triangles'
+//  reads were scattered over the chunk's rows, a cache line a lane a
+//  step.
+shared vec4 keys[CHUNK * STRIDE];
+shared vec4 queries[CHUNK * STRIDE];
+
+//  Every lane's sum of squares of every position, for the roots.
+shared float partial[CHUNK * LANES];
 
 float logistic(float v) {
     return 1.0 / (1.0 + exp(-clamp(v, -60.0, 60.0)));
@@ -99,10 +178,302 @@ float softplus(float v) {
     return v > 20.0 ? v : log(1.0 + exp(v));
 }
 
+//  The workgroup's run, head and lane, for the chunks.
+uint lane;
+uint h;
+uint first;
+uint run_count;
+uint row0;
+uint slots;
+uint head;
+uint key_of;
+uint query_of;
+uint value_of;
+uint answer;
+uint head_at;
+uint kept_from;
+float a_log;
+float dt_bias;
+
+//  A position's row in the source, and in the answer.
+#define ROW(t) ((row0 + done + (t)) * shape.mix)
+#define OUT(t) ((row0 + done + (t)) * answer + h * head)
+
+//  The keys and queries of the chunk's n positions from column p0,
+//  into shared memory; the lanes have to be through with the piece
+//  before, and the piece has to be there before anybody reads it.
+void stage(const uint n, uint done, uint p0) {
+    uint i = p0 + lane;
+    bool inside = i < head;
+
+    barrier();
+
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        keys[t * STRIDE + lane / 4u][lane % 4u] =
+            inside ? x[ROW(t) + key_of + i] : 0.0;
+        queries[t * STRIDE + lane / 4u][lane % 4u] =
+            inside ? x[ROW(t) + query_of + i] : 0.0;
+    }
+
+    barrier();
+}
+
+//  One chunk of n positions from position done of the run, beginning
+//  from the state in read_at. The count is a constant at every call,
+//  so that each call is its own kernel once the compiler is through:
+//  the loops over the chunk's positions unroll to the count, and a
+//  lane's numbers for its column stay in registers.
+void chunk(const uint n, uint done, uint read_at) {
+    //  The decay and the rate a position, where each position's state
+    //  goes, and the products of the decays: lane t for position t, and
+    //  then between (s, t) for s <= t is the decays from s + 1 to t, one
+    //  for s = t -- products and not quotients of a running product,
+    //  since a decay can be very small.
+    if (lane < CHUNK) {
+        uint t = lane;
+        if (t < n) {
+            uint p = row0 + done + t;
+            float alpha = r[shape.alpha_at + p * shape.value_heads + h];
+            float beta = r[shape.beta_at + p * shape.value_heads + h];
+            decay[t] = exp(a_log * softplus(alpha + dt_bias));
+            rate[t] = logistic(beta);
+
+            uint slot = (first + done + t + 1u) % slots;
+            bool keep = done + t >= kept_from || t == n - 1u;
+            written[t] = keep ? head_at + slot * shape.every : NOWHERE;
+        } else {
+            decay[t] = 1.0;
+            rate[t] = 0.0;
+            written[t] = NOWHERE;
+        }
+    }
+
+    barrier();
+
+    if (lane < CHUNK) {
+        uint sfrom = lane;
+        float product = 1.0;
+        between[sfrom * CHUNK + sfrom] = 1.0;
+        for (uint t = sfrom + 1u; t < CHUNK; t++) {
+            product *= decay[t];
+            between[sfrom * CHUNK + t] = product;
+        }
+    }
+
+    //  The two triangles: the keys against each other, gram (a, b) for
+    //  a < b, and against the queries, cross (a, b) for a <= b, an
+    //  entry a lane, summed over the pieces as they are staged for the
+    //  first columns' pass.
+    float kk[CHUNK * CHUNK / LANES];
+    float kq[CHUNK * CHUNK / LANES];
+
+    [[unroll]] for (uint e = 0u; e < CHUNK * CHUNK / LANES; e++) {
+        kk[e] = 0.0;
+        kq[e] = 0.0;
+    }
+
+    //  The columns of the state, LANES at a time.
+    for (uint g = 0u; g < head; g += LANES) {
+        //  A lane past the head takes the first column: it reads what
+        //  lane 0 reads and computes what lane 0 computes, so what it
+        //  writes there is what lane 0 writes, and nothing it does needs
+        //  guarding but its square, which would count the column twice.
+        uint j = g + lane;
+        bool live = j < head;
+        uint column = live ? j : 0u;
+
+        //  What the state says of every key and every query of the
+        //  chunk, from one pass over the state's rows, ROWS of them on
+        //  their way at once, a piece of the keys and queries at a
+        //  time. A row past the head is nothing, and what it reads of
+        //  the piece is within it, so nothing needs guarding but the
+        //  row.
+        float of_key[CHUNK];
+        float of_query[CHUNK];
+        float fix[CHUNK];
+
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            of_key[t] = 0.0;
+            of_query[t] = 0.0;
+        }
+
+        for (uint p0 = 0u; p0 < head; p0 += PIECE) {
+            stage(n, done, p0);
+
+            uint span = min(PIECE, head - p0);
+
+            if (g == 0u) {
+                [[unroll]] for (uint e = 0u; e < CHUNK * CHUNK / LANES; e++) {
+                    uint entry = lane + e * LANES;
+                    uint a = entry / CHUNK;
+                    uint b = entry % CHUNK;
+
+                    if (a <= b && b < n) {
+                        for (uint c = 0u; c < (span + 3u) / 4u; c++) {
+                            vec4 key = keys[a * STRIDE + c];
+                            kk[e] += dot(key, keys[b * STRIDE + c]);
+                            kq[e] += dot(key, queries[b * STRIDE + c]);
+                        }
+                    }
+                }
+            }
+
+            for (uint i0 = 0u; i0 < span; i0 += ROWS) {
+                vec4 state[VECS];
+
+                [[unroll]] for (uint v = 0u; v < VECS; v++) {
+                    [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                        uint i = p0 + i0 + v * 4u + k;
+                        state[v][k] = i < head ? s[read_at + i * head + column] : 0.0;
+                    }
+                }
+
+                [[unroll]] for (uint t = 0u; t < n; t++) {
+                    [[unroll]] for (uint v = 0u; v < VECS; v++) {
+                        vec4 key = keys[t * STRIDE + i0 / 4u + v];
+                        vec4 query = queries[t * STRIDE + i0 / 4u + v];
+                        [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                            of_key[t] += state[v][k] * key[k];
+                            of_query[t] += state[v][k] * query[k];
+                        }
+                    }
+                }
+            }
+        }
+
+        if (g == 0u) {
+            [[unroll]] for (uint e = 0u; e < CHUNK * CHUNK / LANES; e++) {
+                gram[lane + e * LANES] = kk[e];
+                cross[lane + e * LANES] = kq[e];
+            }
+
+            barrier();
+        }
+
+        //  The corrections, each from the ones before it: g_s is the
+        //  decays from the chunk's start through s. The triangle is
+        //  taken square, the half above the diagonal by nothing, so
+        //  that every index is a constant and the corrections stay in
+        //  registers.
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            fix[t] = 0.0;
+        }
+
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            float g_t = between[t] * decay[0];
+            float u = x[ROW(t) + value_of + column] - g_t * of_key[t];
+            [[unroll]] for (uint q = 0u; q < n; q++) {
+                float weight = q < t ? between[q * CHUNK + t] * gram[q * CHUNK + t] : 0.0;
+                u -= weight * fix[q];
+            }
+            fix[t] = u * rate[t];
+        }
+
+        //  The answers, scaled, and each one's square into the sum the
+        //  root comes from; the normalization waits for every column's
+        //  square.
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            float o = between[t] * decay[0] * of_query[t];
+            [[unroll]] for (uint q = 0u; q < n; q++) {
+                float weight = q <= t ? between[q * CHUNK + t] * cross[q * CHUNK + t] : 0.0;
+                o += weight * fix[q];
+            }
+            o *= uintBitsToFloat(shape.scale);
+            y[OUT(t) + column] = o;
+            float square = live ? o * o : 0.0;
+            if (g == 0u) {
+                partial[t * LANES + lane] = square;
+            } else {
+                partial[t * LANES + lane] += square;
+            }
+        }
+
+        //  The states the chunk leaves, a row at a time from the row it
+        //  began with: each position's is the one before decayed and
+        //  corrected, and the ones nobody asks for are not written. The
+        //  row is read before any position's is written, so a slot
+        //  written may be the slot read.
+        for (uint p0 = 0u; p0 < head; p0 += PIECE) {
+            //  Still there from the pass before, where one piece is the
+            //  head.
+            if (head > PIECE) {
+                stage(n, done, p0);
+            }
+
+            uint span = min(PIECE, head - p0);
+
+            for (uint i0 = 0u; i0 < span; i0 += ROWS) {
+                vec4 row[VECS];
+
+                [[unroll]] for (uint v = 0u; v < VECS; v++) {
+                    [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                        uint i = p0 + i0 + v * 4u + k;
+                        row[v][k] = i < head ? s[read_at + i * head + column] : 0.0;
+                    }
+                }
+
+                [[unroll]] for (uint t = 0u; t < n; t++) {
+                    [[unroll]] for (uint v = 0u; v < VECS; v++) {
+                        row[v] = row[v] * decay[t] + keys[t * STRIDE + i0 / 4u + v] * fix[t];
+                    }
+
+                    uint to = written[t];
+                    if (to != NOWHERE) {
+                        [[unroll]] for (uint v = 0u; v < VECS; v++) {
+                            [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                                uint i = p0 + i0 + v * 4u + k;
+                                if (i < head) {
+                                    s[to + i * head + column] = row[v][k];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    barrier();
+
+    //  Each position's root from every lane's sum: the partials folded
+    //  in halves, every position's at once.
+    for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
+        if (lane < reach) {
+            [[unroll]] for (uint t = 0u; t < n; t++) {
+                partial[t * LANES + lane] += partial[t * LANES + lane + reach];
+            }
+        }
+        barrier();
+    }
+
+    if (lane < n) {
+        root[lane] = 1.0 / sqrt(partial[lane * LANES] / float(head)
+                                + uintBitsToFloat(shape.epsilon));
+    }
+
+    barrier();
+
+    //  The answers normalized and gated.
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        for (uint j = lane; j < head; j += LANES) {
+            uint o_at = OUT(t) + j;
+            float z = r[shape.z_at + (row0 + done + t) * answer + h * head + j];
+            float gain = w[shape.base + 2u * shape.value_heads + j];
+            y[o_at] = y[o_at] * root[t] * gain * logistic(z) * z;
+        }
+    }
+
+    //  The chunk's last state has to land before the next chunk reads
+    //  it, and the shared numbers have to be read out before the next
+    //  chunk writes them.
+    memoryBarrierBuffer();
+    barrier();
+}
+
 void main() {
-    uint h = gl_WorkGroupID.x;
+    h = gl_WorkGroupID.x;
     uint run = gl_WorkGroupID.y;
-    uint lane = gl_LocalInvocationID.x;
+    lane = gl_LocalInvocationID.x;
 
     if (h >= shape.value_heads || run >= shape.runs) {
         return;
@@ -110,92 +481,54 @@ void main() {
 
     uint at = shape.table_at + run * 5u;
     uint base = tab[at];
-    uint first = tab[at + 1u];
-    uint run_count = tab[at + 2u];
-    uint row0 = tab[at + 3u];
-    uint slots = tab[at + 4u];
+    first = tab[at + 1u];
+    run_count = tab[at + 2u];
+    row0 = tab[at + 3u];
+    slots = tab[at + 4u];
 
-    uint head = shape.head;
-    uint square = head * head;
+    head = shape.head;
     uint kh = h % shape.key_heads;
-    float a_log = w[shape.base + h];
-    float dt_bias = w[shape.base + shape.value_heads + h];
-    float scale = uintBitsToFloat(shape.scale);
-    float epsilon = uintBitsToFloat(shape.epsilon);
+    query_of = kh * head;
+    key_of = shape.key_width + kh * head;
+    value_of = 2u * shape.key_width + h * head;
+    answer = shape.value_heads * head;
+    a_log = w[shape.base + h];
+    dt_bias = w[shape.base + shape.value_heads + h];
 
-    //  The slot read walks the ring a position at a time, and the slot
-    //  written is the one after it: counted rather than divided, since
-    //  a remainder by a number nobody knows at compile time is a long
-    //  instruction sequence, twice a position.
-    uint read_slot = first % slots;
-    uint head_at = base + shape.state_at + h * square;
+    //  The slot a chunk begins from walks the ring a chunk at a time,
+    //  and the slot a position writes is the one after its own.
+    head_at = base + shape.state_at + h * head * head;
 
-    for (uint p = 0u; p < run_count; p++) {
-        uint t = row0 + p;
-        uint row = t * shape.mix;
-        uint q_at = row + kh * head;
-        uint k_at = row + shape.key_width + kh * head;
-        uint v_at = row + 2u * shape.key_width + h * head;
+    //  The first position the host keeps the state of.
+    kept_from = run_count > slots ? run_count - slots : 0u;
 
-        uint write_slot = read_slot + 1u == slots ? 0u : read_slot + 1u;
-        uint read_at = head_at + read_slot * shape.every;
-        uint write_at = head_at + write_slot * shape.every;
+    //  The run in chunks: whole ones while they last, then the rest in
+    //  halves, so that a single position -- a token generated -- takes
+    //  the kernel made for one.
+    uint done = 0u;
 
-        float alpha = r[shape.alpha_at + t * shape.value_heads + h];
-        float beta = r[shape.beta_at + t * shape.value_heads + h];
-        float a = exp(a_log * softplus(alpha + dt_bias));
-        float b = logistic(beta);
+    while (done < run_count) {
+        uint left = run_count - done;
+        uint read_at = head_at + ((first + done) % slots) * shape.every;
+        uint n;
 
-        float sum = 0.0;
-
-        for (uint j = lane; j < head; j += LANES) {
-            //  The correction: what the decayed state already says
-            //  about this key, taken off the value and rated.
-            float said = 0.0;
-            for (uint i = 0u; i < head; i++) {
-                said += s[read_at + i * head + j] * x[k_at + i];
-            }
-            float u = b * (x[v_at + j] - a * said);
-
-            //  The state decayed and corrected, and the answer read
-            //  out of it as it is written.
-            float o = 0.0;
-            for (uint i = 0u; i < head; i++) {
-                float made = a * s[read_at + i * head + j] + x[k_at + i] * u;
-                s[write_at + i * head + j] = made;
-                o += made * x[q_at + i];
-            }
-
-            o *= scale;
-            y[t * shape.value_heads * head + h * head + j] = o;
-            sum += o * o;
+        if (left >= CHUNK) {
+            n = CHUNK;
+            chunk(CHUNK, done, read_at);
+        } else if (left >= CHUNK / 2u) {
+            n = CHUNK / 2u;
+            chunk(CHUNK / 2u, done, read_at);
+        } else if (left >= CHUNK / 4u) {
+            n = CHUNK / 4u;
+            chunk(CHUNK / 4u, done, read_at);
+        } else if (left >= CHUNK / 8u) {
+            n = CHUNK / 8u;
+            chunk(CHUNK / 8u, done, read_at);
+        } else {
+            n = 1u;
+            chunk(1u, done, read_at);
         }
 
-        //  The head's mean square, folded.
-        partial[lane] = sum;
-        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
-            barrier();
-            if (lane < reach) {
-                partial[lane] += partial[lane + reach];
-            }
-        }
-        barrier();
-
-        float root = 1.0 / sqrt(partial[0] / float(head) + epsilon);
-
-        for (uint j = lane; j < head; j += LANES) {
-            uint at = t * shape.value_heads * head + h * head + j;
-            float z = r[shape.z_at + t * shape.value_heads * head + h * head + j];
-            float gain = w[shape.base + 2u * shape.value_heads + j];
-            y[at] = y[at] * root * gain * (z / (1.0 + exp(-clamp(z, -60.0, 60.0))));
-        }
-
-        //  The write of this position's state has to land before the
-        //  next position reads it -- the same slot where the ring is
-        //  one -- and every lane wrote rows every other lane reads.
-        memoryBarrierBuffer();
-        barrier();
-
-        read_slot = write_slot;
+        done += n;
     }
 }

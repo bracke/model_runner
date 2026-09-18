@@ -1029,10 +1029,12 @@ package Model_Runner.Platform.Device.Products is
    --  device keeps -- A_log a value head, dt's bias a value head, then
    --  the gain a column, in Base, Span and At_Byte -- and the state of
    --  every value head in the slot of the state buffer the ring says; it
-   --  writes each position's answer, Value_Heads heads of Head, and each
-   --  position's state into the slot the position after it reads. The
-   --  same numbers as the host's chunked rule, associated as the rule
-   --  states them rather than as the triangles do.
+   --  writes each position's answer, Value_Heads heads of Head, and the
+   --  states the ring keeps -- a run's last Slots positions', each into
+   --  the slot the position after it reads. The run goes in chunks of
+   --  sixteen positions unrolled from the state each began with, as the
+   --  host's rule goes: the same numbers, associated as its triangles
+   --  are.
    --
    --  @param Steps Sequence to add to.
    --  @param Base First byte of the storage the weight lies in.
