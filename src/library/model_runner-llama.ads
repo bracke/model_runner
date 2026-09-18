@@ -1703,8 +1703,10 @@ package Model_Runner.Llama is
    --  a row at a time out of one word, so a head is a whole number of
    --  fours -- and asked only of a session holding its cache packed.
    --  Then Context_Past_Bound, which is the size rather than the shape:
-   --  the cache is one storage buffer there and a device states how much
-   --  of one a shader may be given.
+   --  a device states how much of one storage buffer a shader may be
+   --  given, and the cache proper is one buffer of four bytes an element
+   --  -- its half-precision copy being another of two, which is never
+   --  the one that decides.
    --
    --  Device_Takes_All where the backend is not the device, or where it
    --  will do all three.

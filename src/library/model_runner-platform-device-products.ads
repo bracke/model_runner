@@ -1667,12 +1667,11 @@ package Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural) return Boolean;
 
-   --  Where the half-precision copy begins, in halves of the cache
-   --  buffer: after the cache proper, two halves an element of it. An
-   --  unpacking step is told where in the copy to write in halves, and
-   --  the attention that reads the copy is told an element index, which
-   --  the engine adds this to -- so a caller naming the same place to
-   --  both asks here.
+   --  Where the half-precision copy begins, in halves of the buffer it
+   --  is in. Nought, the copy having a buffer of its own; kept as a
+   --  question rather than written down as nought by its callers,
+   --  because where the copy begins is the copy's business and it has
+   --  been two things already.
    --
    --  @param Item Engine to ask.
    --  @return The copy's first half, in halves.
@@ -2715,10 +2714,27 @@ private
       Cache_Memory : System.Address := System.Null_Address;
       Cache_Bytes  : Interfaces.Unsigned_64 := 0;
 
-      --  How many binary32 elements of that the cache proper holds. The
-      --  rest is the half-precision copy of it, which the matrix kernel
-      --  attends out of and nothing else reads, and which begins at twice
-      --  this counted in halves.
+      --  And the half-precision copy of it, which the matrix kernel
+      --  attends out of and nothing else reads: a buffer of its own
+      --  rather than the back half of that one.
+      --
+      --  A device states how much of one storage buffer a shader may be
+      --  given and how large one allocation may be, and this part states
+      --  four gigabytes for both. Kept together, a context of more than
+      --  seven hundred million values was past the first number and a
+      --  context of more than a thousand million past the second, so
+      --  Phi-3 mini at its own four thousand and ninety-six -- 4.8 GB of
+      --  the two together -- was refused the device and attended on the
+      --  processor. Apart, the cache proper is four bytes an element and
+      --  the copy two, and each is under both numbers where the two
+      --  together were not.
+      Copy_Buffer : System.Address := System.Null_Address;
+      Copy_Memory : System.Address := System.Null_Address;
+      Copy_Bytes  : Interfaces.Unsigned_64 := 0;
+      Copy_At     : System.Address := System.Null_Address;
+
+      --  How many binary32 elements the cache proper holds, which is how
+      --  many halves the copy holds.
       Cache_Elements : Interfaces.Unsigned_64 := 0;
 
       --  The cache mapped once and left mapped. A position is written every

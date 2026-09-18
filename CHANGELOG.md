@@ -267,6 +267,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The cache and its half-precision copy are two buffers on the device,
+  so a context half as large again fits there.** They were one buffer of
+  six bytes an element, and a device states both how much of one storage
+  buffer a shader may be given and how large one allocation may be --
+  four gigabytes for each on the part measured here. Six bytes an
+  element reached that at a context this program can be asked for: Phi-3
+  mini at its own 4,096 asked for 4.8 GB and was refused the device
+  altogether, keeping its context on the processor and attending there
+  while its products stayed on the device. Apart, the cache proper is
+  four bytes an element and the copy two, and what bounds a context is
+  the larger of the two: a context of a hundred and thirty-one thousand
+  tokens of Qwen3.5-0.8B now sits on the device where it did not, and
+  the reachable context grows by half. The descriptor set carries a
+  sixth binding for the copy, the kernels that read or write it name
+  that binding, and the ones that do not are unchanged.
 - **What the device will not do with a model is one question with one
   answer, asked by every command that opens a session.** `embed` opened
   one and said nothing, so a model whose attention the device will not

@@ -33,7 +33,11 @@ layout(local_size_x = LANES) in;
 layout(std430, binding = 0) readonly  buffer Weight { float  g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float  x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float  y[]; };
-layout(std430, binding = 2) writeonly buffer Halves { float16_t yh[]; };
+//  The cache's half-precision copy, which has a buffer of its own so
+//  that neither it nor the cache proper is past what one storage buffer
+//  may hold. Written where this step places into the cache and left
+//  alone where it does not.
+layout(std430, binding = 5) writeonly buffer Halves { float16_t yh[]; };
 layout(std430, binding = 4) readonly  buffer Table  { double turn[]; };
 
 layout(push_constant) uniform Shape {
@@ -100,7 +104,10 @@ void main() {
         for (uint c = lane; c < shape.v_width; c += LANES) {
             float value = x[from + c];
             y[into + c] = value;
-            yh[shape.half_base + into + c] = float16_t (value);
+
+            if (shape.halves != 0u) {
+                yh[shape.half_base + into + c] = float16_t (value);
+            }
         }
         return;
     }

@@ -150,10 +150,12 @@ const uint DM = 128u;
 const uint DM = 64u;
 #endif
 
-//  The keys and the values, as the instruction reads them, in the same
-//  buffer as the cache proper and after it. Aliasing the binding is how a
-//  shader reaches one buffer as two kinds.
-layout(std430, binding = 0) readonly buffer Halves { float16_t kvh[]; };
+//  The keys and the values, as the instruction reads them: the cache's
+//  half-precision copy, in a buffer of its own so that neither it nor
+//  the cache proper is past what one storage buffer may hold. The bases
+//  the caller pushes are the copy's own, counted in halves from its
+//  front.
+layout(std430, binding = 5) readonly buffer Halves { float16_t kvh[]; };
 
 //  And as binary32, for the sinks.
 layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };

@@ -269,19 +269,22 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   --  Four storage buffers: the weights, the vectors, the results, and the
-   --  half-precision copy of the vectors the matrix product reads. Three
-   --  of the four kernels use three of them and never name the fourth; a
-   --  descriptor that is written and not read costs nothing, and a second
-   --  layout for the sake of one binding would cost a second pool, a second
-   --  set of sets and a second of everything that names one.
-   type Binding_Array is array (1 .. 5) of Set_Layout_Binding;
+   --  Six storage buffers: the weights, the vectors, the results, the
+   --  half-precision copy of the vectors the matrix product reads, a
+   --  fifth a kernel may use for what it likes, and the cache's own
+   --  half-precision copy, which has a buffer of its own so that neither
+   --  it nor the cache proper is past what one storage buffer may hold.
+   --  Most kernels name three of the six and never the rest; a descriptor
+   --  that is written and not read costs nothing, and a second layout for
+   --  the sake of one binding would cost a second pool, a second set of
+   --  sets and a second of everything that names one.
+   type Binding_Array is array (1 .. 6) of Set_Layout_Binding;
 
    type Set_Layout_Create_Info is record
       Kind     : C.unsigned := Structure_Set_Layout;
       Next     : Address := Null_Handle;
       Flags    : C.unsigned := 0;
-      Count    : C.unsigned := 5;
+      Count    : C.unsigned := 6;
       Bindings : Address := Null_Handle;
    end record
      with Convention => C;
@@ -318,7 +321,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Buffer_Info_Array is array (1 .. 5) of aliased Buffer_Info;
+   type Buffer_Info_Array is array (1 .. 6) of aliased Buffer_Info;
 
    --  The fourth descriptor of every set: the half-precision copy of the
    --  batch where the engine has one, and the vectors again where it has
@@ -770,6 +773,20 @@ package body Model_Runner.Platform.Device.Products is
              Offset => 0,
              Extent => Item.Vector_Bytes));
 
+   --  And the cache's half-precision copy, which has a buffer of its own
+   --  so that neither it nor the cache proper is past what one storage
+   --  buffer may hold. A set is written whole, so a dispatch that never
+   --  reads the copy is given something rather than nothing: the vector
+   --  buffer, as the halves above are.
+   function Copy_Descriptor (Item : Engine) return Buffer_Info
+   is (if Item.Copy_Buffer /= Null_Handle
+       then (Buffer => Item.Copy_Buffer,
+             Offset => 0,
+             Extent => Item.Copy_Bytes)
+       else (Buffer => Item.Vector_Buffer,
+             Offset => 0,
+             Extent => Item.Vector_Bytes));
+
    type Write_Descriptor is record
       Kind        : C.unsigned := Structure_Write_Descriptor;
       Next        : Address := Null_Handle;
@@ -784,7 +801,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Write_Array is array (1 .. 5) of aliased Write_Descriptor;
+   type Write_Array is array (1 .. 6) of aliased Write_Descriptor;
 
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
@@ -2395,7 +2412,7 @@ package body Model_Runner.Platform.Device.Products is
          end;
       end if;
 
-      --  Four storage buffers, and what a set of them looks like.
+      --  Six storage buffers, and what a set of them looks like.
       declare
          Create : constant Create_Call :=
            To_Create (Point ("vkCreateDescriptorSetLayout"));
@@ -3014,10 +3031,14 @@ package body Model_Runner.Platform.Device.Products is
            To_Create (Point ("vkCreateDescriptorPool"));
 
          --  Room for the single product's set and for one per step of the
-         --  longest sequence, in one pool: three storage descriptors each.
+         --  longest sequence, in one pool: six storage descriptors each,
+         --  which is what the set layout declares. A pool sized for five
+         --  of them hands out sets whose sixth descriptor was never
+         --  allocated, and a device asked to write one wrote nothing --
+         --  every product read whatever the binding held last.
          Sizes   : aliased Pool_Size :=
            (Kind  => Descriptor_Storage,
-            Count => C.unsigned (5 * (1 + 2 * Sequence_Limit)));
+            Count => C.unsigned (6 * (1 + 2 * Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -3394,10 +3415,21 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Cache_At := Null_Handle;
+
+         if Unmap /= null
+           and then Item.Logical /= Null_Handle
+           and then Item.Copy_Memory /= Null_Handle
+         then
+            Unmap (Item.Logical, Item.Copy_Memory);
+         end if;
+
+         Item.Copy_At := Null_Handle;
       end;
 
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+      Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
       Item.Cache_Bytes := 0;
+      Item.Copy_Bytes := 0;
 
       --  And the linear states' room, the same way.
       declare
@@ -4124,8 +4156,11 @@ package body Model_Runner.Platform.Device.Products is
    -- Cached_Bytes --
    -------------------
 
+   --  Both buffers: what the device holds for the context is the cache
+   --  proper and its half-precision copy, and a reader asking how much
+   --  of the device the context takes is asking about both.
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64
-   is (Item.Cache_Bytes);
+   is (Item.Cache_Bytes + Item.Copy_Bytes);
 
    function Cached_Elements
      (Item : Engine) return Model_Runner.Numerics.Element_Count
@@ -5169,6 +5204,8 @@ package body Model_Runner.Platform.Device.Products is
          Told (4) := Half_Descriptor (Item);
          Told (5) := Told (3);
 
+         Told (6) := Copy_Descriptor (Item);
+
          for Index in Told'Range loop
             if Index in Buffers'Range then
                Told (Index).Buffer := Buffers (Index);
@@ -5180,7 +5217,7 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Index).Buffers := Told (Index)'Address;
          end loop;
 
-         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
@@ -5355,8 +5392,9 @@ package body Model_Runner.Platform.Device.Products is
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
-      --  Four bytes an element for the cache and two more for the
-      --  half-precision copy the matrix kernel attends out of.
+      --  Four bytes an element for the cache and two for the
+      --  half-precision copy the matrix kernel attends out of, in two
+      --  buffers rather than one.
       --
       --  The copy is what makes that kernel worth having. Staging the
       --  binary32 cache into shared memory a tile at a time and converting
@@ -5365,16 +5403,28 @@ package body Model_Runner.Platform.Device.Products is
       --  one more product, took a 1419-token prompt from 1.535 s to 1.785.
       --  Kept in halves, the keys and values are what the instruction
       --  reads and are loaded straight out of memory.
+      --
+      --  Apart, because a device states how much of one buffer a shader
+      --  may be given and how large one allocation may be: six bytes an
+      --  element reached both bounds at a context this program can be
+      --  asked for, and four and two do not.
       Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Elements) * 6;
+        Interfaces.Unsigned_64 (Elements) * 4;
 
-      --  What the buffer being replaced held, kept until the new one has
-      --  been made and mapped.
+      Copy_Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 2;
+
+      --  What the buffers being replaced held, kept until the new ones
+      --  have been made and mapped.
       Carry_Over     : Boolean := False;
       Carried_At     : Address := Null_Handle;
       Carried        : Interfaces.Unsigned_64 := 0;
       Carried_Buffer : Address := Null_Handle;
       Carried_Memory : Address := Null_Handle;
+
+      Copy_Carried_At     : Address := Null_Handle;
+      Copy_Carried_Buffer : Address := Null_Handle;
+      Copy_Carried_Memory : Address := Null_Handle;
    begin
       Ok := False;
 
@@ -5391,13 +5441,15 @@ package body Model_Runner.Platform.Device.Products is
       --  first token. Refused, the session keeps its context on the host
       --  and attends there, as one the device has no room for does; a
       --  packed cache is a quarter of the size and fits.
-      if Over_Limit (Item, Wanted) then
+      if Over_Limit (Item, Wanted) or else Over_Limit (Item, Copy_Wanted) then
          return;
       end if;
 
       --  Already large enough is already done, so a caller may say this
       --  every layer without paying for it after the first.
-      if Item.Cache_Bytes >= Wanted then
+      if Item.Cache_Bytes >= Wanted
+        and then Item.Copy_Bytes >= Copy_Wanted
+      then
          Ok := True;
          return;
       end if;
@@ -5415,21 +5467,48 @@ package body Model_Runner.Platform.Device.Products is
          Was_Elements : constant Interfaces.Unsigned_64 :=
            Item.Cache_Elements;
 
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-      begin
-         Item.Cache_Buffer := Null_Handle;
-         Item.Cache_Memory := Null_Handle;
-         Item.Cache_At := Null_Handle;
+         Was_Copy_Buffer : Address := Item.Copy_Buffer;
+         Was_Copy_Memory : Address := Item.Copy_Memory;
+         Was_Copy_At     : constant Address := Item.Copy_At;
 
-         Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
-         if not Ok then
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+         --  Both or neither: a cache without its copy is a cache the
+         --  matrix kernel would read nothing out of.
+         procedure Give_Both_Back is
+         begin
             if Was_At /= Null_Handle and then Unmap /= null then
                Unmap (Item.Logical, Was_Memory);
             end if;
 
+            if Was_Copy_At /= Null_Handle and then Unmap /= null then
+               Unmap (Item.Logical, Was_Copy_Memory);
+            end if;
+
             Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+            Give_Back_Buffer (Item, Was_Copy_Buffer, Was_Copy_Memory);
             Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
             Item.Cache_Elements := 0;
+         end Give_Both_Back;
+      begin
+         Item.Cache_Buffer := Null_Handle;
+         Item.Cache_Memory := Null_Handle;
+         Item.Cache_At := Null_Handle;
+         Item.Copy_Buffer := Null_Handle;
+         Item.Copy_Memory := Null_Handle;
+         Item.Copy_At := Null_Handle;
+
+         Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
+         if not Ok then
+            Give_Both_Back;
+            return;
+         end if;
+
+         Take (Item, Copy_Wanted, Item.Copy_Buffer, Item.Copy_Memory, Ok);
+         if not Ok then
+            Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+            Give_Both_Back;
             return;
          end if;
 
@@ -5438,6 +5517,9 @@ package body Model_Runner.Platform.Device.Products is
          Carried := Was_Elements;
          Carried_Buffer := Was_Buffer;
          Carried_Memory := Was_Memory;
+         Copy_Carried_At := Was_Copy_At;
+         Copy_Carried_Buffer := Was_Copy_Buffer;
+         Copy_Carried_Memory := Was_Copy_Memory;
       end;
 
       --  Mapped here and left mapped. The kind this came from is
@@ -5453,10 +5535,22 @@ package body Model_Runner.Platform.Device.Products is
          then
             Ok := False;
             Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
             return;
          end if;
 
          Item.Cache_At := Where;
+
+         if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Wanted, 0,
+                 Where'Access) /= 0
+         then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
+            return;
+         end if;
+
+         Item.Copy_At := Where;
       end;
 
       --  Zeroed, because the matrix kernel reads a whole tile of cached
@@ -5469,24 +5563,24 @@ package body Model_Runner.Platform.Device.Products is
          Room : Model_Runner.Bytes.Byte_Array
            (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
            with Import, Address => Item.Cache_At;
+
+         Copy_Room : Model_Runner.Bytes.Byte_Array
+           (1 .. Model_Runner.Bytes.Byte_Count (Copy_Wanted))
+           with Import, Address => Item.Copy_At;
       begin
          Room := [others => 0];
+         Copy_Room := [others => 0];
       end;
 
       --  And what the old buffer held, into the new one: the values where
       --  they were, and the half-precision copy of them where it now
       --  begins, which is further along because there are more values in
       --  front of it.
+      --  And what the old buffers held, into the new ones: the values
+      --  where they were and the halves where they were, each at the
+      --  front of its own buffer now.
       if Carry_Over then
          declare
-            use type System.Storage_Elements.Integer_Address;
-
-            function Along
-              (Base : Address; By : Interfaces.Unsigned_64) return Address
-            is (System.Storage_Elements.To_Address
-                  (System.Storage_Elements.To_Integer (Base)
-                   + System.Storage_Elements.Integer_Address (By)));
-
             Was_Values : Model_Runner.Bytes.Byte_Array
               (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
               with Import, Address => Carried_At;
@@ -5495,31 +5589,39 @@ package body Model_Runner.Platform.Device.Products is
               (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
               with Import, Address => Item.Cache_At;
 
-            Was_Halves : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
-              with Import, Address => Along (Carried_At, Carried * 4);
-
-            Now_Halves : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
-              with Import,
-                   Address =>
-                     Along (Item.Cache_At,
-                            Interfaces.Unsigned_64 (Elements) * 4);
-
             Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
          begin
             Now_Values := Was_Values;
-            Now_Halves := Was_Halves;
+
+            if Copy_Carried_At /= Null_Handle then
+               declare
+                  Was_Halves : Model_Runner.Bytes.Byte_Array
+                    (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
+                    with Import, Address => Copy_Carried_At;
+
+                  Now_Halves : Model_Runner.Bytes.Byte_Array
+                    (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
+                    with Import, Address => Item.Copy_At;
+               begin
+                  Now_Halves := Was_Halves;
+               end;
+            end if;
 
             if Unmap /= null then
                Unmap (Item.Logical, Carried_Memory);
+
+               if Copy_Carried_At /= Null_Handle then
+                  Unmap (Item.Logical, Copy_Carried_Memory);
+               end if;
             end if;
          end;
 
          Give_Back_Buffer (Item, Carried_Buffer, Carried_Memory);
+         Give_Back_Buffer (Item, Copy_Carried_Buffer, Copy_Carried_Memory);
       end if;
 
       Item.Cache_Bytes := Wanted;
+      Item.Copy_Bytes := Copy_Wanted;
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
    end Reserve;
 
@@ -5569,23 +5671,20 @@ package body Model_Runner.Platform.Device.Products is
       --  seeded reads the same to the matrix kernel as one the device
       --  wrote itself. Only where there is one: a caller may put values
       --  into a cache this engine took for itself rather than reserved,
-      --  and writing halves at an offset of nothing would put them over
-      --  the cache proper.
-      if Item.Cache_Elements > 0
-        and then Item.Cache_Elements * 4
-                 + Interfaces.Unsigned_64 (At_Value) * 2
+      --  and there is no copy of such a cache to write.
+      if Item.Copy_At /= Null_Handle
+        and then Interfaces.Unsigned_64 (At_Value) * 2
                  + Interfaces.Unsigned_64 (Values'Length) * 2
-                 <= Item.Cache_Bytes
+                 <= Item.Copy_Bytes
       then
          declare
             Halves : Model_Runner.Numerics.Half_Array (Values'Range)
               with Import,
                    Address =>
                      System.Storage_Elements.To_Address
-                       (System.Storage_Elements.To_Integer (Item.Cache_At)
+                       (System.Storage_Elements.To_Integer (Item.Copy_At)
                         + System.Storage_Elements.Integer_Address
-                            (Item.Cache_Elements * 4
-                             + Interfaces.Unsigned_64 (At_Value) * 2));
+                            (Interfaces.Unsigned_64 (At_Value) * 2));
          begin
             for Index in Halves'Range loop
                Halves (Index) := Model_Runner.Numerics.To_Half (Values (Index));
@@ -5642,7 +5741,7 @@ package body Model_Runner.Platform.Device.Products is
    -------------
 
    function Copy_At (Item : Engine) return Interfaces.Unsigned_64
-   is (Item.Cache_Elements * 2);
+   is (0 * Item.Cache_Elements);
 
    ---------------
    -- Get_Bytes --
@@ -5894,13 +5993,15 @@ package body Model_Runner.Platform.Device.Products is
          Told (4) := Half_Descriptor (Item);
          Told (5) := Told (3);
 
+         Told (6) := Copy_Descriptor (Item);
+
          for Binding in Told'Range loop
             Notes (Binding).Target := Item.Descriptor;
             Notes (Binding).Binding := C.unsigned (Binding - 1);
             Notes (Binding).Buffers := Told (Binding)'Address;
          end loop;
 
-         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
       end;
 
       declare
@@ -6468,13 +6569,15 @@ package body Model_Runner.Platform.Device.Products is
          Told (4) := Half_Descriptor (Item);
          Told (5) := Told (3);
 
+         Told (6) := Copy_Descriptor (Item);
+
          for Binding in Told'Range loop
             Notes (Binding).Target := Item.Descriptor;
             Notes (Binding).Binding := C.unsigned (Binding - 1);
             Notes (Binding).Buffers := Told (Binding)'Address;
          end loop;
 
-         Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
       end;
 
       declare
@@ -6502,21 +6605,21 @@ package body Model_Runner.Platform.Device.Products is
             First      => C.unsigned (First),
             Last       => C.unsigned (Last),
             --  Where the keys and the values begin. The matrix kernel
-            --  reads them out of the half-precision copy, which lies after
-            --  the cache proper and is indexed the same way, so where that
-            --  kernel is the one bound these say so and nothing else in
-            --  the block has to change. A push constant is what the shader
-            --  that is running reads, and only one of them runs.
+            --  reads them out of the half-precision copy, which has a
+            --  buffer of its own and is indexed the same way, so where
+            --  that kernel is the one bound these say so and nothing else
+            --  in the block has to change. A push constant is what the
+            --  shader that is running reads, and only one of them runs.
             K_Base     =>
               C.unsigned
                 (K_Base
                  + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
-                    then Natural (Item.Cache_Elements * 2) else 0)),
+                    then Natural (Copy_At (Item)) else 0)),
             V_Base     =>
               C.unsigned
                 (V_Base
                  + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
-                    then Natural (Item.Cache_Elements * 2) else 0)),
+                    then Natural (Copy_At (Item)) else 0)),
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
             Scale      => C.C_float (Scale),
@@ -8858,13 +8961,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -8881,13 +8986,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -8904,13 +9011,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -8940,13 +9049,15 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.Turn_Buffer, Offset => 0,
                   Extent => Item.Turn_Bytes);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -8968,13 +9079,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -8989,13 +9102,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9019,13 +9134,15 @@ package body Model_Runner.Platform.Device.Products is
                  (Buffer => Item.State_Buffer, Offset => 0,
                   Extent => Item.State_Bytes);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9040,13 +9157,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9073,13 +9192,15 @@ package body Model_Runner.Platform.Device.Products is
                           Places (Steps.Items (Index).Joined).Bytes)
                   else Told (3));
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9096,13 +9217,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9128,13 +9251,15 @@ package body Model_Runner.Platform.Device.Products is
                           Places (Steps.Items (Index).Reads_Two).Bytes)
                   else Told (3));
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9166,13 +9291,15 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
+               Told (6) := Copy_Descriptor (Item);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -9233,13 +9360,15 @@ package body Model_Runner.Platform.Device.Products is
                     * Interfaces.Unsigned_64 (Count) * 4);
             end if;
 
+            Told (6) := Copy_Descriptor (Item);
+
             for Binding in Told'Range loop
                Notes (Binding).Target := Item.Sets (Index);
                Notes (Binding).Binding := C.unsigned (Binding - 1);
                Notes (Binding).Buffers := Told (Binding)'Address;
             end loop;
 
-            Update (Item.Logical, 5, Notes'Address, 0, Null_Handle);
+            Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
 
             <<Next_Set>>
          end loop;
@@ -9789,23 +9918,26 @@ package body Model_Runner.Platform.Device.Products is
                         Group_Size => C.unsigned (This.Group_Size),
                         First      => C.unsigned (This.First),
                         Last       => C.unsigned (This.Last),
-                        --  The half-precision copy of the cache where the
+                        --  A base counted in elements of whichever the
+                        --  kernel reads: the half-precision copy where the
                         --  matrix kernel is the one that will run, and the
                         --  cache proper otherwise. A round is never that
                         --  kernel however many rows it has, so it reads the
                         --  cache proper as it always did.
-                        --  Added in sixty-four bits and narrowed once. A
-                        --  cache dealt into blocks is larger than one
-                        --  session's, and a base past two thousand million
-                        --  is a number this addition can reach and Natural
-                        --  cannot hold.
+                        --  The copy has a buffer of its own, so a base
+                        --  into it is the same number as into the cache:
+                        --  what was added here was where the copy began
+                        --  inside one buffer, and there is no such place
+                        --  now. Kept as an addition of the copy's front,
+                        --  which is nought, so that a copy put somewhere
+                        --  else again is a change in one place.
                         K_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.K_Base)
                              + (if Reads_Copy
                                      (Item, Count, This.Head_Size,
                                       This.Value_Size, This.Table > 0)
-                                then Item.Cache_Elements * 2
+                                then Copy_At (Item)
                                 else 0)),
                         V_Base     =>
                           C.unsigned
@@ -9813,7 +9945,7 @@ package body Model_Runner.Platform.Device.Products is
                              + (if Reads_Copy
                                      (Item, Count, This.Head_Size,
                                       This.Value_Size, This.Table > 0)
-                                then Item.Cache_Elements * 2
+                                then Copy_At (Item)
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
                         V_Width    => C.unsigned (This.V_Width),
@@ -9980,10 +10112,11 @@ package body Model_Runner.Platform.Device.Products is
                         Packing => 0,
 
                         --  Where the half-precision copy of the cache
-                        --  begins, in halves, which is the one thing this
-                        --  kernel needs that the others put nothing in.
+                        --  begins, in halves of its own buffer, which is
+                        --  the one thing this kernel needs that the others
+                        --  put nothing in.
                         Base    =>
-                          C.unsigned (Item.Cache_Elements * 2),
+                          C.unsigned (Copy_At (Item)),
                         Joins   => 0,
 
                         --  A round's per-row table, which this is the one
@@ -10065,9 +10198,12 @@ package body Model_Runner.Platform.Device.Products is
                           (if This.Into_Cache then C.unsigned (This.Stride)
                            else C.unsigned (This.Rows)),
                         Turn_Base => 0,
+                        --  The copy's front, which is nought: it has a
+                        --  buffer of its own and this kernel writes into
+                        --  it from there.
                         Half_Base =>
                           (if This.Into_Cache
-                           then C.unsigned (Item.Cache_Elements * 2)
+                           then C.unsigned (Copy_At (Item))
                            else 0),
                         Halves    => (if This.Into_Cache then 1 else 0),
                         V_From    =>

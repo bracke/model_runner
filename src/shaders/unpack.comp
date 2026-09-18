@@ -30,7 +30,7 @@ layout(local_size_x = LANES) in;
 
 layout(std430, binding = 0) readonly  buffer Words  { uint  kvw[]; };
 layout(std430, binding = 0) readonly  buffer Scales { float kvf[]; };
-layout(std430, binding = 2) writeonly buffer Halves { float16_t kvh[]; };
+layout(std430, binding = 5) writeonly buffer Halves { float16_t kvh[]; };
 
 layout(push_constant) uniform Shape {
     //  Elements a position holds.

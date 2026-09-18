@@ -34,12 +34,12 @@ layout(std430, binding = 0) readonly  buffer Kept   { float kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Cache  { float kv[]; };
 
-//  The same buffer again, as halves. The cache is kept twice: once as it
-//  has always been kept, and once in half precision after it, which is
-//  what the matrix attention kernel reads. Aliasing the binding is how a
-//  shader reaches one buffer as two kinds; the descriptor set is unchanged
-//  and so is every other kernel bound against it.
-layout(std430, binding = 2) writeonly buffer Halves { float16_t kvh[]; };
+//  The cache's half-precision copy, which the matrix attention kernel
+//  reads: a buffer of its own rather than the back of the cache, so that
+//  neither it nor the cache proper is past what one storage buffer may
+//  hold. The cache is kept twice, once as it has always been kept and
+//  once in half precision beside it.
+layout(std430, binding = 5) writeonly buffer Halves { float16_t kvh[]; };
 
 layout(push_constant) uniform Shape {
     //  Elements a position holds.
@@ -57,7 +57,10 @@ layout(push_constant) uniform Shape {
 
     uint unused_packing;
 
-    //  Where the half-precision copy begins, in halves.
+    //  Where the half-precision copy begins, in halves of its own
+    //  buffer, which is nought: a word the engine still pushes and this
+    //  kernel still adds, so that a copy somewhere else is a change in
+    //  one place.
     uint half_base;
 
     //  Bound but unread here: the products put a folded join in this word.

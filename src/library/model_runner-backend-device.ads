@@ -378,12 +378,14 @@ package Model_Runner.Backend.Device is
    --    device states none.
    function Cache_Bound return Interfaces.Unsigned_64;
 
-   --  How many bytes a context of this many elements would take on the
-   --  device: four an element and two more for the half-precision copy the
-   --  matrix attention reads.
+   --  How many bytes of one storage buffer a context of this many
+   --  elements would take on the device: four an element, the cache
+   --  proper being one buffer and its half-precision copy another of two
+   --  bytes an element. What bounds a context is the larger of the two,
+   --  which is the cache proper.
    --
    --  @param Elements Values, keys and values together.
-   --  @return Bytes.
+   --  @return Bytes of the buffer that decides.
    function Cache_Bytes_For
      (Elements : Model_Runner.Numerics.Element_Count)
       return Interfaces.Unsigned_64;

@@ -898,7 +898,7 @@ package body Model_Runner.Backend.Device is
    function Cache_Bytes_For
      (Elements : Model_Runner.Numerics.Element_Count)
       return Interfaces.Unsigned_64
-   is (Interfaces.Unsigned_64 (Elements) * 6);
+   is (Interfaces.Unsigned_64 (Elements) * 4);
 
    ---------------
    -- Put_Table --

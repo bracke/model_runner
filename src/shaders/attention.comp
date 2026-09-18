@@ -142,20 +142,20 @@ layout(local_size_x = 64) in;
 //  its time reading: a round of sixteen sequences at 1419 positions spent
 //  thirty milliseconds of a sixty-three millisecond step here.
 //
-//  The per-row table is the one thing that is not in the copy. It lives at
-//  the end of the cache proper, which is the same buffer, so under HALVED
-//  it is read as two halves of the word it was written as -- the low half
-//  first, which is how a little-endian device stores it and every device
-//  this runs on is one.
+//  The per-row table and a head's sink are the things that are not in the
+//  copy: they live in the cache proper, which is a buffer of its own, and
+//  are read as the binary32 they were written as whichever way the keys
+//  and values are read. The copy was the back of that buffer once and was
+//  read through an alias of the same binding, a word as the two halves it
+//  was stored as; it is its own buffer now, so that neither it nor the
+//  cache proper is past what one storage buffer may hold.
 #ifdef HALVED
-layout(std430, binding = 0) readonly buffer Cache { float16_t kvh[]; };
+layout(std430, binding = 5) readonly buffer Copy { float16_t kvh[]; };
+layout(std430, binding = 0) readonly buffer Cache { float kv[]; };
 
 float held_at (uint at) { return float (kvh[at]); }
 
-uint word_at (uint at) {
-    return uint (float16BitsToUint16 (kvh[at * 2u]))
-         | (uint (float16BitsToUint16 (kvh[at * 2u + 1u])) << 16u);
-}
+uint word_at (uint at) { return floatBitsToUint (kv[at]); }
 #else
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 

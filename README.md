@@ -2036,6 +2036,16 @@ layer refused at its attention step; it is refused the block at open
 now, and the run says how wide the heads are and that an exact
 `--kv-cache` goes over.
 
+The bound that refusal names has moved since. The cache and its
+half-precision copy were one buffer of six bytes an element, and a device
+states both how much of one buffer a shader may be given and how large one
+allocation may be -- four gigabytes each here, which six bytes an element
+reaches at a context this program can be asked for. They are two buffers
+now, four bytes an element and two, so what bounds a context is the larger
+of them: a hundred and thirty-one thousand tokens of Qwen3.5-0.8B sit on
+the device where they did not, and the reachable context is half as large
+again.
+
 The first thing that number found was the refusal it was written to
 explain. The step that packs a layer's keys and values writes the cache a
 word at a time, and a row narrower than a word shares one with the row

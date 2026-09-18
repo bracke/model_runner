@@ -5135,16 +5135,40 @@ package body Tests.Backend_Cases is
       --  request would go to the driver: nothing to hold it to.
       if Products.Byte_Limit (Engine) > 0 then
          declare
-            --  Six bytes an element: one more element than the bound
-            --  holds.
+            --  The cache proper is four bytes an element and its
+            --  half-precision copy two, in a buffer each, so what the
+            --  bound holds is four bytes an element: one element more
+            --  than that is past it. Six bytes an element was the answer
+            --  while the two were one buffer, and a context between the
+            --  two -- Phi-3 mini's at its own 4,096 -- was refused the
+            --  device for a reason that has since been taken away.
             Past : constant N.Element_Count :=
-              N.Element_Count (Products.Byte_Limit (Engine) / 6 + 1);
+              N.Element_Count (Products.Byte_Limit (Engine) / 4 + 1);
+
+            --  And a context the old arithmetic refused and this one
+            --  takes, where the bound leaves room for it: past four
+            --  sixths of the bound and inside four quarters.
+            Between : constant N.Element_Count :=
+              N.Element_Count (Products.Byte_Limit (Engine) / 5);
          begin
             Products.Reserve (Engine, Past, Ok);
             Assert (not Ok,
                     "a cache past what one storage buffer holds was taken");
             Assert (Products.Cached_Bytes (Engine) = 0,
                     "the refused cache left bytes reserved");
+
+            --  Only where the device has the memory for it: the bound is
+            --  what one buffer may hold and not what the part has, and a
+            --  part with four gigabytes of bound and less memory than
+            --  that says no for the other reason.
+            Products.Reserve (Engine, Between, Ok);
+
+            if Ok then
+               Assert (Products.Cached_Bytes (Engine)
+                       = Interfaces.Unsigned_64 (Between) * 6,
+                       "a cache the two buffers hold takes something other "
+                       & "than six bytes an element of the device");
+            end if;
          end;
       end if;
 
