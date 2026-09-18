@@ -239,6 +239,13 @@ A wider cache buffer used to come up empty and turn every seated session out
 of its block. It carries its contents over now, values and half-precision
 copy alike.
 
+A seventeenth session turns the first out of its block, and the session
+turned out writes its keys and values back into whatever block it is given
+next. That write was the whole of its cache, which is the room it has rather
+than what it has put there: twelve tokens of a 2,048-token context is 540
+kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
+that layer still holds.
+
 And two sessions on one device used to write over each other's keys, which
 nothing did and nothing caught; blocks are the answer to that as well.
 

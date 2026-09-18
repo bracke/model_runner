@@ -3374,6 +3374,142 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Run_Says_Which_Layers_The_Device_Took;
 
+   ------------------------------------------------------------
+   -- A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said --
+   ------------------------------------------------------------
+
+   --  The device's cache is dealt out in blocks, one a session, and there
+   --  are sixteen of them. A seventeenth session takes the block of
+   --  whichever held one longest, and the one turned out writes its cache
+   --  into a block again when it next runs -- the host's copy being the
+   --  copy of record, which is what makes turning one out safe.
+   --
+   --  That write used to be the whole of the session's arrays, the shape
+   --  of the cache rather than the shape of what is in it; it is now a
+   --  layer at a time and only the cells each layer holds. So this opens
+   --  seventeen sessions of a few tokens each, runs the first again, and
+   --  asks whether it says what the same sequence says on the processor:
+   --  what the turned-out session carries back has to be what it left.
+   procedure A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Seats  : constant := 16;
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      --  What a session says of one more token after the prompt.
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+
+         First   : L.Session;
+         Beside : array (1 .. Seats) of L.Session;
+
+         Alone, After : Logit_Vector;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (First, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the first session did not open");
+         Says (Under, First, Alone);
+
+         --  Sixteen more, each of which takes a block: the first one's
+         --  goes to the last of them.
+         for Index in Beside'Range loop
+            L.Open (Beside (Index), Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not open:" & Integer'Image (Index));
+
+            declare
+               Ignored : Logit_Vector;
+            begin
+               Says (Under, Beside (Index), Ignored);
+            end;
+         end loop;
+
+         --  And the first again, which has to write its cache into a
+         --  block anew and say what it said before of the same token.
+         L.Evaluate (First, Under.Ready, 7, After, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the turned-out session did not evaluate: "
+                 & E.Error_Code'Image (Status.Code));
+
+         declare
+            Host   : L.Session;
+            Wanted : Logit_Vector;
+         begin
+            L.Open (Host, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the comparison session did not open");
+            Says (Under, Host, Wanted);
+            L.Evaluate (Host, Under.Ready, 7, Wanted, Status => Status);
+            Assert (E.Is_Ok (Status), "the comparison did not evaluate");
+
+            declare
+               Worst : N.Real := 0.0;
+            begin
+               for Index in Wanted'Range loop
+                  Worst :=
+                    N.Real'Max (Worst, abs (Wanted (Index) - After (Index)));
+               end loop;
+
+               Assert (Worst <= 1.0E-4,
+                       "a session turned out of its block and back says"
+                       & N.Real'Image (Worst) & " away from one that kept it");
+            end;
+
+            L.Close (Host);
+         end;
+
+         for Index in Beside'Range loop
+            L.Close (Beside (Index));
+         end loop;
+
+         L.Close (First);
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said;
+
    ---------------------------------------------------------
    -- A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State --
    ---------------------------------------------------------
@@ -12101,6 +12237,10 @@ package body Tests.Inference_Cases is
         (T, Device_Says_When_A_Model_Will_Not_Fit'Access,
          "a model whose matrices are larger than the device will hold is "
          & "refused while it loads, with both numbers");
+      Register_Routine
+        (T, A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said'Access,
+         "a session turned out of its block of the device's cache writes "
+         & "it back and says what it said before");
       Register_Routine
         (T, A_Run_Says_Which_Layers_The_Device_Took'Access,
          "a run on the device says how many layers went over whole and "

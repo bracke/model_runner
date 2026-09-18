@@ -267,6 +267,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A session returning to a block writes the cells it holds, not the room
+  it has for them.** The cache is dealt out in blocks a session apiece, and
+  a session turned out of its block writes what it committed back into the
+  next block it is given, because that block is another session's leavings.
+  The write was the whole of its cache -- the shape of the room rather than
+  of what is in it. On TinyLlama at its own 2,048-token context a session
+  that has said twelve tokens holds twelve cells of each of twenty-two
+  layers, 540 kilobytes, and was writing ninety-two megabytes across the
+  bus, all but that of it zeros the block already had. It writes a layer at
+  a time now, and only the cells that layer still holds, which is where a
+  sliding window has left them.
 - **A ring of nothing is no longer written across the bus to say so.** A
   session's first linear layer sent its whole ring of states to the seat
   it had taken, because a seat given up is taken again holding the ring

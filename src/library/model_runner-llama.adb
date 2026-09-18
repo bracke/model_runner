@@ -5541,18 +5541,62 @@ package body Model_Runner.Llama is
             Block_Taken := Wanted;
          end if;
 
-         --  What the host holds, into the block: a session's whole cache in
-         --  two writes, and only where it has committed something. A
-         --  session with nothing committed has nothing to preserve, and the
-         --  buffer it is taking a block of was zeroed when it was made.
+         --  What the host holds, into the block, and only where it has
+         --  committed something: a session with nothing committed has
+         --  nothing to preserve, and the buffer it is taking a block of
+         --  was zeroed when it was made.
+         --
+         --  A layer at a time, and only the cells it has written. The
+         --  whole array in two writes was the shape of the cache rather
+         --  than the shape of what is in it: a session of a 2,048-token
+         --  context that has said twelve tokens holds twelve cells of
+         --  every layer and forty-six megabytes of room for them, and
+         --  the rest of it is the zeros the block already has. A layer
+         --  holds its cells from the lowest position it still has, which
+         --  a window slides forward, so what is written is that run.
          if Item.Committed > 0 and then Item.Held = Exact then
-            Model_Runner.Backend.Device.Put_Cache
-              (Base, Item.Keys.all, Written);
+            declare
+               Settings : Configuration renames Item.Owner.Settings;
 
-            if Written then
-               Model_Runner.Backend.Device.Put_Cache
-                 (Base + Item.Keys.all'Length, Item.Values.all, Written);
-            end if;
+               KV_Width : constant Element_Count :=
+                 Element_Count (Settings.KV_Heads * Settings.Head_Size);
+               V_Width  : constant Element_Count :=
+                 Element_Count (Settings.KV_Heads * Settings.Value_Size);
+
+               Layers : constant Natural :=
+                 (if Item.Cells = null then 0 else Item.Cells.all'Length);
+            begin
+               for Layer in 0 .. Layers - 1 loop
+                  declare
+                     Held : constant Element_Count :=
+                       Element_Count'Min
+                         (Item.Cells.all (Layer),
+                          Cell_Of (Item.all, Layer,
+                                   Element_Count (Item.Committed)));
+                  begin
+                     if Written and then Held > 0 then
+                        Model_Runner.Backend.Device.Put_Cache
+                          (Base + Keys_At (Item.all, Layer),
+                           Item.Keys.all
+                             (Keys_At (Item.all, Layer)
+                              .. Keys_At (Item.all, Layer)
+                                 + Held * KV_Width - 1),
+                           Written);
+                     end if;
+
+                     if Written and then Held > 0 then
+                        Model_Runner.Backend.Device.Put_Cache
+                          (Base + Item.Keys.all'Length
+                           + Values_At (Item.all, Layer),
+                           Item.Values.all
+                             (Values_At (Item.all, Layer)
+                              .. Values_At (Item.all, Layer)
+                                 + Held * V_Width - 1),
+                           Written);
+                     end if;
+                  end;
+               end loop;
+            end;
          elsif Item.Committed > 0 then
             --  A packed session's block: its bytes as they are, and its
             --  scales as floats, each where Packed_Block says.
