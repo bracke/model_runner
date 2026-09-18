@@ -267,6 +267,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A device that would never read the cache's copy is no longer given
+  one.** The copy is what the matrix attention reads, what a round's
+  attention reads, and what a token reads where the copy is preferred; a
+  device with none of those kernels reads it never, and was handed two
+  bytes an element of it all the same -- a third of what a context takes
+  there, kept for nobody. It is taken where something would read it and
+  not otherwise, and the step that places a layer's keys is told which,
+  so that a device without a copy does not write one into whatever that
+  binding holds instead.
 - **The cache and its half-precision copy are two buffers on the device,
   so a context half as large again fits there.** They were one buffer of
   six bytes an element, and a device states both how much of one storage

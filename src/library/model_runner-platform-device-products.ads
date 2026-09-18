@@ -1774,6 +1774,18 @@ package Model_Runner.Platform.Device.Products is
    --  @return True when Attend_Packed can run.
    function Attends_Packed (Item : Engine) return Boolean;
 
+   --  Whether this device keeps the cache's half-precision copy: the
+   --  matrix attention reads it, a round's attention reads it, and a
+   --  token reads it where the copy is preferred, so a device with any
+   --  of those kernels keeps one and a device with none of them does
+   --  not. Two bytes an element against the cache proper's four, which
+   --  is a third of what a context takes on the device and was taken
+   --  there for nobody.
+   --
+   --  @param Item Engine.
+   --  @return True where a reserved cache has a copy beside it.
+   function Keeps_Copy (Item : Engine) return Boolean;
+
    --  Whether the packed kernel reads heads of this shape, which is the
    --  part of its rule a model decides rather than a session's layout:
    --  it reads four elements of a row at a time out of one word, so a

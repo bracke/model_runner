@@ -55,7 +55,12 @@ layout(push_constant) uniform Shape {
     //  Where the first of them goes, in elements.
     uint at_first;
 
-    uint unused_packing;
+    //  One where the cache's half-precision copy is there to write, and
+    //  nought where it is not: a device with neither the matrix
+    //  instruction nor the halved attention has no copy, nothing would
+    //  ever read one, and the binding a copy would be at holds something
+    //  else that a write here would put a hole in.
+    uint halves;
 
     //  Where the half-precision copy begins, in halves of its own
     //  buffer, which is nought: a word the engine still pushes and this
@@ -97,6 +102,9 @@ void main() {
         float value = x[from + c];
 
         kv[into + c] = value;
-        kvh[shape.half_base + into + c] = float16_t (value);
+
+        if (shape.halves != 0u) {
+            kvh[shape.half_base + into + c] = float16_t (value);
+        }
     }
 }

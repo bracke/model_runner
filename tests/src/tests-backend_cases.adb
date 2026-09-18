@@ -5175,6 +5175,24 @@ package body Tests.Backend_Cases is
       Products.Reserve (Engine, 1024, Ok);
       Assert (Ok, "a cache that fits was refused after one that did not");
 
+      --  And what it takes of the device: the cache proper of four bytes
+      --  an element, and the half-precision copy of two beside it where
+      --  anything here would read one. A device with neither the matrix
+      --  attention nor the halved one reads no copy ever, and keeping one
+      --  was a third of a context's room on the device kept for nobody.
+      --  Whatever it holds -- a reserve only ever grows, so this is the
+      --  largest asked for above.
+      Assert (Products.Cached_Bytes (Engine)
+              = Interfaces.Unsigned_64 (Products.Cached_Elements (Engine))
+                * (if Products.Keeps_Copy (Engine) then 6 else 4),
+              "a cache of"
+              & N.Element_Count'Image (Products.Cached_Elements (Engine))
+              & " elements takes"
+              & Interfaces.Unsigned_64'Image (Products.Cached_Bytes (Engine))
+              & " bytes of a device that "
+              & (if Products.Keeps_Copy (Engine) then "keeps" else "keeps no")
+              & " copy");
+
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);

@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 38) of Text_Access :=
+   Held : constant array (1 .. 39) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -117,7 +117,14 @@ package body Library_Surface is
       --  Which of the packed kernels' two compilations is bound: the one
       --  through shared memory alone, which a device without subgroup
       --  operations gets and the suite asks for on one that has them.
-      new String'("Prefer_Plain_Packing")];
+      new String'("Prefer_Plain_Packing"),
+
+      --  Whether this device keeps the cache's half-precision copy. The
+      --  engine knows because it decides; nothing else in the program
+      --  needs to, and a test holding a reserved cache to what it should
+      --  take -- six bytes an element with the copy and four without --
+      --  is the one caller there is.
+      new String'("Keeps_Copy")];
 
    ---------------
    -- Is_Listed --

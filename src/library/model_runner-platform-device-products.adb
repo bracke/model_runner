@@ -404,6 +404,20 @@ package body Model_Runner.Platform.Device.Products is
    --  that token was short of work, not of bytes. Bundled and sliced, a
    --  token at thirteen hundred positions is the bytes, and the copy is
    --  half of them.
+   --  Whether anything on this device would ever read the cache's
+   --  half-precision copy: the matrix attention reads it, a round's
+   --  attention reads it, and a token reads it where the copy is
+   --  preferred -- and a device with none of those kernels has nothing
+   --  that would. Two bytes an element of the cache, which is a third of
+   --  what a context takes there, kept for nobody.
+   function Wants_Copy (Item : Engine) return Boolean
+   is (Item.Attend_Matrix /= Null_Handle
+       or else Item.Attend_Matrix_Wide /= Null_Handle
+       or else Item.Halved_Line /= Null_Handle);
+
+   function Keeps_Copy (Item : Engine) return Boolean
+   is (Wants_Copy (Item));
+
    function Attends_By_Halves
      (Item : Engine; Rounding : Boolean) return Boolean
    is ((Rounding or else Item.Halves)
@@ -5441,14 +5455,17 @@ package body Model_Runner.Platform.Device.Products is
       --  first token. Refused, the session keeps its context on the host
       --  and attends there, as one the device has no room for does; a
       --  packed cache is a quarter of the size and fits.
-      if Over_Limit (Item, Wanted) or else Over_Limit (Item, Copy_Wanted) then
+      if Over_Limit (Item, Wanted)
+        or else (Wants_Copy (Item) and then Over_Limit (Item, Copy_Wanted))
+      then
          return;
       end if;
 
       --  Already large enough is already done, so a caller may say this
       --  every layer without paying for it after the first.
       if Item.Cache_Bytes >= Wanted
-        and then Item.Copy_Bytes >= Copy_Wanted
+        and then (Item.Copy_Bytes >= Copy_Wanted
+                  or else not Wants_Copy (Item))
       then
          Ok := True;
          return;
@@ -5505,11 +5522,16 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Take (Item, Copy_Wanted, Item.Copy_Buffer, Item.Copy_Memory, Ok);
-         if not Ok then
-            Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
-            Give_Both_Back;
-            return;
+         --  The copy only where something on this device would read it.
+         if Wants_Copy (Item) then
+            Take (Item, Copy_Wanted, Item.Copy_Buffer, Item.Copy_Memory, Ok);
+            if not Ok then
+               Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+               Give_Both_Back;
+               return;
+            end if;
+         else
+            Ok := True;
          end if;
 
          Carry_Over := Was_At /= Null_Handle and then Was_Elements > 0;
@@ -5541,16 +5563,18 @@ package body Model_Runner.Platform.Device.Products is
 
          Item.Cache_At := Where;
 
-         if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Wanted, 0,
-                 Where'Access) /= 0
-         then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
-            return;
-         end if;
+         if Item.Copy_Buffer /= Null_Handle then
+            if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Wanted, 0,
+                    Where'Access) /= 0
+            then
+               Ok := False;
+               Item.Cache_Bytes := 0;
+               Item.Copy_Bytes := 0;
+               return;
+            end if;
 
-         Item.Copy_At := Where;
+            Item.Copy_At := Where;
+         end if;
       end;
 
       --  Zeroed, because the matrix kernel reads a whole tile of cached
@@ -5564,12 +5588,18 @@ package body Model_Runner.Platform.Device.Products is
            (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
            with Import, Address => Item.Cache_At;
 
-         Copy_Room : Model_Runner.Bytes.Byte_Array
-           (1 .. Model_Runner.Bytes.Byte_Count (Copy_Wanted))
-           with Import, Address => Item.Copy_At;
       begin
          Room := [others => 0];
-         Copy_Room := [others => 0];
+
+         if Item.Copy_At /= Null_Handle then
+            declare
+               Copy_Room : Model_Runner.Bytes.Byte_Array
+                 (1 .. Model_Runner.Bytes.Byte_Count (Copy_Wanted))
+                 with Import, Address => Item.Copy_At;
+            begin
+               Copy_Room := [others => 0];
+            end;
+         end if;
       end;
 
       --  And what the old buffer held, into the new one: the values where
@@ -5593,7 +5623,9 @@ package body Model_Runner.Platform.Device.Products is
          begin
             Now_Values := Was_Values;
 
-            if Copy_Carried_At /= Null_Handle then
+            if Copy_Carried_At /= Null_Handle
+              and then Item.Copy_At /= Null_Handle
+            then
                declare
                   Was_Halves : Model_Runner.Bytes.Byte_Array
                     (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
@@ -5621,7 +5653,8 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       Item.Cache_Bytes := Wanted;
-      Item.Copy_Bytes := Copy_Wanted;
+      Item.Copy_Bytes :=
+        (if Item.Copy_Buffer /= Null_Handle then Copy_Wanted else 0);
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
    end Reserve;
 
@@ -10109,7 +10142,11 @@ package body Model_Runner.Platform.Device.Products is
                         Columns => C.unsigned (This.Stride),
                         Count   => C.unsigned (Count),
                         First   => C.unsigned (This.At_First),
-                        Packing => 0,
+                        --  One where there is a copy of the cache to
+                        --  write and nought where there is not, which is
+                        --  a device that would never read one.
+                        Packing =>
+                          (if Item.Copy_Buffer /= Null_Handle then 1 else 0),
 
                         --  Where the half-precision copy of the cache
                         --  begins, in halves of its own buffer, which is
@@ -10205,7 +10242,14 @@ package body Model_Runner.Platform.Device.Products is
                           (if This.Into_Cache
                            then C.unsigned (Copy_At (Item))
                            else 0),
-                        Halves    => (if This.Into_Cache then 1 else 0),
+                        --  Into the cache, and a copy of it to write:
+                        --  a device that would never read one has none,
+                        --  and what is at that binding instead is not
+                        --  this kernel's to write.
+                        Halves    =>
+                          (if This.Into_Cache
+                             and then Item.Copy_Buffer /= Null_Handle
+                           then 1 else 0),
                         V_From    =>
                           (if This.Reads_Two /= 0
                            then C.unsigned
