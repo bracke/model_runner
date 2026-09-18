@@ -20854,7 +20854,7 @@ panels 31CD20C3D9761C38 src/library/model_runner-quantization-interleave.ads src
 #   device 2D453226CF7F59A7 -> 02D0C36F686348B9,
 #   drafting 2D453226CF7F59A7 -> 90503DFA5CB1A11A,
 #   outside 2D453226CF7F59A7 -> 02D0C36F686348B9,
-#   panels FD59C51018FBE223 -> 31CD20C3D9761C38.
+#   panels 6C0F45D3AB49D8EF -> 31CD20C3D9761C38.
 #
 # load:  0.7 of 16 for the device runs
 # model: TinyLlama-1.1B-Chat Q8_0 for the device runs
