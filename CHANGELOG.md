@@ -267,6 +267,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's cache is zeroed on the device rather than through its
+  mapping.** A cache has to start zeroed, because the matrix attention
+  reads whole tiles of cached positions whether or not every position in
+  one has been written and a not-a-number in memory nobody wrote
+  survives being multiplied by a weight of zero. Written by the host,
+  that zeroing faults in every page of the cache as it goes: seventeen
+  milliseconds of a nineteen-millisecond reserve for the ninety
+  megabytes a 2,048-token context of TinyLlama takes -- and every
+  session pays a reserve now that a cache nobody holds is given back.
+  `vkCmdFillBuffer` writes it where the memory is: the reserve is two
+  milliseconds, the twelve-token figure is 0.277 s against the 0.304 it
+  had become and the 0.276 it was before the cache was ever given back,
+  and the pages the host touches are the ones it writes a position into.
 - **The device's cache is given back when the last session that held a
   block of it closes.** A reserve only ever grew, so a run that read a
   long context and went on to short ones left the device holding the

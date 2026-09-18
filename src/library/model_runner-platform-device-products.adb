@@ -1227,6 +1227,18 @@ package body Model_Runner.Platform.Device.Products is
      procedure (Buffer : Address; X, Y, Z : C.unsigned)
      with Convention => C;
 
+   --  Fill a run of a buffer with one word, on the device. Zeroing a
+   --  cache through its mapping is the host faulting in every page of it
+   --  -- seventeen milliseconds of a nineteen-millisecond reserve for a
+   --  cache of ninety megabytes -- and the device writes its own memory
+   --  at its own rate.
+   type Fill_Call is access
+     procedure (Buffer : Address; Target : Address;
+                Offset : Interfaces.Unsigned_64;
+                Size   : Interfaces.Unsigned_64;
+                Value  : C.unsigned)
+     with Convention => C;
+
    type Submit_Call is access
      function (Queue : Address; Count : C.unsigned; Info : Address;
                Fence : Address) return C.int
@@ -1297,6 +1309,8 @@ package body Model_Runner.Platform.Device.Products is
    function To_Push is new Ada.Unchecked_Conversion (Address, Push_Call);
    function To_Dispatch is
      new Ada.Unchecked_Conversion (Address, Dispatch_Call);
+
+   function To_Fill is new Ada.Unchecked_Conversion (Address, Fill_Call);
    function To_Barrier is
      new Ada.Unchecked_Conversion (Address, Barrier_Call);
    function To_Submit is new Ada.Unchecked_Conversion (Address, Submit_Call);
@@ -5583,22 +5597,69 @@ package body Model_Runner.Platform.Device.Products is
       --  weight of zero against a value that was never written is zero
       --  times whatever was in that memory, and a not-a-number there
       --  survives the zero.
+      --
+      --  On the device rather than through the mapping. Written by the
+      --  host, the zeroing faults in every page of the cache as it goes:
+      --  seventeen milliseconds of a nineteen-millisecond reserve for the
+      --  ninety megabytes a 2,048-token context of TinyLlama takes, paid
+      --  by every session since a cache nobody holds is given back. The
+      --  device writes its own memory at its own rate, and the pages the
+      --  host touches are the ones it writes a position into.
       declare
-         Room : Model_Runner.Bytes.Byte_Array
-           (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
-           with Import, Address => Item.Cache_At;
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
 
+         Began : aliased Command_Begin_Info;
+
+         Good, Cancelled : Boolean;
       begin
-         Room := [others => 0];
+         --  What is in flight is using the command buffer this records
+         --  into, and its own buffers: a reserve happens between layers,
+         --  where the sequence before it may still be running.
+         Settle (Item, Good);
 
-         if Item.Copy_At /= Null_Handle then
-            declare
-               Copy_Room : Model_Runner.Bytes.Byte_Array
-                 (1 .. Model_Runner.Bytes.Byte_Count (Copy_Wanted))
-                 with Import, Address => Item.Copy_At;
-            begin
-               Copy_Room := [others => 0];
-            end;
+         if not Good then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
+            return;
+         end if;
+
+         if Reset_Buffer = null or else Start = null or else Stop = null
+           or else Fill = null
+           or else Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Start (Item.Buffer, Began'Address) /= 0
+         then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
+            return;
+         end if;
+
+         Fill (Item.Buffer, Item.Cache_Buffer, 0, Wanted, 0);
+
+         if Item.Copy_Buffer /= Null_Handle then
+            Fill (Item.Buffer, Item.Copy_Buffer, 0, Copy_Wanted, 0);
+         end if;
+
+         if Stop (Item.Buffer) /= 0 then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
+            return;
+         end if;
+
+         Submit_And_Wait (Item, Good, Cancelled, null);
+
+         if not Good then
+            Ok := False;
+            Item.Cache_Bytes := 0;
+            Item.Copy_Bytes := 0;
+            return;
          end if;
       end;
 
