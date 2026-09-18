@@ -894,6 +894,8 @@ package body Tests.Inference_Cases is
       Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
 
       declare
+         use type Interfaces.Unsigned_64;
+
          Held  : aliased constant B.Byte_Array := Image.all;
          Under : Harness (Held'Access);
          Status : E.Error_Info;
@@ -948,6 +950,21 @@ package body Tests.Inference_Cases is
             Assert (E.Is_Ok (Status), "a rewind to the front was refused");
 
             L.Close (Live);
+
+            --  The room a hybrid's ring is seated in, given back with
+            --  the seat: it grew to hold every seated ring and never
+            --  shrank, so a session with states kept left tens of
+            --  megabytes of the machine's own memory on the device
+            --  until the engine closed. The engine calls
+            --  Release_State_Room where the last seat is given up, as it
+            --  calls Release_Cache where the last block is. Nothing on
+            --  the processor takes a room at all, so this says nothing
+            --  there.
+            Assert (Model_Runner.Backend.Device.State_Room_Bytes = 0,
+                    "the device still holds"
+                    & Interfaces.Unsigned_64'Image
+                        (Model_Runner.Backend.Device.State_Room_Bytes)
+                    & " bytes of state room with no session seated in it");
          end;
 
          declare
@@ -3150,6 +3167,16 @@ package body Tests.Inference_Cases is
                      (Model_Runner.Backend.Device.Cached_Bytes)
                  & " bytes of cache with no session left to hold a block "
                  & "of it");
+
+         --  And the room a hybrid's rings are seated in, by the same
+         --  rule: this fixture has no linear layers, so the room is
+         --  nothing either way, and the hybrid test below is where a
+         --  room is taken and given back.
+         Assert (Model_Runner.Backend.Device.State_Room_Bytes = 0,
+                 "the device still holds"
+                 & Interfaces.Unsigned_64'Image
+                     (Model_Runner.Backend.Device.State_Room_Bytes)
+                 & " bytes of state room with no session seated in it");
 
          Whole := Model_Runner.Backend.Device.Layers_Whole - Was_Whole;
          Handed := Model_Runner.Backend.Device.Layers_Handed - Was_Handed;

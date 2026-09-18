@@ -267,6 +267,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A hybrid's room of rings gets what the cache got, and a run says how
+  large it is.** The room every seated session's ring of states lives in
+  was zeroed by the host -- faulting in every page of tens of megabytes
+  -- and grew to hold each new seat and never shrank, so a hybrid
+  session left its room on the device until the engine closed.
+  `vkCmdFillBuffer` zeroes it where the memory is, and the engine hands
+  it back where the last seat in it is given up, as it does the cache
+  with the last block. `--show-stats` reports **bytes of linear states
+  on the device** beside the context's, which nothing said before: on
+  Qwen3.5-0.8B at a context of 512 it is twenty megabytes against the
+  context's twenty-two.
 - **The device's cache is zeroed on the device rather than through its
   mapping.** A cache has to start zeroed, because the matrix attention
   reads whole tiles of cached positions whether or not every position in

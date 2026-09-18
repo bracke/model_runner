@@ -1882,6 +1882,21 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Give that room back, once no session is seated in it.
+   --
+   --  As the cache is: a room grows to hold every seated session's ring
+   --  and never shrank, so a hybrid session with many states kept left
+   --  its room on the device until the engine closed -- the machine's
+   --  own memory, on a part that shares it. The engine says when the
+   --  last seat is given up; nothing here can tell, a seat being kept
+   --  for a session that may run again.
+   --
+   --  Waits for what is in flight, since a buffer a submission is
+   --  reading may not be freed under it.
+   --
+   --  @param Item Engine.
+   procedure Release_State_Room (Item : in out Engine);
+
    --  Write values into that room.
    --
    --  @param Item Ready engine with the room reserved.
@@ -2116,6 +2131,17 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to ask.
    --  @return Bytes of key and value cache resident, or zero for none.
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64;
+
+   --  And how many bytes the room a hybrid's rings of states are seated
+   --  in takes, which is the other thing a session holds on the device
+   --  and the one a run said nothing about: a ring is every linear
+   --  layer's memories and states for as many slots as a session keeps,
+   --  tens of megabytes on a model of a few hundred million weights, and
+   --  a round of sessions holds one apiece.
+   --
+   --  @param Item Engine to ask.
+   --  @return Bytes of that room, or zero where none is taken.
+   function State_Room_Bytes (Item : Engine) return Interfaces.Unsigned_64;
 
    --  How many values that cache holds room for: the count Reserve was
    --  last asked for and met, keys and values together. The bytes are

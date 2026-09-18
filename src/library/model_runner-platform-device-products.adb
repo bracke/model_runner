@@ -4190,6 +4190,9 @@ package body Model_Runner.Platform.Device.Products is
    function Cached_Bytes (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Cache_Bytes + Item.Copy_Bytes);
 
+   function State_Room_Bytes (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.State_Bytes);
+
    function Cached_Elements
      (Item : Engine) return Model_Runner.Numerics.Element_Count
    is (Model_Runner.Numerics.Element_Count (Item.Cache_Elements));
@@ -6429,12 +6432,55 @@ package body Model_Runner.Platform.Device.Products is
 
       Item.State_At := Where;
 
+      --  Zeroed on the device rather than through the mapping, for the
+      --  reason the cache is: written by the host it faults in every page
+      --  of a room that is tens of megabytes, and the device writes its
+      --  own memory at its own rate. A ring is written by the session
+      --  that seats in it before anything reads it, so what this buys is
+      --  a room whose gaps are nothing rather than whatever was there.
       declare
-         Room : Model_Runner.Bytes.Byte_Array
-           (1 .. Model_Runner.Bytes.Byte_Count (Wanted))
-           with Import, Address => Item.State_At;
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
+
+         Began : aliased Command_Begin_Info;
+
+         Good, Cancelled : Boolean;
       begin
-         Room := [others => 0];
+         --  What is in flight is using the command buffer this records
+         --  into: a room is reserved between layers, where the sequence
+         --  before it may still be running.
+         Settle (Item, Good);
+
+         if not Good
+           or else Reset_Buffer = null or else Start = null
+           or else Stop = null or else Fill = null
+           or else Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Start (Item.Buffer, Began'Address) /= 0
+         then
+            Ok := False;
+            Item.State_Bytes := 0;
+            return;
+         end if;
+
+         Fill (Item.Buffer, Item.State_Buffer, 0, Wanted, 0);
+
+         if Stop (Item.Buffer) /= 0 then
+            Ok := False;
+            Item.State_Bytes := 0;
+            return;
+         end if;
+
+         Submit_And_Wait (Item, Good, Cancelled, null);
+
+         if not Good then
+            Ok := False;
+            Item.State_Bytes := 0;
+            return;
+         end if;
       end;
 
       --  What was there, carried over.
@@ -6459,6 +6505,39 @@ package body Model_Runner.Platform.Device.Products is
       Item.State_Bytes := Wanted;
       Ok := True;
    end Reserve_State;
+
+   -------------------------
+   -- Release_State_Room --
+   -------------------------
+
+   procedure Release_State_Room (Item : in out Engine) is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+      Settled : Boolean;
+   begin
+      if Item.State_Buffer = Null_Handle then
+         return;
+      end if;
+
+      Settle (Item, Settled);
+
+      if not Settled then
+         return;
+      end if;
+
+      if Unmap /= null
+        and then Item.Logical /= Null_Handle
+        and then Item.State_At /= Null_Handle
+      then
+         Unmap (Item.Logical, Item.State_Memory);
+      end if;
+
+      Item.State_At := Null_Handle;
+      Give_Back_Buffer (Item, Item.State_Buffer, Item.State_Memory);
+      Item.State_Bytes := 0;
+   end Release_State_Room;
 
    ---------------
    -- Put_State --

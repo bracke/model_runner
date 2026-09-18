@@ -3656,6 +3656,8 @@ package body Model_Runner.CLI.Execute is
                      Given_Back     => Model_Runner.Backend.Device.Given_Back,
                      Cached_Bytes   =>
                        Model_Runner.Backend.Device.Cached_Bytes,
+                     State_Bytes    =>
+                       Model_Runner.Backend.Device.State_Room_Bytes,
                      Layers_Whole   =>
                        Model_Runner.Backend.Device.Layers_Whole,
                      Layers_Handed  =>

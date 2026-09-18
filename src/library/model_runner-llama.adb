@@ -5025,6 +5025,16 @@ package body Model_Runner.Llama is
 
       Item.State_Seated := False;
       Item.State_On_Device := False;
+
+      --  And the room itself where nobody is seated in it: it grew to
+      --  hold every seated ring and never shrank, so a hybrid session
+      --  with states kept left tens of megabytes of the machine's own
+      --  memory on the device until the engine closed. The next session
+      --  to seat takes a room again and writes its ring into it, which
+      --  is what seating is.
+      if (for all Seated of State_Seats => Seated = null) then
+         Model_Runner.Backend.Device.Release_State_Room;
+      end if;
    end Release_State_Room;
 
    --  Give a session a seat: the first gap past the table that its ring

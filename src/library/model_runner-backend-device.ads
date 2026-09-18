@@ -319,6 +319,14 @@ package Model_Runner.Backend.Device is
    --  @return Bytes of key and value cache resident, or zero for none.
    function Cached_Bytes return Interfaces.Unsigned_64;
 
+   --  And the room a hybrid's rings of states are seated in, which is
+   --  the other thing a session holds there: every linear layer's
+   --  memories and states for as many slots as it keeps, a ring a
+   --  session, and nothing said how much.
+   --
+   --  @return Bytes of that room, or zero where none is taken.
+   function State_Room_Bytes return Interfaces.Unsigned_64;
+
    --  How many values that cache holds room for, keys and values
    --  together: what Reserve_Cache was last asked for and met. Not the
    --  bytes over four -- the bytes hold a half-precision copy past the
@@ -389,6 +397,11 @@ package Model_Runner.Backend.Device is
    --  here can tell on its own, a block being kept for a session that
    --  may come back.
    procedure Release_Cache;
+
+   --  And the room a hybrid's rings of states are seated in, once no
+   --  session is seated in it: the same rule and the same reason, a room
+   --  that grew to hold every seated ring and never shrank.
+   procedure Release_State_Room;
 
    --  How many bytes of one storage buffer a context of this many
    --  elements would take on the device: four an element, the cache

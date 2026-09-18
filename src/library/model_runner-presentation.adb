@@ -527,6 +527,7 @@ package body Model_Runner.Presentation is
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
       Cached_Bytes   : Interfaces.Unsigned_64 := 0;
+      State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
       Handed_Why     : String := "")
@@ -627,6 +628,15 @@ package body Model_Runner.Presentation is
          Put_Field
            (Item, "statistics.cached_bytes",
             T.Image (Long_Long_Integer (Cached_Bytes)), Diagnostic);
+
+         --  And the rings, for a hybrid: said only where there are any,
+         --  since every other architecture would read a nought there and
+         --  wonder what it was.
+         if Interfaces.">" (State_Bytes, 0) then
+            Put_Field
+              (Item, "statistics.state_bytes",
+               T.Image (Long_Long_Integer (State_Bytes)), Diagnostic);
+         end if;
 
          --  And how much of the model went over as one sequence. A layer
          --  refused goes over in pieces instead, or on the processor,

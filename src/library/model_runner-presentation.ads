@@ -313,6 +313,10 @@ package Model_Runner.Presentation is
    --    weights: a device with the model and not the context computes the
    --    products there and hands attention back, and processor time a run
    --    should not have needed was the only sign of it.
+   --  @param State_Bytes How many bytes the room a hybrid's rings of
+   --    states are seated in takes there, or zero where the model has no
+   --    linear layers or none went over: the other thing a session holds
+   --    on the device, and one a run said nothing about.
    --  @param Layers_Whole How many layers went over whole.
    --  @param Layers_Handed How many the processor took instead. A layer
    --    handed back runs with the device idle and a fetch a token, and
@@ -330,6 +334,7 @@ package Model_Runner.Presentation is
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
       Cached_Bytes   : Interfaces.Unsigned_64 := 0;
+      State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
       Handed_Why     : String := "");

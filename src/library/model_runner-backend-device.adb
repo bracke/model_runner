@@ -602,6 +602,9 @@ package body Model_Runner.Backend.Device is
    function Cached_Bytes return Interfaces.Unsigned_64
    is (Products.Cached_Bytes (Engine));
 
+   function State_Room_Bytes return Interfaces.Unsigned_64
+   is (Products.State_Room_Bytes (Engine));
+
    function Cached_Elements return Model_Runner.Numerics.Element_Count
    is (Products.Cached_Elements (Engine));
 
@@ -894,6 +897,17 @@ package body Model_Runner.Backend.Device is
          Products.Release_Cache (Engine);
       end if;
    end Release_Cache;
+
+   ------------------------
+   -- Release_State_Room --
+   ------------------------
+
+   procedure Release_State_Room is
+   begin
+      if Ready_Now then
+         Products.Release_State_Room (Engine);
+      end if;
+   end Release_State_Room;
 
    -----------------
    -- Cache_Bound --
