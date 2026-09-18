@@ -2359,6 +2359,31 @@ package body Model_Runner.CLI.Execute is
             return;
          end if;
 
+         --  A context the device will not hold, said before the run
+         --  rather than left to be inferred from one that was slower than
+         --  it looked: the cache is one storage buffer there, a device
+         --  states how much of one a shader may be given, and a context
+         --  past that keeps to the processor and attends there while the
+         --  products stay on the device. Every other number the run
+         --  reports reads as it does when the whole model runs there.
+         declare
+            Wanted, Bound : Interfaces.Unsigned_64;
+            Fits          : Boolean;
+         begin
+            L.Context_Room (Session, Wanted, Bound, Fits);
+
+            if not Fits then
+               Screen.Put_Message
+                 ("cli.note.context_off_device",
+                  [Loc.Named
+                     ("value",
+                      Model_Runner.Text.Image (Long_Long_Integer (Wanted))),
+                   Loc.Named
+                     ("total",
+                      Model_Runner.Text.Image (Long_Long_Integer (Bound)))]);
+            end if;
+         end;
+
          --  An option that cannot do anything here says so rather than
          --  being accepted and forgotten -- and whether it can is known only
          --  now, once the model has said whether it carries a next-token

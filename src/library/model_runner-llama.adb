@@ -5327,6 +5327,39 @@ package body Model_Runner.Llama is
        elsif Item.Held in Eighth | Fourth then Packed_Layout (Item).Span
        else 0);
 
+   ------------------
+   -- Context_Room --
+   ------------------
+
+   procedure Context_Room
+     (Item   : Session;
+      Wanted : out Interfaces.Unsigned_64;
+      Bound  : out Interfaces.Unsigned_64;
+      Fits   : out Boolean)
+   is
+      use type Model_Runner.Backend.Backend_Kind;
+   begin
+      Wanted := 0;
+      Bound := 0;
+      Fits := True;
+
+      if Item.Owner = null
+        or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+      then
+         return;
+      end if;
+
+      --  What Take_Block will ask for: this session's block, the table a
+      --  round reads past it and a layer's sinks after that.
+      Wanted :=
+        Model_Runner.Backend.Device.Cache_Bytes_For
+          (Block_Span_Of (Item)
+           + Element_Count (Model_Runner.Backend.Device.Table_Room)
+           + Element_Count (Model_Runner.Backend.Device.Sink_Room));
+      Bound := Model_Runner.Backend.Device.Cache_Bound;
+      Fits := Bound = 0 or else Wanted <= Bound;
+   end Context_Room;
+
    procedure Take_Block (Item : Session_Access; Ok : out Boolean)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -12638,6 +12671,11 @@ package body Model_Runner.Llama is
             Asked      : Boolean := False;
             Went_Whole : Boolean := False;
 
+            --  And the one reason the engine knows and the device cannot,
+            --  the sequence never having been built: that this session has
+            --  no block of the device's cache.
+            No_Block   : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -12817,6 +12855,7 @@ package body Model_Runner.Llama is
                              Model_Runner.Backend.Backend_Device)
                then
                   Take_Block (Item'Unchecked_Access, Resident);
+                  No_Block := not Resident;
 
                   if Resident then
                      if Settings.Rotary > 0 then
@@ -13439,7 +13478,8 @@ package body Model_Runner.Llama is
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
             then
-               Model_Runner.Backend.Device.Note_Layer (Went_Whole, Asked);
+               Model_Runner.Backend.Device.Note_Layer
+                 (Went_Whole, Asked, Cache => No_Block);
             end if;
          end;
       end loop;
@@ -13756,6 +13796,13 @@ package body Model_Runner.Llama is
       --  embedding, which the host has.
       Carrying : constant Boolean := True;
       Deferring : constant Boolean := True;
+
+      --  Whether any layer was kept off the whole road because the
+      --  session has no block of the device's cache -- a context past
+      --  what one storage buffer holds there is the usual reason, and it
+      --  reads nothing like a shape the sequence will not take. Set by
+      --  Has_Block below and read where the layer's outcome is noted.
+      Blockless : Boolean := False;
       Carried : Boolean := False;
 
       --  Which layers left their keys and values in the device's cache
@@ -13866,6 +13913,8 @@ package body Model_Runner.Llama is
          Held : Boolean;
       begin
          Take_Block (Of_Item, Held);
+
+         Blockless := Blockless or else not Held;
          return Held;
       end Has_Block;
 
@@ -14444,6 +14493,12 @@ package body Model_Runner.Llama is
             Asked      : Boolean := False;
             Went_Whole : Boolean := False;
 
+            --  And the one reason the engine knows and the device cannot:
+            --  that this session has no block of the device's cache,
+            --  which Has_Block finds while the layer's road is chosen and
+            --  so is read where the outcome is noted rather than here.
+            No_Block   : Boolean := False;
+
             --  Set when a device took the whole gated feed-forward, its
             --  projection down included, so that the common tail does not
             --  project it a second time.
@@ -14927,6 +14982,7 @@ package body Model_Runner.Llama is
                                 Model_Runner.Backend.Backend_Device)
                   then
                      Take_Block (Item'Unchecked_Access, Resident);
+                     No_Block := not Resident;
                   end if;
 
                   --  The whole layer as one submission, where the device
@@ -15998,7 +16054,8 @@ package body Model_Runner.Llama is
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
             then
-               Model_Runner.Backend.Device.Note_Layer (Went_Whole, Asked);
+               Model_Runner.Backend.Device.Note_Layer
+                 (Went_Whole, Asked, Cache => No_Block or else Blockless);
             end if;
          end;
       end loop;

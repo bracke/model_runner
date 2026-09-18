@@ -1685,6 +1685,32 @@ package Model_Runner.Llama is
    --    rewind reaches anywhere.
    function States_Kept (Item : Session) return Natural;
 
+   --  What this session's context would take on the device, and whether
+   --  the device will hold it.
+   --
+   --  The cache is one storage buffer -- binary32 with a half-precision
+   --  copy after it -- and a device states how much of one buffer a
+   --  shader may be given. A context past that is refused rather than
+   --  bound, and the session keeps its cache on the host and attends
+   --  there while its products stay on the device: correct, and slower
+   --  than it looks from outside, since every other number a run reports
+   --  is what it is when the whole model runs there. Phi-3 mini at its
+   --  own 4,096 asks for 4.8 GB on a part that holds 4 GiB of one
+   --  buffer. A caller that asks this before the run can say so.
+   --
+   --  Wanted and Bound are zero, and Fits is True, where the backend is
+   --  not the device or none is open: nothing is refused there.
+   --
+   --  @param Item Open session.
+   --  @param Wanted Receives the bytes the context would take.
+   --  @param Bound Receives what one buffer may hold.
+   --  @param Fits Receives False only where the device will refuse it.
+   procedure Context_Room
+     (Item   : Session;
+      Wanted : out Interfaces.Unsigned_64;
+      Bound  : out Interfaces.Unsigned_64;
+      Fits   : out Boolean);
+
    --  Whether the model carries a block past its stack for drafting the
    --  token after the next, and the session can run it: a hybrid file's
    --  nextn block, and a session holding its cache exactly.

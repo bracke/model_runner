@@ -3218,6 +3218,36 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
+         --  What the device would need for this context, and what one
+         --  buffer there holds: a small fixture's is far under it, and
+         --  the two numbers are the ones a run names where it is not.
+         declare
+            Live   : L.Session;
+            Status : E.Error_Info;
+
+            use type Interfaces.Unsigned_64;
+
+            Wanted, Bound : Interfaces.Unsigned_64;
+            Fits          : Boolean;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "a session did not open for its room");
+
+            L.Context_Room (Live, Wanted, Bound, Fits);
+
+            Assert (Wanted > 0,
+                    "a session on the device says its context takes nothing");
+            Assert (Bound > 0,
+                    "the device states no bound on one storage buffer");
+            Assert (Fits,
+                    "a fixture's context does not fit on the device, which "
+                    & "holds" & Interfaces.Unsigned_64'Image (Bound)
+                    & " bytes of one buffer against its"
+                    & Interfaces.Unsigned_64'Image (Wanted));
+
+            L.Close (Live);
+         end;
+
          Counted (Under, L.Exact, Whole, Handed, Batch => True);
          Assert (Handed > 0,
                  "the code variant took every layer whole on the device, "

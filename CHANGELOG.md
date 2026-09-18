@@ -246,6 +246,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A context the device will not hold is said at open, by name and with
+  both numbers.** The cache is one storage buffer there -- binary32 with
+  a half-precision copy after it, six bytes an element -- and a device
+  states how much of one buffer a shader may be given. A context past
+  that is refused rather than bound, and the session keeps its cache on
+  the processor and attends there while its products stay on the device:
+  correct, and slower than it looks, since every other number a run
+  reports reads as it does when the whole model runs there. Phi-3 mini at
+  its own 4,096 asks for 4.8 GB on a part that holds 4 GiB of one buffer.
+  A run now says so as the session opens -- what the context takes, what
+  one buffer holds, and that a packed `--kv-cache` is a quarter of the
+  size -- rather than leaving it to be inferred afterwards; and where the
+  layers are counted, the reason reads *the context is not on the
+  device* rather than the shape it is not.
 - **A device run says how much of the model went over whole.** A layer
   the device will not take as one sequence goes over in pieces instead
   -- a submission a step, its activation home between them -- or on the

@@ -564,7 +564,10 @@ package body Model_Runner.Backend.Device is
    -- Note_Layer --
    ----------------
 
-   procedure Note_Layer (Whole : Boolean; Asked : Boolean := False) is
+   procedure Note_Layer
+     (Whole : Boolean;
+      Asked : Boolean := False;
+      Cache : Boolean := False) is
    begin
       if Whole then
          Whole_Count := Whole_Count + 1;
@@ -575,7 +578,8 @@ package body Model_Runner.Backend.Device is
 
       if Handed_First = Not_Handed then
          Handed_First :=
-           (if not Asked then Shape_Handed
+           (if Cache then Cache_Handed
+            elsif not Asked then Shape_Handed
             elsif Layer_Refusal /= Not_Handed then Layer_Refusal
             else (case Products.Last_Refusal (Engine) is
                      when Products.Packed_Refused => Packed_Handed,
@@ -879,6 +883,22 @@ package body Model_Runner.Backend.Device is
 
       Products.Reserve (Engine, Elements, Ok);
    end Reserve_Cache;
+
+   -----------------
+   -- Cache_Bound --
+   -----------------
+
+   function Cache_Bound return Interfaces.Unsigned_64
+   is (if Ready_Now then Products.Byte_Limit (Engine) else 0);
+
+   --------------------
+   -- Cache_Bytes_For --
+   --------------------
+
+   function Cache_Bytes_For
+     (Elements : Model_Runner.Numerics.Element_Count)
+      return Interfaces.Unsigned_64
+   is (Interfaces.Unsigned_64 (Elements) * 6);
 
    ---------------
    -- Put_Table --

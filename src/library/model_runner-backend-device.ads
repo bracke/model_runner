@@ -219,7 +219,14 @@ package Model_Runner.Backend.Device is
    --  @param Whole True where the whole layer went over as one sequence.
    --  @param Asked True where the device was asked, False where the
    --    engine's own check kept the layer back.
-   procedure Note_Layer (Whole : Boolean; Asked : Boolean := False);
+   --  @param Cache True where what kept it back was the context not being
+   --    on the device -- a context past what one storage buffer holds
+   --    there, or a device with no room for one -- which the engine knows
+   --    and the sequence never hears about, having never been built.
+   procedure Note_Layer
+     (Whole : Boolean;
+      Asked : Boolean := False;
+      Cache : Boolean := False);
 
    --  @return Layers noted whole since the device was opened.
    function Layers_Whole return Natural;
@@ -357,6 +364,29 @@ package Model_Runner.Backend.Device is
    procedure Reserve_Cache
      (Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
+
+   --  How many bytes one storage buffer may hold here, which is what
+   --  bounds a session's context: the cache is one buffer, binary32 with
+   --  a half-precision copy after it, and a context past the bound is
+   --  refused rather than bound -- the allocation goes through, the
+   --  descriptor naming a range past it does not, and every read out of
+   --  it is undefined. A caller that knows what its context will take can
+   --  say so before the run rather than leave the reader to infer it from
+   --  a run that was slower than it looked.
+   --
+   --  @return The bound in bytes, or zero where no device is open or the
+   --    device states none.
+   function Cache_Bound return Interfaces.Unsigned_64;
+
+   --  How many bytes a context of this many elements would take on the
+   --  device: four an element and two more for the half-precision copy the
+   --  matrix attention reads.
+   --
+   --  @param Elements Values, keys and values together.
+   --  @return Bytes.
+   function Cache_Bytes_For
+     (Elements : Model_Runner.Numerics.Element_Count)
+      return Interfaces.Unsigned_64;
 
    --  Write a round's per-row table into that cache.
    --
