@@ -83,6 +83,13 @@ package body Model_Runner.Platform.Device.Products is
    Query_Result_Wait        : constant := 2;
    Access_Shader_Read       : constant := 16#20#;
    Access_Shader_Write      : constant := 16#40#;
+
+   --  And the transfer stage, for the two commands that write a buffer
+   --  without a shader: the fill that zeroes a fresh cache or room, and
+   --  the copy that carries what a smaller one held into it.
+   Pipeline_Stage_Transfer  : constant := 16#1000#;
+   Access_Transfer_Read     : constant := 16#800#;
+   Access_Transfer_Write    : constant := 16#1000#;
    Bind_Point_Compute   : constant := 1;
    Level_Primary        : constant := 0;
    Use_Once             : constant := 1;
@@ -1232,6 +1239,20 @@ package body Model_Runner.Platform.Device.Products is
    --  -- seventeen milliseconds of a nineteen-millisecond reserve for a
    --  cache of ninety megabytes -- and the device writes its own memory
    --  at its own rate.
+   --  A run of one buffer copied into another, on the device: where the
+   --  run begins in each and how long it is, in bytes.
+   type Copy_Region is record
+      From : Interfaces.Unsigned_64 := 0;
+      Into : Interfaces.Unsigned_64 := 0;
+      Span : Interfaces.Unsigned_64 := 0;
+   end record
+     with Convention => C;
+
+   type Copy_Buffer_Call is access
+     procedure (Buffer : Address; From, Into : Address;
+                Count : C.unsigned; Regions : Address)
+     with Convention => C;
+
    type Fill_Call is access
      procedure (Buffer : Address; Target : Address;
                 Offset : Interfaces.Unsigned_64;
@@ -1311,6 +1332,9 @@ package body Model_Runner.Platform.Device.Products is
      new Ada.Unchecked_Conversion (Address, Dispatch_Call);
 
    function To_Fill is new Ada.Unchecked_Conversion (Address, Fill_Call);
+
+   function To_Copy_Buffer is
+     new Ada.Unchecked_Conversion (Address, Copy_Buffer_Call);
    function To_Barrier is
      new Ada.Unchecked_Conversion (Address, Barrier_Call);
    function To_Submit is new Ada.Unchecked_Conversion (Address, Submit_Call);
@@ -5448,7 +5472,6 @@ package body Model_Runner.Platform.Device.Products is
       --  What the buffers being replaced held, kept until the new ones
       --  have been made and mapped.
       Carry_Over     : Boolean := False;
-      Carried_At     : Address := Null_Handle;
       Carried        : Interfaces.Unsigned_64 := 0;
       Carried_Buffer : Address := Null_Handle;
       Carried_Memory : Address := Null_Handle;
@@ -5552,7 +5575,6 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Carry_Over := Was_At /= Null_Handle and then Was_Elements > 0;
-         Carried_At := Was_At;
          Carried := Was_Elements;
          Carried_Buffer := Was_Buffer;
          Carried_Memory := Was_Memory;
@@ -5615,6 +5637,10 @@ package body Model_Runner.Platform.Device.Products is
            To_Begin (Point ("vkBeginCommandBuffer"));
          Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
          Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
+         Copy_Buffer : constant Copy_Buffer_Call :=
+           To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+         Barrier : constant Barrier_Call :=
+           To_Barrier (Point ("vkCmdPipelineBarrier"));
 
          Began : aliased Command_Begin_Info;
 
@@ -5633,7 +5659,8 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Reset_Buffer = null or else Start = null or else Stop = null
-           or else Fill = null
+           or else Fill = null or else Copy_Buffer = null
+           or else Barrier = null
            or else Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
          then
@@ -5647,6 +5674,45 @@ package body Model_Runner.Platform.Device.Products is
 
          if Item.Copy_Buffer /= Null_Handle then
             Fill (Item.Buffer, Item.Copy_Buffer, 0, Copy_Wanted, 0);
+         end if;
+
+         --  And what the buffers being replaced hold, carried into the
+         --  front of the new ones: a cache is dealt out in blocks a
+         --  session apiece, and a wider buffer that came up empty would
+         --  make every session write its whole cache over again. Through
+         --  the mappings this was the host reading the device's memory,
+         --  which is the slowest thing per byte this program does; the
+         --  device copies its own memory beside the fill.
+         --
+         --  Behind a barrier, because the fill wrote the same bytes and
+         --  two transfers may run in either order.
+         if Carry_Over then
+            declare
+               Wall : aliased Memory_Barrier :=
+                 (Wrote  => Access_Transfer_Write,
+                  Reads  => C.unsigned (Access_Transfer_Read
+                                        + Access_Transfer_Write),
+                  others => <>);
+
+               Values : aliased Copy_Region :=
+                 (From => 0, Into => 0, Span => Carried * 4);
+               Halves : aliased Copy_Region :=
+                 (From => 0, Into => 0, Span => Carried * 2);
+            begin
+               Barrier (Item.Buffer, Pipeline_Stage_Transfer,
+                        Pipeline_Stage_Transfer, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+
+               Copy_Buffer (Item.Buffer, Carried_Buffer, Item.Cache_Buffer,
+                            1, Values'Address);
+
+               if Item.Copy_Buffer /= Null_Handle
+                 and then Copy_Carried_Buffer /= Null_Handle
+               then
+                  Copy_Buffer (Item.Buffer, Copy_Carried_Buffer,
+                               Item.Copy_Buffer, 1, Halves'Address);
+               end if;
+            end;
          end if;
 
          if Stop (Item.Buffer) /= 0 then
@@ -5666,43 +5732,13 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end;
 
-      --  And what the old buffer held, into the new one: the values where
-      --  they were, and the half-precision copy of them where it now
-      --  begins, which is further along because there are more values in
-      --  front of it.
-      --  And what the old buffers held, into the new ones: the values
-      --  where they were and the halves where they were, each at the
-      --  front of its own buffer now.
+      --  The old buffers, unmapped and given back. What they held is in
+      --  the new ones already, carried there by the device beside the
+      --  fill that zeroed the rest.
       if Carry_Over then
          declare
-            Was_Values : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
-              with Import, Address => Carried_At;
-
-            Now_Values : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Carried * 4))
-              with Import, Address => Item.Cache_At;
-
             Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
          begin
-            Now_Values := Was_Values;
-
-            if Copy_Carried_At /= Null_Handle
-              and then Item.Copy_At /= Null_Handle
-            then
-               declare
-                  Was_Halves : Model_Runner.Bytes.Byte_Array
-                    (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
-                    with Import, Address => Copy_Carried_At;
-
-                  Now_Halves : Model_Runner.Bytes.Byte_Array
-                    (1 .. Model_Runner.Bytes.Byte_Count (Carried * 2))
-                    with Import, Address => Item.Copy_At;
-               begin
-                  Now_Halves := Was_Halves;
-               end;
-            end if;
-
             if Unmap /= null then
                Unmap (Item.Logical, Carried_Memory);
 
@@ -6445,6 +6481,10 @@ package body Model_Runner.Platform.Device.Products is
            To_Begin (Point ("vkBeginCommandBuffer"));
          Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
          Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
+         Copy_Buffer : constant Copy_Buffer_Call :=
+           To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+         Barrier : constant Barrier_Call :=
+           To_Barrier (Point ("vkCmdPipelineBarrier"));
 
          Began : aliased Command_Begin_Info;
 
@@ -6458,6 +6498,7 @@ package body Model_Runner.Platform.Device.Products is
          if not Good
            or else Reset_Buffer = null or else Start = null
            or else Stop = null or else Fill = null
+           or else Copy_Buffer = null or else Barrier = null
            or else Reset_Buffer (Item.Buffer, 0) /= 0
            or else Start (Item.Buffer, Began'Address) /= 0
          then
@@ -6467,6 +6508,30 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Fill (Item.Buffer, Item.State_Buffer, 0, Wanted, 0);
+
+         --  And what the room being replaced held, into the front of the
+         --  new one: every seated session's ring, which a room that came
+         --  up empty would make each of them write again. On the device,
+         --  behind a barrier, for the reasons the cache's carry is.
+         if Was_At /= Null_Handle and then Was_Bytes > 0 then
+            declare
+               Wall : aliased Memory_Barrier :=
+                 (Wrote  => Access_Transfer_Write,
+                  Reads  => C.unsigned (Access_Transfer_Read
+                                        + Access_Transfer_Write),
+                  others => <>);
+
+               Rings : aliased Copy_Region :=
+                 (From => 0, Into => 0, Span => Was_Bytes);
+            begin
+               Barrier (Item.Buffer, Pipeline_Stage_Transfer,
+                        Pipeline_Stage_Transfer, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+
+               Copy_Buffer (Item.Buffer, Was_Buffer, Item.State_Buffer,
+                            1, Rings'Address);
+            end;
+         end if;
 
          if Stop (Item.Buffer) /= 0 then
             Ok := False;
@@ -6483,19 +6548,9 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end;
 
-      --  What was there, carried over.
+      --  The room being replaced, unmapped and given back: what it held
+      --  is in the new one already, carried there by the device.
       if Was_At /= Null_Handle and then Was_Bytes > 0 then
-         declare
-            Was : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Was_Bytes))
-              with Import, Address => Was_At;
-            Now : Model_Runner.Bytes.Byte_Array
-              (1 .. Model_Runner.Bytes.Byte_Count (Was_Bytes))
-              with Import, Address => Item.State_At;
-         begin
-            Now := Was;
-         end;
-
          if Unmap /= null then
             Unmap (Item.Logical, Was_Memory);
          end if;

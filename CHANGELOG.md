@@ -267,6 +267,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A buffer that grows carries what it held on the device.** The cache
+  is dealt out in blocks a session apiece and the room of rings in seats,
+  so a wider buffer that came up empty would make every session write
+  its whole cache or ring again -- what was there is carried into the
+  front of the new one. Through the mappings that was the host reading
+  the device's memory, which is the slowest thing per byte this program
+  does, and there is a `vkCmdCopyBuffer` for it: recorded beside the
+  fill that zeroes the rest, behind a barrier, in the submission that
+  was already being made.
 - **A hybrid's room of rings gets what the cache got, and a run says how
   large it is.** The room every seated session's ring of states lives in
   was zeroed by the host -- faulting in every page of tens of megabytes
