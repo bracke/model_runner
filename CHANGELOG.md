@@ -55,6 +55,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Thirty-nine catalog keys were in no check at all.** The check that
+  asks whether anything reads each message held five hundred and twelve
+  keys and the catalog holds five hundred and fifty-one, so it stopped
+  taking names partway and said nothing: the last thirty-nine were
+  neither checked for a reader nor, once the locales were checked,
+  present at all. The bound is a thousand now and overflowing it is a
+  failure that names itself, as the operation registry's bound already
+  was. The two locales this repository ships beside English are held
+  level with it in both directions -- every English key present in each,
+  and no key in one that English does not have, which nothing could ask
+  for -- since a missing translation renders in English with nothing
+  said, and a stale one is a line nothing can reach.
 - **Ten lines of `help embed` were their own names in angle brackets.**
   The rotation options, the yarn options and the three device options
   are taken by `embed` as well as by `run`, and the catalog had lines

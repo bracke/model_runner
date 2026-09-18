@@ -886,8 +886,20 @@ package body Checks is
          Catalog : constant String :=
            Contents ("resources/messages/catalog.txt");
 
-         Room  : constant := 512;
+         --  Room for every English key, and a failure rather than a
+         --  silence where there is not. It held five hundred and twelve
+         --  while the catalog held five hundred and fifty-one, so the
+         --  last thirty-nine keys were in no check at all: nothing said
+         --  whether anything read them, and the locale check below
+         --  reported every one of them as a translation of a key that
+         --  does not exist. A bound that is silently full makes a check
+         --  weaker as a project grows, which is the opposite of what a
+         --  check is for -- the same lesson the operation registry
+         --  learned, and this is the same failure written down here.
+         Room  : constant := 1_000;
          Width : constant := 96;
+
+         Overflowed : Boolean := False;
 
          type Key_Text is record
             Text : String (1 .. Width) := [others => ' '];
@@ -945,8 +957,15 @@ package body Checks is
 
          Cursor : Natural := Catalog'First;
       begin
-         --  The English keys are the catalog: another locale carries a
-         --  subset and falls back, so a key it does not have is not missing.
+         --  The English keys are the catalog. The runtime lets another
+         --  locale carry a subset and fall back per key, which is right
+         --  for a translation in progress and is not what this
+         --  repository ships: every locale here has carried every key
+         --  since it was added, and a key that goes missing from one of
+         --  them renders in English with nothing said. The two halves
+         --  below hold them level -- every English key in every locale,
+         --  and no key in a locale that English does not have, which
+         --  nothing could ever ask for.
          while Cursor <= Catalog'Last loop
             declare
                Stop : Natural := Cursor;
@@ -973,6 +992,8 @@ package body Checks is
                                  Count := Count + 1;
                                  Keys (Count).Last := Key'Length;
                                  Keys (Count).Text (1 .. Key'Length) := Key;
+                              else
+                                 Overflowed := True;
                               end if;
                            end;
                            exit;
@@ -990,6 +1011,99 @@ package body Checks is
             Fail ("no catalog keys were found; the check no longer matches "
                   & "the file it reads");
          end if;
+
+         Result.Performed := Result.Performed + 1;
+         if Overflowed then
+            Fail ("more than" & Natural'Image (Room) & " catalog keys were "
+                  & "found, or one longer than" & Natural'Image (Width)
+                  & " characters, and the rest were not checked; raise the "
+                  & "bound in this check");
+         end if;
+
+         --  Every English key in the other locales this repository ships.
+         declare
+            --  Asked for by name rather than found in the file: a locale
+            --  whose every key went missing would otherwise be a locale
+            --  this check no longer looks at.
+            procedure Level (Prefix : String) is
+            begin
+               for Index in 1 .. Count loop
+                  declare
+                     Key : constant String :=
+                       Keys (Index).Text (1 .. Keys (Index).Last);
+                  begin
+                     Result.Performed := Result.Performed + 1;
+
+                     if not Holds (Catalog,
+                                   Character'Val (10) & Prefix & "." & Key
+                                   & " =")
+                     then
+                        Fail ("the catalog has en." & Key & " and not "
+                              & Prefix & "." & Key & ", so that message "
+                              & "renders in English there with nothing "
+                              & "said");
+                     end if;
+                  end;
+               end loop;
+            end Level;
+            --  And no key a locale has that English does not: the
+            --  English keys are what anything asks for, so such a line
+            --  is one nothing can reach -- a translation of a message
+            --  that was renamed or taken out, left behind.
+            procedure Only_There (Prefix : String) is
+               Cursor : Natural := Catalog'First;
+            begin
+               while Cursor <= Catalog'Last loop
+                  declare
+                     Stop : Natural := Cursor;
+                  begin
+                     while Stop <= Catalog'Last
+                       and then Catalog (Stop) /= Character'Val (10)
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+
+                     declare
+                        Line : constant String := Catalog (Cursor .. Stop - 1);
+                        Head : constant String := Prefix & ".";
+                     begin
+                        if Line'Length > Head'Length
+                          and then Line (Line'First
+                                         .. Line'First + Head'Length - 1)
+                                   = Head
+                        then
+                           for Index in Line'First + Head'Length .. Line'Last
+                           loop
+                              if Line (Index) = ' ' then
+                                 declare
+                                    Key : constant String :=
+                                      Line (Line'First + Head'Length
+                                            .. Index - 1);
+                                 begin
+                                    Result.Performed := Result.Performed + 1;
+
+                                    if not Has_Key (Key) then
+                                       Fail ("the catalog has " & Prefix & "."
+                                             & Key & " and no en." & Key
+                                             & ", so nothing can ask for it");
+                                    end if;
+                                 end;
+                                 exit;
+                              end if;
+                           end loop;
+                        end if;
+                     end;
+
+                     Cursor := Stop + 1;
+                  end;
+               end loop;
+            end Only_There;
+         begin
+            Level ("da");
+            Level ("qps");
+            Only_There ("da");
+            Only_There ("qps");
+         end;
 
          --  The three families the code builds rather than writes.
          for Code in E.Error_Code loop
