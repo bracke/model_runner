@@ -378,6 +378,18 @@ package Model_Runner.Backend.Device is
    --    device states none.
    function Cache_Bound return Interfaces.Unsigned_64;
 
+   --  Give the device's cache back, both buffers of it, once no session
+   --  holds a block of it.
+   --
+   --  A reserve only ever grows, so a run that opened a long-context
+   --  session and closed it left the device holding that cache -- on a
+   --  part that shares the host's memory, the machine's memory held for
+   --  a session that is gone, and a later model refused for want of it.
+   --  The engine says when the last block has been given up; nothing
+   --  here can tell on its own, a block being kept for a session that
+   --  may come back.
+   procedure Release_Cache;
+
    --  How many bytes of one storage buffer a context of this many
    --  elements would take on the device: four an element, the cache
    --  proper being one buffer and its half-precision copy another of two

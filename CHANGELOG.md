@@ -267,6 +267,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's cache is given back when the last session that held a
+  block of it closes.** A reserve only ever grew, so a run that read a
+  long context and went on to short ones left the device holding the
+  long one's cache -- on a part that shares the host's memory, the
+  machine's memory held for a session that had closed, and a later model
+  refused for want of it. The engine already knew the moment: it is
+  where the last block is given up and the width every block has is
+  forgotten. Both buffers go back there, after what is in flight has
+  finished reading them, and the next session reserves afresh.
 - **A device that would never read the cache's copy is no longer given
   one.** The copy is what the matrix attention reads, what a round's
   attention reads, and what a token reads where the copy is preferred; a

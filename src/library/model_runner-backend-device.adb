@@ -884,6 +884,17 @@ package body Model_Runner.Backend.Device is
       Products.Reserve (Engine, Elements, Ok);
    end Reserve_Cache;
 
+   -------------------
+   -- Release_Cache --
+   -------------------
+
+   procedure Release_Cache is
+   begin
+      if Ready_Now then
+         Products.Release_Cache (Engine);
+      end if;
+   end Release_Cache;
+
    -----------------
    -- Cache_Bound --
    -----------------

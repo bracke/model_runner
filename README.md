@@ -1926,17 +1926,27 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.339 s | **0.247 s** |
-| -- evaluating the prompt | 0.042 s | 0.029 s |
-| -- generating | 0.297 s | **0.218 s** |
-| -- processor time | 1.81 s | **0.12 s** |
-| 110-token prompt, one token | 0.314 s | **0.102 s** |
-| -- evaluating the prompt | 0.286 s | **0.082 s** |
-| -- processor time | 2.33 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.345 s | **0.304 s** |
+| -- evaluating the prompt | 0.041 s | 0.056 s |
+| -- generating | 0.303 s | **0.249 s** |
+| -- processor time | 1.83 s | **0.15 s** |
+| 110-token prompt, one token | 0.321 s | **0.108 s** |
+| -- evaluating the prompt | 0.320 s | **0.107 s** |
+| -- processor time | 2.52 s | **0.02 s** |
 
-All the cells were taken in one sitting on 2026-09-07, back to back, at the
+All the cells were taken in one sitting on 2026-09-18, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
-version of this table before last. The second row used to say "nothing
+version of this table before last. The device's first row is slower than it
+read on 2026-09-07 -- 0.304 s against 0.247, and its prompt 0.056 against
+0.029 -- for a reason worth keeping in view: the tool runs three rounds in
+one process and each round now opens a session that takes the device's cache
+for itself, where the second and third used to find the first round's still
+there. The cache is given back when the last session holding a block of it
+closes, so that a run which read a long context and went on to short ones no
+longer holds the long one's cache -- the machine's own memory, on a part that
+shares it. Ninety-odd megabytes allocated and mapped is about thirty
+milliseconds here, which is what the first row gained; a run of the program
+pays it once, as it always did, because a run opens one session. The second row used to say "nothing
 generated" and the command it names generates one token, so it says that now
 and carries the prompt on a line of its own. The device column carries what
 share of each run the part had work to do, and these two runs are fed 40 and

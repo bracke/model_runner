@@ -5658,6 +5658,51 @@ package body Model_Runner.Platform.Device.Products is
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
    end Reserve;
 
+   -------------------
+   -- Release_Cache --
+   -------------------
+
+   procedure Release_Cache (Item : in out Engine) is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+      Settled : Boolean;
+   begin
+      if Item.Cache_Buffer = Null_Handle
+        and then Item.Copy_Buffer = Null_Handle
+      then
+         return;
+      end if;
+
+      --  What is in flight is reading it.
+      Settle (Item, Settled);
+
+      if not Settled then
+         return;
+      end if;
+
+      if Unmap /= null and then Item.Logical /= Null_Handle then
+         if Item.Cache_At /= Null_Handle then
+            Unmap (Item.Logical, Item.Cache_Memory);
+         end if;
+
+         if Item.Copy_At /= Null_Handle then
+            Unmap (Item.Logical, Item.Copy_Memory);
+         end if;
+      end if;
+
+      Item.Cache_At := Null_Handle;
+      Item.Copy_At := Null_Handle;
+
+      Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+      Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
+
+      Item.Cache_Bytes := 0;
+      Item.Copy_Bytes := 0;
+      Item.Cache_Elements := 0;
+   end Release_Cache;
+
    ---------------
    -- Put_Cache --
    ---------------

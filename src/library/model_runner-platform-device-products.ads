@@ -1820,6 +1820,23 @@ package Model_Runner.Platform.Device.Products is
       Words    : Word_List;
       Ok       : out Boolean);
 
+   --  Give the cache back, both buffers of it.
+   --
+   --  A reserve only ever grows: a caller that asked for a long context
+   --  and then for short ones left the device holding the long one's
+   --  cache, which on a part that shares the host's memory is the
+   --  machine's memory held for a session that has closed. The engine
+   --  cannot know when that is -- a block is dealt out and kept, and a
+   --  session that comes back writes into the one it had -- so the
+   --  caller says, when the last block of it has been given up.
+   --
+   --  Waits for what is in flight, since a buffer a submission is
+   --  reading may not be freed under it. The next Reserve makes a new
+   --  one and zeroes it, so nothing of what was held is read again.
+   --
+   --  @param Item Engine.
+   procedure Release_Cache (Item : in out Engine);
+
    --  Write a run of values into that cache.
    --
    --  @param Item Ready engine with a cache reserved.

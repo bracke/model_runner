@@ -10667,6 +10667,14 @@ package body Model_Runner.Llama is
          if (for all Holder of Block_Holder => Holder = null) then
             Block_Span := 0;
             Block_Taken := 0;
+
+            --  And the buffers themselves, which a reserve only ever
+            --  grew: the last block given up is nobody holding the
+            --  device's cache, and a run that read a long context and
+            --  went on to short ones left the long one's cache there --
+            --  on a part that shares the host's memory, the machine's
+            --  memory held for a session that has closed.
+            Model_Runner.Backend.Device.Release_Cache;
          end if;
       end if;
 

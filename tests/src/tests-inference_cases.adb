@@ -3093,6 +3093,8 @@ package body Tests.Inference_Cases is
          Handed : out Natural;
          Batch  : Boolean := False)
       is
+         use type Interfaces.Unsigned_64;
+
          Live   : L.Session;
          Status : E.Error_Info;
          Logits : Logit_Vector;
@@ -3135,6 +3137,19 @@ package body Tests.Inference_Cases is
          end if;
 
          L.Close (Live);
+
+         --  And the device's cache with it: a reserve only ever grows, so
+         --  the session that closed would otherwise leave the device
+         --  holding what its context took -- the machine's own memory,
+         --  on a part that shares it -- until the engine closed. The
+         --  engine calls Release_Cache where the last block is given up,
+         --  which is the moment nothing holds one.
+         Assert (Model_Runner.Backend.Device.Cached_Bytes = 0,
+                 "the device still holds"
+                 & Interfaces.Unsigned_64'Image
+                     (Model_Runner.Backend.Device.Cached_Bytes)
+                 & " bytes of cache with no session left to hold a block "
+                 & "of it");
 
          Whole := Model_Runner.Backend.Device.Layers_Whole - Was_Whole;
          Handed := Model_Runner.Backend.Device.Layers_Handed - Was_Handed;
