@@ -142,7 +142,6 @@ package body Library_Surface is
       --  over, which says what happened rather than what is.
       new String'("Holds_Block"),
       new String'("Holds_Seat"),
-      new String'("Blocks_Held"),
       new String'("Seats_Held")];
 
    ---------------

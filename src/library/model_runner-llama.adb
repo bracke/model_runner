@@ -4953,6 +4953,14 @@ package body Model_Runner.Llama is
    Block_Clock : Natural := 0;
    Block_Used  : array (Block_Holder'Range) of Natural := [others => 0];
 
+   --  Whether the last session to ask for a block and be refused was
+   --  refused because every one of them was another session's, rather
+   --  than for anything about its own shape or size. Read where the
+   --  layer's outcome is noted, so that a run says which of the two it
+   --  was: one is a context this device will not hold, the other is
+   --  sixteen sessions that got there first.
+   Blocks_Were_Held : Boolean := False;
+
    --  Who asked last, which is how a session's run of asks -- one a layer,
    --  through a token -- is told from the token before it.
    Last_Asker : Session_Access := null;
@@ -5725,6 +5733,21 @@ package body Model_Runner.Llama is
             Why := Context_Past_Bound;
             Asked := Wanted;
             Kept := Bound;
+            return;
+         end if;
+
+         --  And last, the one that is neither: every block held by
+         --  another session, and none of them cold enough to turn out.
+         --  Said only of a session that holds none itself, and true only
+         --  of this moment -- a block given back is a block this session
+         --  may have.
+         if Item.Seat < 0
+           and then Blocks_Held = Model_Runner.Backend.Device.Block_Limit
+         then
+            Why := Blocks_All_Held;
+            Asked := Interfaces.Unsigned_64 (Blocks_Held);
+            Kept := Interfaces.Unsigned_64
+                      (Model_Runner.Backend.Device.Block_Limit);
          end if;
       end;
    end Device_Room;
@@ -5861,6 +5884,73 @@ package body Model_Runner.Llama is
       return Base;
    end First_Block_Gap;
 
+   --  How many layers hold cells of a session's cache, which is how many
+   --  runs of keys and values a move of its block has at most.
+   function Block_Layers (Item : Session) return Natural
+   is (if Item.Cells = null then 0 else Item.Cells.all'Length);
+
+   --  Which stretches of a session's block hold anything, counted from
+   --  the block's base: the cells each layer has written, keys and values
+   --  apart, for an exact session; the whole of a packed one, whose bytes
+   --  and scales are laid out as the host lays its own and whose unused
+   --  room is a fraction of what an exact block's is.
+   --
+   --  @param Item The session.
+   --  @param Runs Receives them.
+   --  @param Last How many were written.
+   procedure Held_Runs
+     (Item : Session_Access;
+      Runs : out Model_Runner.Backend.Device.Block_Runs;
+      Last : out Natural) is
+   begin
+      Last := 0;
+
+      if Item.Held /= Exact or else Item.Committed = 0 then
+         Last := 1;
+         Runs (1) := (At_Value => 0, Count => Block_Span_Of (Item.all));
+         return;
+      end if;
+
+      declare
+         Settings : Configuration renames Item.Owner.Settings;
+
+         KV_Width : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Head_Size);
+         V_Width  : constant Element_Count :=
+           Element_Count (Settings.KV_Heads * Settings.Value_Size);
+      begin
+         for Layer in 0 .. Block_Layers (Item.all) - 1 loop
+            declare
+               Held : constant Element_Count :=
+                 Element_Count'Min
+                   (Item.Cells.all (Layer),
+                    Cell_Of (Item.all, Layer,
+                             Element_Count (Item.Committed)));
+            begin
+               if Held > 0 then
+                  Last := Last + 1;
+                  Runs (Last) :=
+                    (At_Value => Keys_At (Item.all, Layer),
+                     Count    => Held * KV_Width);
+
+                  Last := Last + 1;
+                  Runs (Last) :=
+                    (At_Value =>
+                       Item.Keys.all'Length + Values_At (Item.all, Layer),
+                     Count    => Held * V_Width);
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  A session that has committed something but holds no cell of any
+      --  layer -- a window that has slid past everything -- moves nothing.
+      if Last = 0 then
+         Last := 1;
+         Runs (1) := (At_Value => 0, Count => 0);
+      end if;
+   end Held_Runs;
+
    --  Move blocks to the front until one of Span fits below where the
    --  buffer has already been dealt to, or until nothing is left to move.
    --
@@ -5912,15 +6002,25 @@ package body Model_Runner.Llama is
                --  including the positions it owes the host's copy, which
                --  had to be read back before the block could be written
                --  from the host -- goes down with the block.
+               --
+               --  And only the cells the session has written, a layer at
+               --  a time, as the write from the host was: the rest of a
+               --  block is the zeros it was made with, and at a long
+               --  context that is most of it.
                declare
                   Went : Boolean;
+                  Runs : Model_Runner.Backend.Device.Block_Runs
+                           (1 .. 2 * Block_Layers (Next.all) + 1);
+                  Last : Natural := 0;
                begin
+                  Held_Runs (Next, Runs, Last);
+
                   Model_Runner.Backend.Device.Move_Cache
-                    (From     => Where,
-                     Into     => Place,
-                     Elements => Block_Span_Of (Next.all),
-                     Halves   => Copy_Span_Of (Next.all),
-                     Ok       => Went);
+                    (From   => Where,
+                     Into   => Place,
+                     Runs   => Runs (1 .. Last),
+                     Halves => Next.Held = Exact,
+                     Ok     => Went);
 
                   if not Went then
                      Ok := False;
@@ -6010,6 +6110,7 @@ package body Model_Runner.Llama is
       --  at its previous token is what says whether it may turn another
       --  session out, below. Its own last ask says nothing -- that was
       --  the layer before, a tick ago.
+      Blocks_Were_Held := False;
       Block_Clock := Block_Clock + 1;
       if Last_Asker /= Item then
          Item.Asked_Before := Item.Asked_At;
@@ -6065,6 +6166,7 @@ package body Model_Runner.Llama is
             end loop;
 
             if Found < 0 then
+               Blocks_Were_Held := True;
                return;
             end if;
 
@@ -6079,6 +6181,7 @@ package body Model_Runner.Llama is
             --  opened, which is what lets it in where a block has gone
             --  cold.
             if Block_Used (Found) >= Asked_Last then
+               Blocks_Were_Held := True;
                return;
             end if;
 
@@ -14251,7 +14354,8 @@ package body Model_Runner.Llama is
                  (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
             then
                Model_Runner.Backend.Device.Note_Layer
-                 (Went_Whole, Asked, Cache => No_Block);
+                 (Went_Whole, Asked, Cache => No_Block,
+                  Held => No_Block and then Blocks_Were_Held);
             end if;
          end;
       end loop;
@@ -16860,7 +16964,10 @@ package body Model_Runner.Llama is
                  (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
             then
                Model_Runner.Backend.Device.Note_Layer
-                 (Went_Whole, Asked, Cache => No_Block or else Blockless);
+                 (Went_Whole, Asked, Cache => No_Block or else Blockless,
+                  Held =>
+                    (No_Block or else Blockless)
+                    and then Blocks_Were_Held);
             end if;
          end;
       end loop;

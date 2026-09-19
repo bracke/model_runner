@@ -1088,6 +1088,12 @@ package body Model_Runner.CLI.Execute is
               ("cli.note.context_off_device",
                [Loc.Named ("value", Shown (Asked)),
                 Loc.Named ("total", Shown (Kept))]);
+
+         when L.Blocks_All_Held =>
+            Screen.Put_Message
+              ("cli.note.blocks_all_held",
+               [Loc.Named ("value", Shown (Asked)),
+                Loc.Named ("total", Shown (Kept))]);
       end case;
    end Say_Device_Room;
 
@@ -2296,6 +2302,8 @@ package body Model_Runner.CLI.Execute is
                   return "statistics.handed.packed";
                when Model_Runner.Backend.Device.Cache_Handed =>
                   return "statistics.handed.cache";
+               when Model_Runner.Backend.Device.Blocks_Handed =>
+                  return "statistics.handed.blocks";
                when Model_Runner.Backend.Device.Room_Handed =>
                   return "statistics.handed.room";
                when Model_Runner.Backend.Device.Refused_Handed =>

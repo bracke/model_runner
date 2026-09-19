@@ -2031,9 +2031,12 @@ whole. A session whose keys are packed four bits wide and whose rows are
 narrower than the word the packing writes had every layer refused that way.
 `--show-stats` says **layers whole on the device N of M**, and where any
 were not it names the first one's reason -- the packed context's rows
-narrower than a word, the context not on the device at all, no room for the
-layer's weights, a shape the sequence does not take, or the sequence
-refused. It also says **blocks of the device's cache turned over to another
+narrower than a word, the context not on the device at all, every block of
+its cache held by another session, no room for the layer's weights, a shape
+the sequence does not take, or the sequence refused. The two about the cache
+are different answers: a context the device will not hold is a thing to fix
+by asking for less, and sixteen sessions that got there first is a thing
+that passes when one of them closes. It also says **blocks of the device's cache turned over to another
 session** and **seats in the device's room of rings turned over**, where
 either happened: there are sixteen of each, a seventeenth session takes the
 one gone longest unasked, and the session turned out writes what it holds
@@ -2047,11 +2050,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.2 | 0 | 39.3 |
-| 16 | **49.2** | 0 | 39.3 |
+| 8 | 49.3 | 0 | 39.2 |
+| 16 | **49.1** | 0 | 39.3 |
 | 17 | 48.1 | 1 | 39.2 |
-| 20 | 46.5 | 4 | 39.3 |
-| 32 | 43.5 | 16 | 39.2 |
+| 20 | 46.3 | 4 | 39.2 |
+| 32 | 43.5 | 16 | 39.1 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2064,7 +2067,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 43.5 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -2087,7 +2090,9 @@ twice the context takes its place, which no gap a departure leaves can hold.
 Twelve sessions at a context of 512, a departure every other turn, medians of
 three alternated triples: **46.7 tokens a second under that rule, 45.1 when
 any gap at all sets the packing going, 46.6 with no packing -- and 594 MB of
-cache in all three**. The gaps on that workload are reusable, so packing them
+cache in all three**. That rule reads 44.8, 44.6, 44.6 in a later sitting;
+the three were measured against each other within one, which is what the
+ordering rests on. The gaps on that workload are reusable, so packing them
 buys nothing and costs three and a half per cent; what the rule keeps is the
 pattern where two gaps, neither of which holds the arrival, together do. It used to
 be dealt in blocks of one width -- the first session's -- which refused the
@@ -16659,10 +16664,10 @@ N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
 
 | Members | `f32` | `q8` |
 | --- | ---: | ---: |
-| 2 | 0.365 s | 0.789 s |
-| 4 | 0.378 s | 0.776 s |
-| 8 | 0.584 s | 0.941 s |
-| 16 | 0.654 s | 1.458 s |
+| 2 | 0.369 s | 0.784 s |
+| 4 | 0.394 s | 0.794 s |
+| 8 | 0.590 s | 0.953 s |
+| 16 | 0.672 s | 1.473 s |
 
 An exact round attends through the kernel that reads the half-precision copy
 beside the cache; a packed round reads bytes through a kernel of its own and

@@ -213,8 +213,8 @@ package Model_Runner.Backend.Device is
    --  engine notes every layer's outcome; the run's report shows the
    --  counts, and the reason where any were refused.
    type Handing is
-     (Not_Handed, Shape_Handed, Packed_Handed, Cache_Handed, Room_Handed,
-      Refused_Handed);
+     (Not_Handed, Shape_Handed, Packed_Handed, Cache_Handed, Blocks_Handed,
+      Room_Handed, Refused_Handed);
 
    --  @param Whole True where the whole layer went over as one sequence.
    --  @param Asked True where the device was asked, False where the
@@ -223,10 +223,17 @@ package Model_Runner.Backend.Device is
    --    on the device -- a context past what one storage buffer holds
    --    there, or a device with no room for one -- which the engine knows
    --    and the sequence never hears about, having never been built.
+   --  @param Held True where the context is not there for a reason of its
+   --    own: every block of the cache is another session's, and none was
+   --    cold enough to turn out. A run whose layers were handed back for
+   --    that is one the device could have taken had it been asked sooner,
+   --    which is a different thing from a context it will not hold at
+   --    all, and the report said the same for both.
    procedure Note_Layer
      (Whole : Boolean;
       Asked : Boolean := False;
-      Cache : Boolean := False);
+      Cache : Boolean := False;
+      Held  : Boolean := False);
 
    --  @return Layers noted whole since the device was opened.
    function Layers_Whole return Natural;
@@ -258,6 +265,13 @@ package Model_Runner.Backend.Device is
    --  @return Seats in the room of rings turned over since then.
    function Rings_Turned return Natural;
 
+   --  A stretch inside a block that holds something, and a list of them:
+   --  the engine's names for what the products call the same.
+   subtype Block_Run is
+     Model_Runner.Platform.Device.Products.Block_Run;
+   subtype Block_Runs is
+     Model_Runner.Platform.Device.Products.Block_Runs;
+
    --  Move a block of the cache to another place in it, on the device.
    --
    --  What the packing moves a block with. The engine used to write the
@@ -267,18 +281,25 @@ package Model_Runner.Backend.Device is
    --  the device copies it where it lies instead, and the
    --  half-precision copy beside it in the same submission.
    --
+   --  Only the stretches of it that hold anything, which the caller says
+   --  because only it knows how its cache is laid out: a session of a
+   --  2,048-token context that has said twelve tokens holds twelve cells
+   --  of every layer, and the rest of the block is the zeros it was made
+   --  with.
+   --
    --  @param From Where the block begins now, in elements.
    --  @param Into Where it is to begin, which must be below From.
-   --  @param Elements How wide the block is.
-   --  @param Halves How many halves of the copy beside it to move, or
-   --    zero for none.
+   --  @param Runs What inside it to move, counted from the block's base.
+   --  @param Halves True to move the same runs of the half-precision copy
+   --    beside it, which an exact session's block has and a packed one
+   --    uses only as scratch.
    --  @param Ok True when the move ran.
    procedure Move_Cache
-     (From     : Model_Runner.Numerics.Element_Count;
-      Into     : Model_Runner.Numerics.Element_Count;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Halves   : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean);
+     (From   : Model_Runner.Numerics.Element_Count;
+      Into   : Model_Runner.Numerics.Element_Count;
+      Runs   : Block_Runs;
+      Halves : Boolean;
+      Ok     : out Boolean);
 
    --  The same for a seat in the room of rings.
    --

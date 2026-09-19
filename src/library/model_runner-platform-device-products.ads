@@ -1891,7 +1891,16 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
-   --  Move a run of the cache to another place in it, on the device.
+   --  A stretch inside a block that holds something: where it begins,
+   --  counted from the block's base in elements, and how long it is.
+   type Block_Run is record
+      At_Value : Model_Runner.Numerics.Element_Count := 0;
+      Count    : Model_Runner.Numerics.Element_Count := 0;
+   end record;
+
+   type Block_Runs is array (Positive range <>) of Block_Run;
+
+   --  Move a block of the cache to another place in it, on the device.
    --
    --  What a block of the cache is moved with when the blocks are packed
    --  forward to close a gap. The host's copy of a session's cache is
@@ -1900,27 +1909,34 @@ package Model_Runner.Platform.Device.Products is
    --  copy read home first; vkCmdCopyBuffer moves it where it lies, and
    --  the half-precision copy beside it in the same submission.
    --
-   --  The two runs may overlap -- a block moved down by less than its own
-   --  width does -- so a move that overlaps is recorded as a run of
-   --  regions of the distance between them, front to back, none of which
+   --  Only the stretches of it that hold anything: a session of a
+   --  2,048-token context that has said twelve tokens holds twelve cells
+   --  of every layer, and the rest of its block is the zeros it was made
+   --  with. The caller says which stretches those are, since only it
+   --  knows how its cache is laid out; one run of the whole block is what
+   --  a caller that cannot say asks for.
+   --
+   --  Source and destination may overlap -- a block moved down by less
+   --  than its own width does -- so each run is recorded as regions of
+   --  the distance between the two places, front to back, none of which
    --  overlaps its own source.
    --
    --  @param Item Ready engine with a cache reserved.
-   --  @param From Where the run begins now, in elements.
+   --  @param From Where the block begins now, in elements.
    --  @param Into Where it is to begin, which must be below From.
-   --  @param Elements How long the run is.
-   --  @param Halves How many halves of the copy beside it to move from
-   --    and to the same places, or zero for none: a block whose session
-   --    keeps an exact cache has a half of every element, a packed one
-   --    only the room a layer unpacks into.
+   --  @param Runs What inside it to move, from the block's base.
+   --  @param Halves True to move the same runs of the half-precision copy
+   --    beside it: a block whose session keeps an exact cache has a half
+   --    of every element of it, a packed one uses the copy only as the
+   --    room a layer unpacks into, which the next layer writes again.
    --  @param Ok True when the move was recorded and ran.
    procedure Move_Cache
-     (Item     : in out Engine;
-      From     : Model_Runner.Numerics.Element_Count;
-      Into     : Model_Runner.Numerics.Element_Count;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Halves   : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean);
+     (Item   : in out Engine;
+      From   : Model_Runner.Numerics.Element_Count;
+      Into   : Model_Runner.Numerics.Element_Count;
+      Runs   : Block_Runs;
+      Halves : Boolean;
+      Ok     : out Boolean);
 
    --  The same for the room a hybrid's rings are seated in: a seat moved
    --  to close a gap below it, without the ring coming home and going

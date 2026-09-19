@@ -286,6 +286,23 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A move copies the cells a session holds, not the room it has for
+  them.** The device-side move took the block whole, which at a long context
+  is mostly the zeros it was made with: a 2,048-token session that has said
+  twelve tokens holds twelve cells of every layer. The engine hands the move
+  a list of the stretches that hold anything -- a layer's keys and a layer's
+  values, as the write from the host did -- and each is copied as its own
+  region of the one submission, the half-precision copy beside it where the
+  session keeps an exact cache. A packed block goes whole, its unused room
+  being a quarter the size.
+- **A run says when the device's blocks are all held, rather than saying the
+  context is not on the device.** A session refused a block because sixteen
+  others hold them, and none had gone unasked long enough to be turned out,
+  was reported exactly like a session whose context the device will not hold
+  at all -- one is a thing to fix by asking for less, the other is sixteen
+  sessions that got there first and passes when one of them closes.
+  `--show-stats` names it, and `Device_Room` answers `Blocks_All_Held` for a
+  caller that asks before it runs.
 - **A block and a ring are moved where they lie.** The packing moved a block
   by writing the session's committed cells into the new place out of the
   host's copy, which meant reading back whatever the device owed that copy

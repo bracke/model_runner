@@ -580,7 +580,8 @@ package body Model_Runner.Backend.Device is
    procedure Note_Layer
      (Whole : Boolean;
       Asked : Boolean := False;
-      Cache : Boolean := False) is
+      Cache : Boolean := False;
+      Held  : Boolean := False) is
    begin
       if Whole then
          Whole_Count := Whole_Count + 1;
@@ -591,7 +592,8 @@ package body Model_Runner.Backend.Device is
 
       if Handed_First = Not_Handed then
          Handed_First :=
-           (if Cache then Cache_Handed
+           (if Held then Blocks_Handed
+            elsif Cache then Cache_Handed
             elsif not Asked then Shape_Handed
             elsif Layer_Refusal /= Not_Handed then Layer_Refusal
             else (case Products.Last_Refusal (Engine) is
@@ -634,18 +636,18 @@ package body Model_Runner.Backend.Device is
    ----------------
 
    procedure Move_Cache
-     (From     : Model_Runner.Numerics.Element_Count;
-      Into     : Model_Runner.Numerics.Element_Count;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Halves   : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean) is
+     (From   : Model_Runner.Numerics.Element_Count;
+      Into   : Model_Runner.Numerics.Element_Count;
+      Runs   : Block_Runs;
+      Halves : Boolean;
+      Ok     : out Boolean) is
    begin
       if not Ready_Now then
          Ok := False;
          return;
       end if;
 
-      Products.Move_Cache (Engine, From, Into, Elements, Halves, Ok);
+      Products.Move_Cache (Engine, From, Into, Runs, Halves, Ok);
    end Move_Cache;
 
    ----------------

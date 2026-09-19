@@ -1708,11 +1708,18 @@ package Model_Runner.Llama is
    --  -- its half-precision copy being another of two, which is never
    --  the one that decides.
    --
+   --  Then Blocks_All_Held, which is not the session's shape or size at
+   --  all but the company it keeps: the cache is dealt in sixteen blocks,
+   --  every one of them is another session's, and none had gone unasked
+   --  long enough to be turned out. That is the one answer here that may
+   --  be different a moment later, and a session that gets it is asking
+   --  too late rather than asking for too much.
+   --
    --  Device_Takes_All where the backend is not the device, or where it
-   --  will do all three.
+   --  will do all four.
    type Device_Limit is
      (Device_Takes_All, Heads_Past_Room, Packed_Heads_Unread,
-      Context_Past_Bound);
+      Context_Past_Bound, Blocks_All_Held);
 
    --  @param Item Open session.
    --  @param Why Receives which of them, or Device_Takes_All.

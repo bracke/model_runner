@@ -6630,28 +6630,17 @@ package body Model_Runner.Platform.Device.Products is
    end Move_Run;
 
    procedure Move_Cache
-     (Item     : in out Engine;
-      From     : Model_Runner.Numerics.Element_Count;
-      Into     : Model_Runner.Numerics.Element_Count;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Halves   : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean)
+     (Item   : in out Engine;
+      From   : Model_Runner.Numerics.Element_Count;
+      Into   : Model_Runner.Numerics.Element_Count;
+      Runs   : Block_Runs;
+      Halves : Boolean;
+      Ok     : out Boolean)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
-      From_Byte : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (From) * 4;
-      Into_Byte : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Into) * 4;
-      Span      : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Elements) * 4;
-
-      Half_From : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (From) * 2;
-      Half_Into : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Into) * 2;
-      Half_Span : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Halves) * 2;
+      --  The highest element any run reaches, for the bounds check.
+      Reaches : Model_Runner.Numerics.Element_Count := 0;
 
       Reset_Buffer : constant Reset_Buffer_Call :=
         To_Reset_Buffer (Point ("vkResetCommandBuffer"));
@@ -6667,11 +6656,18 @@ package body Model_Runner.Platform.Device.Products is
    begin
       Ok := False;
 
+      for Run of Runs loop
+         Reaches :=
+           Model_Runner.Numerics.Element_Count'Max
+             (Reaches, Run.At_Value + Run.Count);
+      end loop;
+
       if not Is_Ready (Item)
         or else Item.Cache_Buffer = Null_Handle
-        or else Elements = 0
+        or else Runs'Length = 0
+        or else Reaches = 0
         or else Into >= From
-        or else From_Byte + Span > Item.Cache_Bytes
+        or else Interfaces.Unsigned_64 (From + Reaches) * 4 > Item.Cache_Bytes
         or else Reset_Buffer = null or else Start = null
         or else Stop = null or else Copier = null
       then
@@ -6688,15 +6684,27 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      Move_Run (Item, Item.Cache_Buffer, From_Byte, Into_Byte, Span, Copier);
+      for Run of Runs loop
+         if Run.Count > 0 then
+            Move_Run
+              (Item, Item.Cache_Buffer,
+               Interfaces.Unsigned_64 (From + Run.At_Value) * 4,
+               Interfaces.Unsigned_64 (Into + Run.At_Value) * 4,
+               Interfaces.Unsigned_64 (Run.Count) * 4, Copier);
 
-      if Item.Copy_Buffer /= Null_Handle
-        and then Half_Span > 0
-        and then Half_From + Half_Span <= Item.Copy_Bytes
-      then
-         Move_Run (Item, Item.Copy_Buffer, Half_From, Half_Into, Half_Span,
-                   Copier);
-      end if;
+            if Halves
+              and then Item.Copy_Buffer /= Null_Handle
+              and then Interfaces.Unsigned_64 (From + Run.At_Value + Run.Count)
+                         * 2 <= Item.Copy_Bytes
+            then
+               Move_Run
+                 (Item, Item.Copy_Buffer,
+                  Interfaces.Unsigned_64 (From + Run.At_Value) * 2,
+                  Interfaces.Unsigned_64 (Into + Run.At_Value) * 2,
+                  Interfaces.Unsigned_64 (Run.Count) * 2, Copier);
+            end if;
+         end if;
+      end loop;
 
       if Stop (Item.Buffer) /= 0 then
          return;
