@@ -2050,11 +2050,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.4 | 0 | 39.3 |
-| 16 | **48.8** | 0 | 39.3 |
-| 17 | 48.6 | 1 | 39.3 |
-| 20 | 46.6 | 4 | 39.2 |
-| 32 | 43.6 | 16 | 39.2 |
+| 8 | 48.9 | 0 | 39.0 |
+| 16 | **49.0** | 0 | 38.9 |
+| 17 | 47.9 | 1 | 38.9 |
+| 20 | 46.3 | 4 | 38.8 |
+| 32 | 43.4 | 16 | 38.7 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2067,7 +2067,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 42.4 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -16664,10 +16664,10 @@ N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
 
 | Members | `f32` | `q8` | `q8` before it was sliced |
 | --- | ---: | ---: | ---: |
-| 2 | 0.370 s | **0.431 s** | 0.784 s |
-| 4 | 0.376 s | **0.525 s** | 0.794 s |
-| 8 | 0.584 s | **0.834 s** | 0.953 s |
-| 16 | 0.760 s | **1.293 s** | 1.473 s |
+| 2 | 0.374 s | **0.437 s** | 0.784 s |
+| 4 | 0.396 s | **0.537 s** | 0.794 s |
+| 8 | 0.564 s | **0.872 s** | 0.953 s |
+| 16 | 0.760 s | **1.318 s** | 1.473 s |
 
 The last column is the sitting before the slicing, whose `f32` readings were
 0.369, 0.394, 0.590 and 0.672 -- the exact rounds reproduce within a few per
@@ -16686,7 +16686,13 @@ apiece and gets two hundred and fifty-six. The kernel takes its span from
 the table and says for itself when a slice is empty, so the cut only had to
 be allowed.
 
-What is left is the unpacking, which a bundle of eight heads pays once for
+What is left is the unpacking, and the device's clock says so: after the
+slicing, every other step of a packed round's layer matches the exact
+round's to a microsecond, and the attention step is the whole of the
+difference -- two members 274 us of a 1,137 us layer against 85 of 948,
+sixteen members 1,989 of 3,096 against 445 of 1,599. It scales with the rows
+now rather than with the workgroups it was starved of. The unpacking is per
+element, and a bundle of eight heads pays it once for
 the key it reads. A workgroup a head, which would be the exact kernel's
 parallelism, was tried and read 4.59 ms a layer: the sharing is worth more
 than the workgroups. Eight members at `q4` read 0.975 s before the slicing,

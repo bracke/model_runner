@@ -639,6 +639,38 @@ package body Model_Runner.Platform.Device.Products is
    --  axis: one, except for a batch too short for the tiled kernels over
    --  a cache long enough to be worth cutting, where merge.comp is there
    --  to put the slices together.
+   --  Workgroups worth having in flight at once on this part: a dozen
+   --  compute units, each wanting several to hide what a read costs.
+   --
+   --  A number and not a question asked of the device, because Vulkan has
+   --  no portable answer -- the compute-unit count is a vendor extension
+   --  where it exists at all -- and because the answer here is flat over
+   --  a wide range. Sixteen rounds of a 1,419-token prompt with packed
+   --  caches, the same binary built five ways:
+   --
+   --     want      64    128    256    512   1024
+   --     2 members 0.444 0.442 0.438 0.439 0.445 s
+   --     8 members 0.938 0.869 0.840 0.838 0.856 s
+   --
+   --  Two hundred and fifty-six and five hundred and twelve are the same
+   --  answer; being wrong by a factor of four either way costs two to
+   --  twelve per cent. A part of another shape would want its own number
+   --  and would not suffer much for this one.
+   Want_Workgroups : constant := 256;
+
+   --  How many slices the exact kernels cut the cache into.
+   --
+   --  Not a round's, though the kernel would take one: it reads its span
+   --  from the per-row table and marks an empty slice as empty, which is
+   --  what let the packed kernel be cut. Measured on this part, sixteen
+   --  rounds of a 1,419-token prompt: two members 0.359 s cut against
+   --  0.364 whole, four 0.397 against 0.401, eight 0.588 against 0.605,
+   --  sixteen 0.750 against 0.717. A per cent or two at the small counts
+   --  and four per cent the wrong way at sixteen -- an exact round's
+   --  workgroup already bundles eight heads and is quick, so what the
+   --  cut adds in merging costs more than the workgroups it gains. The
+   --  packed kernel, whose workgroups unpack as they read, gains by a
+   --  third from the same cut.
    function Attend_Slices
      (Item       : Engine;
       Positions  : Natural;
@@ -6046,12 +6078,6 @@ package body Model_Runner.Platform.Device.Products is
        elsif Queries <= 2 and then Group_Size mod 4 = 0 then 4
        elsif Queries <= 4 and then Group_Size mod 2 = 0 then 2
        else 1);
-
-   --  Workgroups worth having in flight at once on this part: a dozen
-   --  compute units, each wanting several to hide what a read costs.
-   --  Enough rather than exact -- what it decides is how many slices the
-   --  cache is cut into, and the answer is flat either side of it.
-   Want_Workgroups : constant := 256;
 
    --  How many slices a sequence's packed attention cuts the cache into,
    --  as Attend_Slices cuts it for the exact kernel.

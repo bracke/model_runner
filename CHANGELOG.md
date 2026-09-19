@@ -286,6 +286,25 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **The exact kernel keeps its refusal to slice a round, and now says why.**
+  What let the packed kernel cut a round's cache would let this one too --
+  the kernel reads its span from the per-row table and marks an empty slice
+  as empty -- so it was tried. Sixteen rounds of a 1,419-token prompt: two
+  members 0.359 s cut against 0.364 whole, four 0.397 against 0.401, eight
+  0.588 against 0.605, sixteen 0.750 against 0.717. A per cent or two at the
+  small counts and four per cent the wrong way at sixteen: an exact round's
+  workgroup already bundles eight heads and is quick, so the merge the cut
+  adds costs more than the workgroups it wins. The packed kernel, whose
+  workgroups unpack as they read, gains a third from the same cut. The rule
+  stays where it was, with the numbers beside it.
+- **Where a packed round's remaining time goes, measured.** After the
+  slicing, a packed round is 1.2 to 1.8 times an exact one, and the device's
+  clock says all of it is still the attention step: two members read 274 us
+  of a 1,137 us layer against the exact round's 85 of 948, and sixteen read
+  1,989 of 3,096 against 445 of 1,599. Every other step of the layer is the
+  same to a microsecond. The step now scales with the rows rather than with
+  the workgroups it was starved of, so what is left is the unpacking itself
+  -- per element, shared eight ways by the bundle and no further.
 - **A session refused a block because sixteen others hold them is tested for
   saying so.** The seventeen-session test now asks `Device_Room` what the
   turned-out session is told -- `Blocks_All_Held`, sixteen of sixteen, rather
