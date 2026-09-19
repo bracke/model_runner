@@ -3724,6 +3724,157 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Sessions_Of_Different_Sizes_Share_The_Device_S_Cache;
 
+   -------------------------------------------------------
+   -- Two_Models_On_One_Device_Keep_Their_Own_Caches --
+   -------------------------------------------------------
+
+   --  One device, one cache buffer, and a block in it the size of the
+   --  session that holds it -- which the suite had only ever exercised
+   --  with one model's sessions. Two models on the device at once is what
+   --  a server hosting more than one does, and it is where the rules
+   --  about the buffer are decided: who fits beside whom, how far the
+   --  half-precision copy must reach, what a round of one model's members
+   --  may do while another model's session holds a block.
+   --
+   --  So: two fixtures of different shapes, prepared at the same time on
+   --  the device, with sessions of each stepped turn and turn about, and
+   --  each held to what it says alone. A block written over another
+   --  model's is a wrong answer, and nothing in the suite would have
+   --  caught it.
+   procedure Two_Models_On_One_Device_Keep_Their_Own_Caches
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Plain, Hybrid : B.Byte_Array_Access;
+
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Plain);
+      Tiny_Model.Build (Hybrid, Kind => Tiny_Model.Qwen35, Room => 64);
+
+      declare
+         Held_Plain  : aliased constant B.Byte_Array := Plain.all;
+         Held_Hybrid : aliased constant B.Byte_Array := Hybrid.all;
+
+         One : Harness (Held_Plain'Access);
+         Two : Harness (Held_Hybrid'Access);
+
+         Ready_One, Ready_Two, Awake : Boolean;
+
+         Status : E.Error_Info;
+
+         First, Second : L.Session;
+         Said_One, Said_Two : Logit_Vector;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Plain);
+            B.Free (Hybrid);
+            return;
+         end if;
+
+         Start (One, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready_One);
+         Start (Two, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready_Two);
+
+         if not Ready_One or else not Ready_Two then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Plain);
+            B.Free (Hybrid);
+            return;
+         end if;
+
+         --  A session of each, stepped one after the other so that both
+         --  hold blocks of the one buffer at the same time.
+         L.Open (First, One.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the first model's session did not open");
+
+         L.Open (Second, Two.Ready, Context => 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the second model's session did not open");
+
+         for Index in Prompt'Range loop
+            L.Evaluate (First, One.Ready, Prompt (Index), Said_One,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "the first model would not evaluate");
+
+            L.Evaluate (Second, Two.Ready, Prompt (Index), Said_Two,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "the second model would not evaluate");
+         end loop;
+
+         --  Both on the device at once, which is the thing this is about.
+         Assert (L.Blocks_Held >= 2,
+                 "two models' sessions hold" & Natural'Image (L.Blocks_Held)
+                 & " blocks between them, wanted two");
+
+         L.Close (First);
+         L.Close (Second);
+
+         --  And what each says with the device to itself.
+         declare
+            Alone : L.Session;
+            Want  : Logit_Vector;
+            Worst : N.Real := 0.0;
+         begin
+            L.Open (Alone, One.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the lone session did not open");
+            Says (One, Alone, Want);
+            L.Close (Alone);
+
+            for Index in Want'Range loop
+               Worst := N.Real'Max (Worst, abs (Want (Index) - Said_One (Index)));
+            end loop;
+
+            Assert (Worst <= 1.0E-4,
+                    "the first model beside the second says"
+                    & N.Real'Image (Worst) & " away from what it says alone");
+         end;
+
+         declare
+            Alone : L.Session;
+            Want  : Logit_Vector;
+            Worst : N.Real := 0.0;
+         begin
+            L.Open (Alone, Two.Ready, Context => 64, Status => Status);
+            Assert (E.Is_Ok (Status), "the lone hybrid did not open");
+            Says (Two, Alone, Want);
+            L.Close (Alone);
+
+            for Index in Want'Range loop
+               Worst := N.Real'Max (Worst, abs (Want (Index) - Said_Two (Index)));
+            end loop;
+
+            Assert (Worst <= 2.0E-3,
+                    "the second model beside the first says"
+                    & N.Real'Image (Worst) & " away from what it says alone");
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Plain);
+      B.Free (Hybrid);
+   end Two_Models_On_One_Device_Keep_Their_Own_Caches;
+
    ---------------------------------------------------------
    -- The_Cache_Moves_Its_Blocks_Rather_Than_Growing --
    ---------------------------------------------------------
@@ -3737,12 +3888,17 @@ package body Tests.Inference_Cases is
    --  It moves the blocks down instead, in the order they sit in, and
    --  stops at the first one that makes the room -- a block moved is the
    --  session's cache written again where it now is, which is what a
-   --  session turned out of a block pays anyway.
+   --  session turned out of a block pays anyway. Only where the gaps
+   --  below would hold what is being placed, so that the moving is what
+   --  keeps the buffer from growing rather than something paid for
+   --  nothing.
    --
-   --  Three short sessions, the middle one closed, and a long one asked
-   --  for: the cache may be no larger than the three of them packed,
-   --  which is measured here rather than worked out. And the session
-   --  whose block moved has to say what it says with the cache to itself.
+   --  Five short sessions, the second and the fourth closed, and a long
+   --  one asked for: two gaps of a short block each, neither of which
+   --  holds a long one, and together exactly enough. The cache may be no
+   --  larger than the three short blocks and the long one packed, which
+   --  is measured here rather than worked out -- and the session whose
+   --  block moved has to say what it says with the cache to itself.
    procedure The_Cache_Moves_Its_Blocks_Rather_Than_Growing
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3843,30 +3999,28 @@ package body Tests.Inference_Cases is
             end if;
 
             declare
-               First, Middle, Third, Big : L.Session;
+               Short_Room : array (1 .. 5) of L.Session;
+               Big   : L.Session;
                Moved : Logit_Vector;
 
-               --  Two short blocks and a long one, packed: one short
+               --  Three short blocks and a long one, packed: one short
                --  block's place is Two_Short - One_Short, and One_Long
                --  carries the table, the sinks and the long block.
                Packed : constant Interfaces.Unsigned_64 :=
-                 One_Long + 2 * (Two_Short - One_Short);
+                 One_Long + 3 * (Two_Short - One_Short);
             begin
-               L.Open (First, Under.Ready, Context => Short,
-                       Status => Status);
-               Says (Under, First, Answer);
+               for Index in Short_Room'Range loop
+                  L.Open (Short_Room (Index), Under.Ready, Context => Short,
+                          Status => Status);
+                  Assert (E.Is_Ok (Status), "a short session did not open");
+                  Says (Under, Short_Room (Index), Moved);
+               end loop;
 
-               L.Open (Middle, Under.Ready, Context => Short,
-                       Status => Status);
-               Says (Under, Middle, Answer);
-
-               L.Open (Third, Under.Ready, Context => Short,
-                       Status => Status);
-               Says (Under, Third, Moved);
-
-               --  The middle block given back, and a block that will not
-               --  fit the gap it leaves asked for.
-               L.Close (Middle);
+               --  Two blocks given back with a block between them, so
+               --  that neither gap holds what is asked for next and the
+               --  two together do.
+               L.Close (Short_Room (2));
+               L.Close (Short_Room (4));
 
                L.Open (Big, Under.Ready, Context => Long, Status => Status);
                Says (Under, Big, Answer);
@@ -3890,14 +4044,16 @@ package body Tests.Inference_Cases is
                end;
 
                --  And the session whose block moved says what it said.
-               L.Evaluate (Third, Under.Ready, 7, Moved, Status => Status);
+               L.Evaluate (Short_Room (5), Under.Ready, 7, Moved,
+                           Status => Status);
                Assert (E.Is_Ok (Status),
                        "the moved session did not evaluate: "
                        & E.Error_Code'Image (Status.Code));
 
                L.Close (Big);
-               L.Close (Third);
-               L.Close (First);
+               L.Close (Short_Room (5));
+               L.Close (Short_Room (3));
+               L.Close (Short_Room (1));
 
                declare
                   Alone  : L.Session;
@@ -3945,12 +4101,15 @@ package body Tests.Inference_Cases is
    --
    --  It moves the seats to the front instead, where the gaps below would
    --  hold the ring between them: a ring read home and written again,
-   --  which is what a session turned out of a seat pays anyway.
+   --  which is what a session turned out of a seat pays anyway, and worth
+   --  paying only where the moving is what keeps the room from growing.
    --
-   --  Three rings of one size, the middle one given back, and a ring twice
-   --  the size asked for: the room may be no larger than the three of them
-   --  packed, which is measured here rather than worked out -- a session
-   --  alone in the room says what one ring of each size takes.
+   --  Five rings of one size, the second and the fourth given back, and a
+   --  ring twice the size asked for: two gaps of one ring each, neither
+   --  holding the larger one and the two together doing. The room may be
+   --  no larger than the three small rings and the large one packed,
+   --  which is measured here rather than worked out -- a session alone in
+   --  the room says what one ring of each size takes.
    procedure The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4057,44 +4216,44 @@ package body Tests.Inference_Cases is
             end if;
 
             declare
-               First, Middle, Third, Big : L.Session;
-
-               --  Two small rings and a large one, packed: one ring's
-               --  place is Two_Small - One_Small, and One_Large carries
-               --  the table and the large ring.
-               Packed : constant Interfaces.Unsigned_64 :=
-                 One_Large + 2 * (Two_Small - One_Small);
+               Seated : array (1 .. 5) of L.Session;
+               Big    : L.Session;
             begin
-               L.Open (First, Under.Ready, Context => Room, Status => Status);
-               L.Keep_States (First, Small, Status);
-               Says (Under, First, Answer);
+               for Index in Seated'Range loop
+                  L.Open (Seated (Index), Under.Ready, Context => Room,
+                          Status => Status);
+                  Assert (E.Is_Ok (Status), "a small session did not open");
+                  L.Keep_States (Seated (Index), Small, Status);
+                  Says (Under, Seated (Index), Answer);
+               end loop;
 
-               L.Open (Middle, Under.Ready, Context => Room, Status => Status);
-               L.Keep_States (Middle, Small, Status);
-               Says (Under, Middle, Answer);
-
-               L.Open (Third, Under.Ready, Context => Room, Status => Status);
-               L.Keep_States (Third, Small, Status);
-               Says (Under, Third, Answer);
-
-               --  The middle seat given back, and a ring that will not fit
-               --  the gap it leaves asked for.
-               L.Close (Middle);
-
-               L.Open (Big, Under.Ready, Context => Room, Status => Status);
-               L.Keep_States (Big, Large, Status);
-               Says (Under, Big, Answer);
+               --  Two seats given back with a seat between them, so that
+               --  neither gap holds what is asked for next and the two
+               --  together do.
+               L.Close (Seated (2));
+               L.Close (Seated (4));
 
                declare
-                  Taken : constant Interfaces.Unsigned_64 :=
+                  Before : constant Interfaces.Unsigned_64 :=
                     Model_Runner.Backend.Device.State_Room_Bytes;
                begin
-                  Assert (Taken <= Packed,
-                          "the room grew to"
-                          & Interfaces.Unsigned_64'Image (Taken)
-                          & " bytes where the three rings packed take"
-                          & Interfaces.Unsigned_64'Image (Packed)
-                          & ": the gap the middle seat left was not used");
+                  L.Open (Big, Under.Ready, Context => Room,
+                          Status => Status);
+                  L.Keep_States (Big, Large, Status);
+                  Says (Under, Big, Answer);
+
+                  --  The room the five rings took holds three of them and
+                  --  the large one, once the seats are moved down; the
+                  --  packing stops as soon as that is true, so what is
+                  --  asked here is that the room did not grow at all and
+                  --  not that it is packed to the last element.
+                  Assert
+                    (Model_Runner.Backend.Device.State_Room_Bytes <= Before,
+                     "the room grew to"
+                     & Interfaces.Unsigned_64'Image
+                         (Model_Runner.Backend.Device.State_Room_Bytes)
+                     & " bytes from" & Interfaces.Unsigned_64'Image (Before)
+                     & ": the gaps the two seats left were not used");
 
                   Assert (Model_Runner.Backend.Device.Rings_Moved > 0,
                           "a ring was moved and nothing counted it");
@@ -4108,14 +4267,16 @@ package body Tests.Inference_Cases is
                   Want  : Logit_Vector;
                   Worst : N.Real := 0.0;
                begin
-                  L.Evaluate (Third, Under.Ready, 7, After, Status => Status);
+                  L.Evaluate (Seated (5), Under.Ready, 7, After,
+                              Status => Status);
                   Assert (E.Is_Ok (Status),
                           "the moved session did not evaluate: "
                           & E.Error_Code'Image (Status.Code));
 
                   L.Close (Big);
-                  L.Close (Third);
-                  L.Close (First);
+                  L.Close (Seated (5));
+                  L.Close (Seated (3));
+                  L.Close (Seated (1));
 
                   L.Open (Lone, Under.Ready, Context => Room,
                           Status => Status);
@@ -13038,6 +13199,10 @@ package body Tests.Inference_Cases is
         (T, Sessions_Of_Different_Sizes_Share_The_Device_S_Cache'Access,
          "sessions of three context lengths share the device's cache, each "
          & "in a block of its own size, and each says what it says alone");
+      Register_Routine
+        (T, Two_Models_On_One_Device_Keep_Their_Own_Caches'Access,
+         "two models prepared on one device at once, their sessions "
+         & "stepped turn and turn about, each says what it says alone");
       Register_Routine
         (T, The_Cache_Moves_Its_Blocks_Rather_Than_Growing'Access,
          "the device's cache moves its blocks down rather than growing "

@@ -248,10 +248,14 @@ Blocks are placed at the first gap that holds them and moved down when the
 buffer would otherwise grow past a gap a larger block cannot use -- the
 packing stops at the first block that makes the room, and a block moved is
 the session's cache written where it now is. The room of rings does the same
-with its seats. `--turns N --churn K` prices it: twelve sessions at a context
-of 512 with a departure every other turn read 43.5 tokens a second packing
-against 44.9 growing, 51 blocks moved, and the same 594 MB of cache either
-way, the gaps on that workload being reusable.
+with its seats -- and only where the gaps below would hold what is being
+placed, which is when the moving is what keeps the buffer from growing.
+`--turns N --churn K` prices it: twelve sessions at a context of 512 with a
+departure every other turn read 44.7 tokens a second under that rule, against
+43.3 when any gap at all set the packing going and 44.7 with no packing at
+all -- the same 594 MB of cache in all three, the gaps on that workload being
+reusable. What the packing is for is the pattern the tests build, where two
+gaps neither of which holds the arrival together do.
 
 A seventeenth session turns out whichever block has gone longest unasked --
 the session holding it reads back whatever the device owes its copy, gives
@@ -263,8 +267,8 @@ gone unasked since before the asking session's previous token, so seventeen
 sessions reading a token apiece in turn leave each other alone and the
 seventeenth does without, which costs one session its speed rather than all
 seventeen a cache carried back and forth every token. `--show-stats` says how
-often either happened, and a caller can ask what is true now rather than what
-happened: `Holds_Block` and `Holds_Seat` of a session, `Blocks_Held` and
+often either happened -- and how often a block or a seat was moved to close a
+gap -- and a caller can ask what is true now rather than what happened: `Holds_Block` and `Holds_Seat` of a session, `Blocks_Held` and
 `Seats_Held` of the device. `tests speed --turns N` measures the cost: N sessions
 taking turns a token apiece, which is the shape the sixteen blocks are a
 limit on where a round is not. On TinyLlama-1.1B Q8_0 at a context of 512,

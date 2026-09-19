@@ -267,6 +267,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A round defers its read-back as a batch does.** A round's rows belong to
+  different sessions, so where a batch of one session recorded its positions
+  as owed and fetched them when something was about to read them, a round
+  read every row of every layer back into its member's host copy as it went
+  -- two reads a layer a member, for bytes an ordinary run never looks at.
+  Each member has a window of its own to defer into now. Alternated pairs on
+  a 1,419-token prompt: sixteen members 0.661 s against 0.674, eight 0.587
+  against 0.590, four 0.394 against 0.400 -- the deferring binary ahead in
+  all nine pairs.
+- **Blocks and seats are packed forward only where that is what keeps the
+  buffer from growing.** The trigger was any gap at all below, which on a
+  churning workload moved fifty-one blocks and saved nothing: the gaps there
+  are reusable, so the buffer would not have grown anyway. It asks now
+  whether the gaps below would hold what is being placed, which is when the
+  packing avoids the growth entirely. Twelve sessions at a context of 512
+  with a departure every other turn: **44.7 tokens a second against 43.3
+  packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
+  the pattern the tests build, two gaps neither of which holds the arrival
+  and both of which together do, still packs.
+- **Two models on one device, in the suite at last.** One device, one cache
+  buffer, blocks the size of the sessions in them -- and nothing had ever
+  put two models' sessions in it at once, which is what a server hosting
+  more than one does. Two fixtures of different shapes are prepared on the
+  device together now, their sessions stepped turn and turn about, and each
+  is held to what it says alone.
 - **What the packing costs, measured.** Both compactions were on the
   correctness path with no figure beside them. `tests speed --turns N
   --churn K` closes a session every K turns and admits one asking for twice

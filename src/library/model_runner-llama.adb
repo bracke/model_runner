@@ -5353,7 +5353,7 @@ package body Model_Runner.Llama is
       --  again.
       if Interfaces.Unsigned_64 (Place + Span) * 4
          > Model_Runner.Backend.Device.State_Room_Bytes
-        and then Room_Below (Place) > 0
+        and then Room_Below (Place) >= Span
       then
          declare
             Moved : Boolean;
@@ -6127,7 +6127,7 @@ package body Model_Runner.Llama is
                   end if;
                end loop;
 
-               if Taken < Block_Taken then
+               if Block_Taken - Taken >= Span then
                   Compact_Blocks (Span, Moved);
 
                   if Moved then
@@ -16863,17 +16863,25 @@ package body Model_Runner.Llama is
       --  wait on any of them.
       --  Whether the host's copy can simply be owed rather than fetched.
       --
-      --  Every layer of this call has to have deferred, and it has to be a
-      --  batch rather than a round: a layer that did not defer wrote the
-      --  host's copy itself and may not have written the device's, so
-      --  fetching that layer's range back would overwrite a good copy with
-      --  whatever the block happens to hold; and a round's rows belong to
-      --  different sessions, which is a range each rather than one.
+      --  Every layer of this call has to have deferred: a layer that did
+      --  not wrote the host's copy itself and may not have written the
+      --  device's, so fetching that layer's range back would overwrite a
+      --  good copy with whatever the block happens to hold.
+      --
+      --  A round's rows belong to different sessions, which is a range
+      --  each rather than one -- so a round read every row of every layer
+      --  back where a batch of one session deferred the lot. Each member
+      --  has a window of its own to defer into, and each is fetched when
+      --  something is about to read that member's copy.
       declare
-         Owing : constant Boolean :=
-           Deferring and then not Rounding
+         All_Deferred : constant Boolean :=
+           Deferring
            and then (for all Index in Source.Layers.all'Range =>
                        Deferred (Index));
+
+         Owing : constant Boolean := All_Deferred and then not Rounding;
+
+         Owing_Round : constant Boolean := All_Deferred and then Rounding;
       begin
          if Owing then
             if Item.Owed_Count = 0 then
@@ -16887,10 +16895,29 @@ package body Model_Runner.Llama is
                               Item.Committed + Natural (Count))
                  - Item.Owed_At;
             end if;
+
+         elsif Owing_Round then
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Whose : constant Session_Access := Held_By (Which);
+                  Where : constant Natural := Natural (Sits_At (Which));
+               begin
+                  if Whose.Owed_Count = 0 then
+                     Whose.Owed_At := Where;
+                     Whose.Owed_Count := 1;
+                  else
+                     Whose.Owed_Count :=
+                       Natural'Max (Whose.Owed_At + Whose.Owed_Count,
+                                    Where + 1)
+                       - Whose.Owed_At;
+                  end if;
+               end;
+            end loop;
          end if;
 
          for Index in Source.Layers.all'Range loop
             if Deferred (Index) and then not Owing
+              and then not Owing_Round
               and then not Linear (Settings, Natural (Index))
             then
                declare
