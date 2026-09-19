@@ -3642,6 +3642,12 @@ package body Tests.Inference_Cases is
    --  three tokens apart and holds each to what it says alone, as the
    --  level round beside it does.
    --
+   --  Eight members and not two: the table carries a last a row, and two
+   --  rows differing says little about eight that all differ -- a slice
+   --  that is empty for one row and not another, a sweep that stops
+   --  where the widest row stops, and a bundle of heads whose rows are
+   --  at eight different places are what the kernel has to get right.
+   --
    --  On both backends: the processor's answer is the one the device's
    --  is held to, and the rows' lasts differ there too.
    procedure A_Round_Of_Members_At_Different_Lengths_Says_The_Same
@@ -3649,18 +3655,18 @@ package body Tests.Inference_Cases is
    is
       pragma Unreferenced (T);
 
-      Long_Prompt  : constant array (1 .. 5) of Vocab.Token_Id :=
-        [4, 5, 6, 7, 8];
-      Short_Prompt : constant array (1 .. 2) of Vocab.Token_Id := [9, 3];
+      Members : constant := 8;
+      Steps   : constant := 2;
 
-      Steps : constant := 3;
-
-      Long_Steps  : constant array (1 .. Steps) of Vocab.Token_Id :=
-        [2, 5, 7];
-      Short_Steps : constant array (1 .. Steps) of Vocab.Token_Id :=
-        [6, 4, 9];
+      --  Member N reads N tokens of its own before the round starts, so
+      --  the eight sit at eight different lasts, and says two more in
+      --  the round. Its tokens are its own, so the eight sequences are
+      --  eight different answers and a row reading another's cells shows.
+      function Token_Of (Member, Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Member * 5 + Place * 3) mod 12));
 
       type Trail is array (1 .. Steps) of Logit_Vector;
+      type Trails is array (1 .. Members) of Trail;
 
       Image : B.Byte_Array_Access;
 
@@ -3673,13 +3679,13 @@ package body Tests.Inference_Cases is
 
          Status : E.Error_Info;
 
-         Alone_Long, Alone_Short : Trail := [others => [others => 0.0]];
+         Alone : Trails := [others => [others => [others => 0.0]]];
 
          Name : constant String :=
            Model_Runner.Backend.Backend_Name (Backend);
 
-         --  The device's round attends through a kernel of its own and
-         --  the processor's is the same arithmetic in the same order.
+         --  The device's round attends through a kernel of its own; the
+         --  processor's is the same arithmetic in the same order.
          Bound : constant N.Real :=
            (if Model_Runner.Backend."=" (Backend,
                                          Model_Runner.Backend.Backend_CPU)
@@ -3691,158 +3697,134 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
-         --  Each alone: the long one reads five tokens and then its
-         --  three, the short one two and then its three.
-         declare
-            Live : L.Session;
-         begin
-            L.Open (Live, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the long session did not open");
+         --  Each alone first: its own prompt, then its own two steps.
+         for Member in 1 .. Members loop
+            declare
+               Live    : L.Session;
+               Ignored : Logit_Vector;
+            begin
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a lone session did not open:" & Integer'Image (Member));
 
-            for Index in Long_Prompt'Range loop
-               declare
-                  Ignored : Logit_Vector;
-               begin
-                  L.Evaluate (Live, Under.Ready, Long_Prompt (Index),
+               for Place in 1 .. Member loop
+                  L.Evaluate (Live, Under.Ready, Token_Of (Member, Place),
                               Ignored, Status => Status);
-                  Assert (E.Is_Ok (Status), "the long prompt failed");
-               end;
-            end loop;
+                  Assert (E.Is_Ok (Status), "a lone prompt failed");
+               end loop;
 
-            for Step in 1 .. Steps loop
-               L.Evaluate (Live, Under.Ready, Long_Steps (Step),
-                           Alone_Long (Step), Status => Status);
-               Assert (E.Is_Ok (Status), "the long sequence failed");
-            end loop;
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Live, Under.Ready,
+                              Token_Of (Member, Member + Step),
+                              Alone (Member) (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "a lone sequence failed");
+               end loop;
 
-            L.Close (Live);
-         end;
+               L.Close (Live);
+            end;
+         end loop;
 
+         --  No two of them say the same thing, or a collision would pass
+         --  for an answer.
+         for Member in 1 .. Members - 1 loop
+            declare
+               Same : Boolean := True;
+            begin
+               for Index in Logit_Vector'Range loop
+                  if Alone (Member) (Steps) (Index)
+                    /= Alone (Member + 1) (Steps) (Index)
+                  then
+                     Same := False;
+                     exit;
+                  end if;
+               end loop;
+
+               Assert (not Same,
+                       "two of the sequences say the same thing on " & Name
+                       & ", so this fixture cannot tell a collision from a"
+                       & " coincidence");
+            end;
+         end loop;
+
+         --  And as a round of eight, each member where its own prompt
+         --  left it.
          declare
-            Live : L.Session;
-         begin
-            L.Open (Live, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the short session did not open");
+            Live : array (1 .. Members) of aliased L.Session;
 
-            for Index in Short_Prompt'Range loop
-               declare
-                  Ignored : Logit_Vector;
-               begin
-                  L.Evaluate (Live, Under.Ready, Short_Prompt (Index),
-                              Ignored, Status => Status);
-                  Assert (E.Is_Ok (Status), "the short prompt failed");
-               end;
-            end loop;
+            Group : L.Session_Group (1 .. Members);
+            Said  : Vocab.Token_Array (1 .. Members);
 
-            for Step in 1 .. Steps loop
-               L.Evaluate (Live, Under.Ready, Short_Steps (Step),
-                           Alone_Short (Step), Status => Status);
-               Assert (E.Is_Ok (Status), "the short sequence failed");
-            end loop;
-
-            L.Close (Live);
-         end;
-
-         --  The two must differ, or a collision would pass unseen.
-         declare
-            Same : Boolean := True;
-         begin
-            for Index in Logit_Vector'Range loop
-               if Alone_Long (Steps) (Index) /= Alone_Short (Steps) (Index)
-               then
-                  Same := False;
-                  exit;
-               end if;
-            end loop;
-
-            Assert (not Same,
-                    "the two sequences say the same thing on " & Name
-                    & ", so this fixture cannot tell a collision from a"
-                    & " coincidence");
-         end;
-
-         --  And as a round, the members three positions apart.
-         declare
-            Long_One, Short_One : aliased L.Session;
-
-            Both : Model_Runner.Tensors.Real_Array_Access := null;
+            Rows : Model_Runner.Tensors.Real_Array_Access := null;
 
             Worst : N.Real := 0.0;
          begin
-            L.Open (Long_One, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the long member did not open");
-
-            L.Open (Short_One, Under.Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the short member did not open");
-
-            for Index in Long_Prompt'Range loop
+            for Member in 1 .. Members loop
                declare
                   Ignored : Logit_Vector;
                begin
-                  L.Evaluate (Long_One, Under.Ready, Long_Prompt (Index),
-                              Ignored, Status => Status);
-                  Assert (E.Is_Ok (Status), "the member's long prompt failed");
+                  L.Open (Live (Member), Under.Ready, Status => Status);
+                  Assert (E.Is_Ok (Status), "a member did not open");
+
+                  Group (Member) := Live (Member)'Unchecked_Access;
+
+                  for Place in 1 .. Member loop
+                     L.Evaluate (Live (Member), Under.Ready,
+                                 Token_Of (Member, Place), Ignored,
+                                 Status => Status);
+                     Assert (E.Is_Ok (Status), "a member's prompt failed");
+                  end loop;
+
+                  Assert (L.Position (Live (Member)) = Member,
+                          "a member is not where its prompt left it");
                end;
             end loop;
-
-            for Index in Short_Prompt'Range loop
-               declare
-                  Ignored : Logit_Vector;
-               begin
-                  L.Evaluate (Short_One, Under.Ready, Short_Prompt (Index),
-                              Ignored, Status => Status);
-                  Assert (E.Is_Ok (Status),
-                          "the member's short prompt failed");
-               end;
-            end loop;
-
-            Assert (L.Position (Long_One) = Long_Prompt'Length
-                    and then L.Position (Short_One) = Short_Prompt'Length,
-                    "the members are not where their prompts left them");
 
             Model_Runner.Tensors.Allocate
-              (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
-            Assert (Both /= null, "the round had no room for its logits");
+              (N.Element_Count (Members)
+               * N.Element_Count (Tiny_Model.Vocabulary), Rows);
+            Assert (Rows /= null, "the round had no room for its logits");
 
             for Step in 1 .. Steps loop
+               for Member in 1 .. Members loop
+                  Said (Member) := Token_Of (Member, Member + Step);
+               end loop;
+
                L.Evaluate_Round
-                 (Members =>
-                    [Long_One'Unchecked_Access, Short_One'Unchecked_Access],
-                  Source  => Under.Ready,
-                  Tokens  => [Long_Steps (Step), Short_Steps (Step)],
-                  Logits  => Both,
-                  Status  => Status);
+                 (Members => Group, Source => Under.Ready,
+                  Tokens  => Said, Logits => Rows, Status => Status);
 
                Assert (E.Is_Ok (Status),
-                       "a round of two lengths failed at step"
+                       "a round of eight lengths failed at step"
                        & Integer'Image (Step) & " on " & Name & ": "
                        & E.Error_Code'Image (Status.Code));
 
-               for Index in Logit_Vector'Range loop
-                  Worst :=
-                    N.Real'Max
-                      (Worst,
-                       abs (Both.all (Both.all'First + Index)
-                            - Alone_Long (Step) (Index)));
-                  Worst :=
-                    N.Real'Max
-                      (Worst,
-                       abs (Both.all (Both.all'First
-                                      + N.Element_Count
-                                          (Tiny_Model.Vocabulary)
-                                      + Index)
-                            - Alone_Short (Step) (Index)));
+               for Member in 1 .. Members loop
+                  declare
+                     Base : constant N.Element_Count :=
+                       N.Element_Count (Member - 1)
+                       * N.Element_Count (Tiny_Model.Vocabulary);
+                  begin
+                     for Index in Logit_Vector'Range loop
+                        Worst :=
+                          N.Real'Max
+                            (Worst,
+                             abs (Rows.all (Rows.all'First + Base + Index)
+                                  - Alone (Member) (Step) (Index)));
+                     end loop;
+                  end;
                end loop;
             end loop;
 
             Assert (Worst <= Bound,
-                    "a member of a round whose rows are at different"
+                    "a member of a round whose eight rows are at eight"
                     & " lengths says" & N.Real'Image (Worst)
                     & " away from the same sequence alone on " & Name);
 
-            Model_Runner.Tensors.Free (Both);
-            L.Close (Long_One);
-            L.Close (Short_One);
+            Model_Runner.Tensors.Free (Rows);
+
+            for Member in 1 .. Members loop
+               L.Close (Live (Member));
+            end loop;
          end;
       end On;
    begin
@@ -4790,6 +4772,216 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said;
+
+   --------------------------------------------------------------
+   -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
+   --------------------------------------------------------------
+
+   --  The same for a hybrid, whose linear layers keep a ring of states a
+   --  session rather than keys and values, and whose round reads a runs
+   --  table of its own: five words a run, and among them where the run
+   --  begins in its member's ring. A round of members at one position
+   --  says little about that table -- every run begins at the same slot
+   --  -- so this steps four members whose contexts are one, two, three
+   --  and four tokens long, and holds each to what it says alone.
+   --
+   --  The attention side of the same model is the other half: its rows'
+   --  lasts differ here too, and a hybrid's layers are some of each.
+   procedure A_Hybrid_Round_At_Different_Lengths_Says_The_Same
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Members : constant := 4;
+      Steps   : constant := 2;
+      Room    : constant := 64;
+
+      function Token_Of (Member, Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Member * 5 + Place * 3) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+      type Trails is array (1 .. Members) of Trail;
+
+      Image : B.Byte_Array_Access;
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind);
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind) is
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+
+         Status : E.Error_Info;
+
+         Alone : Trails := [others => [others => [others => 0.0]]];
+
+         Name : constant String :=
+           Model_Runner.Backend.Backend_Name (Backend);
+
+         --  As the level hybrid round beside this one is held: the
+         --  processor's is the same arithmetic in the same order, the
+         --  device's runs its rule over the ring a run at a time.
+         Bound : constant N.Real :=
+           (if Model_Runner.Backend."=" (Backend,
+                                         Model_Runner.Backend.Backend_CPU)
+            then 1.0E-4 else 2.0E-3);
+      begin
+         Start (Under, Backend => Backend, Ready => Ready);
+
+         if not Ready then
+            return;
+         end if;
+
+         for Member in 1 .. Members loop
+            declare
+               Live    : L.Session;
+               Ignored : Logit_Vector;
+            begin
+               L.Open (Live, Under.Ready, Context => Room, Status => Status);
+               Assert (E.Is_Ok (Status), "a lone hybrid did not open");
+
+               --  A ring of several slots, so that where a run begins in
+               --  it is a thing the runs' table has to say: with nothing
+               --  kept the ring is one slot and every position reads it.
+               L.Keep_States (Live, 4, Status);
+               Assert (E.Is_Ok (Status), "a lone hybrid would not keep states");
+
+               for Place in 1 .. Member loop
+                  L.Evaluate (Live, Under.Ready, Token_Of (Member, Place),
+                              Ignored, Status => Status);
+                  Assert (E.Is_Ok (Status), "a lone hybrid prompt failed");
+               end loop;
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Live, Under.Ready,
+                              Token_Of (Member, Member + Step),
+                              Alone (Member) (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "a lone hybrid sequence failed");
+               end loop;
+
+               L.Close (Live);
+            end;
+         end loop;
+
+         for Member in 1 .. Members - 1 loop
+            declare
+               Same : Boolean := True;
+            begin
+               for Index in Logit_Vector'Range loop
+                  if Alone (Member) (Steps) (Index)
+                    /= Alone (Member + 1) (Steps) (Index)
+                  then
+                     Same := False;
+                     exit;
+                  end if;
+               end loop;
+
+               Assert (not Same,
+                       "two of the hybrid sequences say the same thing on "
+                       & Name & ", so a collision would pass for an answer");
+            end;
+         end loop;
+
+         declare
+            Live : array (1 .. Members) of aliased L.Session;
+
+            Group : L.Session_Group (1 .. Members);
+            Said  : Vocab.Token_Array (1 .. Members);
+
+            Rows : Model_Runner.Tensors.Real_Array_Access := null;
+
+            Worst : N.Real := 0.0;
+         begin
+            for Member in 1 .. Members loop
+               declare
+                  Ignored : Logit_Vector;
+               begin
+                  L.Open (Live (Member), Under.Ready, Context => Room,
+                          Status => Status);
+                  Assert (E.Is_Ok (Status), "a hybrid member did not open");
+
+                  L.Keep_States (Live (Member), 4, Status);
+                  Assert (E.Is_Ok (Status),
+                          "a hybrid member would not keep states");
+
+                  Group (Member) := Live (Member)'Unchecked_Access;
+
+                  for Place in 1 .. Member loop
+                     L.Evaluate (Live (Member), Under.Ready,
+                                 Token_Of (Member, Place), Ignored,
+                                 Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "a hybrid member's prompt failed");
+                  end loop;
+               end;
+            end loop;
+
+            Model_Runner.Tensors.Allocate
+              (N.Element_Count (Members)
+               * N.Element_Count (Tiny_Model.Vocabulary), Rows);
+            Assert (Rows /= null, "the hybrid round had no room for logits");
+
+            for Step in 1 .. Steps loop
+               for Member in 1 .. Members loop
+                  Said (Member) := Token_Of (Member, Member + Step);
+               end loop;
+
+               L.Evaluate_Round
+                 (Members => Group, Source => Under.Ready,
+                  Tokens  => Said, Logits => Rows, Status => Status);
+
+               Assert (E.Is_Ok (Status),
+                       "a hybrid round of four lengths failed at step"
+                       & Integer'Image (Step) & " on " & Name & ": "
+                       & E.Error_Code'Image (Status.Code));
+
+               for Member in 1 .. Members loop
+                  declare
+                     Base : constant N.Element_Count :=
+                       N.Element_Count (Member - 1)
+                       * N.Element_Count (Tiny_Model.Vocabulary);
+                  begin
+                     for Index in Logit_Vector'Range loop
+                        Worst :=
+                          N.Real'Max
+                            (Worst,
+                             abs (Rows.all (Rows.all'First + Base + Index)
+                                  - Alone (Member) (Step) (Index)));
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+
+            Assert (Worst <= Bound,
+                    "a member of a hybrid round whose rows are at four"
+                    & " lengths says" & N.Real'Image (Worst)
+                    & " away from the same sequence alone on " & Name);
+
+            Model_Runner.Tensors.Free (Rows);
+
+            for Member in 1 .. Members loop
+               L.Close (Live (Member));
+            end loop;
+         end;
+      end On;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+
+      On (Model_Runner.Backend.Backend_CPU);
+
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if Awake then
+            On (Model_Runner.Backend.Backend_Device);
+            Model_Runner.Backend.Device.Close;
+         end if;
+      end;
+
+      B.Free (Image);
+   end A_Hybrid_Round_At_Different_Lengths_Says_The_Same;
 
    ---------------------------------------------------------
    -- A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State --
@@ -13550,6 +13742,11 @@ package body Tests.Inference_Cases is
         (T, A_Run_Says_Which_Layers_The_Device_Took'Access,
          "a run on the device says how many layers went over whole and "
          & "how many the processor took, and names what refused them");
+      Register_Routine
+        (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
+         "a hybrid round whose members sit at different positions gives "
+         & "each what it would get alone, on the processor and on the "
+         & "device");
       Register_Routine
         (T, A_Round_Of_A_Hybrid_Keeps_Each_Member_S_State'Access,
          "a round of hybrid sessions gives each member what it would get "
