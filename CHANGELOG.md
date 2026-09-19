@@ -286,6 +286,24 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A packed round cuts its cache into slices, as every other attention
+  does.** A round of packed members cost about twice a round of exact ones,
+  and the device's own clock said where: the attention step read 1.36 ms of a
+  2.47 ms layer, against 0.25 ms of 1.44 for the exact round. Everything else
+  was the same. The cause was a dispatch that gave a packed round thirty-two
+  workgroups -- four bundles of heads by eight rows -- where the exact kernel
+  dispatches a head apiece and gets two hundred and fifty-six: a round was
+  never sliced, on the reading that its rows' lasts live in the table rather
+  than in the call's first and last. The kernel takes its span from the table
+  and divides what it finds, and says for itself when a slice is empty, so
+  the cut only had to be allowed. How many slices follows how many
+  workgroups the heads and rows already give, aiming at enough to fill the
+  part. **Sixteen rounds of a 1,419-token prompt: two members 0.431 s against
+  0.784 before, four 0.525 against 0.794, eight 0.834 against 0.953, sixteen
+  1.293 against 1.473.** A packed round is 1.2 to 1.8 times an exact one now
+  rather than about twice, and what is left is the unpacking itself, which is
+  paid once a bundle of eight heads and cannot be shared further -- a
+  workgroup a head, tried, read 4.59 ms a layer.
 - **A move copies the cells a session holds, not the room it has for
   them.** The device-side move took the block whole, which at a long context
   is mostly the zeros it was made with: a 2,048-token session that has said

@@ -78,6 +78,11 @@ package Speed_Run is
    --    phase, as the single-sequence measurement does. The phases are
    --    charged to the first member's session, which for a round is where
    --    the whole round's work is counted.
+   --  @param Timeline True to report what the device's own clock said
+   --    each step of each sequence cost, as the single-sequence
+   --    measurement does. A round's whole layer is one sequence, so the
+   --    phase clock above charges all of it to one phase and this is the
+   --    only instrument that says which step a round spends its time in.
    procedure Round
      (Path        : String;
       Prompt_Path : String;
@@ -88,7 +93,8 @@ package Speed_Run is
         Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Budget      : Boolean := False);
+      Budget      : Boolean := False;
+      Timeline    : Boolean := False);
 
    --  Several sessions taking turns, a token each, rather than stepped
    --  together.

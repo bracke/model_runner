@@ -2050,11 +2050,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.3 | 0 | 39.2 |
-| 16 | **49.1** | 0 | 39.3 |
-| 17 | 48.1 | 1 | 39.2 |
-| 20 | 46.3 | 4 | 39.2 |
-| 32 | 43.5 | 16 | 39.1 |
+| 8 | 49.4 | 0 | 39.3 |
+| 16 | **48.8** | 0 | 39.3 |
+| 17 | 48.6 | 1 | 39.3 |
+| 20 | 46.6 | 4 | 39.2 |
+| 32 | 43.6 | 16 | 39.2 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2067,7 +2067,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 42.4 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -16658,23 +16658,40 @@ read 45.2**, and sixteen read 148.7 where the pushed table read 62.8 -- that
 last row being the cap: a round of more than eight attended on the host and
 was slower than the same device at eight.
 
-A round whose members keep their caches packed costs about twice one whose
+A round whose members keep their caches packed costs more than one whose
 members keep them exactly, for a quarter of the memory. `tests speed --round
 N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
 
-| Members | `f32` | `q8` |
-| --- | ---: | ---: |
-| 2 | 0.369 s | 0.784 s |
-| 4 | 0.394 s | 0.794 s |
-| 8 | 0.590 s | 0.953 s |
-| 16 | 0.672 s | 1.473 s |
+| Members | `f32` | `q8` | `q8` before it was sliced |
+| --- | ---: | ---: | ---: |
+| 2 | 0.370 s | **0.431 s** | 0.784 s |
+| 4 | 0.376 s | **0.525 s** | 0.794 s |
+| 8 | 0.584 s | **0.834 s** | 0.953 s |
+| 16 | 0.760 s | **1.293 s** | 1.473 s |
+
+The last column is the sitting before the slicing, whose `f32` readings were
+0.369, 0.394, 0.590 and 0.672 -- the exact rounds reproduce within a few per
+cent, and the sixteen-member row is the one that moves with the machine.
 
 An exact round attends through the kernel that reads the half-precision copy
 beside the cache; a packed round reads bytes through a kernel of its own and
-unpacks nothing, a layer's rows being unpacked only where one session's batch
-attends through the matrix instruction. Eight members at `q4` read 0.975 s,
-which is `q8`'s figure and not half of it -- what the packed rounds are
-paying is the kernel and not the bytes.
+unpacks them as it goes. It used to cost about twice the exact round, and
+`--device-timeline` said where: the attention step read 1.36 ms of a 2.47 ms
+layer against the exact round's 0.25 of 1.44, with everything else the same.
+**A round was never sliced** -- its rows' lasts live in the per-row table
+rather than in the call's first and last, and that was read as meaning the
+cache could not be cut -- so a packed round had thirty-two workgroups, four
+bundles of heads by eight rows, where the exact kernel dispatches a head
+apiece and gets two hundred and fifty-six. The kernel takes its span from
+the table and says for itself when a slice is empty, so the cut only had to
+be allowed.
+
+What is left is the unpacking, which a bundle of eight heads pays once for
+the key it reads. A workgroup a head, which would be the exact kernel's
+parallelism, was tried and read 4.59 ms a layer: the sharing is worth more
+than the workgroups. Eight members at `q4` read 0.975 s before the slicing,
+which was `q8`'s figure and not half of it -- what a packed round pays is the
+unpacking and not the bytes.
 
 **The middle column was carrying a one-off nobody had priced.** A round of
 eight at that context spent 0.98 s of a 2.75-second measurement writing every

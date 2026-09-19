@@ -6047,23 +6047,49 @@ package body Model_Runner.Platform.Device.Products is
        elsif Queries <= 4 and then Group_Size mod 2 = 0 then 2
        else 1);
 
+   --  Workgroups worth having in flight at once on this part: a dozen
+   --  compute units, each wanting several to hide what a read costs.
+   --  Enough rather than exact -- what it decides is how many slices the
+   --  cache is cut into, and the answer is flat either side of it.
+   Want_Workgroups : constant := 256;
+
    --  How many slices a sequence's packed attention cuts the cache into,
-   --  as Attend_Slices cuts it for the exact kernel: a token against a
-   --  long cache is a few bundles streaming megabytes each, and a part
-   --  with a dozen compute units wants dozens of workgroups. A batch has
-   --  its positions for that already.
+   --  as Attend_Slices cuts it for the exact kernel.
+   --
+   --  What the first two axes give is the bundles across the heads and
+   --  the rows down the second, and where that is not enough to fill the
+   --  part the cache is cut across the third. A batch of one session has
+   --  its positions for that; a token has one row and a few bundles; a
+   --  round of eight rows has thirty-two workgroups, which read a long
+   --  cache a third slower than the same rows cut into slices -- 1.36 ms
+   --  a layer against 0.98 on a 1,419-token prompt. Rounds were not cut
+   --  at all until that was measured, on the reading that their rows'
+   --  lasts are in the table rather than in First and Last; the kernel
+   --  takes its span from the table and divides what it finds, so the
+   --  count here is a hint and an empty slice says so for itself.
+   --
+   --  Never below a slice of Slice_Least positions: cutting a short cache
+   --  into sixteen is sixteen dispatches with nothing in them.
+   --
+   --  @param Item Engine.
+   --  @param Wide How many workgroups the first two axes give.
+   --  @param First The lowest cached position this call reads.
+   --  @param Last The highest.
    function Packed_Slices
-     (Item      : Engine;
-      Positions : Natural;
-      First     : Natural;
-      Last      : Natural) return Natural
+     (Item  : Engine;
+      Wide  : Natural;
+      First : Natural;
+      Last  : Natural) return Natural
    is (if Item.Merge_Line = Null_Handle
-         or else Positions >= Query_Block
          or else Last < First
+         or else Wide = 0
        then 1
-       else Natural'Min
-              (Slice_Limit,
-               (Last - First + Slice_Least) / Slice_Least));
+       else Natural'Max
+              (1,
+               Natural'Min
+                 (Natural'Min (Slice_Limit,
+                               (Want_Workgroups + Wide - 1) / Wide),
+                  (Last - First + Slice_Least) / Slice_Least)));
 
    -------------------
    -- Attend_Packed --
@@ -10362,6 +10388,15 @@ package body Model_Runner.Platform.Device.Products is
                      Queries : constant Positive :=
                        (if This.Table /= 0 then 1
                         else Packed_Queries (Count));
+                     --  The bundle is what makes a packed round bearable:
+                     --  a workgroup of eight heads unpacks the key it
+                     --  reads once and dots it into eight queries. A
+                     --  round dispatched a workgroup a head instead --
+                     --  two hundred and fifty-six of them rather than
+                     --  thirty-two, which looked like the parallelism the
+                     --  exact kernel gets -- read 4.59 ms a layer against
+                     --  1.36, because what a packed row costs is the
+                     --  unpacking and that is paid once a bundle.
                      Bundle  : constant Positive :=
                        Packed_Bundle (This.Group_Size, Queries,
                                       This.Last - This.First + 1);
@@ -10394,12 +10429,13 @@ package body Model_Runner.Platform.Device.Products is
                         Table_At   => C.unsigned (This.Table),
                         Sinks_At   => C.unsigned (This.Sinks));
 
-                     --  A round is never sliced: its rows' lasts are in
-                     --  the table, not in First and Last.
                      Slices : constant Natural :=
-                       (if Barrier = null or else This.Table /= 0 then 1
+                       (if Barrier = null then 1
                         else Packed_Slices
-                               (Item, Count, This.First, This.Last));
+                               (Item,
+                                (This.Heads + Bundle - 1) / Bundle
+                                * ((Count + Queries - 1) / Queries),
+                                This.First, This.Last));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);

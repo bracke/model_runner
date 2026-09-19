@@ -2772,7 +2772,8 @@ begin
                      then Model_Runner.Llama.Fourth
                      else Model_Runner.Llama.Exact)),
                Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Budget      => Given ("--budget"));
+               Budget      => Given ("--budget"),
+               Timeline    => Given ("--device-timeline"));
             return;
          end if;
 

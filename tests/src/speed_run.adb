@@ -951,7 +951,8 @@ package body Speed_Run is
         Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Budget      : Boolean := False)
+      Budget      : Boolean := False;
+      Timeline    : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -997,6 +998,8 @@ package body Speed_Run is
                Say ("no device answered");
                return;
             end if;
+
+            Model_Runner.Backend.Device.Keep_Timeline (Timeline);
          end;
       end if;
 
@@ -1283,6 +1286,13 @@ package body Speed_Run is
          Room_Of.Free (Rows);
          Room_Of.Free (Aside);
       end;
+
+      if Timeline and then Backend = Model_Runner.Backend.Backend_Device then
+         Ada.Text_IO.Put
+           (Ada.Text_IO.Standard_Error,
+            Model_Runner.Backend.Device.Timeline_Report);
+         Model_Runner.Backend.Device.Keep_Timeline (False);
+      end if;
 
       L.Close (Engine, Status);
       Containers.Close (Container);
