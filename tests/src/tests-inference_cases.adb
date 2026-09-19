@@ -3741,6 +3741,18 @@ package body Tests.Inference_Cases is
    --  each held to what it says alone. A block written over another
    --  model's is a wrong answer, and nothing in the suite would have
    --  caught it.
+   --
+   --  And the two sessions keep their caches differently -- one exactly,
+   --  one packed to a byte an element -- because that is what decides how
+   --  far the half-precision copy beside the cache must reach: an exact
+   --  block has a half of every element of it, a packed one uses the copy
+   --  only as the room a layer unpacks into. A copy sized for one kind
+   --  and read by the other is not a slow answer but a wrong one.
+   --
+   --  Both sessions are asked whether they were given a block at all, and
+   --  whether their layers went over whole. Without that this would pass
+   --  on a device that quietly refused the second model and attended it
+   --  on the processor, which is the failure it is here to catch.
    procedure Two_Models_On_One_Device_Keep_Their_Own_Caches
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3808,20 +3820,42 @@ package body Tests.Inference_Cases is
          L.Open (First, One.Ready, Status => Status);
          Assert (E.Is_Ok (Status), "the first model's session did not open");
 
-         L.Open (Second, Two.Ready, Context => 64, Status => Status);
+         L.Open (Second, Two.Ready, Context => 64, Cache => L.Eighth,
+                 Status => Status);
          Assert (E.Is_Ok (Status), "the second model's session did not open");
 
          for Index in Prompt'Range loop
-            L.Evaluate (First, One.Ready, Prompt (Index), Said_One,
-                        Status => Status);
-            Assert (E.Is_Ok (Status), "the first model would not evaluate");
+            declare
+               Whole_One, Whole_Two : Natural;
+            begin
+               Whole_One := Model_Runner.Backend.Device.Layers_Whole;
+               L.Evaluate (First, One.Ready, Prompt (Index), Said_One,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the first model would not evaluate");
+               Whole_Two := Model_Runner.Backend.Device.Layers_Whole;
 
-            L.Evaluate (Second, Two.Ready, Prompt (Index), Said_Two,
-                        Status => Status);
-            Assert (E.Is_Ok (Status), "the second model would not evaluate");
+               Assert (Whole_Two > Whole_One,
+                       "the first model had no layer go over whole beside"
+                       & " the second");
+
+               L.Evaluate (Second, Two.Ready, Prompt (Index), Said_Two,
+                           Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the second model would not evaluate");
+
+               Assert (Model_Runner.Backend.Device.Layers_Whole > Whole_Two,
+                       "the second model had no layer go over whole beside"
+                       & " the first: a device that refuses one of two"
+                       & " models says nothing in the answers");
+            end;
          end loop;
 
-         --  Both on the device at once, which is the thing this is about.
+         --  Both on the device at once, which is the thing this is about,
+         --  and each in a block of its own.
+         Assert (L.Holds_Block (First),
+                 "the first model's session holds no block");
+         Assert (L.Holds_Block (Second),
+                 "the second model's session holds no block");
          Assert (L.Blocks_Held >= 2,
                  "two models' sessions hold" & Natural'Image (L.Blocks_Held)
                  & " blocks between them, wanted two");
@@ -3854,7 +3888,8 @@ package body Tests.Inference_Cases is
             Want  : Logit_Vector;
             Worst : N.Real := 0.0;
          begin
-            L.Open (Alone, Two.Ready, Context => 64, Status => Status);
+            L.Open (Alone, Two.Ready, Context => 64, Cache => L.Eighth,
+                    Status => Status);
             Assert (E.Is_Ok (Status), "the lone hybrid did not open");
             Says (Two, Alone, Want);
             L.Close (Alone);

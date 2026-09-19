@@ -282,10 +282,20 @@ Keep a Changelog and the project uses semantic versioning.
   are reusable, so the buffer would not have grown anyway. It asks now
   whether the gaps below would hold what is being placed, which is when the
   packing avoids the growth entirely. Twelve sessions at a context of 512
-  with a departure every other turn: **44.7 tokens a second against 43.3
+  with a departure every other turn: **46.7 tokens a second against 45.1
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **Two models on one device, and two cache precisions with them.** The test
+  that puts two models' sessions in the one cache buffer now has one of them
+  keep its cache packed to a byte an element while the other keeps it
+  exactly, which is what decides how far the half-precision copy must reach:
+  an exact block has a half of every element of it, a packed one uses the
+  copy only as the room a layer unpacks into. It also asks whether each
+  model's layers went over whole and whether each session holds a block,
+  rather than only comparing logits -- without that it would have passed on a
+  device that quietly refused the second model and attended it on the
+  processor, which is the failure it exists to catch.
 - **Two models on one device, in the suite at last.** One device, one cache
   buffer, blocks the size of the sessions in them -- and nothing had ever
   put two models' sessions in it at once, which is what a server hosting

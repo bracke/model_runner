@@ -5075,6 +5075,13 @@ package body Model_Runner.Llama is
    --  says. Said by Send_States, which decides whether it is wanted, and
    --  by the compaction below, which has just moved the seat and must put
    --  the ring where it now is before anything reads it there.
+   --
+   --  Every slot of it, though only the slots a position has written say
+   --  anything and a seat freshly taken is zeros. Sending the written
+   --  ones alone was written and measured: a ring is as many slots as a
+   --  draft is long and one more, so a session is past the last of them
+   --  within six positions and every slot is live from there on. Nothing
+   --  that can be run here showed the difference.
    procedure Write_Ring (Item : Session_Access; Ok : out Boolean) is
       Settings    : Configuration renames Item.Owner.Settings;
       Every       : constant Element_Count := Device_Slot_Span (Item.all);

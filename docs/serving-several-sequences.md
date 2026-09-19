@@ -251,8 +251,8 @@ the session's cache written where it now is. The room of rings does the same
 with its seats -- and only where the gaps below would hold what is being
 placed, which is when the moving is what keeps the buffer from growing.
 `--turns N --churn K` prices it: twelve sessions at a context of 512 with a
-departure every other turn read 44.7 tokens a second under that rule, against
-43.3 when any gap at all set the packing going and 44.7 with no packing at
+departure every other turn read 46.7 tokens a second under that rule, against
+45.1 when any gap at all set the packing going and 46.6 with no packing at
 all -- the same 594 MB of cache in all three, the gaps on that workload being
 reusable. What the packing is for is the pattern the tests build, where two
 gaps neither of which holds the arrival together do.
