@@ -21824,3 +21824,33 @@ panels 0FBA26D8515100EC src/library/model_runner-quantization-interleave.ads src
 # load:  0.2 of 16 for the device runs, but 1.2 for the sixteen-member
 #   packed round, which says so above
 # model: TinyLlama-1.1B-Chat Q8_0 and Qwen3.5-0.8B Q8_0 for the device runs
+
+# 2026-09-21 (later), two negatives and a test, none of which moves a
+# figure: the groups' digests are unchanged because nothing they list
+# changed.
+#
+# THE BYTE SCALE OUT OF THE DOT. A packed key row of the byte storage
+# keeps one scale for the whole row, so the dot may be taken on the
+# numbers as stored and scaled once -- sixteen vec4 multiplies a
+# position of a sixty-four-wide head against one multiply a row. Written
+# and compiled both ways, alternated: eight members of a 1,419-token
+# prompt read 0.815, 0.841, 0.844 s hoisted against 0.834, 0.839, 0.840,
+# and one session generating sixty-four tokens read 1.686 and 1.677 s
+# against 1.665 and 1.676. Nothing. The compiler was already doing it --
+# the scale is loop-invariant for the byte storage and feeds a dot --
+# and the source is left saying what it means rather than what the
+# hardware wants. Taken out.
+#
+# A BATCH OF EIGHT, WHICH THE ROUND'S RULE CHANGED BY ACCIDENT. Slicing
+# the cache used to be refused to any call of eight positions or more,
+# on the reading that a batch has its positions for parallelism; the
+# rule that let a round slice counts workgroups instead, so a batch of
+# eight -- four bundles by eight positions, thirty-two workgroups --
+# slices where it did not. Measured rather than assumed, packed keys on
+# the 1,419-token prompt: a batch of eight read 6.999 and 7.252 s
+# evaluating the prompt against 7.526 and 7.736 unsliced, a batch of
+# thirty-two 1.475 and 1.546 against 1.557 and 1.563, and a batch of a
+# hundred and twenty-eight 0.903 and 0.902 against 0.914 and 0.888 --
+# which is the same call, the rule giving one slice at that width. So
+# the accident is worth six per cent at eight and nothing at a hundred
+# and twenty-eight, and it stays.

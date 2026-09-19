@@ -3504,14 +3504,60 @@ package body Tests.Inference_Cases is
          Assert (not L.Holds_Block (First),
                  "the session turned out of its block still holds one");
 
+         --  And what it is told when it asks why: not that its context
+         --  will not fit the device, which is the answer a session of
+         --  the wrong size gets, but that every block is somebody
+         --  else's -- the one answer here that a moment may change.
+         declare
+            use type L.Device_Limit;
+            use type Interfaces.Unsigned_64;
+
+            Why         : L.Device_Limit;
+            Asked, Kept : Interfaces.Unsigned_64;
+         begin
+            L.Device_Room (First, Why, Asked, Kept);
+
+            Assert (Why = L.Blocks_All_Held,
+                    "a session refused for want of a free block was told "
+                    & L.Device_Limit'Image (Why));
+            Assert (Asked = Interfaces.Unsigned_64 (Seats)
+                      and then Kept = Interfaces.Unsigned_64 (Seats),
+                    "the answer counted" & Interfaces.Unsigned_64'Image (Asked)
+                    & " blocks of" & Interfaces.Unsigned_64'Image (Kept)
+                    & ", wanted" & Integer'Image (Seats) & " of both");
+
+            --  And a session that holds one is told nothing is wrong.
+            L.Device_Room (Beside (Beside'Last), Why, Asked, Kept);
+            Assert (Why = L.Device_Takes_All,
+                    "a session holding a block was told "
+                    & L.Device_Limit'Image (Why));
+         end;
+
          --  The first again, which is now the coldest session on the
          --  device: it asks, finds every block held by one warmer than
          --  itself, and attends on the processor rather than turning
          --  another out and being turned out again next token.
-         L.Evaluate (First, Under.Ready, 7, After, Status => Status);
-         Assert (E.Is_Ok (Status),
-                 "the turned-out session did not evaluate: "
-                 & E.Error_Code'Image (Status.Code));
+         declare
+            Was_Handed : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Handed;
+         begin
+            L.Evaluate (First, Under.Ready, 7, After, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the turned-out session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  And the run's report says which refusal it was, where it
+            --  used to say the context was not on the device at all.
+            Assert (Model_Runner.Backend.Device.Layers_Handed > Was_Handed,
+                    "a session without a block had every layer go over"
+                    & " whole anyway");
+            Assert (Model_Runner.Backend.Device."="
+                      (Model_Runner.Backend.Device.First_Handing,
+                       Model_Runner.Backend.Device.Blocks_Handed),
+                    "the layers handed back were put down to "
+                    & Model_Runner.Backend.Device.Handing'Image
+                        (Model_Runner.Backend.Device.First_Handing));
+         end;
 
          Assert (Model_Runner.Backend.Device.Blocks_Turned = 1,
                  "a session as cold as the one holding a block turned it"

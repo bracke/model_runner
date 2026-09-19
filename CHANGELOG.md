@@ -286,6 +286,13 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A session refused a block because sixteen others hold them is tested for
+  saying so.** The seventeen-session test now asks `Device_Room` what the
+  turned-out session is told -- `Blocks_All_Held`, sixteen of sixteen, rather
+  than the answer a session of the wrong size gets -- asks the same of a
+  session that holds one and gets `Device_Takes_All`, and holds the run's
+  report to naming the blocks and not the context when that session's layers
+  go to the processor.
 - **A packed round cuts its cache into slices, as every other attention
   does.** A round of packed members cost about twice a round of exact ones,
   and the device's own clock said where: the attention step read 1.36 ms of a
