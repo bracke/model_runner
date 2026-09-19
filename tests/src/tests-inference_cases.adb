@@ -3567,29 +3567,33 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said;
 
-   ------------------------------------------------------------
-   -- A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One --
-   ------------------------------------------------------------
+   -----------------------------------------------------------
+   -- Sessions_Of_Different_Sizes_Share_The_Device_S_Cache --
+   -----------------------------------------------------------
 
-   --  The device's cache buffer is dealt out in blocks of one width --
-   --  the width the first session to take one asked for -- and a block
-   --  has to hold what the session keeps in it. A session that keeps less
-   --  takes a block and leaves the rest of it unread; a session that
-   --  keeps more is refused and attends on the processor, until the last
-   --  block goes and the width is forgotten with it. A session refused
-   --  asks again at every layer, so it takes the cache as soon as that
-   --  happens.
+   --  The device's cache buffer is dealt out a session at a time, each
+   --  placed at the first gap that holds what it keeps, so a block is the
+   --  size of the session in it. It used to be dealt in blocks of one
+   --  width -- the first session's -- which meant a session of any other
+   --  width was refused the cache and attended every layer on the
+   --  processor for as long as any session of the first width was open,
+   --  and that sixteen short-context sessions behind one long one each
+   --  took a block the long one's size.
    --
-   --  This holds all three: the narrower session seated beside the wider
-   --  one, the wider session refused where the narrower set the width,
-   --  and the wider one taking the cache once the last narrow block is
-   --  given back.
-   procedure A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One
+   --  Three sessions of three context lengths, opened shortest first so
+   --  that each of the two after it wants more than the one before -- the
+   --  case that used to be refused -- and stepped one after another so
+   --  that all three hold blocks at once. Each has to have its layers go
+   --  over whole, and each has to say what a session of its own length
+   --  says with nobody else on the device: a block placed over another's
+   --  is a wrong answer and not a slow one.
+   procedure Sessions_Of_Different_Sizes_Share_The_Device_S_Cache
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
 
-      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+      Lengths : constant array (1 .. 3) of Positive := [8, 12, 16];
+      Prompt  : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
 
       Image : B.Byte_Array_Access;
 
@@ -3619,9 +3623,8 @@ package body Tests.Inference_Cases is
 
          Status : E.Error_Info;
 
-         Wide, Narrow : L.Session;
-
-         Answer : Logit_Vector;
+         Live   : array (Lengths'Range) of L.Session;
+         Shared : array (Lengths'Range) of Logit_Vector;
       begin
          Model_Runner.Backend.Device.Open (Awake);
 
@@ -3639,77 +3642,286 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
-         --  A wide session first, which deals the buffer in its width.
-         L.Open (Wide, Under.Ready, Context => 16, Status => Status);
-         Assert (E.Is_Ok (Status), "the first session did not open");
-         Says (Under, Wide, Answer);
-
-         L.Open (Narrow, Under.Ready, Context => 8, Status => Status);
-         Assert (E.Is_Ok (Status), "the second session did not open");
-
-         declare
-            Whole : constant Natural :=
-              Model_Runner.Backend.Device.Layers_Whole;
-         begin
-            Says (Under, Narrow, Answer);
-
-            Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
-                    "a session that keeps less than a block holds was"
-                    & " refused one");
-         end;
-
-         L.Close (Wide);
-         L.Close (Narrow);
-
-         --  And the other way about: a narrow session deals the buffer in
-         --  its width, and a wider one does not fit until the last narrow
-         --  block is given back.
-         declare
-            Short, Long : L.Session;
-         begin
-            L.Open (Short, Under.Ready, Context => 8, Status => Status);
-            Assert (E.Is_Ok (Status), "the narrow session did not open");
-            Says (Under, Short, Answer);
-
-            L.Open (Long, Under.Ready, Context => 16, Status => Status);
-            Assert (E.Is_Ok (Status), "the wide session did not open");
+         --  Shortest first, so that every session after the first wants
+         --  more room than the buffer has been dealt for.
+         for Index in Lengths'Range loop
+            L.Open (Live (Index), Under.Ready, Context => Lengths (Index),
+                    Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not open:" & Integer'Image (Index));
 
             declare
                Whole : constant Natural :=
                  Model_Runner.Backend.Device.Layers_Whole;
             begin
-               Says (Under, Long, Answer);
-
-               Assert (Model_Runner.Backend.Device.Layers_Whole = Whole,
-                       "a session that keeps more than a block holds was"
-                       & " given one anyway");
-            end;
-
-            --  The last block of the narrow width given back, and with it
-            --  the width itself.
-            L.Close (Short);
-
-            declare
-               Whole : constant Natural :=
-                 Model_Runner.Backend.Device.Layers_Whole;
-            begin
-               L.Evaluate (Long, Under.Ready, 7, Answer, Status => Status);
-               Assert (E.Is_Ok (Status),
-                       "the wide session did not evaluate: "
-                       & E.Error_Code'Image (Status.Code));
+               Says (Under, Live (Index), Shared (Index));
 
                Assert (Model_Runner.Backend.Device.Layers_Whole > Whole,
-                       "a session refused the cache for its width never"
-                       & " asked again once the width was forgotten");
+                       "a session of context" & Integer'Image (Lengths (Index))
+                       & " was refused a block beside sessions of another"
+                       & " size");
             end;
+         end loop;
 
-            L.Close (Long);
-         end;
+         --  One more token each, turn and turn about, with all three
+         --  holding blocks: a block over another's shows here.
+         for Index in Lengths'Range loop
+            L.Evaluate
+              (Live (Index), Under.Ready, 7, Shared (Index),
+               Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not evaluate its last token: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         --  And what each would have said alone, on a device holding
+         --  nothing else.
+         for Index in Lengths'Range loop
+            L.Close (Live (Index));
+         end loop;
+
+         for Index in Lengths'Range loop
+            declare
+               Alone  : L.Session;
+               Wanted : Logit_Vector;
+               Worst  : N.Real := 0.0;
+            begin
+               L.Open (Alone, Under.Ready, Context => Lengths (Index),
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the lone session did not open");
+               Says (Under, Alone, Wanted);
+               L.Evaluate (Alone, Under.Ready, 7, Wanted, Status => Status);
+               Assert (E.Is_Ok (Status), "the lone session did not evaluate");
+
+               for Place in Wanted'Range loop
+                  Worst :=
+                    N.Real'Max
+                      (Worst, abs (Wanted (Place) - Shared (Index) (Place)));
+               end loop;
+
+               Assert (Worst <= 1.0E-4,
+                       "a session of context" & Integer'Image (Lengths (Index))
+                       & " sharing the cache says" & N.Real'Image (Worst)
+                       & " away from one that had it to itself");
+
+               L.Close (Alone);
+            end;
+         end loop;
+
          Model_Runner.Backend.Device.Close;
       end;
 
       B.Free (Image);
-   end A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One;
+   end Sessions_Of_Different_Sizes_Share_The_Device_S_Cache;
+
+   ------------------------------------------------------------
+   -- The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing --
+   ------------------------------------------------------------
+
+   --  Seats in the room of rings are placed at the first gap that holds
+   --  them, and a session is asked how many states to keep -- so rings
+   --  differ in size, and a seat given back in the middle leaves a gap a
+   --  larger ring cannot use. The room used to grow at the end for every
+   --  one of those and shrink only when the last seat went.
+   --
+   --  It moves the seats to the front instead, where the gaps below would
+   --  hold the ring between them: a ring read home and written again,
+   --  which is what a session turned out of a seat pays anyway.
+   --
+   --  Three rings of one size, the middle one given back, and a ring twice
+   --  the size asked for: the room may be no larger than the three of them
+   --  packed, which is measured here rather than worked out -- a session
+   --  alone in the room says what one ring of each size takes.
+   procedure The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 64;
+      Small  : constant := 40;
+      Large  : constant := 80;
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a hybrid session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+         Answer : Logit_Vector;
+
+         --  What the room takes with one ring of a given size in it, and
+         --  with two: measured rather than worked out, and the difference
+         --  between them is one ring's place with the table left out.
+         --  The room is given back when the last seat goes, so each of
+         --  these starts from an empty room.
+         function Takes
+           (Keeping : Natural; Seats : Positive)
+            return Interfaces.Unsigned_64
+         is
+            Live  : array (1 .. Seats) of L.Session;
+            Taken : Interfaces.Unsigned_64;
+            Local : E.Error_Info;
+         begin
+            for Index in Live'Range loop
+               L.Open (Live (Index), Under.Ready, Context => Room,
+                       Status => Local);
+               Assert (E.Is_Ok (Local), "a measuring session did not open");
+               L.Keep_States (Live (Index), Keeping, Local);
+               Assert (E.Is_Ok (Local),
+                       "a measuring session would not keep states");
+               Says (Under, Live (Index), Answer);
+            end loop;
+
+            Taken := Model_Runner.Backend.Device.State_Room_Bytes;
+
+            for Index in Live'Range loop
+               L.Close (Live (Index));
+            end loop;
+
+            return Taken;
+         end Takes;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         declare
+            use type Interfaces.Unsigned_64;
+
+            One_Small : constant Interfaces.Unsigned_64 := Takes (Small, 1);
+            Two_Small : constant Interfaces.Unsigned_64 := Takes (Small, 2);
+            One_Large : constant Interfaces.Unsigned_64 := Takes (Large, 1);
+         begin
+            --  A device that seats no ring at all says nothing here, and
+            --  neither does one whose rings are all the same size however
+            --  many states are kept.
+            if One_Small = 0 or else Two_Small <= One_Small
+              or else One_Large <= One_Small
+            then
+               Model_Runner.Backend.Device.Close;
+               B.Free (Image);
+               return;
+            end if;
+
+            declare
+               First, Middle, Third, Big : L.Session;
+
+               --  Two small rings and a large one, packed: one ring's
+               --  place is Two_Small - One_Small, and One_Large carries
+               --  the table and the large ring.
+               Packed : constant Interfaces.Unsigned_64 :=
+                 One_Large + 2 * (Two_Small - One_Small);
+            begin
+               L.Open (First, Under.Ready, Context => Room, Status => Status);
+               L.Keep_States (First, Small, Status);
+               Says (Under, First, Answer);
+
+               L.Open (Middle, Under.Ready, Context => Room, Status => Status);
+               L.Keep_States (Middle, Small, Status);
+               Says (Under, Middle, Answer);
+
+               L.Open (Third, Under.Ready, Context => Room, Status => Status);
+               L.Keep_States (Third, Small, Status);
+               Says (Under, Third, Answer);
+
+               --  The middle seat given back, and a ring that will not fit
+               --  the gap it leaves asked for.
+               L.Close (Middle);
+
+               L.Open (Big, Under.Ready, Context => Room, Status => Status);
+               L.Keep_States (Big, Large, Status);
+               Says (Under, Big, Answer);
+
+               declare
+                  Taken : constant Interfaces.Unsigned_64 :=
+                    Model_Runner.Backend.Device.State_Room_Bytes;
+               begin
+                  Assert (Taken <= Packed,
+                          "the room grew to"
+                          & Interfaces.Unsigned_64'Image (Taken)
+                          & " bytes where the three rings packed take"
+                          & Interfaces.Unsigned_64'Image (Packed)
+                          & ": the gap the middle seat left was not used");
+               end;
+
+               --  And each of them still says what it said: a ring moved
+               --  is a ring read home and written again, not a ring lost.
+               declare
+                  After : Logit_Vector;
+                  Lone  : L.Session;
+                  Want  : Logit_Vector;
+                  Worst : N.Real := 0.0;
+               begin
+                  L.Evaluate (Third, Under.Ready, 7, After, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the moved session did not evaluate: "
+                          & E.Error_Code'Image (Status.Code));
+
+                  L.Close (Big);
+                  L.Close (Third);
+                  L.Close (First);
+
+                  L.Open (Lone, Under.Ready, Context => Room,
+                          Status => Status);
+                  L.Keep_States (Lone, Small, Status);
+                  Says (Under, Lone, Want);
+                  L.Evaluate (Lone, Under.Ready, 7, Want, Status => Status);
+                  Assert (E.Is_Ok (Status), "the comparison did not evaluate");
+
+                  for Index in Want'Range loop
+                     Worst :=
+                       N.Real'Max (Worst, abs (Want (Index) - After (Index)));
+                  end loop;
+
+                  Assert (Worst <= 2.0E-3,
+                          "a session whose seat was moved says"
+                          & N.Real'Image (Worst)
+                          & " away from one that never moved");
+
+                  L.Close (Lone);
+               end;
+            end;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing;
 
    ----------------------------------------------------------
    -- A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said --
@@ -12592,10 +12804,13 @@ package body Tests.Inference_Cases is
          "a session turned out of its block of the device's cache writes "
          & "it back and says what it said before");
       Register_Routine
-        (T, A_Block_Holds_A_Narrower_Session_And_Not_A_Wider_One'Access,
-         "a session that keeps less than a block of the device's cache "
-         & "holds is seated in one beside a wider session, and one that "
-         & "keeps more waits for the width to be forgotten");
+        (T, Sessions_Of_Different_Sizes_Share_The_Device_S_Cache'Access,
+         "sessions of three context lengths share the device's cache, each "
+         & "in a block of its own size, and each says what it says alone");
+      Register_Routine
+        (T, The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing'Access,
+         "the device's room of rings moves its seats to the front rather "
+         & "than growing past a gap a larger ring cannot use");
       Register_Routine
         (T, A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said'Access,
          "a hybrid turned out of its seat in the device's room of rings "

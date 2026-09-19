@@ -267,6 +267,34 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's cache is dealt a session at a time, not in blocks of one
+  width.** A block is placed at the first gap that holds what the session
+  keeps, as a ring is placed in the room of rings, so a block is the size of
+  the session in it. Dealt in one width -- the first session's -- sixteen
+  short-context sessions behind one long one each took a block the long one's
+  size, and a session wanting more than the dealt width was refused the
+  device's cache for as long as any session of that width was open. The width
+  rule is gone with it; what refuses a session now is the buffer's own bound.
+  Sessions of three context lengths sharing the cache, each saying what it
+  says alone, is a test.
+- **The room of rings moves its seats to the front rather than growing past a
+  gap.** Rings differ in size -- a session is asked how many states to keep --
+  and seats come back in whatever order sessions close, so a seat given up in
+  the middle left a gap a larger ring could not use and the room grew at the
+  end for every one of those. It compacts instead, where the room would
+  otherwise grow and there is any gap below: each ring read home and written
+  again at its new place, which is what a session turned out of a seat pays
+  anyway. A ring is also placed on a kilobyte now whatever else is seated --
+  the alignment was applied after the gap was chosen, so a ring smaller than
+  the alignment could be placed on top of another one, and with three or more
+  such rings seated it was.
+- **What the sixteen blocks are worth, beside what they cost.** The
+  turn-taking measurement now has its processor column: sessions taking turns
+  read 40.6 to 40.7 tokens a second on the processor at every count, having
+  nothing to run out of, against the device's 51.1 at sixteen sessions and
+  44.8 at thirty-two. The blocks are worth 1.26 times at sixteen and still
+  1.10 at thirty-two, where half the sessions attend on the processor for want
+  of one.
 - **A block of the device's cache holds a session that keeps less than it
   does.** The buffer is dealt out in blocks of one width, and a session of
   another width -- a second model, or the same one asked for a shorter
@@ -282,16 +310,16 @@ Keep a Changelog and the project uses semantic versioning.
   sessions want them.** `tests speed --turns N` opens N sessions, gives each
   the prompt, and has them take turns a token apiece -- which is the shape
   the blocks are a limit on, where a round is not. On TinyLlama-1.1B Q8_0 at
-  a context of 512, sixteen sessions read 49.2 tokens a second with no block
-  turned over, seventeen read 47.9 with one, and thirty-two read 43.4 with
+  a context of 512, sixteen sessions read 51.1 tokens a second with no block
+  turned over, seventeen read 49.8 with one, and thirty-two read 44.8 with
   sixteen. The guard is what keeps those numbers flat: without it the same
   thirty-two sessions turn a block over 528 times rather than 16, and at a
   1,419-token context twenty sessions read **7.8 tokens a second against
-  42.2** -- a 64-megabyte cache written across the bus every token against
+  43.5** -- a 64-megabyte cache written across the bus every token against
   four writes in the whole run. Where a session's cache is small the churn
-  is nearly free and doing without a block costs a little: at a context of
-  512 the unguarded thirty-two read 45.0 against 43.4. The guard keeps the
-  cliff away and pays the three per cent.
+  is nearly free and doing without a block costs almost nothing: at a context
+  of 512 the unguarded thirty-two read 45.1 against 44.8, under one per cent.
+  The guard keeps the cliff away and pays that.
 - **A seventeenth hybrid session is dealt a seat in the room of rings, and
   no session turns another out while both are busy.** The room a hybrid's
   rings of states are seated in holds sixteen seats as the cache holds

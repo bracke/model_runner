@@ -2180,6 +2180,17 @@ private
       --  out of its block loses nothing but the copy.
       Seat       : Integer := -1;
 
+      --  And where that block begins in the buffer, in elements. The
+      --  buffer used to be dealt in blocks of one width -- the first
+      --  session's -- and a block's base was its seat times that width,
+      --  which meant sixteen short-context sessions behind one long one
+      --  each took a block the long one's size, and a session wanting
+      --  more than the dealt width was refused the cache altogether. Each
+      --  session is placed at the first gap that holds what it keeps now,
+      --  as a ring is placed in the room of rings, so a block is the size
+      --  of the session in it.
+      Cache_Base : Model_Runner.Numerics.Element_Count := 0;
+
       --  When this session last asked for a block of that cache, and when
       --  it last asked for a seat in the room of rings, on the clock that
       --  counts asks. Set where the session is opened, so that a session

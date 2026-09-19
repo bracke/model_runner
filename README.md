@@ -2045,34 +2045,43 @@ sessions and has them take turns a token apiece -- the shape the sixteen
 blocks are a limit on, where a round of at most sixteen members is not. On
 the same TinyLlama-1.1B Q8_0 at a context of 512:
 
-| Sessions taking turns | tokens a second | blocks turned over |
-| --- | ---: | ---: |
-| 8 | 49.2 | 0 |
-| 16 | **49.2** | 0 |
-| 17 | 47.9 | 1 |
-| 20 | 46.4 | 4 |
-| 32 | 43.4 | 16 |
+| Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
+| --- | ---: | ---: | ---: |
+| 8 | 51.1 | 0 | 40.7 |
+| 16 | **51.1** | 0 | 40.7 |
+| 17 | 49.8 | 1 | 40.7 |
+| 20 | 48.0 | 4 | 40.6 |
+| 32 | 44.8 | 16 | 40.6 |
+
+Tokens a second, all of them. The processor column is flat because it has
+nothing to run out of, and it is what the blocks are worth: **1.26 times at
+sixteen sessions and still 1.10 at thirty-two**, where half the sessions are
+attending on the processor for want of a block and only their products are on
+the device.
 
 A block is taken only from a session that has gone unasked since before the
 asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 42.2 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 43.5 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
-writes in the run. The guard costs something in the other corner -- where a
-session holds twenty-odd positions the churn is nearly free, and the
-unguarded thirty-two above read 45.0 against 43.4 -- and three per cent there
-is what not falling off the cliff is worth. The unguarded readings were taken
-with the guard disabled in a build made for the purpose, which is the only
-way to take them.
+writes in the run. The guard costs almost nothing in the other corner: where
+a session holds twenty-odd positions, carrying its cache back is nearly free
+and the unguarded thirty-two above read 45.1 against 44.8, which is under one
+per cent. The unguarded readings were taken with the guard disabled in a
+build made for the purpose, which is the only way to take them.
 
-A block also holds a session that keeps less than it does: the buffer is
-dealt in blocks of the first session's width, and a shorter context, or a
-second model with a smaller cache, sits at the front of a block and leaves
-the rest unread rather than being refused the device. Only a session that
-keeps more waits, and it waits for the last block of the narrower width to
-be given back.
+The buffer is dealt a session at a time, each placed at the first gap that
+holds what it keeps, so a block is the size of the session in it. It used to
+be dealt in blocks of one width -- the first session's -- which refused the
+device's cache to a session of any other width for as long as any session of
+the first was open, and gave sixteen short-context sessions behind one long
+one a block the long one's size each. The room a hybrid's rings sit in is
+dealt the same way, and moves its seats to the front rather than growing past
+a gap a larger ring cannot use: rings differ in size, seats come back in
+whatever order sessions close, and a ring moved costs what a session turned
+out of a seat pays anyway.
 
 The same question gets the same answer where the shape is the model's
 rather than the context's: the packed attention reads four elements of a
@@ -16587,9 +16596,10 @@ that does not divide.
 **Stage three: a round's attention on the device.** Stage two put every
 product on the device and left attention on the host, because the device
 holds one cache laid out as one session's and a round's rows are different
-sessions. Now it holds several: the cache buffer is dealt out in blocks of
-one session's worth, and a session takes a block the first time it writes to
-the device's cache and keeps it while anything else can be given one. A
+sessions. Now it holds several: the cache buffer is dealt out a
+session at a time, each block placed at the first gap that holds what that
+session keeps, and a session takes one the first time it writes to the
+device's cache and keeps it while anything else can be given one. A
 round's rows read the blocks their sessions were already in, so **forming a
 round costs a table of two words a row and nothing else**. Where every block
 is held, a session asking for one takes the block stamped longest ago -- the

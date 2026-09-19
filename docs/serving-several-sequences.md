@@ -217,12 +217,15 @@ How it is built, which is what the pricing said it had to be:
   eight rows and capped a round there; the cache is a buffer the kernel has
   bound already, so what was a limit became a read of two words a row.
 - **The device's cache, dealt out in blocks.** It held one session's keys and
-  values. It is handed out in blocks of one session's worth now, and a
-  session takes one the first time it writes to that cache and keeps it while
-  anything else can be given one: where every block is held, the block
+  values. It is handed out a session at a time now, each placed at the first
+  gap that holds what it keeps -- so a block is the size of the session in it,
+  and a session takes one the first time it writes to that cache and keeps it
+  while anything else can be given one: where every block is held, the block
   stamped longest ago goes to the session asking. A round's rows read the
   blocks their sessions were already in, so forming a round writes the table
-  and nothing else.
+  and nothing else; rows of members that are not laid out alike go to the
+  processor, the table saying where each block begins and not where a layer
+  begins inside it.
 - **Sixteen members.** What memory bounds rather than what a push block
   holds: sixteen blocks of this model at two thousand positions is two
   gigabytes. More than that keeps attention on the host, as stage two left
@@ -254,15 +257,16 @@ seventeen a cache carried back and forth every token. `--show-stats` says how
 often either happened, and `tests speed --turns N` measures it: N sessions
 taking turns a token apiece, which is the shape the sixteen blocks are a
 limit on where a round is not. On TinyLlama-1.1B Q8_0 at a context of 512,
-sixteen sessions read 49.2 tokens a second and turn no block over, seventeen
-read 47.9 and turn one, and thirty-two read 43.4 and turn sixteen. Take the
-guard away and the same thirty-two turn a block over 528 times instead of
-sixteen; at a 1,419-token context, twenty sessions read 7.8 tokens a second
-without the guard against 42.2 with it, which is a 64-megabyte cache written
-across the bus every token against four writes in the run. Where a session
-holds little the churn is nearly free and the guard costs about three per
-cent -- the unguarded thirty-two read 45.0 against 43.4 at a context of 512
--- which is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
+sixteen sessions read 51.1 tokens a second and turn no block over, seventeen
+read 49.8 and turn one, and thirty-two read 44.8 and turn sixteen; the same
+counts on the processor read 40.6 to 40.7 whatever the count, having nothing
+to run out of. Take the guard away and the same thirty-two turn a block over
+528 times instead of sixteen; at a 1,419-token context, twenty sessions read
+7.8 tokens a second without the guard against 43.5 with it, which is a
+64-megabyte cache written across the bus every token against four writes in
+the run. Where a session holds little the churn is nearly free and the guard
+costs under one per cent -- the unguarded thirty-two read 45.1 against 44.8
+at a context of 512 -- which is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
 that layer still holds. A round stamps every member before any of them asks,
