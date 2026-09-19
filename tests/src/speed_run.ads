@@ -69,6 +69,11 @@ package Speed_Run is
    --  @param Backend Which backend runs the products. A device runs a
    --    round's attention as well, up to the member count its push
    --    constants hold; past that a round attends on the host.
+   --  @param Cache What each member stores its context in, as --kv-cache
+   --    names it: a round of packed members attends through a kernel of
+   --    its own and unpacks nothing, where a batch of one packed session
+   --    unpacks a layer into the room the half-precision copy would have
+   --    had. What that costs a round had never been asked.
    --  @param Budget True to report where the round's time went, phase by
    --    phase, as the single-sequence measurement does. The phases are
    --    charged to the first member's session, which for a round is where
@@ -79,6 +84,8 @@ package Speed_Run is
       Tokens      : Positive;
       Threads     : Positive;
       Members     : Positive;
+      Cache       : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False);

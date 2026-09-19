@@ -1891,6 +1891,53 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Move a run of the cache to another place in it, on the device.
+   --
+   --  What a block of the cache is moved with when the blocks are packed
+   --  forward to close a gap. The host's copy of a session's cache is
+   --  what the engine used to write into the new place, which is the
+   --  slowest thing per byte this program does and needs the device's own
+   --  copy read home first; vkCmdCopyBuffer moves it where it lies, and
+   --  the half-precision copy beside it in the same submission.
+   --
+   --  The two runs may overlap -- a block moved down by less than its own
+   --  width does -- so a move that overlaps is recorded as a run of
+   --  regions of the distance between them, front to back, none of which
+   --  overlaps its own source.
+   --
+   --  @param Item Ready engine with a cache reserved.
+   --  @param From Where the run begins now, in elements.
+   --  @param Into Where it is to begin, which must be below From.
+   --  @param Elements How long the run is.
+   --  @param Halves How many halves of the copy beside it to move from
+   --    and to the same places, or zero for none: a block whose session
+   --    keeps an exact cache has a half of every element, a packed one
+   --    only the room a layer unpacks into.
+   --  @param Ok True when the move was recorded and ran.
+   procedure Move_Cache
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  The same for the room a hybrid's rings are seated in: a seat moved
+   --  to close a gap below it, without the ring coming home and going
+   --  back.
+   --
+   --  @param Item Ready engine with a room reserved.
+   --  @param From Where the ring begins now, in elements.
+   --  @param Into Where it is to begin, below From.
+   --  @param Elements How long the ring is.
+   --  @param Ok True when the move was recorded and ran.
+   procedure Move_State
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  Zero a run of that room, on the device.
    --
    --  A seat is a stretch of the room a session's ring lives in, and a
@@ -1908,6 +1955,7 @@ package Model_Runner.Platform.Device.Products is
    --  @param At_Value Where the run begins, in elements.
    --  @param Count How many elements.
    --  @param Ok True when it was zeroed.
+
    procedure Clear_State
      (Item     : in out Engine;
       At_Value : Model_Runner.Numerics.Element_Count;

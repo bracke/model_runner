@@ -258,6 +258,40 @@ package Model_Runner.Backend.Device is
    --  @return Seats in the room of rings turned over since then.
    function Rings_Turned return Natural;
 
+   --  Move a block of the cache to another place in it, on the device.
+   --
+   --  What the packing moves a block with. The engine used to write the
+   --  session's cache into the new place out of the host's copy, which
+   --  meant reading back whatever the device owed that copy first and
+   --  then sending the whole of what the session holds across the bus;
+   --  the device copies it where it lies instead, and the
+   --  half-precision copy beside it in the same submission.
+   --
+   --  @param From Where the block begins now, in elements.
+   --  @param Into Where it is to begin, which must be below From.
+   --  @param Elements How wide the block is.
+   --  @param Halves How many halves of the copy beside it to move, or
+   --    zero for none.
+   --  @param Ok True when the move ran.
+   procedure Move_Cache
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
+   --  The same for a seat in the room of rings.
+   --
+   --  @param From Where the ring begins now, in elements.
+   --  @param Into Where it is to begin, below From.
+   --  @param Elements How long the ring is.
+   --  @param Ok True when the move ran.
+   procedure Move_State
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  Note that a block of the cache, or a seat in the room of rings, was
    --  moved to close a gap below it.
    --

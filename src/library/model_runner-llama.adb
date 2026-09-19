@@ -5224,26 +5224,26 @@ package body Model_Runner.Llama is
             exit when Next = null;
 
             if Where > Place then
-               --  The host's copy made the newer one, then the ring put
-               --  where the seat has moved to.
-               Fetch_States (Next);
+               --  Moved where it lies, as a block of the cache is: the
+               --  ring came home to the host and went back again for
+               --  this, which is tens of megabytes across the bus twice
+               --  to shift a seat that the device can shift itself.
+               declare
+                  Went : Boolean;
+               begin
+                  Model_Runner.Backend.Device.Move_State
+                    (From     => Where,
+                     Into     => Place,
+                     Elements => Device_Ring_Span (Next.all),
+                     Ok       => Went);
 
-               if Next.State_On_Device then
-                  Ok := False;
-                  return;
-               end if;
-
-               Next.State_Base := Place;
-
-               if Next.Committed > 0 then
-                  Write_Ring (Next, Ok);
-
-                  if not Ok then
+                  if not Went then
+                     Ok := False;
                      return;
                   end if;
+               end;
 
-                  Next.State_On_Device := True;
-               end if;
+               Next.State_Base := Place;
 
                Model_Runner.Backend.Device.Note_Moved (Ring => True);
             end if;
@@ -5907,19 +5907,20 @@ package body Model_Runner.Llama is
             exit when Next = null;
 
             if Where > Place then
-               --  What the device wrote and the host has not read yet,
-               --  read before the block moves out from under it.
-               Settle_Cache (Next.all);
-
-               if Next.Owed_Count > 0 then
-                  Ok := False;
-                  return;
-               end if;
-
+               --  Moved where it lies. The host's copy is not read and
+               --  not written: what the device holds of that session --
+               --  including the positions it owes the host's copy, which
+               --  had to be read back before the block could be written
+               --  from the host -- goes down with the block.
                declare
                   Went : Boolean;
                begin
-                  Write_Block (Next, Place, Went);
+                  Model_Runner.Backend.Device.Move_Cache
+                    (From     => Where,
+                     Into     => Place,
+                     Elements => Block_Span_Of (Next.all),
+                     Halves   => Copy_Span_Of (Next.all),
+                     Ok       => Went);
 
                   if not Went then
                      Ok := False;

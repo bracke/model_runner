@@ -16653,6 +16653,24 @@ read 45.2**, and sixteen read 148.7 where the pushed table read 62.8 -- that
 last row being the cap: a round of more than eight attended on the host and
 was slower than the same device at eight.
 
+A round whose members keep their caches packed costs about twice one whose
+members keep them exactly, for a quarter of the memory. `tests speed --round
+N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
+
+| Members | `f32` | `q8` |
+| --- | ---: | ---: |
+| 2 | 0.365 s | 0.789 s |
+| 4 | 0.378 s | 0.776 s |
+| 8 | 0.584 s | 0.941 s |
+| 16 | 0.654 s | 1.458 s |
+
+An exact round attends through the kernel that reads the half-precision copy
+beside the cache; a packed round reads bytes through a kernel of its own and
+unpacks nothing, a layer's rows being unpacked only where one session's batch
+attends through the matrix instruction. Eight members at `q4` read 0.975 s,
+which is `q8`'s figure and not half of it -- what the packed rounds are
+paying is the kernel and not the bytes.
+
 **The middle column was carrying a one-off nobody had priced.** A round of
 eight at that context spent 0.98 s of a 2.75-second measurement writing every
 member's whole cache into its block, because a member prefills alone and was

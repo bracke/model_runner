@@ -6585,6 +6585,191 @@ package body Model_Runner.Platform.Device.Products is
    -- Clear_State --
    -----------------
 
+   ----------------
+   -- Move_Cache --
+   ----------------
+
+   --  One buffer's run moved into another place in the same buffer, and
+   --  the halves beside it. Recorded as one submission with a barrier
+   --  between the two so that a reader of either sees the whole of it.
+   procedure Move_Run
+     (Item    : in out Engine;
+      Buffer  : Address;
+      From    : Interfaces.Unsigned_64;
+      Into    : Interfaces.Unsigned_64;
+      Bytes   : Interfaces.Unsigned_64;
+      Copier  : Copy_Buffer_Call);
+
+   procedure Move_Run
+     (Item    : in out Engine;
+      Buffer  : Address;
+      From    : Interfaces.Unsigned_64;
+      Into    : Interfaces.Unsigned_64;
+      Bytes   : Interfaces.Unsigned_64;
+      Copier  : Copy_Buffer_Call)
+   is
+      --  Non-overlapping pieces where the two runs overlap: the distance
+      --  between them is how much may be moved at once, front to back.
+      Step : constant Interfaces.Unsigned_64 :=
+        (if Bytes <= From - Into then Bytes else From - Into);
+
+      Done : Interfaces.Unsigned_64 := 0;
+   begin
+      while Done < Bytes loop
+         declare
+            Span : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64'Min (Step, Bytes - Done);
+
+            Piece : aliased Copy_Region :=
+              (From => From + Done, Into => Into + Done, Span => Span);
+         begin
+            Copier (Item.Buffer, Buffer, Buffer, 1, Piece'Address);
+            Done := Done + Span;
+         end;
+      end loop;
+   end Move_Run;
+
+   procedure Move_Cache
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      From_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (From) * 4;
+      Into_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Into) * 4;
+      Span      : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+
+      Half_From : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (From) * 2;
+      Half_Into : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Into) * 2;
+      Half_Span : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Halves) * 2;
+
+      Reset_Buffer : constant Reset_Buffer_Call :=
+        To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+      Start : constant Begin_Call :=
+        To_Begin (Point ("vkBeginCommandBuffer"));
+      Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+      Copier : constant Copy_Buffer_Call :=
+        To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+
+      Began : aliased Command_Begin_Info;
+
+      Good, Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.Cache_Buffer = Null_Handle
+        or else Elements = 0
+        or else Into >= From
+        or else From_Byte + Span > Item.Cache_Bytes
+        or else Reset_Buffer = null or else Start = null
+        or else Stop = null or else Copier = null
+      then
+         return;
+      end if;
+
+      --  A kernel in flight may be reading the block.
+      Settle (Item, Good);
+
+      if not Good
+        or else Reset_Buffer (Item.Buffer, 0) /= 0
+        or else Start (Item.Buffer, Began'Address) /= 0
+      then
+         return;
+      end if;
+
+      Move_Run (Item, Item.Cache_Buffer, From_Byte, Into_Byte, Span, Copier);
+
+      if Item.Copy_Buffer /= Null_Handle
+        and then Half_Span > 0
+        and then Half_From + Half_Span <= Item.Copy_Bytes
+      then
+         Move_Run (Item, Item.Copy_Buffer, Half_From, Half_Into, Half_Span,
+                   Copier);
+      end if;
+
+      if Stop (Item.Buffer) /= 0 then
+         return;
+      end if;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      Ok := Good;
+   end Move_Cache;
+
+   ----------------
+   -- Move_State --
+   ----------------
+
+   procedure Move_State
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      From_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (From) * 4;
+      Into_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Into) * 4;
+      Span      : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+
+      Reset_Buffer : constant Reset_Buffer_Call :=
+        To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+      Start : constant Begin_Call :=
+        To_Begin (Point ("vkBeginCommandBuffer"));
+      Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+      Copier : constant Copy_Buffer_Call :=
+        To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+
+      Began : aliased Command_Begin_Info;
+
+      Good, Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_Buffer = Null_Handle
+        or else Elements = 0
+        or else Into >= From
+        or else From_Byte + Span > Item.State_Bytes
+        or else Reset_Buffer = null or else Start = null
+        or else Stop = null or else Copier = null
+      then
+         return;
+      end if;
+
+      Settle (Item, Good);
+
+      if not Good
+        or else Reset_Buffer (Item.Buffer, 0) /= 0
+        or else Start (Item.Buffer, Began'Address) /= 0
+      then
+         return;
+      end if;
+
+      Move_Run (Item, Item.State_Buffer, From_Byte, Into_Byte, Span, Copier);
+
+      if Stop (Item.Buffer) /= 0 then
+         return;
+      end if;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      Ok := Good;
+   end Move_State;
+
    procedure Clear_State
      (Item     : in out Engine;
       At_Value : Model_Runner.Numerics.Element_Count;

@@ -630,6 +630,43 @@ package body Model_Runner.Backend.Device is
    function Rings_Turned return Natural is (Turned_Rings);
 
    ----------------
+   -- Move_Cache --
+   ----------------
+
+   procedure Move_Cache
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Move_Cache (Engine, From, Into, Elements, Halves, Ok);
+   end Move_Cache;
+
+   ----------------
+   -- Move_State --
+   ----------------
+
+   procedure Move_State
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Move_State (Engine, From, Into, Elements, Ok);
+   end Move_State;
+
+   ----------------
    -- Note_Moved --
    ----------------
 

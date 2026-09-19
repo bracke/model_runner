@@ -4073,7 +4073,10 @@ package body Tests.Inference_Cases is
 
                   --  And the move said, which is what Note_Moved records
                   --  and a run reports: a packing nobody can see is a
-                  --  packing nobody can price.
+                  --  packing nobody can price. The move itself is
+                  --  Move_Cache, which copies the block and the halves
+                  --  beside it where they lie rather than writing the
+                  --  session's cache in again from the host.
                   Assert (Model_Runner.Backend.Device.Blocks_Moved > 0,
                           "a block was moved and nothing counted it");
                end;
@@ -4290,6 +4293,8 @@ package body Tests.Inference_Cases is
                      & " bytes from" & Interfaces.Unsigned_64'Image (Before)
                      & ": the gaps the two seats left were not used");
 
+                  --  Move_State is what shifted it, the ring copied
+                  --  where it lies rather than fetched home and sent.
                   Assert (Model_Runner.Backend.Device.Rings_Moved > 0,
                           "a ring was moved and nothing counted it");
                end;

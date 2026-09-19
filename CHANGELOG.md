@@ -286,6 +286,28 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A block and a ring are moved where they lie.** The packing moved a block
+  by writing the session's committed cells into the new place out of the
+  host's copy, which meant reading back whatever the device owed that copy
+  first; a ring was moved by fetching the whole of it home and sending it
+  again. `vkCmdCopyBuffer` moves both where they lie now -- the cache and the
+  half-precision copy beside it in one submission, in pieces of the distance
+  moved where the two runs overlap -- so nothing crosses the bus and the
+  owed window needs no settling. On the workloads that can be run here the
+  moves are too rare for the difference to show: twelve moves in a
+  sixteen-second run is a fifth of a per cent of it either way. What it
+  removes is the host round-trip, which at a full context is the block's
+  whole size over the bus against the same bytes at the device's own
+  bandwidth.
+- **What a packed round costs, measured.** `tests speed --round N` takes a
+  `--kv-cache` now, and the answer had never been asked: a round whose
+  members keep packed caches costs about twice one whose members keep them
+  exactly, for a quarter of the memory. On a 1,419-token prompt, sixteen
+  rounds: two members 0.789 s against 0.365, four 0.776 against 0.378, eight
+  0.941 against 0.584, sixteen 1.458 against 0.654. Eight members at `q4`
+  read 0.975 s, which is `q8`'s figure rather than half of it -- what a
+  packed round pays is the kernel it attends through and not the bytes it
+  reads.
 - **Two models on one device, and two cache precisions with them.** The test
   that puts two models' sessions in the one cache buffer now has one of them
   keep its cache packed to a byte an element while the other keeps it

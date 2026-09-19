@@ -947,6 +947,8 @@ package body Speed_Run is
       Tokens      : Positive;
       Threads     : Positive;
       Members     : Positive;
+      Cache       : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False)
@@ -1088,7 +1090,7 @@ package body Speed_Run is
          --  level, so neither do these.
          for Index in Live'Range loop
             L.Open (Live (Index), Engine, Workers => Where,
-                    Status => Status);
+                    Cache => Cache, Status => Status);
             exit when E.Is_Error (Status);
 
             --  The phase clock, on the member the round is made on: a round
