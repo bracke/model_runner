@@ -157,6 +157,48 @@ contexts whether or not the members fill them. Blocks of positions rather
 than blocks of sessions is the next thing, and it is a capacity question
 rather than a speed one.
 
+## Pages
+
+A block is a session's whole context, taken the first time it writes and
+kept for its life. A session that fills a hundred positions of a
+two-thousand-position context holds the room for two thousand, and sixteen
+of them hold it sixteen times. What a server wants instead is to deal the
+cache in **pages** -- a fixed stretch of positions -- and give a session
+only as many as it has filled, wherever they happen to be free.
+
+A page holds a power-of-two run of positions of one layer, its keys and then
+its values: `P` keys of `KV_Width` and `P` values of `V_Width`, so a page is
+a fixed size for the model whatever session it serves. A session at a
+context of `C` holds `ceil(cells/P)` pages a layer, a sliding-window layer
+fewer than a whole-context one, and the pages it holds are scattered through
+the buffer rather than one run. Where a block let a row read `k_base + the
+block's base + the position times the width`, a page makes the position name
+its page: a per-layer table, a word a page giving the element that page
+begins at, and the position's keys at that base plus its place inside the
+page. `k_base` and `v_base` become offsets inside a page -- nought and `P *
+KV_Width` -- and the table is where the block's base was.
+
+**Stage one -- done.** The four kernels that touch the cache read and write
+it either way. `attention.comp`, `attention_matrix.comp`, `heads.comp` and
+`place.comp` each carry a `place_of` that a shift of zero sends down the
+block path it always took and a shift above zero sends through a page table;
+the products and backend layers pass a `Pages_At` and a `Page_Shift` through
+`Add_Place`, `Add_Attention`, `Add_Heads`, `Whole_Layer`, `Attend_And_Feed`
+and `Attend_And_Project`. The engine asks for a shift of zero everywhere
+today, which is the same arithmetic and the whole device suite unchanged, so
+what is added is the room to page and not a page.
+
+**Stage two -- the engine.** A free list of pages, a session's pages a
+layer, the per-layer tables written into the cache as the round's table is,
+and growth as a session adds positions rather than all at once at open. The
+block allocator's other halves come with it: settling a paged session reads
+its scattered pages back into the host's contiguous copy, a round of paged
+members writes each row's page table, and a session gives its pages back page
+by page at close. It is where the capacity win is spent, and where the
+correctness gate below is generalised once more: a paged member of a round,
+and a session larger than one page, must each produce bit for bit what it
+produces in blocks.
+
 ## Staging
 
 **One — done.** `Evaluate_Round` on the processor, the four substitutions
