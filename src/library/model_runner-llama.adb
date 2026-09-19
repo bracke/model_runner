@@ -4933,11 +4933,14 @@ package body Model_Runner.Llama is
    --  round that is already formed.
    Block_Taken  : Element_Count := 0;
 
-   --  What a block must begin on, in elements. Nothing in the kernels asks
-   --  for it -- they index elements -- and it is here so that a buffer
-   --  dealt to a dozen sessions of odd sizes reads as something a person
-   --  can follow.
-   Block_Alignment : constant Element_Count := 256;
+   --  What a block must begin on, in elements: a cache line of this part,
+   --  sixteen binary32 words. Nothing in the kernels asks for it -- they
+   --  index elements -- but a block that began at an odd element would
+   --  have every row of keys in it straddling a line it need not, which
+   --  is what the room of rings measured at a third of the rule's time
+   --  when a ring began forty floats in. A kilobyte, as the rings use,
+   --  would round a short session's whole block up to one.
+   Block_Alignment : constant Element_Count := 16;
    Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
@@ -5105,69 +5108,6 @@ package body Model_Runner.Llama is
       end loop;
    end Write_Ring;
 
-   --  Move every seated ring to the front of the room, one after another,
-   --  and say how far they now reach.
-   --
-   --  The room is dealt a seat at a time, each placed at the first gap that
-   --  holds it, and seats are given up in whatever order the sessions
-   --  holding them close. Rings differ in size -- a session is asked how
-   --  many states to keep -- so a seat given back in the middle leaves a
-   --  gap that a larger ring cannot use, and the room grew at the end for
-   --  every one of those while the gaps below it stayed empty. Nothing
-   --  shrank it but the last seat going.
-   --
-   --  What a move costs is the ring read home and written again, which is
-   --  what a session pays anyway when it is turned out of a seat; a ring
-   --  whose place does not change pays nothing. Said only where the room
-   --  would otherwise have to grow past what is already reserved.
-   --
-   --  @param Ok False where a ring could not be read back or written, in
-   --    which case nothing was moved that is not where the host says.
-   procedure Compact_State_Room (Ok : out Boolean) is
-      Place : Element_Count := State_Table_Room;
-   begin
-      Ok := True;
-
-      for Seat in State_Seats'Range loop
-         declare
-            Other : constant Session_Access := State_Seats (Seat);
-         begin
-            if Other /= null then
-               declare
-                  Span : constant Element_Count :=
-                    Device_Ring_Span (Other.all);
-               begin
-                  if Other.State_Base /= Place then
-                     --  The host's copy made the newer one, then the ring
-                     --  put where the seat has moved to.
-                     Fetch_States (Other);
-
-                     if Other.State_On_Device then
-                        Ok := False;
-                        return;
-                     end if;
-
-                     Other.State_Base := Place;
-
-                     if Other.Committed > 0 then
-                        Write_Ring (Other, Ok);
-                        if not Ok then
-                           return;
-                        end if;
-
-                        Other.State_On_Device := True;
-                     end if;
-                  end if;
-
-                  Place :=
-                    (Place + Span + State_Alignment - 1)
-                    / State_Alignment * State_Alignment;
-               end;
-            end if;
-         end;
-      end loop;
-   end Compact_State_Room;
-
    --  The first place in the room a ring of Span elements fits: from the
    --  table's end, moved past every seated ring that overlaps, until
    --  nothing does, and rounded up to what a seat begins on.
@@ -5221,6 +5161,93 @@ package body Model_Runner.Llama is
 
       return (if Upto > Taken then Upto - Taken else 0);
    end Room_Below;
+
+   --  Move seated rings to the front of the room until one of Span fits
+   --  below what the room has already been reserved for, or until nothing
+   --  is left to move.
+   --
+   --  The room is dealt a seat at a time, each placed at the first gap that
+   --  holds it, and seats are given up in whatever order the sessions
+   --  holding them close. Rings differ in size -- a session is asked how
+   --  many states to keep -- so a seat given back in the middle leaves a
+   --  gap that a larger ring cannot use, and the room grew at the end for
+   --  every one of those while the gaps below it stayed empty. Nothing
+   --  shrank it but the last seat going.
+   --
+   --  What a move costs is the ring read home and written again, which is
+   --  what a session pays anyway when it is turned out of a seat; a ring
+   --  whose place does not change pays nothing. So the rings are moved in
+   --  the order they sit in and the walk stops at the first one that makes
+   --  the room, rather than packing all sixteen to seat one session.
+   --
+   --  In that order and no other: a ring moves to where a ring below it
+   --  used to be, so moving from the front means writing only over room
+   --  already given up. Out of order -- seat by seat, as this did at
+   --  first -- a ring could be written over one whose host copy was still
+   --  the older, and what was read back for that one afterwards was the
+   --  ring that had just been written over it.
+   --
+   --  @param Span What the asking session's ring needs room for.
+   --  @param Ok False where a ring could not be read back or written, in
+   --    which case nothing was moved that is not where the host says.
+   procedure Compact_State_Room (Span : Element_Count; Ok : out Boolean) is
+      Place : Element_Count := State_Table_Room;
+   begin
+      Ok := True;
+
+      loop
+         declare
+            Next  : Session_Access := null;
+            Where : Element_Count := 0;
+         begin
+            --  The lowest seat not yet packed.
+            for Seat in State_Seats'Range loop
+               declare
+                  Other : constant Session_Access := State_Seats (Seat);
+               begin
+                  if Other /= null and then Other.State_Base >= Place
+                    and then (Next = null or else Other.State_Base < Where)
+                  then
+                     Next  := Other;
+                     Where := Other.State_Base;
+                  end if;
+               end;
+            end loop;
+
+            exit when Next = null;
+
+            if Where > Place then
+               --  The host's copy made the newer one, then the ring put
+               --  where the seat has moved to.
+               Fetch_States (Next);
+
+               if Next.State_On_Device then
+                  Ok := False;
+                  return;
+               end if;
+
+               Next.State_Base := Place;
+
+               if Next.Committed > 0 then
+                  Write_Ring (Next, Ok);
+
+                  if not Ok then
+                     return;
+                  end if;
+
+                  Next.State_On_Device := True;
+               end if;
+            end if;
+
+            Place :=
+              (Place + Device_Ring_Span (Next.all) + State_Alignment - 1)
+              / State_Alignment * State_Alignment;
+
+            exit when Interfaces.Unsigned_64 (First_Gap (Span) + Span) * 4
+                      <= Model_Runner.Backend.Device.State_Room_Bytes;
+         end;
+      end loop;
+   end Compact_State_Room;
 
    procedure Seat_State
      (Item : Session_Access; Ok : out Boolean; Cleared : out Boolean)
@@ -5329,7 +5356,7 @@ package body Model_Runner.Llama is
          declare
             Moved : Boolean;
          begin
-            Compact_State_Room (Moved);
+            Compact_State_Room (Span, Moved);
 
             if Moved then
                Place := First_Gap (Span);
@@ -5595,6 +5622,28 @@ package body Model_Runner.Llama is
        elsif Item.Held in Eighth | Fourth then Packed_Layout (Item).Span
        else 0);
 
+   --  How far into a session's block a half of an element is read, in
+   --  elements from the block's base.
+   --
+   --  An exact session's block has a half of every element of it: the
+   --  step that places a position writes both, and the matrix attention
+   --  reads the halves. A packed session's block has no copy of itself --
+   --  its keys and values are bytes or nibbles already -- and what it
+   --  uses the copy for is the room a layer's rows unpack into for that
+   --  same instruction, which is at the block's front and a fraction of
+   --  it. A cache dealt to packed sessions used to keep two bytes for
+   --  every element of every block, for elements no kernel would read a
+   --  half of.
+   function Copy_Span_Of (Item : Session) return Element_Count
+   is (if Item.Held = Exact then Block_Span_Of (Item)
+       elsif Item.Held in Eighth | Fourth
+       then Element_Count
+              (Item.Owner.Settings.KV_Heads
+               * (Item.Owner.Settings.Head_Size
+                  + Item.Owner.Settings.Value_Size))
+            * (if Item.Cells = null then 0 else Widest_Cells (Item.Cells.all))
+       else 0);
+
    ------------------
    -- Context_Room --
    ------------------
@@ -5670,6 +5719,231 @@ package body Model_Runner.Llama is
          end if;
       end;
    end Device_Room;
+
+   --  Write what the host holds of a session's cache into the block at
+   --  Base, and only where it has committed something: a session with
+   --  nothing committed has nothing to preserve, and a block it is taking
+   --  for the first time was zeroed when the buffer was made.
+   --
+   --  A layer at a time, and only the cells it has written. The whole
+   --  array in two writes was the shape of the cache rather than the shape
+   --  of what is in it: a session of a 2,048-token context that has said
+   --  twelve tokens holds twelve cells of every layer and forty-six
+   --  megabytes of room for them, and the rest of it is the zeros the
+   --  block already has. A layer holds its cells from the lowest position
+   --  it still has, which a window slides forward, so what is written is
+   --  that run.
+   --
+   --  Said where a session takes a block and where one it holds is moved,
+   --  which is the same writing to the same end.
+   --
+   --  @param Item The session.
+   --  @param Base Where its block begins, in elements.
+   --  @param Written True when everything went.
+   procedure Write_Block
+     (Item : Session_Access; Base : Element_Count; Written : out Boolean) is
+   begin
+      Written := True;
+
+      if Item.Committed = 0 then
+         return;
+      end if;
+
+      if Item.Held = Exact then
+         declare
+            Settings : Configuration renames Item.Owner.Settings;
+
+            KV_Width : constant Element_Count :=
+              Element_Count (Settings.KV_Heads * Settings.Head_Size);
+            V_Width  : constant Element_Count :=
+              Element_Count (Settings.KV_Heads * Settings.Value_Size);
+
+            Layers : constant Natural :=
+              (if Item.Cells = null then 0 else Item.Cells.all'Length);
+         begin
+            for Layer in 0 .. Layers - 1 loop
+               declare
+                  Held : constant Element_Count :=
+                    Element_Count'Min
+                      (Item.Cells.all (Layer),
+                       Cell_Of (Item.all, Layer,
+                                Element_Count (Item.Committed)));
+               begin
+                  if Written and then Held > 0 then
+                     Model_Runner.Backend.Device.Put_Cache
+                       (Base + Keys_At (Item.all, Layer),
+                        Item.Keys.all
+                          (Keys_At (Item.all, Layer)
+                           .. Keys_At (Item.all, Layer)
+                              + Held * KV_Width - 1),
+                        Written);
+                  end if;
+
+                  if Written and then Held > 0 then
+                     Model_Runner.Backend.Device.Put_Cache
+                       (Base + Item.Keys.all'Length
+                        + Values_At (Item.all, Layer),
+                        Item.Values.all
+                          (Values_At (Item.all, Layer)
+                           .. Values_At (Item.all, Layer)
+                              + Held * V_Width - 1),
+                        Written);
+                  end if;
+               end;
+            end loop;
+         end;
+      else
+         --  A packed session's block: its bytes as they are, and its
+         --  scales as floats, each where Packed_Block says.
+         declare
+            Laid : constant Packed_Block := Packed_Layout (Item.all);
+         begin
+            Model_Runner.Backend.Device.Put_Cache_Bytes
+              (Interfaces.Unsigned_64 (Base) * 4, Item.Byte_Keys.all,
+               Written);
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache_Bytes
+                 (Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4,
+                  Item.Byte_Values.all, Written);
+            end if;
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Base + Laid.Key_Scales_At, Item.Key_Scales.all, Written);
+            end if;
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Base + Laid.Value_Scales_At, Item.Value_Scales.all,
+                  Written);
+            end if;
+         end;
+      end if;
+   end Write_Block;
+
+   --  The first place in the buffer a block of Span elements fits: from
+   --  the front, past every block held that overlaps, until nothing does.
+   function First_Block_Gap (Span : Element_Count) return Element_Count is
+      Base : Element_Count := 0;
+   begin
+      loop
+         declare
+            Moved : Boolean := False;
+         begin
+            for Which in Block_Holder'Range loop
+               declare
+                  Other : constant Session_Access := Block_Holder (Which);
+               begin
+                  if Other /= null
+                    and then Base < Other.Cache_Base
+                                    + Block_Span_Of (Other.all)
+                    and then Other.Cache_Base < Base + Span
+                  then
+                     Base :=
+                       (Other.Cache_Base + Block_Span_Of (Other.all)
+                        + Block_Alignment - 1)
+                       / Block_Alignment * Block_Alignment;
+                     Moved := True;
+                  end if;
+               end;
+            end loop;
+            exit when not Moved;
+         end;
+      end loop;
+
+      return Base;
+   end First_Block_Gap;
+
+   --  Move blocks to the front until one of Span fits below where the
+   --  buffer has already been dealt to, or until nothing is left to move.
+   --
+   --  Blocks are the size of the sessions in them and are given back in
+   --  whatever order those sessions close, so a block given up between two
+   --  others leaves a gap a larger block cannot use. Without this the
+   --  buffer grew at the end for every one of those and shrank only when
+   --  the last block went.
+   --
+   --  A block moved is the session's cache written again where it now is --
+   --  what a session turned out of a block pays anyway -- so the blocks are
+   --  moved in order from the front and the walk stops at the first one
+   --  that makes the room. Moving every block would settle and rewrite
+   --  sixteen caches to seat one session.
+   --
+   --  @param Span What the asking session needs room for.
+   --  @param Ok False where a block could not be settled or written, in
+   --    which case it is still where the host's copy says it is.
+   procedure Compact_Blocks (Span : Element_Count; Ok : out Boolean) is
+      Place : Element_Count := 0;
+   begin
+      Ok := True;
+
+      --  In order of where they sit, which is the order that packs them.
+      loop
+         declare
+            Next  : Session_Access := null;
+            Where : Element_Count := 0;
+         begin
+            --  The lowest block not yet packed.
+            for Which in Block_Holder'Range loop
+               declare
+                  Other : constant Session_Access := Block_Holder (Which);
+               begin
+                  if Other /= null and then Other.Cache_Base >= Place
+                    and then (Next = null or else Other.Cache_Base < Where)
+                  then
+                     Next  := Other;
+                     Where := Other.Cache_Base;
+                  end if;
+               end;
+            end loop;
+
+            exit when Next = null;
+
+            if Where > Place then
+               --  What the device wrote and the host has not read yet,
+               --  read before the block moves out from under it.
+               Settle_Cache (Next.all);
+
+               if Next.Owed_Count > 0 then
+                  Ok := False;
+                  return;
+               end if;
+
+               declare
+                  Went : Boolean;
+               begin
+                  Write_Block (Next, Place, Went);
+
+                  if not Went then
+                     Ok := False;
+                     return;
+                  end if;
+               end;
+
+               Next.Cache_Base := Place;
+            end if;
+
+            Place :=
+              (Place + Block_Span_Of (Next.all) + Block_Alignment - 1)
+              / Block_Alignment * Block_Alignment;
+
+            --  Enough moved: the asking session fits in what the packing
+            --  has opened up, and the rest may stay where they are.
+            exit when First_Block_Gap (Span) + Span <= Block_Taken;
+         end;
+      end loop;
+
+      --  What the table sits past, which packing may have brought down.
+      Block_Taken := 0;
+
+      for Which in Block_Holder'Range loop
+         if Block_Holder (Which) /= null then
+            Block_Taken :=
+              Element_Count'Max
+                (Block_Taken,
+                 Block_Holder (Which).Cache_Base
+                 + Block_Span_Of (Block_Holder (Which).all));
+         end if;
+      end loop;
+   end Compact_Blocks;
 
    procedure Take_Block (Item : Session_Access; Ok : out Boolean)
    is
@@ -5825,34 +6099,39 @@ package body Model_Runner.Llama is
          --  session of that width was open.
          Span : constant Element_Count := Block_Span_Of (Item.all);
 
-         Base : Element_Count := 0;
+         Base : Element_Count := First_Block_Gap (Span);
 
          Written : Boolean := True;
       begin
-         loop
+         --  Where that gap is past what the buffer has been dealt to while
+         --  there is a gap below it, the blocks are moved down instead of
+         --  the buffer growing -- as the room of rings moves its seats,
+         --  and for the same reason: blocks are the size of the sessions
+         --  in them and come back in whatever order those sessions close.
+         if Base + Span > Block_Taken then
             declare
-               Moved : Boolean := False;
+               Taken : Element_Count := 0;
+               Moved : Boolean;
             begin
                for Which in Block_Holder'Range loop
-                  declare
-                     Other : constant Session_Access := Block_Holder (Which);
-                  begin
-                     if Other /= null
-                       and then Base < Other.Cache_Base
-                                       + Block_Span_Of (Other.all)
-                       and then Other.Cache_Base < Base + Span
-                     then
-                        Base :=
-                          (Other.Cache_Base + Block_Span_Of (Other.all)
-                           + Block_Alignment - 1)
-                          / Block_Alignment * Block_Alignment;
-                        Moved := True;
-                     end if;
-                  end;
+                  if Block_Holder (Which) /= null then
+                     Taken :=
+                       Taken
+                       + (Block_Span_Of (Block_Holder (Which).all)
+                          + Block_Alignment - 1)
+                         / Block_Alignment * Block_Alignment;
+                  end if;
                end loop;
-               exit when not Moved;
+
+               if Taken < Block_Taken then
+                  Compact_Blocks (Span, Moved);
+
+                  if Moved then
+                     Base := First_Block_Gap (Span);
+                  end if;
+               end if;
             end;
-         end loop;
+         end if;
 
          declare
             --  Room for this block and every block held, for the table a
@@ -5861,8 +6140,24 @@ package body Model_Runner.Llama is
               Element_Count'Max (Base + Span, Block_Taken)
               + Element_Count (Model_Runner.Backend.Device.Table_Room)
               + Element_Count (Model_Runner.Backend.Device.Sink_Room);
+
+            --  And how far the halves are read: this block's need and
+            --  every held block's, which for a packed one is the room a
+            --  layer unpacks into and not the block.
+            Copy_Upto : Element_Count := Base + Copy_Span_Of (Item.all);
          begin
-            Model_Runner.Backend.Device.Reserve_Cache (Wanted, Ok);
+            for Which in Block_Holder'Range loop
+               if Block_Holder (Which) /= null then
+                  Copy_Upto :=
+                    Element_Count'Max
+                      (Copy_Upto,
+                       Block_Holder (Which).Cache_Base
+                       + Copy_Span_Of (Block_Holder (Which).all));
+               end if;
+            end loop;
+
+            Model_Runner.Backend.Device.Reserve_Cache
+              (Wanted, Copy_Upto, Ok);
             if not Ok then
                return;
             end if;
@@ -5874,87 +6169,7 @@ package body Model_Runner.Llama is
 
          Item.Cache_Base := Base;
 
-         --  What the host holds, into the block, and only where it has
-         --  committed something: a session with nothing committed has
-         --  nothing to preserve, and the buffer it is taking a block of
-         --  was zeroed when it was made.
-         --
-         --  A layer at a time, and only the cells it has written. The
-         --  whole array in two writes was the shape of the cache rather
-         --  than the shape of what is in it: a session of a 2,048-token
-         --  context that has said twelve tokens holds twelve cells of
-         --  every layer and forty-six megabytes of room for them, and
-         --  the rest of it is the zeros the block already has. A layer
-         --  holds its cells from the lowest position it still has, which
-         --  a window slides forward, so what is written is that run.
-         if Item.Committed > 0 and then Item.Held = Exact then
-            declare
-               Settings : Configuration renames Item.Owner.Settings;
-
-               KV_Width : constant Element_Count :=
-                 Element_Count (Settings.KV_Heads * Settings.Head_Size);
-               V_Width  : constant Element_Count :=
-                 Element_Count (Settings.KV_Heads * Settings.Value_Size);
-
-               Layers : constant Natural :=
-                 (if Item.Cells = null then 0 else Item.Cells.all'Length);
-            begin
-               for Layer in 0 .. Layers - 1 loop
-                  declare
-                     Held : constant Element_Count :=
-                       Element_Count'Min
-                         (Item.Cells.all (Layer),
-                          Cell_Of (Item.all, Layer,
-                                   Element_Count (Item.Committed)));
-                  begin
-                     if Written and then Held > 0 then
-                        Model_Runner.Backend.Device.Put_Cache
-                          (Base + Keys_At (Item.all, Layer),
-                           Item.Keys.all
-                             (Keys_At (Item.all, Layer)
-                              .. Keys_At (Item.all, Layer)
-                                 + Held * KV_Width - 1),
-                           Written);
-                     end if;
-
-                     if Written and then Held > 0 then
-                        Model_Runner.Backend.Device.Put_Cache
-                          (Base + Item.Keys.all'Length
-                           + Values_At (Item.all, Layer),
-                           Item.Values.all
-                             (Values_At (Item.all, Layer)
-                              .. Values_At (Item.all, Layer)
-                                 + Held * V_Width - 1),
-                           Written);
-                     end if;
-                  end;
-               end loop;
-            end;
-         elsif Item.Committed > 0 then
-            --  A packed session's block: its bytes as they are, and its
-            --  scales as floats, each where Packed_Block says.
-            declare
-               Laid : constant Packed_Block := Packed_Layout (Item.all);
-            begin
-               Model_Runner.Backend.Device.Put_Cache_Bytes
-                 (Interfaces.Unsigned_64 (Base) * 4, Item.Byte_Keys.all,
-                  Written);
-               if Written then
-                  Model_Runner.Backend.Device.Put_Cache_Bytes
-                    (Interfaces.Unsigned_64 (Base + Laid.Values_At) * 4,
-                     Item.Byte_Values.all, Written);
-               end if;
-               if Written then
-                  Model_Runner.Backend.Device.Put_Cache
-                    (Base + Laid.Key_Scales_At, Item.Key_Scales.all, Written);
-               end if;
-               if Written then
-                  Model_Runner.Backend.Device.Put_Cache
-                    (Base + Laid.Value_Scales_At, Item.Value_Scales.all,
-                     Written);
-               end if;
-            end;
-         end if;
+         Write_Block (Item, Base, Written);
 
          if not Written then
             Ok := False;

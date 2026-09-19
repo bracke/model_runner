@@ -2047,15 +2047,15 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 51.1 | 0 | 40.7 |
-| 16 | **51.1** | 0 | 40.7 |
-| 17 | 49.8 | 1 | 40.7 |
-| 20 | 48.0 | 4 | 40.6 |
-| 32 | 44.8 | 16 | 40.6 |
+| 8 | 49.4 | 0 | 39.4 |
+| 16 | **49.3** | 0 | 39.2 |
+| 17 | 48.1 | 1 | 39.3 |
+| 20 | 46.4 | 4 | 39.1 |
+| 32 | 43.6 | 16 | 39.1 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
-sixteen sessions and still 1.10 at thirty-two**, where half the sessions are
+sixteen sessions and still 1.12 at thirty-two**, where half the sessions are
 attending on the processor for want of a block and only their products are on
 the device.
 
@@ -2064,12 +2064,12 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 43.5 guarded**, a 64-megabyte cache
+**7.9 tokens a second unguarded against 42.2 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
-writes in the run. The guard costs almost nothing in the other corner: where
-a session holds twenty-odd positions, carrying its cache back is nearly free
-and the unguarded thirty-two above read 45.1 against 44.8, which is under one
-per cent. The unguarded readings were taken with the guard disabled in a
+writes in the run. The guard does cost in the other corner: where a session
+holds twenty-odd positions, carrying its cache back is nearly free and the
+unguarded thirty-two above read 45.4 against 43.6, four per cent the other
+way. The unguarded readings were taken with the guard disabled in a
 build made for the purpose, which is the only way to take them.
 
 The buffer is dealt a session at a time, each placed at the first gap that
@@ -2101,7 +2101,13 @@ reaches at a context this program can be asked for. They are two buffers
 now, four bytes an element and two, so what bounds a context is the larger
 of them: a hundred and thirty-one thousand tokens of Qwen3.5-0.8B sit on
 the device where they did not, and the reachable context is half as large
-again.
+again. The copy reaches only as far as halves are read, besides. A block
+whose session keeps an exact cache has a half of every element of it; one
+kept packed keeps no copy of itself -- its keys and values are bytes or
+nibbles already -- and uses the copy as the room a layer's rows unpack into
+for the matrix instruction, which is a fraction of the block. TinyLlama at
+a 2,048-token context with `--kv-cache q8` holds **25.5 MB of context on
+the device against 35.2**.
 
 The first thing that number found was the refusal it was written to
 explain. The step that packs a layer's keys and values writes the cache a

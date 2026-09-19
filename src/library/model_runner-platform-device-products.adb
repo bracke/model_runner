@@ -5441,9 +5441,10 @@ package body Model_Runner.Platform.Device.Products is
    -------------
 
    procedure Reserve
-     (Item     : in out Engine;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean)
+     (Item      : in out Engine;
+      Elements  : Model_Runner.Numerics.Element_Count;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -5466,8 +5467,14 @@ package body Model_Runner.Platform.Device.Products is
       Wanted : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Elements) * 4;
 
+      --  And the copy only as far as anything reads halves: a block kept
+      --  packed uses the room a layer's rows unpack into, at the front of
+      --  it, and not two bytes for every element of the block. A cache
+      --  dealt to packed sessions used to carry a half of every element
+      --  of every one of them, which is half again of what the blocks
+      --  themselves take.
       Copy_Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Elements) * 2;
+        Interfaces.Unsigned_64 (Copy_Upto) * 2;
 
       --  What the buffers being replaced held, kept until the new ones
       --  have been made and mapped.
@@ -5479,6 +5486,7 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Carried_At     : Address := Null_Handle;
       Copy_Carried_Buffer : Address := Null_Handle;
       Copy_Carried_Memory : Address := Null_Handle;
+      Copy_Carried_Bytes  : Interfaces.Unsigned_64 := 0;
    begin
       Ok := False;
 
@@ -5496,7 +5504,8 @@ package body Model_Runner.Platform.Device.Products is
       --  and attends there, as one the device has no room for does; a
       --  packed cache is a quarter of the size and fits.
       if Over_Limit (Item, Wanted)
-        or else (Wants_Copy (Item) and then Over_Limit (Item, Copy_Wanted))
+        or else (Wants_Copy (Item) and then Copy_Wanted > 0
+                 and then Over_Limit (Item, Copy_Wanted))
       then
          return;
       end if;
@@ -5527,6 +5536,12 @@ package body Model_Runner.Platform.Device.Products is
          Was_Copy_Buffer : Address := Item.Copy_Buffer;
          Was_Copy_Memory : Address := Item.Copy_Memory;
          Was_Copy_At     : constant Address := Item.Copy_At;
+
+         --  What the copy held, in bytes, which is no longer two for
+         --  every element of the cache: it reaches as far as halves are
+         --  read and no further, so what is carried into the new one is
+         --  bounded by both.
+         Was_Copy_Bytes : constant Interfaces.Unsigned_64 := Item.Copy_Bytes;
 
          Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
 
@@ -5562,8 +5577,9 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         --  The copy only where something on this device would read it.
-         if Wants_Copy (Item) then
+         --  The copy only where something on this device would read it,
+         --  and only as far as it is read.
+         if Wants_Copy (Item) and then Copy_Wanted > 0 then
             Take (Item, Copy_Wanted, Item.Copy_Buffer, Item.Copy_Memory, Ok);
             if not Ok then
                Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
@@ -5581,6 +5597,7 @@ package body Model_Runner.Platform.Device.Products is
          Copy_Carried_At := Was_Copy_At;
          Copy_Carried_Buffer := Was_Copy_Buffer;
          Copy_Carried_Memory := Was_Copy_Memory;
+         Copy_Carried_Bytes := Was_Copy_Bytes;
       end;
 
       --  Mapped here and left mapped. The kind this came from is
@@ -5697,7 +5714,10 @@ package body Model_Runner.Platform.Device.Products is
                Values : aliased Copy_Region :=
                  (From => 0, Into => 0, Span => Carried * 4);
                Halves : aliased Copy_Region :=
-                 (From => 0, Into => 0, Span => Carried * 2);
+                 (From => 0, Into => 0,
+                  Span =>
+                    Interfaces.Unsigned_64'Min
+                      (Copy_Carried_Bytes, Copy_Wanted));
             begin
                Barrier (Item.Buffer, Pipeline_Stage_Transfer,
                         Pipeline_Stage_Transfer, 0, 1, Wall'Address,
@@ -7082,7 +7102,9 @@ package body Model_Runner.Platform.Device.Products is
       --  one call for a caller with a cache in hand; a caller that writes a
       --  position at a time uses the two beneath it and pays the upload once
       --  rather than once a call.
-      Reserve (Item, Cache'Length, Good);
+      --  A whole cache handed over at once is read as an exact session's
+      --  is, halves and all.
+      Reserve (Item, Cache'Length, Cache'Length, Good);
       if not Good then
          return;
       end if;

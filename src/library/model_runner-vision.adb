@@ -1217,7 +1217,10 @@ package body Model_Runner.Vision is
       K_Base := Work.Cache_Base;
       V_Base := K_Base + Patches * Width;
 
-      Model_Runner.Backend.Device.Reserve_Cache (V_Base + Patches * Width, Ok);
+      --  Patches are read as an exact session's keys and values are, so
+      --  the copy must reach as far as they do.
+      Model_Runner.Backend.Device.Reserve_Cache
+        (V_Base + Patches * Width, V_Base + Patches * Width, Ok);
       if not Ok then
          return;
       end if;

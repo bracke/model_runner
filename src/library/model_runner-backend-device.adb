@@ -900,15 +900,16 @@ package body Model_Runner.Backend.Device is
    -------------------
 
    procedure Reserve_Cache
-     (Elements : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean) is
+     (Elements  : Model_Runner.Numerics.Element_Count;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean) is
    begin
       if not Ready_Now then
          Ok := False;
          return;
       end if;
 
-      Products.Reserve (Engine, Elements, Ok);
+      Products.Reserve (Engine, Elements, Copy_Upto, Ok);
    end Reserve_Cache;
 
    -------------------

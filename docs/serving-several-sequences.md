@@ -244,6 +244,12 @@ A wider cache buffer used to come up empty and turn every seated session out
 of its block. It carries its contents over now, values and half-precision
 copy alike.
 
+Blocks are placed at the first gap that holds them and moved down when the
+buffer would otherwise grow past a gap a larger block cannot use -- the
+packing stops at the first block that makes the room, and a block moved is
+the session's cache written where it now is. The room of rings does the same
+with its seats.
+
 A seventeenth session turns out whichever block has gone longest unasked --
 the session holding it reads back whatever the device owes its copy, gives
 the block up, and writes its keys and values into whatever block it is given
@@ -257,15 +263,15 @@ seventeen a cache carried back and forth every token. `--show-stats` says how
 often either happened, and `tests speed --turns N` measures it: N sessions
 taking turns a token apiece, which is the shape the sixteen blocks are a
 limit on where a round is not. On TinyLlama-1.1B Q8_0 at a context of 512,
-sixteen sessions read 51.1 tokens a second and turn no block over, seventeen
-read 49.8 and turn one, and thirty-two read 44.8 and turn sixteen; the same
-counts on the processor read 40.6 to 40.7 whatever the count, having nothing
+sixteen sessions read 49.3 tokens a second and turn no block over, seventeen
+read 48.1 and turn one, and thirty-two read 43.6 and turn sixteen; the same
+counts on the processor read 39.1 to 39.4 whatever the count, having nothing
 to run out of. Take the guard away and the same thirty-two turn a block over
 528 times instead of sixteen; at a 1,419-token context, twenty sessions read
-7.8 tokens a second without the guard against 43.5 with it, which is a
+7.9 tokens a second without the guard against 42.2 with it, which is a
 64-megabyte cache written across the bus every token against four writes in
 the run. Where a session holds little the churn is nearly free and the guard
-costs under one per cent -- the unguarded thirty-two read 45.1 against 44.8
+costs about four per cent -- the unguarded thirty-two read 45.4 against 43.6
 at a context of 512 -- which is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells

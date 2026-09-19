@@ -2200,7 +2200,7 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
-      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Ok);
+      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Room * 2, Ok);
 
       if not Ok then
          --  A device that will not hold a cache is a slower run, not a
@@ -2306,7 +2306,7 @@ package body Tests.Backend_Cases is
 
       --  Reserving again for the same room is the engine's every-position
       --  case, and must neither refuse nor lose what is there.
-      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Ok);
+      Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Room * 2, Ok);
       Assert (Ok, "asking again for room a device already holds was "
               & "refused");
 
@@ -2420,7 +2420,7 @@ package body Tests.Backend_Cases is
          Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
       end loop;
 
-      Products.Reserve (Engine, Cache'Length, Ok);
+      Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Products.Close (Engine);
@@ -2822,7 +2822,7 @@ package body Tests.Backend_Cases is
                  Length => Model_Runner.Bytes.Byte_Count
                              (Weights.all'Length));
 
-      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Model_Runner.Backend.Device.Close;
@@ -3042,7 +3042,7 @@ package body Tests.Backend_Cases is
       Up_View   := Viewed (Up_Bytes, Feed, Span);
       Down_View := Viewed (Down_Bytes, Span, Feed);
 
-      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Model_Runner.Backend.Device.Close;
@@ -3528,7 +3528,7 @@ package body Tests.Backend_Cases is
       Assert (Query_Row /= null and then Whole /= null
               and then Held (1) /= null, "no room for the test");
 
-      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Ok);
+      Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Model_Runner.Backend.Device.Close;
@@ -5151,7 +5151,7 @@ package body Tests.Backend_Cases is
             Between : constant N.Element_Count :=
               N.Element_Count (Products.Byte_Limit (Engine) / 5);
          begin
-            Products.Reserve (Engine, Past, Ok);
+            Products.Reserve (Engine, Past, Past, Ok);
             Assert (not Ok,
                     "a cache past what one storage buffer holds was taken");
             Assert (Products.Cached_Bytes (Engine) = 0,
@@ -5161,7 +5161,7 @@ package body Tests.Backend_Cases is
             --  what one buffer may hold and not what the part has, and a
             --  part with four gigabytes of bound and less memory than
             --  that says no for the other reason.
-            Products.Reserve (Engine, Between, Ok);
+            Products.Reserve (Engine, Between, Between, Ok);
 
             if Ok then
                Assert (Products.Cached_Bytes (Engine)
@@ -5172,7 +5172,7 @@ package body Tests.Backend_Cases is
          end;
       end if;
 
-      Products.Reserve (Engine, 1024, Ok);
+      Products.Reserve (Engine, 1024, 1024, Ok);
       Assert (Ok, "a cache that fits was refused after one that did not");
 
       --  And what it takes of the device: the cache proper of four bytes
@@ -5287,7 +5287,7 @@ package body Tests.Backend_Cases is
             else N.Wide_Real (0.1 + N.Real (Index mod 5) / 10.0));
       end loop;
 
-      Products.Reserve (Engine, Cache_Room, Ok);
+      Products.Reserve (Engine, Cache_Room, Cache_Room, Ok);
       Assert (Ok, "no cache could be reserved");
 
       --  The long road: the product, each head normalized, turned, and
@@ -5889,7 +5889,7 @@ package body Tests.Backend_Cases is
          Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
       end loop;
 
-      Products.Reserve (Engine, Cache'Length, Ok);
+      Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Products.Close (Engine);
@@ -6148,7 +6148,7 @@ package body Tests.Backend_Cases is
          Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
       end loop;
 
-      Products.Reserve (Engine, Cache'Length, Ok);
+      Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
       if not Ok then
          Products.Close (Engine);
@@ -6335,7 +6335,7 @@ package body Tests.Backend_Cases is
 
          --  The exact kernel over what the bytes stand for, one query and
          --  a batch of seven under a window of two hundred.
-         Products.Reserve (Engine, N.Element_Count'Max (Whole, 2 * Room), Ok);
+         Products.Reserve (Engine, N.Element_Count'Max (Whole, 2 * Room), N.Element_Count'Max (Whole, 2 * Room), Ok);
          Assert (Ok, "the cache would not be reserved for " & What);
          Products.Put_Cache (Engine, 0, Stand, Ok);
          Assert (Ok, "the standing cache would not be written");
@@ -6361,7 +6361,7 @@ package body Tests.Backend_Cases is
 
                --  The packed block over the same cache, past the standing
                --  numbers so the two never overlap.
-               Products.Reserve (Engine, 2 * Room + Whole, Ok);
+               Products.Reserve (Engine, 2 * Room + Whole, 2 * Room + Whole, Ok);
                Assert (Ok, "the cache would not be widened for " & What);
                Products.Put_Bytes (Engine, Interfaces.Unsigned_64 (2 * Room + Base) * 4,
                                    Key_Bytes, Ok);
@@ -6483,7 +6483,7 @@ package body Tests.Backend_Cases is
             Sinks_At : constant N.Element_Count := 2 * Room + Whole;
             Identity : Model_Runner.Bytes.Byte_Array_Access;
          begin
-            Products.Reserve (Engine, Sinks_At + Heads, Ok);
+            Products.Reserve (Engine, Sinks_At + Heads, Sinks_At + Heads, Ok);
             Assert (Ok, "the cache would not be widened for the sinks for " & What);
             Products.Put_Cache (Engine, Sinks_At, Sinks, Ok);
             Assert (Ok, "the sinks would not be written for " & What);
@@ -6701,7 +6701,7 @@ package body Tests.Backend_Cases is
                --  Room in the copy for the layer's rows in halves, which a
                --  block this small -- one layer's rows -- has not got of
                --  its own.
-               Products.Reserve (Engine, Copy_V + Cells * KV_Span, Ok);
+               Products.Reserve (Engine, Copy_V + Cells * KV_Span, Copy_V + Cells * KV_Span, Ok);
                Assert (Ok, "the cache would not be widened for the copy for " & What);
 
                Products.Open_Sequence (Steps);
@@ -6956,7 +6956,7 @@ package body Tests.Backend_Cases is
                end;
             end loop;
 
-            Products.Reserve (Engine, Whole, Ok);
+            Products.Reserve (Engine, Whole, Whole, Ok);
             Assert (Ok, "the cache would not be reserved for " & What);
 
             Products.Open_Sequence (Steps);
@@ -7121,7 +7121,7 @@ package body Tests.Backend_Cases is
             Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
          end loop;
 
-         Products.Reserve (Engine, Cache'Length, Ok);
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
          Assert (Ok, "the cache would not be reserved");
 
          Products.Put_Cache (Engine, 0, Cache, Ok);
@@ -7209,7 +7209,7 @@ package body Tests.Backend_Cases is
             Wanted : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
             Scores : N.Real_Array (0 .. Positions + Batch - 1);
          begin
-            Products.Reserve (Engine, Cache'Length + Heads, Ok);
+            Products.Reserve (Engine, Cache'Length + Heads, Cache'Length + Heads, Ok);
             Assert (Ok, "the cache would not be widened for the sinks");
             Products.Put_Cache (Engine, Sinks_At, Sinks, Ok);
             Assert (Ok, "the sinks would not be written");

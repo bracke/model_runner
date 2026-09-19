@@ -267,6 +267,32 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The half-precision copy reaches as far as halves are read and no
+  further.** The copy beside the cache was two bytes for every element of
+  the buffer, whatever was in it. A block whose session keeps an exact cache
+  has a half of every element of it; one kept packed has no copy of itself --
+  its keys and values are bytes or nibbles already -- and uses the copy only
+  as the room a layer's rows unpack into for the matrix instruction, which is
+  a fraction of the block at its front. The reserve is told how far the
+  halves are read now: **TinyLlama-1.1B at a 2,048-token context with
+  `--kv-cache q8` holds 25.5 MB of context on the device against 35.2 MB**,
+  and a device where nothing reads halves at all takes no copy, as before.
+  The growth carry was copying two bytes per cache element into the new copy
+  whatever its size, which is what made this visible: with a copy shorter
+  than the cache it copied past the end of the buffer and the submission
+  failed.
+- **Blocks of the cache are moved down rather than the buffer growing past a
+  gap.** Blocks are the size of the sessions in them and come back in
+  whatever order those sessions close, so a block given up between two others
+  left a gap a larger block could not use -- and the buffer grew at the end
+  for every one of those, shrinking only when the last block went. It packs
+  them forward instead, in the order they sit in, stopping at the first one
+  that makes the room: a block moved is the session's cache written where it
+  now is, which is what a session turned out of a block pays anyway. The room
+  of rings stops the same way rather than packing all sixteen seats, and both
+  walk in the order the places sit in -- out of order, a ring could be written
+  over one whose host copy was still the older, and what was read back for
+  that one afterwards was the ring that had just been written over it.
 - **The device's cache is dealt a session at a time, not in blocks of one
   width.** A block is placed at the first gap that holds what the session
   keeps, as a ring is placed in the room of rings, so a block is the size of
@@ -290,10 +316,10 @@ Keep a Changelog and the project uses semantic versioning.
   such rings seated it was.
 - **What the sixteen blocks are worth, beside what they cost.** The
   turn-taking measurement now has its processor column: sessions taking turns
-  read 40.6 to 40.7 tokens a second on the processor at every count, having
-  nothing to run out of, against the device's 51.1 at sixteen sessions and
-  44.8 at thirty-two. The blocks are worth 1.26 times at sixteen and still
-  1.10 at thirty-two, where half the sessions attend on the processor for want
+  read 39.1 to 39.4 tokens a second on the processor at every count, having
+  nothing to run out of, against the device's 49.3 at sixteen sessions and
+  43.6 at thirty-two. The blocks are worth 1.26 times at sixteen and still
+  1.12 at thirty-two, where half the sessions attend on the processor for want
   of one.
 - **A block of the device's cache holds a session that keeps less than it
   does.** The buffer is dealt out in blocks of one width, and a session of
@@ -310,16 +336,16 @@ Keep a Changelog and the project uses semantic versioning.
   sessions want them.** `tests speed --turns N` opens N sessions, gives each
   the prompt, and has them take turns a token apiece -- which is the shape
   the blocks are a limit on, where a round is not. On TinyLlama-1.1B Q8_0 at
-  a context of 512, sixteen sessions read 51.1 tokens a second with no block
-  turned over, seventeen read 49.8 with one, and thirty-two read 44.8 with
+  a context of 512, sixteen sessions read 49.3 tokens a second with no block
+  turned over, seventeen read 48.1 with one, and thirty-two read 43.6 with
   sixteen. The guard is what keeps those numbers flat: without it the same
   thirty-two sessions turn a block over 528 times rather than 16, and at a
-  1,419-token context twenty sessions read **7.8 tokens a second against
-  43.5** -- a 64-megabyte cache written across the bus every token against
+  1,419-token context twenty sessions read **7.9 tokens a second against
+  42.2** -- a 64-megabyte cache written across the bus every token against
   four writes in the whole run. Where a session's cache is small the churn
-  is nearly free and doing without a block costs almost nothing: at a context
-  of 512 the unguarded thirty-two read 45.1 against 44.8, under one per cent.
-  The guard keeps the cliff away and pays that.
+  is nearly free and doing without a block costs something: at a context of
+  512 the unguarded thirty-two read 45.4 against 43.6, four per cent the
+  other way. The guard keeps the cliff away and pays that.
 - **A seventeenth hybrid session is dealt a seat in the room of rings, and
   no session turns another out while both are busy.** The room a hybrid's
   rings of states are seated in holds sixteen seats as the cache holds

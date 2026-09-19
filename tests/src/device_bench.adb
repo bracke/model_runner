@@ -92,7 +92,7 @@ package body Device_Bench is
          --  The cache put there once, as a layer would: a position is
          --  written when it is computed, not re-sent for every call that
          --  reads it. What is timed below is the kernel and nothing else.
-         Products.Reserve (Engine, Cache.all'Length, Ok);
+         Products.Reserve (Engine, Cache.all'Length, Cache.all'Length, Ok);
          if not Ok then
             Ada.Text_IO.Put_Line ("  no room for the cache");
             return;
@@ -200,7 +200,7 @@ package body Device_Bench is
          Asked.all := [others => 0.25];
          Weights.all := [others => 0];
 
-         Products.Reserve (Engine, Cache.all'Length, Ok);
+         Products.Reserve (Engine, Cache.all'Length, Cache.all'Length, Ok);
          if not Ok then
             return;
          end if;
@@ -588,7 +588,7 @@ package body Device_Bench is
          Cache.all := [others => 0.125];
          Asked.all := [others => 0.25];
 
-         Products.Reserve (Engine, Cache.all'Length, Ok);
+         Products.Reserve (Engine, Cache.all'Length, Cache.all'Length, Ok);
          if not Ok then
             Ada.Text_IO.Put_Line ("    no room for the cache");
             return;
@@ -1152,7 +1152,7 @@ package body Device_Bench is
          if Cache > 0 then
             Room := new N.Real_Array (0 .. N.Element_Count (Cache) - 1);
             Room.all := [others => 0.0];
-            Products.Reserve (Engine, Room.all'Length, Ok);
+            Products.Reserve (Engine, Room.all'Length, Room.all'Length, Ok);
             if not Ok then
                Ada.Text_IO.Put_Line ("    no room for the cache");
                return;

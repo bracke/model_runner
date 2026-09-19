@@ -389,10 +389,18 @@ package Model_Runner.Backend.Device is
    --  so a caller may say it every layer.
    --
    --  @param Elements How many values, keys and values together.
+   --  @param Copy_Upto How far into that the half-precision copy must
+   --    reach, in elements: the highest element anything here will read a
+   --    half of. A block whose session keeps an exact cache has a half of
+   --    every element of it; one kept packed has no copy of itself and
+   --    uses the copy only as the room a layer's rows unpack into, at the
+   --    block's front. Nought where nothing reads halves, and then no copy
+   --    is taken at all.
    --  @param Ok True when the room is there.
    procedure Reserve_Cache
-     (Elements : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean);
+     (Elements  : Model_Runner.Numerics.Element_Count;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean);
 
    --  How many bytes one storage buffer may hold here, which is what
    --  bounds a session's context: the cache is one buffer, binary32 with

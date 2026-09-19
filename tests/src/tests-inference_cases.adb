@@ -3714,6 +3714,209 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Sessions_Of_Different_Sizes_Share_The_Device_S_Cache;
 
+   ---------------------------------------------------------
+   -- The_Cache_Moves_Its_Blocks_Rather_Than_Growing --
+   ---------------------------------------------------------
+
+   --  Blocks of the device's cache are the size of the sessions in them
+   --  and are given back in whatever order those sessions close, so a
+   --  block given up between two others leaves a gap a larger block
+   --  cannot use. The buffer used to grow at the end for every one of
+   --  those and shrink only when the last block went.
+   --
+   --  It moves the blocks down instead, in the order they sit in, and
+   --  stops at the first one that makes the room -- a block moved is the
+   --  session's cache written again where it now is, which is what a
+   --  session turned out of a block pays anyway.
+   --
+   --  Three short sessions, the middle one closed, and a long one asked
+   --  for: the cache may be no larger than the three of them packed,
+   --  which is measured here rather than worked out. And the session
+   --  whose block moved has to say what it says with the cache to itself.
+   procedure The_Cache_Moves_Its_Blocks_Rather_Than_Growing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Short  : constant := 8;
+      Long   : constant := 16;
+      Prompt : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      procedure Says
+        (Under  : in out Harness;
+         Live   : in out L.Session;
+         Answer : out Logit_Vector)
+      is
+         Status : E.Error_Info;
+      begin
+         for Index in Prompt'Range loop
+            L.Evaluate
+              (Live, Under.Ready, Prompt (Index), Answer, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Says;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+         Answer : Logit_Vector;
+
+         --  What the cache takes with one session of a given context in
+         --  it, and with two: the buffer is given back when the last
+         --  block goes, so each of these starts from nothing.
+         function Takes
+           (Context : Positive; Blocks : Positive)
+            return Interfaces.Unsigned_64
+         is
+            Live  : array (1 .. Blocks) of L.Session;
+            Taken : Interfaces.Unsigned_64;
+            Local : E.Error_Info;
+         begin
+            for Index in Live'Range loop
+               L.Open (Live (Index), Under.Ready, Context => Context,
+                       Status => Local);
+               Assert (E.Is_Ok (Local), "a measuring session did not open");
+               Says (Under, Live (Index), Answer);
+            end loop;
+
+            Taken := Model_Runner.Backend.Device.Cached_Bytes;
+
+            for Index in Live'Range loop
+               L.Close (Live (Index));
+            end loop;
+
+            return Taken;
+         end Takes;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         declare
+            use type Interfaces.Unsigned_64;
+
+            One_Short : constant Interfaces.Unsigned_64 := Takes (Short, 1);
+            Two_Short : constant Interfaces.Unsigned_64 := Takes (Short, 2);
+            One_Long  : constant Interfaces.Unsigned_64 := Takes (Long, 1);
+         begin
+            --  A device that holds no cache at all says nothing here, and
+            --  neither does one where a short block and a long one come
+            --  to the same size.
+            if One_Short = 0 or else Two_Short <= One_Short
+              or else One_Long <= One_Short
+            then
+               Model_Runner.Backend.Device.Close;
+               B.Free (Image);
+               return;
+            end if;
+
+            declare
+               First, Middle, Third, Big : L.Session;
+               Moved : Logit_Vector;
+
+               --  Two short blocks and a long one, packed: one short
+               --  block's place is Two_Short - One_Short, and One_Long
+               --  carries the table, the sinks and the long block.
+               Packed : constant Interfaces.Unsigned_64 :=
+                 One_Long + 2 * (Two_Short - One_Short);
+            begin
+               L.Open (First, Under.Ready, Context => Short,
+                       Status => Status);
+               Says (Under, First, Answer);
+
+               L.Open (Middle, Under.Ready, Context => Short,
+                       Status => Status);
+               Says (Under, Middle, Answer);
+
+               L.Open (Third, Under.Ready, Context => Short,
+                       Status => Status);
+               Says (Under, Third, Moved);
+
+               --  The middle block given back, and a block that will not
+               --  fit the gap it leaves asked for.
+               L.Close (Middle);
+
+               L.Open (Big, Under.Ready, Context => Long, Status => Status);
+               Says (Under, Big, Answer);
+
+               declare
+                  Taken : constant Interfaces.Unsigned_64 :=
+                    Model_Runner.Backend.Device.Cached_Bytes;
+               begin
+                  Assert (Taken <= Packed,
+                          "the cache grew to"
+                          & Interfaces.Unsigned_64'Image (Taken)
+                          & " bytes where the three blocks packed take"
+                          & Interfaces.Unsigned_64'Image (Packed)
+                          & ": the gap the middle block left was not used");
+               end;
+
+               --  And the session whose block moved says what it said.
+               L.Evaluate (Third, Under.Ready, 7, Moved, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the moved session did not evaluate: "
+                       & E.Error_Code'Image (Status.Code));
+
+               L.Close (Big);
+               L.Close (Third);
+               L.Close (First);
+
+               declare
+                  Alone  : L.Session;
+                  Wanted : Logit_Vector;
+                  Worst  : N.Real := 0.0;
+               begin
+                  L.Open (Alone, Under.Ready, Context => Short,
+                          Status => Status);
+                  Assert (E.Is_Ok (Status), "the lone session did not open");
+                  Says (Under, Alone, Wanted);
+                  L.Evaluate (Alone, Under.Ready, 7, Wanted,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status), "the lone session did not answer");
+
+                  for Index in Wanted'Range loop
+                     Worst :=
+                       N.Real'Max (Worst, abs (Wanted (Index) - Moved (Index)));
+                  end loop;
+
+                  Assert (Worst <= 1.0E-4,
+                          "a session whose block was moved says"
+                          & N.Real'Image (Worst)
+                          & " away from one that never moved");
+
+                  L.Close (Alone);
+               end;
+            end;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end The_Cache_Moves_Its_Blocks_Rather_Than_Growing;
+
    ------------------------------------------------------------
    -- The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing --
    ------------------------------------------------------------
@@ -12807,6 +13010,10 @@ package body Tests.Inference_Cases is
         (T, Sessions_Of_Different_Sizes_Share_The_Device_S_Cache'Access,
          "sessions of three context lengths share the device's cache, each "
          & "in a block of its own size, and each says what it says alone");
+      Register_Routine
+        (T, The_Cache_Moves_Its_Blocks_Rather_Than_Growing'Access,
+         "the device's cache moves its blocks down rather than growing "
+         & "past a gap a larger block cannot use");
       Register_Routine
         (T, The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing'Access,
          "the device's room of rings moves its seats to the front rather "

@@ -1621,6 +1621,14 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Item Ready engine.
    --  @param Elements How many values, keys and values together.
+   --  @param Copy_Upto How far into that the half-precision copy must
+   --    reach, in elements: the highest element anything on this device
+   --    will read a half of. A block whose session keeps an exact cache
+   --    has a half of every element of it; one kept packed has no copy of
+   --    itself, and what it uses the copy for is the room a layer's rows
+   --    unpack into for the matrix instruction, which is a fraction of
+   --    the block at its front. Nought where nothing reads halves at all,
+   --    and then no copy is taken.
    --  @param Ok True when the room is there. False where the device has
    --    no room, and where the cache with its half-precision copy --
    --    six bytes an element -- would be larger than what the device
@@ -1628,9 +1636,10 @@ package Model_Runner.Platform.Device.Products is
    --    descriptor naming a range past that bound reads undefined
    --    values rather than being refused by the driver.
    procedure Reserve
-     (Item     : in out Engine;
-      Elements : Model_Runner.Numerics.Element_Count;
-      Ok       : out Boolean);
+     (Item      : in out Engine;
+      Elements  : Model_Runner.Numerics.Element_Count;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean);
 
    --  Write bytes into that cache, as they are.
    --
