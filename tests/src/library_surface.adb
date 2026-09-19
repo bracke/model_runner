@@ -2,8 +2,16 @@ package body Library_Surface is
 
    type Text_Access is access constant String;
 
+   --  Held without a bound on purpose. It was `array (1 .. 39)` and every
+   --  name added had to have the bound raised beside it; one that did not
+   --  raised Constraint_Error where the package is elaborated, which is
+   --  before the check this list is for can say anything -- so the gate
+   --  died rather than reported, and a reader looking for the word "fail"
+   --  in its output saw a clean run.
+   type Text_List is array (Positive range <>) of Text_Access;
+
    --  The codec's other half.
-   Held : constant array (1 .. 43) of Text_Access :=
+   Held : constant Text_List :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),

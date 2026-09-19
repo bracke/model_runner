@@ -331,6 +331,14 @@ package Model_Runner.Presentation is
    --    a cache written across the bus for it, and a run that turns one
    --    over every token pays it every token. Said only where it happened,
    --    which for one session is never.
+   --  @param Blocks_Moved How often a block was moved to close a gap
+   --    below it, and
+   --  @param Rings_Moved the same for a seat. Blocks and seats are placed
+   --    at the first gap that holds them and given back in whatever order
+   --    the sessions close, so the places are packed forward rather than
+   --    the buffer growing past a gap too small to use -- which costs
+   --    what a turnover costs, the cache or the ring written where it now
+   --    is. Said only where it happened.
    procedure Put_Statistics
      (Item           : in out Console;
       Outcome        : Model_Runner.Generation.Result;
@@ -346,7 +354,9 @@ package Model_Runner.Presentation is
       Layers_Handed  : Natural := 0;
       Handed_Why     : String := "";
       Blocks_Turned  : Natural := 0;
-      Rings_Turned   : Natural := 0);
+      Rings_Turned   : Natural := 0;
+      Blocks_Moved   : Natural := 0;
+      Rings_Moved    : Natural := 0);
 
    --  Somewhere for per-token explanations to go: standard error, one line
    --  a token, in a shape a program can read.

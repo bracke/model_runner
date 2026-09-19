@@ -39,6 +39,10 @@ package body Model_Runner.Backend.Device is
    Turned_Blocks : Natural := 0;
    Turned_Rings  : Natural := 0;
 
+   --  And how often one was moved to close a gap below it.
+   Moved_Blocks : Natural := 0;
+   Moved_Rings  : Natural := 0;
+
    --  What the last whole layer asked for that this device will not do,
    --  found before the sequence is built: a sequence refused while it is
    --  built never reaches the engine's Run, so what Run says of it is the
@@ -523,6 +527,8 @@ package body Model_Runner.Backend.Device is
       Handed_First := Not_Handed;
       Turned_Blocks := 0;
       Turned_Rings := 0;
+      Moved_Blocks := 0;
+      Moved_Rings := 0;
    end Close;
 
    --------------
@@ -622,6 +628,23 @@ package body Model_Runner.Backend.Device is
    function Blocks_Turned return Natural is (Turned_Blocks);
 
    function Rings_Turned return Natural is (Turned_Rings);
+
+   ----------------
+   -- Note_Moved --
+   ----------------
+
+   procedure Note_Moved (Ring : Boolean := False) is
+   begin
+      if Ring then
+         Moved_Rings := Moved_Rings + 1;
+      else
+         Moved_Blocks := Moved_Blocks + 1;
+      end if;
+   end Note_Moved;
+
+   function Blocks_Moved return Natural is (Moved_Blocks);
+
+   function Rings_Moved return Natural is (Moved_Rings);
 
    function Cached_Bytes return Interfaces.Unsigned_64
    is (Products.Cached_Bytes (Engine));

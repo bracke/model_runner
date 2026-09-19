@@ -532,7 +532,9 @@ package body Model_Runner.Presentation is
       Layers_Handed  : Natural := 0;
       Handed_Why     : String := "";
       Blocks_Turned  : Natural := 0;
-      Rings_Turned   : Natural := 0)
+      Rings_Turned   : Natural := 0;
+      Blocks_Moved   : Natural := 0;
+      Rings_Moved    : Natural := 0)
    is
       function Seconds (Value : Model_Runner.Clocks.Nanoseconds) return String
       is (Message
@@ -679,6 +681,18 @@ package body Model_Runner.Presentation is
             Put_Field
               (Item, "statistics.rings_turned",
                T.Image (Long_Long_Integer (Rings_Turned)), Diagnostic);
+         end if;
+
+         if Blocks_Moved > 0 then
+            Put_Field
+              (Item, "statistics.blocks_moved",
+               T.Image (Long_Long_Integer (Blocks_Moved)), Diagnostic);
+         end if;
+
+         if Rings_Moved > 0 then
+            Put_Field
+              (Item, "statistics.rings_moved",
+               T.Image (Long_Long_Integer (Rings_Moved)), Diagnostic);
          end if;
       end if;
 

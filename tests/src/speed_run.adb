@@ -1298,6 +1298,7 @@ package body Speed_Run is
       Threads     : Positive;
       Sessions    : Positive;
       Context     : Natural := 0;
+      Churn       : Natural := 0;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU)
    is
@@ -1398,6 +1399,70 @@ package body Speed_Run is
            Model_Runner.Backend.Device.Blocks_Turned;
          Rings_Before  : constant Natural :=
            Model_Runner.Backend.Device.Rings_Turned;
+
+         --  And what closing the gaps they leave costs, for the workload
+         --  that leaves any: blocks and rings moved to the front.
+         Moved_Before : constant Natural :=
+           Model_Runner.Backend.Device.Blocks_Moved;
+         Rings_Moved_Before : constant Natural :=
+           Model_Runner.Backend.Device.Rings_Moved;
+
+         --  Whose turn it is to leave, and what the session taking its
+         --  place asks for: twice the context every other time, which no
+         --  gap a departing session leaves can hold.
+         Leaving : Natural := 0;
+         Doubled : Boolean := True;
+
+         --  A session opened and given the prompt: said for each at the
+         --  start, and again for the one that takes a departing session's
+         --  place where the run churns.
+         procedure Admit (Index : Positive; Room : Natural);
+
+         procedure Admit (Index : Positive; Room : Natural) is
+            At_Token : Natural := 1;
+         begin
+            L.Open (Live (Index), Engine, Context => Room,
+                    Workers => Where, Status => Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            while At_Token <= Last loop
+               declare
+                  Upto : constant Natural :=
+                    Natural'Min (At_Token + 127, Last);
+               begin
+                  L.Evaluate_Batch
+                    (Live (Index), Engine,
+                     Held (At_Token
+                           + (if At_Token = 1
+                              then Natural'Min (Index - 1, Last - 1)
+                              else 0)
+                           .. Upto),
+                     Aside.all, Status => Status);
+                  exit when E.Is_Error (Status);
+                  At_Token := Upto + 1;
+               end;
+            end loop;
+
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            --  The first token this session will say, greedily off its
+            --  own prompt.
+            declare
+               Best : N.Element_Count := 0;
+            begin
+               for Place in 1 .. Width - 1 loop
+                  if Aside.all (Place) > Aside.all (Best) then
+                     Best := Place;
+                  end if;
+               end loop;
+
+               Next (Index) := Vocab.Token_Id (Best);
+            end;
+         end Admit;
       begin
          Vocab.Encode
            (L.Vocabulary (Engine).all, Text,
@@ -1415,51 +1480,12 @@ package body Speed_Run is
          Room_Of.Allocate (Width, Row);
          Room_Of.Allocate (Width, Aside);
 
-         --  Each session opened and given the prompt, a token shorter for
-         --  each after the first so that they sit at different positions,
-         --  as a server's callers do.
+         --  Each session opened and given the prompt, a token shorter
+         --  for each after the first so that they sit at different
+         --  positions, as a server's callers do.
          for Index in Live'Range loop
-            L.Open (Live (Index), Engine, Context => Context,
-                    Workers => Where, Status => Status);
+            Admit (Index, Context);
             exit when E.Is_Error (Status);
-
-            declare
-               At_Token : Natural := 1;
-            begin
-               while At_Token <= Last loop
-                  declare
-                     Upto : constant Natural :=
-                       Natural'Min (At_Token + 127, Last);
-                  begin
-                     L.Evaluate_Batch
-                       (Live (Index), Engine,
-                        Held (At_Token
-                              + (if At_Token = 1
-                                 then Natural'Min (Index - 1, Last - 1)
-                                 else 0)
-                              .. Upto),
-                        Aside.all, Status => Status);
-                     exit when E.Is_Error (Status);
-                     At_Token := Upto + 1;
-                  end;
-               end loop;
-            end;
-
-            exit when E.Is_Error (Status);
-
-            --  The first token this session will say, greedily off its
-            --  own prompt.
-            declare
-               Best : N.Element_Count := 0;
-            begin
-               for Place in 1 .. Width - 1 loop
-                  if Aside.all (Place) > Aside.all (Best) then
-                     Best := Place;
-                  end if;
-               end loop;
-
-               Next (Index) := Vocab.Token_Id (Best);
-            end;
          end loop;
 
          Watch.Start (Watching);
@@ -1497,6 +1523,23 @@ package body Speed_Run is
                end loop;
 
                exit when E.Is_Error (Status);
+
+               --  A session leaves and another takes its place, asking
+               --  for a context of another size: the block it gets is not
+               --  the one that left, so the buffer has a gap in it that
+               --  the arrival may not fit.
+               if Churn > 0 and then Turn mod Churn = 0 then
+                  Leaving := Leaving mod Sessions + 1;
+                  L.Close (Live (Leaving));
+                  Admit (Leaving,
+                         (if Context = 0 then 0
+                          elsif Doubled
+                          then Natural'Min (2 * Context,
+                                            Settings.Context_Length)
+                          else Context));
+                  Doubled := not Doubled;
+                  exit when E.Is_Error (Status);
+               end if;
             end loop;
 
             Spent :=
@@ -1525,6 +1568,22 @@ package body Speed_Run is
                & ", rings"
                & Integer'Image
                    (Model_Runner.Backend.Device.Rings_Turned - Rings_Before)
+               & ", blocks moved"
+               & Integer'Image
+                   (Model_Runner.Backend.Device.Blocks_Moved - Moved_Before)
+               & ", rings moved"
+               & Integer'Image
+                   (Model_Runner.Backend.Device.Rings_Moved
+                    - Rings_Moved_Before)
+
+               --  And what the device holds of all that at the end, which
+               --  is what packing the blocks forward is for.
+               & ", cache "
+               & T.Image
+                   (Long_Float
+                      (Model_Runner.Backend.Device.Cached_Bytes)
+                    / 1_048_576.0, 1)
+               & " MB"
                & ", mark " & Shown (Mark)
                & Device_Clock.Shown (Clock));
          end if;

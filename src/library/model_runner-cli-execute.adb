@@ -3666,7 +3666,11 @@ package body Model_Runner.CLI.Execute is
                      Blocks_Turned  =>
                        Model_Runner.Backend.Device.Blocks_Turned,
                      Rings_Turned   =>
-                       Model_Runner.Backend.Device.Rings_Turned);
+                       Model_Runner.Backend.Device.Rings_Turned,
+                     Blocks_Moved   =>
+                       Model_Runner.Backend.Device.Blocks_Moved,
+                     Rings_Moved    =>
+                       Model_Runner.Backend.Device.Rings_Moved);
                else
                   Pres.Put_Statistics (Screen, Outcome);
                end if;

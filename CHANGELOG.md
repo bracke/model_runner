@@ -267,6 +267,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the packing costs, measured.** Both compactions were on the
+  correctness path with no figure beside them. `tests speed --turns N
+  --churn K` closes a session every K turns and admits one asking for twice
+  the context, which no gap a departure leaves can hold, and the run reports
+  blocks and seats moved and what the cache ended up holding; `--show-stats`
+  reports the moves too, where any happened. Twelve sessions at a context of
+  512, a departure every other turn, alternated against a build that grows
+  the buffer instead: **43.4 tokens a second packing against 45.0 growing,
+  51 blocks moved, and 594 MB of cache either way**, medians of three
+  alternated pairs. So on a workload whose
+  gaps are reusable the packing buys nothing and costs three per cent; what
+  it is for is the pattern the test builds, where the gap a departure leaves
+  is too small for what arrives and the buffer would otherwise grow for
+  every one of them. Both readings are now in the figures file rather than
+  in anybody's head.
 - **A server can ask which sessions are on the device.** `Holds_Block` and
   `Holds_Seat` say whether a session's cache is in one of the device's
   sixteen blocks and its ring in one of the sixteen seats; `Blocks_Held` and

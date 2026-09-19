@@ -110,6 +110,13 @@ package Speed_Run is
    --    the model's own. Sixteen blocks of a long context is memory the
    --    device may not have, and this is how a measurement of the turns
    --    asks for less of it.
+   --  @param Churn How many turns apart a session closes and a fresh one
+   --    takes its place, or zero for a fixed set. The one that arrives
+   --    asks for half the context of the one that left and the next for
+   --    the whole of it, so the blocks are of two sizes and the gaps a
+   --    departure leaves do not fit what arrives -- which is the workload
+   --    that makes the cache pack its blocks forward, and the only one
+   --    that says what packing costs.
    --  @param Backend Which backend runs the products.
    procedure Turns
      (Path        : String;
@@ -118,6 +125,7 @@ package Speed_Run is
       Threads     : Positive;
       Sessions    : Positive;
       Context     : Natural := 0;
+      Churn       : Natural := 0;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU);
 

@@ -248,7 +248,10 @@ Blocks are placed at the first gap that holds them and moved down when the
 buffer would otherwise grow past a gap a larger block cannot use -- the
 packing stops at the first block that makes the room, and a block moved is
 the session's cache written where it now is. The room of rings does the same
-with its seats.
+with its seats. `--turns N --churn K` prices it: twelve sessions at a context
+of 512 with a departure every other turn read 43.5 tokens a second packing
+against 44.9 growing, 51 blocks moved, and the same 594 MB of cache either
+way, the gaps on that workload being reusable.
 
 A seventeenth session turns out whichever block has gone longest unasked --
 the session holding it reads back whatever the device owes its copy, gives

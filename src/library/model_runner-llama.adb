@@ -5237,6 +5237,8 @@ package body Model_Runner.Llama is
 
                   Next.State_On_Device := True;
                end if;
+
+               Model_Runner.Backend.Device.Note_Moved (Ring => True);
             end if;
 
             Place :=
@@ -5919,6 +5921,8 @@ package body Model_Runner.Llama is
                end;
 
                Next.Cache_Base := Place;
+
+               Model_Runner.Backend.Device.Note_Moved;
             end if;
 
             Place :=

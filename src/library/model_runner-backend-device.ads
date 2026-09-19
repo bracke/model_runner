@@ -258,6 +258,25 @@ package Model_Runner.Backend.Device is
    --  @return Seats in the room of rings turned over since then.
    function Rings_Turned return Natural;
 
+   --  Note that a block of the cache, or a seat in the room of rings, was
+   --  moved to close a gap below it.
+   --
+   --  Both are placed at the first gap that holds them and given back in
+   --  whatever order the sessions holding them close, so a gap a larger
+   --  one cannot use is room kept for nobody. Rather than grow, the
+   --  places are packed forward -- which costs the cache or the ring
+   --  written where it now is, as a session turned out of one pays.
+   --
+   --  @param Ring True for a seat in the room of rings, False for a block
+   --    of the cache.
+   procedure Note_Moved (Ring : Boolean := False);
+
+   --  @return Blocks of the cache moved since the device was opened.
+   function Blocks_Moved return Natural;
+
+   --  @return Seats in the room of rings moved since then.
+   function Rings_Moved return Natural;
+
    --  Attend a generated token out of the half-precision copy of the
    --  cache, or out of the cache proper.
    --

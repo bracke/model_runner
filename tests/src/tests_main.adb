@@ -2742,6 +2742,7 @@ begin
                                       Model_Runner.Platform.Core_Count - 1),
                Sessions    => Number ("--turns", 1),
                Context     => Whole ("--context-size"),
+               Churn       => Whole ("--churn"),
                Backend     => Backend_Of (Option ("--backend", "cpu")));
             return;
          end if;

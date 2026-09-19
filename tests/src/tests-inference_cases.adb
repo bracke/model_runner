@@ -3881,6 +3881,12 @@ package body Tests.Inference_Cases is
                           & " bytes where the three blocks packed take"
                           & Interfaces.Unsigned_64'Image (Packed)
                           & ": the gap the middle block left was not used");
+
+                  --  And the move said, which is what Note_Moved records
+                  --  and a run reports: a packing nobody can see is a
+                  --  packing nobody can price.
+                  Assert (Model_Runner.Backend.Device.Blocks_Moved > 0,
+                          "a block was moved and nothing counted it");
                end;
 
                --  And the session whose block moved says what it said.
@@ -4089,6 +4095,9 @@ package body Tests.Inference_Cases is
                           & " bytes where the three rings packed take"
                           & Interfaces.Unsigned_64'Image (Packed)
                           & ": the gap the middle seat left was not used");
+
+                  Assert (Model_Runner.Backend.Device.Rings_Moved > 0,
+                          "a ring was moved and nothing counted it");
                end;
 
                --  And each of them still says what it said: a ring moved

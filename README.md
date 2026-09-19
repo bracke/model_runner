@@ -2047,11 +2047,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.3 | 0 | 39.4 |
-| 16 | **49.2** | 0 | 39.3 |
-| 17 | 48.2 | 1 | 39.3 |
-| 20 | 46.5 | 4 | 39.2 |
-| 32 | 43.6 | 16 | 39.2 |
+| 8 | 49.1 | 0 | 39.4 |
+| 16 | **49.1** | 0 | 39.3 |
+| 17 | 47.9 | 1 | 39.2 |
+| 20 | 46.1 | 4 | 39.1 |
+| 32 | 43.3 | 16 | 39.1 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2064,7 +2064,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 42.1 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 41.9 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -2078,7 +2078,17 @@ the five-and-a-half-times cliff beside it. The unguarded readings were taken wit
 build made for the purpose, which is the only way to take them.
 
 The buffer is dealt a session at a time, each placed at the first gap that
-holds what it keeps, so a block is the size of the session in it. It used to
+holds what it keeps, so a block is the size of the session in it.
+`tests speed --turns N --churn K` prices the packing that keeps it tight:
+a session leaves every K turns and one asking twice the context takes its
+place, which no gap a departure leaves can hold. Twelve sessions at a
+context of 512, a departure every other turn, against a build that grows the
+buffer instead: **43.4 tokens a second packing against 45.0, 51 blocks
+moved, and 594 MB of cache either way** (medians of three alternated
+pairs) -- the gaps on that workload are
+reusable, so the packing buys nothing there and costs three per cent. What
+it is for is the pattern where the gap a departure leaves is too small for
+what arrives, and the buffer would otherwise grow for every one of them. It used to
 be dealt in blocks of one width -- the first session's -- which refused the
 device's cache to a session of any other width for as long as any session of
 the first was open, and gave sixteen short-context sessions behind one long
