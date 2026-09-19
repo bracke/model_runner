@@ -2743,6 +2743,7 @@ begin
                Sessions    => Number ("--turns", 1),
                Context     => Whole ("--context-size"),
                Churn       => Whole ("--churn"),
+               Spread      => Given ("--spread"),
                Backend     => Backend_Of (Option ("--backend", "cpu")));
             return;
          end if;
@@ -2773,7 +2774,8 @@ begin
                      else Model_Runner.Llama.Exact)),
                Backend     => Backend_Of (Option ("--backend", "cpu")),
                Budget      => Given ("--budget"),
-               Timeline    => Given ("--device-timeline"));
+               Timeline    => Given ("--device-timeline"),
+               Spread      => Given ("--spread"));
             return;
          end if;
 

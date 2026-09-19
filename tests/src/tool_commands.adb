@@ -41,7 +41,8 @@ package body Tool_Commands is
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next"
-     & " --kv-cache --repeats --round --turns --churn --serve --callers"
+     & " --kv-cache --repeats --round --turns --churn --spread --serve"
+     & " --callers"
      & " --no-reuse"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory ";
@@ -78,7 +79,7 @@ package body Tool_Commands is
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup] [--draft-next]"
      & " [--kv-cache MODE] [--repeats N] [--round N] [--turns N]"
-     & " [--churn N]"
+     & " [--churn N] [--spread]"
      & " [--serve N]"
      & " [--callers N] [--no-reuse] [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N]"

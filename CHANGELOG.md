@@ -286,6 +286,29 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A round of members at different lengths is measured at last, and it
+  found a slice count taken from the wrong row.** `tests speed --round N
+  --spread` gives the members prompts from a fraction of the file to the
+  whole of it, which is the shape a server has and the one shape every round
+  measured here did not: they were all at one length but for a token. A
+  packed round of sixteen so spread read **2.150 s against 1.229 for sixteen
+  at the full length** -- more work for less. The cause was the slice hint:
+  a round's rows each carry their own last in the per-row table and the
+  kernel takes its span from there, but the engine counted slices from the
+  call's first and last, which were the *first member's*. With the shortest
+  member first, a round was cut into the slices that row wanted and the
+  longest row swept four times more cache than its share. The span is the
+  widest row's now: the same spread round reads 1.038 s, and a spread round
+  is faster than a level one, as less work should be.
+- **`--turns --spread` and a churn that admits smaller sessions too.** The
+  turn-taking measurement gave every session the same prompt, so a device
+  serving callers of different lengths was unmeasured: sixteen sessions
+  spread from 88 to 1,419 positions read 46.7 tokens a second against 45.9
+  level. And what `--churn` admits now cycles through twice the context,
+  half of it and the whole of it rather than only twice: with a third of
+  arrivals smaller than what left, every gap is reusable, no block is ever
+  moved, and the cache peaks at 528 MB where the doubling-only workload
+  reached 594.
 - **The exact kernel keeps its refusal to slice a round, and now says why.**
   What let the packed kernel cut a round's cache would let this one too --
   the kernel reads its span from the per-row table and marks an empty slice

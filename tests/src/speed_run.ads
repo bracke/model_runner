@@ -83,6 +83,13 @@ package Speed_Run is
    --    measurement does. A round's whole layer is one sequence, so the
    --    phase clock above charges all of it to one phase and this is the
    --    only instrument that says which step a round spends its time in.
+   --  @param Spread True to give the members prompts of different
+   --    lengths, from a fraction of the file to the whole of it, rather
+   --    than the same prompt a token apart. What a round costs is set by
+   --    its longest row -- the kernel sweeps to the last position any row
+   --    asks for and the shorter rows mask what they may not see -- and
+   --    every round measured here had every member at the same length,
+   --    which is the one shape a server does not have.
    procedure Round
      (Path        : String;
       Prompt_Path : String;
@@ -94,7 +101,8 @@ package Speed_Run is
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False;
-      Timeline    : Boolean := False);
+      Timeline    : Boolean := False;
+      Spread      : Boolean := False);
 
    --  Several sessions taking turns, a token each, rather than stepped
    --  together.
@@ -124,12 +132,15 @@ package Speed_Run is
    --    device may not have, and this is how a measurement of the turns
    --    asks for less of it.
    --  @param Churn How many turns apart a session closes and a fresh one
-   --    takes its place, or zero for a fixed set. The one that arrives
-   --    asks for half the context of the one that left and the next for
-   --    the whole of it, so the blocks are of two sizes and the gaps a
-   --    departure leaves do not fit what arrives -- which is the workload
-   --    that makes the cache pack its blocks forward, and the only one
-   --    that says what packing costs.
+   --    takes its place, or zero for a fixed set. What arrives asks for
+   --    twice the context, then half of it, then the whole of it, and
+   --    round again: twice is the arrival no gap a departure leaves can
+   --    hold, which is what makes the buffer grow or the blocks pack, and
+   --    half is the other half of the question -- an arrival that fits
+   --    any gap going.
+   --  @param Spread True to give the sessions prompts of different
+   --    lengths, from a fraction of the file to the whole of it, rather
+   --    than the same prompt a token apart.
    --  @param Backend Which backend runs the products.
    procedure Turns
      (Path        : String;
@@ -139,6 +150,7 @@ package Speed_Run is
       Sessions    : Positive;
       Context     : Natural := 0;
       Churn       : Natural := 0;
+      Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU);
 

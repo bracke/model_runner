@@ -952,7 +952,8 @@ package body Speed_Run is
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False;
-      Timeline    : Boolean := False)
+      Timeline    : Boolean := False;
+      Spread      : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1110,17 +1111,28 @@ package body Speed_Run is
             --  whole long prompt is asking for a shape it never promised.
             declare
                At_Token : Natural := 1;
+
+               --  How much of the prompt this member reads. Level, every
+               --  member is at the same position but for the token the
+               --  next one is shorter; spread, they run from a fraction
+               --  of the prompt to the whole of it, which is what a
+               --  server's callers look like and what a round pays for:
+               --  the kernel sweeps to the longest row's last and the
+               --  short rows mask what they may not see.
+               Mine : constant Natural :=
+                 (if not Spread then Last
+                  else Natural'Max (8, Last * Index / Members));
             begin
-               while At_Token <= Last loop
+               while At_Token <= Mine loop
                   declare
                      Upto : constant Natural :=
-                       Natural'Min (At_Token + 127, Last);
+                       Natural'Min (At_Token + 127, Mine);
                   begin
                      L.Evaluate_Batch
                        (Live (Index), Engine,
                         Held (At_Token
-                              + (if At_Token = 1
-                                 then Natural'Min (Index - 1, Last - 1)
+                              + (if At_Token = 1 and then not Spread
+                                 then Natural'Min (Index - 1, Mine - 1)
                                  else 0)
                               .. Upto),
                         Aside.all, Status => Status);
@@ -1128,6 +1140,22 @@ package body Speed_Run is
                      At_Token := Upto + 1;
                   end;
                end loop;
+            end;
+
+            --  The first token this member will say, off its own
+            --  prompt: where the members read prompts of different
+            --  lengths they do not agree on it, and where they read the
+            --  same one they do.
+            declare
+               Best : N.Element_Count := 0;
+            begin
+               for Place in 1 .. Width - 1 loop
+                  if Aside.all (Place) > Aside.all (Best) then
+                     Best := Place;
+                  end if;
+               end loop;
+
+               Step_Tokens (Index) := Vocab.Token_Id (Best);
             end;
 
             exit when E.Is_Error (Status);
@@ -1142,20 +1170,6 @@ package body Speed_Run is
             Say ("a member would not read the prompt: "
                  & E.Error_Code'Image (Status.Code));
          else
-            --  The first token every member will say, taken from the
-            --  prompt's own last distribution: greedy, so they agree.
-            declare
-               Best : N.Element_Count := 0;
-            begin
-               for Index in 1 .. Width - 1 loop
-                  if Aside.all (Index) > Aside.all (Best) then
-                     Best := Index;
-                  end if;
-               end loop;
-
-               Step_Tokens := [others => Vocab.Token_Id (Best)];
-            end;
-
             --  The phase clock, on the member the round is made on: a
             --  round charges its phases to the session the call names, so
             --  that is the one to ask afterwards. Started here rather than
@@ -1193,7 +1207,13 @@ package body Speed_Run is
                         end if;
                      end loop;
 
-                     if Which > 1
+                     --  Every member reading the same prompt under the
+                     --  same greedy rule must choose the same token, so
+                     --  one that does not has read another's attention.
+                     --  Members of different lengths are different
+                     --  sequences and say what they like.
+                     if not Spread
+                       and then Which > 1
                        and then Vocab.Token_Id (Best) /= Step_Tokens (1)
                      then
                         Stopped := True;
@@ -1223,7 +1243,10 @@ package body Speed_Run is
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
                "members" & Integer'Image (Members)
-               & ", prompt" & Integer'Image (Last)
+               & (if Spread
+                  then ", prompts" & Integer'Image (Natural'Max (8, Last / Members))
+                       & " to" & Integer'Image (Last)
+                  else ", prompt" & Integer'Image (Last))
                & " tokens, " & Integer'Image (Produced)
                & " rounds in " & Said (Spent) & " --"
                & Integer'Image (Produced * Members) & " tokens, "
@@ -1311,6 +1334,7 @@ package body Speed_Run is
       Sessions    : Positive;
       Context     : Natural := 0;
       Churn       : Natural := 0;
+      Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU)
    is
@@ -1420,10 +1444,13 @@ package body Speed_Run is
            Model_Runner.Backend.Device.Rings_Moved;
 
          --  Whose turn it is to leave, and what the session taking its
-         --  place asks for: twice the context every other time, which no
-         --  gap a departing session leaves can hold.
+         --  place asks for: twice the context, then half of it, then the
+         --  whole of it, and round again. Twice is the arrival no gap a
+         --  departure leaves can hold, which is what makes the buffer
+         --  grow or the blocks pack; half is the other half of the
+         --  question, an arrival that fits any gap going.
          Leaving : Natural := 0;
-         Doubled : Boolean := True;
+         Asking  : Natural := 0;
 
          --  A session opened and given the prompt: said for each at the
          --  start, and again for the one that takes a departing session's
@@ -1432,6 +1459,14 @@ package body Speed_Run is
 
          procedure Admit (Index : Positive; Room : Natural) is
             At_Token : Natural := 1;
+
+            --  How much of the prompt this session reads: the whole of
+            --  it, or -- spread -- a fraction rising with its number, so
+            --  that the sessions taking turns are at the lengths a
+            --  server's callers are at rather than all at one.
+            Mine : constant Natural :=
+              (if not Spread then Last
+               else Natural'Max (8, Last * Index / Sessions));
          begin
             L.Open (Live (Index), Engine, Context => Room,
                     Workers => Where, Status => Status);
@@ -1439,16 +1474,16 @@ package body Speed_Run is
                return;
             end if;
 
-            while At_Token <= Last loop
+            while At_Token <= Mine loop
                declare
                   Upto : constant Natural :=
-                    Natural'Min (At_Token + 127, Last);
+                    Natural'Min (At_Token + 127, Mine);
                begin
                   L.Evaluate_Batch
                     (Live (Index), Engine,
                      Held (At_Token
-                           + (if At_Token = 1
-                              then Natural'Min (Index - 1, Last - 1)
+                           + (if At_Token = 1 and then not Spread
+                              then Natural'Min (Index - 1, Mine - 1)
                               else 0)
                            .. Upto),
                      Aside.all, Status => Status);
@@ -1545,11 +1580,13 @@ package body Speed_Run is
                   L.Close (Live (Leaving));
                   Admit (Leaving,
                          (if Context = 0 then 0
-                          elsif Doubled
+                          elsif Asking = 0
                           then Natural'Min (2 * Context,
                                             Settings.Context_Length)
+                          elsif Asking = 1
+                          then Natural'Max (Context / 2, 8)
                           else Context));
-                  Doubled := not Doubled;
+                  Asking := (Asking + 1) mod 3;
                   exit when E.Is_Error (Status);
                end if;
             end loop;

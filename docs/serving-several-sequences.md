@@ -257,6 +257,15 @@ all -- the same 594 MB of cache in all three, the gaps on that workload being
 reusable. What the packing is for is the pattern the tests build, where two
 gaps neither of which holds the arrival together do.
 
+Members and sessions of different lengths are what a server has, and both
+measurements can be asked for them: `--spread` gives each a prompt from a
+fraction of the file to the whole of it. Sixteen sessions taking turns so
+spread read 46.7 tokens a second against 45.9 level; a packed round of
+sixteen read 1.038 s against 1.277. The first spread round measured read
+2.150 s, which was the engine counting a round's slices from its first
+member's last rather than from the widest row's -- the rows each carry their
+own in the table, and the kernel takes its span from there.
+
 A seventeenth session turns out whichever block has gone longest unasked --
 the session holding it reads back whatever the device owes its copy, gives
 the block up, and writes its keys and values into whatever block it is given

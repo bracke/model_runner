@@ -2050,11 +2050,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 48.9 | 0 | 39.0 |
-| 16 | **49.0** | 0 | 38.9 |
-| 17 | 47.9 | 1 | 38.9 |
-| 20 | 46.3 | 4 | 38.8 |
-| 32 | 43.4 | 16 | 38.7 |
+| 8 | 49.4 | 0 | 39.1 |
+| 16 | **49.2** | 0 | 39.2 |
+| 17 | 47.9 | 1 | 39.0 |
+| 20 | 46.5 | 4 | 38.7 |
+| 32 | 43.4 | 16 | 39.0 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2067,7 +2067,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 42.0 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -2090,7 +2090,10 @@ twice the context takes its place, which no gap a departure leaves can hold.
 Twelve sessions at a context of 512, a departure every other turn, medians of
 three alternated triples: **46.7 tokens a second under that rule, 45.1 when
 any gap at all sets the packing going, 46.6 with no packing -- and 594 MB of
-cache in all three**. That rule reads 44.8, 44.6, 44.6 in a later sitting;
+cache in all three**. That was a churn whose arrivals all asked for twice the
+context; what arrives now cycles through twice, half and the whole of it, and
+with a third of arrivals smaller than what left, every gap is reusable: 45.0
+and 45.2 tokens a second, no block moved, and the cache peaks at 528 MB. That rule reads 44.8, 44.6, 44.6 in a later sitting;
 the three were measured against each other within one, which is what the
 ordering rests on. The gaps on that workload are reusable, so packing them
 buys nothing and costs three and a half per cent; what the rule keeps is the
@@ -16664,10 +16667,21 @@ N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
 
 | Members | `f32` | `q8` | `q8` before it was sliced |
 | --- | ---: | ---: | ---: |
-| 2 | 0.374 s | **0.437 s** | 0.784 s |
-| 4 | 0.396 s | **0.537 s** | 0.794 s |
-| 8 | 0.564 s | **0.872 s** | 0.953 s |
-| 16 | 0.760 s | **1.318 s** | 1.473 s |
+| 2 | 0.366 s | **0.437 s** | 0.784 s |
+| 4 | 0.399 s | **0.532 s** | 0.794 s |
+| 8 | 0.591 s | **0.838 s** | 0.953 s |
+| 16 | 0.666 s | **1.231 s** | 1.473 s |
+
+Members at one length, which is the shape a server does not have. `--spread`
+gives them prompts from a fraction of the file to the whole of it: eight
+members then read 0.530 s exact and 0.708 packed, sixteen 0.628 and 0.929 --
+less work for less time, as it should be. That measurement earned its keep
+the first time it was taken, at 2.150 s for the sixteen packed: a round's
+rows each carry their own last in the per-row table and the kernel takes its
+span from there, but the engine was counting slices from the call's first and
+last, which were **the first member's**. With the shortest member first, the
+cut was the one that row wanted and the longest row swept four times more
+cache than its share. The span is the widest row's now.
 
 The last column is the sitting before the slicing, whose `f32` readings were
 0.369, 0.394, 0.590 and 0.672 -- the exact rounds reproduce within a few per

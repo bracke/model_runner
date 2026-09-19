@@ -14589,6 +14589,49 @@ package body Model_Runner.Llama is
           then Element_Count (Held_By (Which).Committed) + Row_Slot (Which)
           else Reserved + Which);
 
+      --  The lowest and the highest cell this call reads of a layer,
+      --  over every row: one session's own for a batch, and for a round
+      --  the widest of its rows -- each row has its own last in the
+      --  table, the kernel takes its span from there, and what these are
+      --  for is the engine's count of slices.
+      function Lowest_Cell (Layer : Natural) return Element_Count;
+      function Highest_Cell (Layer : Natural) return Element_Count;
+
+      function Lowest_Cell (Layer : Natural) return Element_Count is
+         Least : Element_Count :=
+           Cell_Of (Item, Layer, Earliest (Settings, Reserved, Layer));
+      begin
+         if Rounding then
+            for Which in 0 .. Count - 1 loop
+               Least :=
+                 Element_Count'Min
+                   (Least,
+                    Cell_Of (Held_By (Which).all, Layer,
+                             Earliest (Settings, Sits_At (Which), Layer)));
+            end loop;
+         end if;
+
+         return Least;
+      end Lowest_Cell;
+
+      function Highest_Cell (Layer : Natural) return Element_Count is
+         Most : Element_Count :=
+           Cell_Of (Item, Layer,
+                    (if Settings.Causal then Reserved
+                     else Reserved + Count - 1));
+      begin
+         if Rounding then
+            for Which in 0 .. Count - 1 loop
+               Most :=
+                 Element_Count'Max
+                   (Most,
+                    Cell_Of (Held_By (Which).all, Layer, Sits_At (Which)));
+            end loop;
+         end if;
+
+         return Most;
+      end Highest_Cell;
+
       --  The last row a member contributes, which is the row whose
       --  distribution that member is answered with.
       function Last_Row (Of_Member : Element_Count) return Element_Count;
@@ -15953,13 +15996,20 @@ package body Model_Runner.Llama is
                                  + Exact_Keys (Item) + V_Base),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
-                        Natural (Cell_Of (Item, Natural (Index),
-                                          Earliest (Settings, Reserved,
-                                                    Natural (Index)))),
-                        Natural (Cell_Of (Item, Natural (Index),
-                                          (if Settings.Causal
-                                           then Reserved
-                                           else Reserved + Count - 1))),
+                        --  The lowest and highest cached positions this
+                        --  call reads. A round's rows each have their own
+                        --  in the table and the kernel takes its span
+                        --  from there; what these are for then is the
+                        --  engine's count of slices, so they must be the
+                        --  widest row's and not the first member's --
+                        --  which they were, and a round whose first
+                        --  member was the shortest was cut into the
+                        --  slices that row wanted, four times too few
+                        --  for the longest. A round of sixteen packed
+                        --  sessions from 88 to 1,419 positions read 2.15
+                        --  s against 1.23 for sixteen at 1,419.
+                        Natural (Lowest_Cell (Natural (Index))),
+                        Natural (Highest_Cell (Natural (Index))),
                         Natural ((if Rounding then 0
                                   else Block_Base (Item)) + Base),
                         Natural ((if Rounding then 0
