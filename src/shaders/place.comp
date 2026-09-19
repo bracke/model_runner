@@ -76,6 +76,20 @@ layout(push_constant) uniform Shape {
     //  the first one's place and the stride say where all of them go; a
     //  round's rows are different sessions and say so a row at a time.
     uint table_at;
+
+    //  A cache in pages rather than in blocks, as attention.comp reads
+    //  it: a page is page_shift's power of two positions of one layer,
+    //  and a row goes into its position's page at the layer's offset --
+    //  at_first is that offset inside a page, and pages_at is where a
+    //  batch's page table for this layer begins, a word a page. A
+    //  round's rows carry their own tables in the per-row table, where
+    //  a block's base was. Zero for page_shift is a cache in blocks.
+    uint pages_at;
+    uint page_shift;
+
+    //  A batch in pages: which position of its session the first row is,
+    //  which in blocks the caller folded into at_first.
+    uint first_position;
 } shape;
 
 void main() {
@@ -90,13 +104,29 @@ void main() {
 
     //  A batch: the first row's place and one stride a row after it. A
     //  round: this row's own block, the layer's offset inside one session's
-    //  worth, and this row's own position.
-    uint into =
-        shape.table_at != 0u
-      ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
-        + shape.at_first
-        + floatBitsToUint (kept[shape.table_at + slot * 2u]) * shape.stride
-      : shape.at_first + slot * shape.stride;
+    //  worth, and this row's own position. In pages, the row's position
+    //  names a word of its table and the page that word names holds it.
+    uint into;
+
+    if (shape.page_shift == 0u) {
+        into =
+            shape.table_at != 0u
+          ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
+            + shape.at_first
+            + floatBitsToUint (kept[shape.table_at + slot * 2u]) * shape.stride
+          : shape.at_first + slot * shape.stride;
+    } else {
+        uint table = shape.table_at != 0u
+                   ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
+                   : shape.pages_at;
+        uint pos = shape.table_at != 0u
+                 ? floatBitsToUint (kept[shape.table_at + slot * 2u])
+                 : shape.first_position + slot;
+
+        into = floatBitsToUint (kept[table + (pos >> shape.page_shift)])
+               + shape.at_first
+               + (pos & ((1u << shape.page_shift) - 1u)) * shape.stride;
+    }
 
     for (uint c = lane; c < shape.width; c += LANES) {
         float value = x[from + c];

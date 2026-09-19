@@ -883,7 +883,7 @@ package body Model_Runner.Platform.Device.Products is
    --  validation layer was running to say so. Two numbers a word apart is
    --  what let it drift; the range below is now taken from the largest of
    --  them rather than written again.
-   Attention_Bytes : constant := 72;
+   Attention_Bytes : constant := 80;
 
    --  A binary32 by its bits, for a push word that carries one.
    function Float_Bits is new Ada.Unchecked_Conversion
@@ -1101,8 +1101,18 @@ package body Model_Runner.Platform.Device.Products is
       --  softmax's denominator and takes no value -- and zero for none.
       --  In the cache for the reason the table is.
       Sinks_At   : C.unsigned := 0;
+
+      --  A cache in pages: where a batch's page table for the layer
+      --  begins, and the page's width as a shift. Zero shift for a cache
+      --  in blocks.
+      Pages_At   : C.unsigned := 0;
+      Page_Shift : C.unsigned := 0;
    end record
      with Convention => C;
+
+   pragma Compile_Time_Error
+     (Attention_Constants'Size /= Attention_Bytes * 8,
+      "the attention constants are not the size the shader reads");
 
    type Member_Words is array (0 .. Max_Gather - 1) of C.unsigned
      with Convention => C;
@@ -1127,10 +1137,17 @@ package body Model_Runner.Platform.Device.Products is
       V_Width    : C.unsigned := 0;
       V_Into     : C.unsigned := 0;
       V_Stride   : C.unsigned := 0;
+
+      --  A cache in pages, for the dispatch that places: the batch's
+      --  page table, the page's width as a shift, and the session
+      --  position of the first row. Zero shift for a cache in blocks.
+      Pages_At       : C.unsigned := 0;
+      Page_Shift     : C.unsigned := 0;
+      First_Position : C.unsigned := 0;
    end record
      with Convention => C;
 
-   Heads_Bytes : constant := 18 * 4;
+   Heads_Bytes : constant := 21 * 4;
 
    --  What merge.comp is told.
    type Merge_Constants is record
@@ -7244,9 +7261,12 @@ package body Model_Runner.Platform.Device.Products is
 
             --  Never a round: this is the single call, one session's own
             --  positions. And no sinks: a layer with them goes over as a
-            --  sequence or on the host.
+            --  sequence or on the host. Nor pages: the cache it reads is
+            --  the one it was just given, whole.
             Table_At   => 0,
-            Sinks_At   => 0);
+            Sinks_At   => 0,
+            Pages_At   => 0,
+            Page_Shift => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -8292,7 +8312,10 @@ package body Model_Runner.Platform.Device.Products is
       Packed    : Packing_Shape := Not_Packing;
       Unpack    : Boolean := False;
       Cells     : Natural := 0;
-      Half_At   : Interfaces.Unsigned_64 := 0)
+      Half_At   : Interfaces.Unsigned_64 := 0;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -8343,6 +8366,8 @@ package body Model_Runner.Platform.Device.Products is
          At_First => At_First, Table => Table_At, Pack => Packed,
          Unpacks => Unpack, Half_At => Half_At,
          Cells => (if Unpack then Cells else 0),
+         Pages_At => Pages_At, Page_Shift => Page_Shift,
+         First_Position => First_Position,
          Attends => False, Blends => False, Norms => False,
          Rotates => False,
          others => <>);
@@ -8421,7 +8446,10 @@ package body Model_Runner.Platform.Device.Products is
       V_Step      : Natural := 0;
       V_At_First  : Natural := 0;
       V_Stride    : Natural := 0;
-      Kept        : Boolean := True)
+      Kept        : Boolean := True;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0)
    is
       Width : constant Natural := Heads * Head_Size;
    begin
@@ -8458,6 +8486,9 @@ package body Model_Runner.Platform.Device.Products is
          Into_Cache => Into_Cache, At_First => At_First, Stride => Stride,
          V_Rows => (if V_Step = 0 then 0 else Steps.Items (V_Step).Rows),
          V_At_First => V_At_First, V_Stride => V_Stride,
+         Pages_At => (if Into_Cache then Pages_At else 0),
+         Page_Shift => (if Into_Cache then Page_Shift else 0),
+         First_Position => (if Into_Cache then First_Position else 0),
          Attends => False, Blends => False, Norms => False,
          Rotates => False, Places => False,
          others => <>);
@@ -8541,7 +8572,9 @@ package body Model_Runner.Platform.Device.Products is
       From_Step  : Natural := 0;
       Table_At   : Natural := 0;
       Packed     : Packed_Cache := Not_Packed;
-      Sinks_At   : Natural := 0) is
+      Sinks_At   : Natural := 0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -8585,6 +8618,7 @@ package body Model_Runner.Platform.Device.Products is
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
          Causal => Causal, Max_Bias => Max_Bias,
          Table => Table_At, Packed => Packed, Sinks => Sinks_At,
+         Pages_At => Pages_At, Page_Shift => Page_Shift,
          others => <>);
       Added := True;
    end Add_Attention;
@@ -10597,7 +10631,9 @@ package body Model_Runner.Platform.Device.Products is
                                 then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
                         Table_At   => C.unsigned (This.Table),
-                        Sinks_At   => C.unsigned (This.Sinks));
+                        Sinks_At   => C.unsigned (This.Sinks),
+                        Pages_At   => C.unsigned (This.Pages_At),
+                        Page_Shift => C.unsigned (This.Page_Shift));
 
                      Slices : constant Natural :=
                        (if Barrier = null then 1
@@ -10755,6 +10791,17 @@ package body Model_Runner.Platform.Device.Products is
                         --  position, and neither follows from the first
                         --  row's place.
                         Table   => C.unsigned (This.Table),
+
+                        --  And a cache in pages, in the three words after
+                        --  it, which the kernel reads as the batch's page
+                        --  table, the page's shift and the first row's
+                        --  position: a gather's members, in every other
+                        --  step's reading of this block.
+                        Members =>
+                          [0 => C.unsigned (This.Pages_At),
+                           1 => C.unsigned (This.Page_Shift),
+                           2 => C.unsigned (This.First_Position),
+                           others => 0],
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
@@ -10850,7 +10897,10 @@ package body Model_Runner.Platform.Device.Products is
                            else 0),
                         V_Width   => C.unsigned (This.V_Rows),
                         V_Into    => C.unsigned (This.V_At_First),
-                        V_Stride  => C.unsigned (This.V_Stride));
+                        V_Stride  => C.unsigned (This.V_Stride),
+                        Pages_At       => C.unsigned (This.Pages_At),
+                        Page_Shift     => C.unsigned (This.Page_Shift),
+                        First_Position => C.unsigned (This.First_Position));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Heads_Bytes, Shape'Address);

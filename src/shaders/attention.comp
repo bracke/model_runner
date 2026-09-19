@@ -251,7 +251,32 @@ layout(push_constant, std430) uniform Shape {
     //  heads' sinks begin in the cache, in elements, or zero for none.
     //  They are in the cache for the reason the table is.
     uint sinks_at;
+
+    //  A cache dealt out in pages rather than in blocks: a page is
+    //  page_shift's power of two positions of one layer, its keys and
+    //  then its values, and a session's positions are in whatever pages
+    //  it was given. What a row reads in place of where its block begins
+    //  is where its page table for this layer begins -- a word a page,
+    //  each the element that page starts at -- and k_base and v_base are
+    //  then offsets inside a page rather than inside a block. For a
+    //  batch, whose rows are one session's, pages_at is that table; a
+    //  round's rows each carry their own in the per-row table. Zero for
+    //  page_shift is a cache in blocks, which is everything above.
+    uint pages_at;
+    uint page_shift;
 } shape;
+
+//  Where a cached position's keys or values begin: the row's block, the
+//  layer's offset and the position's stride, or the position's page and
+//  its place inside it.
+uint place_of (uint row, uint pos, uint offset, uint width) {
+    if (shape.page_shift == 0u) {
+        return row + offset + pos * width;
+    }
+
+    return word_at (row + (pos >> shape.page_shift)) + offset
+           + (pos & ((1u << shape.page_shift) - 1u)) * width;
+}
 
 //  The largest value width this kernel will take. A head wider than this is
 //  refused by the caller and done on the processor, which is better than a
@@ -542,9 +567,10 @@ void main() {
     uint first_of[QUERIES];
     uint q_of[QUERIES];
 
-    //  Where each row's own cache begins: nothing for a batch, and that
-    //  row's own block for each row of a round. A block of more than one
-    //  query reads a cached key once and dots it into every query of the
+    //  Where each row's own cache begins: nothing for a batch in blocks,
+    //  the batch's page table for one in pages, and that row's own block
+    //  or table for each row of a round. A block of more than one query
+    //  reads a cached key once and dots it into every query of the
     //  block, which is the whole reason a block exists -- and rows of a
     //  round do not share a cache, so the caller gives a round the kernel
     //  whose block is one. That is why the reads below may take held_of[0]
@@ -575,10 +601,11 @@ void main() {
         first_of[i] = first;
 
         //  Where this row's own cache begins, which is nothing at all for a
-        //  batch and a member's worth for each row of a round.
+        //  batch in blocks, its page table for one in pages, and a
+        //  member's own for each row of a round.
         held_of[i] = shape.table_at != 0u
                    ? word_at (shape.table_at + slot * 2u + 1u)
-                   : 0u;
+                   : shape.pages_at;
         //  Without the head's own offset, which the bundle adds where it
         //  reads: every head of the bundle wants the same query position.
         q_of[i] = slot * shape.heads * shape.head_size;
@@ -645,7 +672,11 @@ void main() {
     //  the part has, four waves a SIMD, and read no faster for it.
     const bool v_aligned = true;
 #else
-    bool v_aligned = ((shape.v_base + held_of[0]) & 3u) == 0u
+    //  A page begins on a line, so in pages the row's word says nothing
+    //  about the alignment and only the layer's offset does.
+    bool v_aligned = ((shape.v_base
+                       + (shape.page_shift == 0u ? held_of[0] : 0u)) & 3u)
+                     == 0u
                      && (shape.v_width & 3u) == 0u
                      && (shape.value_size & 3u) == 0u
                      && shape.value_size <= 128u;
@@ -723,7 +754,8 @@ void main() {
             uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
                            + which; \
             uint pos = min (base + at_tile, last_max); \
-            uint k_at = shape.k_base + held_of[0] + pos * shape.kv_width \
+            uint k_at = place_of (held_of[0], pos, shape.k_base, \
+                                  shape.kv_width) \
                         + group * shape.head_size; \
             kk[e] = kv4[(k_at >> 2u) + piece]; \
         } \
@@ -786,7 +818,8 @@ void main() {
         } else
 #endif
         if (step <= last_max) {
-            uint k_at = shape.k_base + held_of[0] + step * shape.kv_width
+            uint k_at = place_of (held_of[0], step, shape.k_base,
+                                  shape.kv_width)
                         + group * shape.head_size;
 
             //  Eight components a turn, so that a query's components are
@@ -981,9 +1014,14 @@ void main() {
             uint c4 = v_comp * 4u;
 
             if (c4 < shape.value_size) {
-                uint v_at = (shape.v_base + held_of[0]
-                             + group * shape.value_size + c4) >> 2u;
-                uint v_step = shape.v_width >> 2u;
+                //  This lane's component of a position's values, four
+                //  at a time: the position's row and the head's place in
+                //  it, where a row is wherever the page or the block has
+                //  it.
+                uint v_head = group * shape.value_size + c4;
+#define V4_AT(POS) \
+    ((place_of (held_of[0], (POS), shape.v_base, shape.v_width) + v_head) \
+     >> 2u)
 
                 //  The carry applied first and the tile's terms added
                 //  straight into the held blend, rather than summed apart
@@ -1005,7 +1043,7 @@ void main() {
                     vec4 v[4];
 
                     for (uint e = 0u; e < 4u; e++) {
-                        v[e] = kv4[v_at + (base + j + e) * v_step];
+                        v[e] = kv4[V4_AT (base + j + e)];
                     }
 
                     for (uint i = 0u; i < QUERIES; i++) {
@@ -1020,7 +1058,7 @@ void main() {
                 }
 
                 for (uint j = run; j < vhi; j++) {
-                    vec4 v = kv4[v_at + (base + j) * v_step];
+                    vec4 v = kv4[V4_AT (base + j)];
 
                     for (uint i = 0u; i < QUERIES; i++) {
                         for (uint h = 0u; h < HEADS; h++) {
@@ -1070,8 +1108,8 @@ void main() {
                 float v[8];
 
                 for (uint e = 0u; e < 8u; e++) {
-                    v[e] = held_at (shape.v_base + held_of[0]
-                                    + (base + j + e) * shape.v_width
+                    v[e] = held_at (place_of (held_of[0], base + j + e,
+                                              shape.v_base, shape.v_width)
                                     + group * shape.value_size + c);
                 }
 
@@ -1087,8 +1125,8 @@ void main() {
             }
 
             for (uint j = run; j < hi; j++) {
-                float v = held_at (shape.v_base + held_of[0]
-                                   + (base + j) * shape.v_width
+                float v = held_at (place_of (held_of[0], base + j,
+                                             shape.v_base, shape.v_width)
                                    + group * shape.value_size + c);
 
                 for (uint i = 0u; i < QUERIES; i++) {

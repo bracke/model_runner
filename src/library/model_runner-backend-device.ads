@@ -859,6 +859,13 @@ package Model_Runner.Backend.Device is
    --    V_Base go unread.
    --  @param Sinks_At Where the heads' sinks begin in the cache, in
    --    elements, for a layer that has them; zero for none.
+   --  @param Pages_At A cache in pages rather than in blocks: where the
+   --    batch's page table for this layer begins, in elements, a word a
+   --    page; K_Base and V_Base are then offsets inside a page. A round's
+   --    rows carry their own tables in the per-row table, where a block's
+   --    base was. Zero with Page_Shift for a cache in blocks.
+   --  @param Page_Shift The page's width in positions, as a shift, or
+   --    zero for a cache in blocks.
    procedure Attend_And_Project
      (Query      : Model_Runner.Tensors.Real_Array;
       Heads      : Natural;
@@ -881,7 +888,9 @@ package Model_Runner.Backend.Device is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Packed     : Packed_Cache := Not_Packed;
-      Sinks_At   : Natural := 0);
+      Sinks_At   : Natural := 0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0);
 
    --  A layer's second half, in one submission rather than two.
    --
@@ -935,6 +944,13 @@ package Model_Runner.Backend.Device is
    --    elements, for a layer that has them; zero for none.
    --  @param Alpha The clamped gate's slope, where Unit is three.
    --  @param Limit The clamped gate's limit, where Unit is three.
+   --  @param Pages_At A cache in pages rather than in blocks: where the
+   --    batch's page table for this layer begins, in elements, a word a
+   --    page; K_Base and V_Base are then offsets inside a page. A round's
+   --    rows carry their own tables in the per-row table, where a block's
+   --    base was. Zero with Page_Shift for a cache in blocks.
+   --  @param Page_Shift The page's width in positions, as a shift, or
+   --    zero for a cache in blocks.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -967,7 +983,9 @@ package Model_Runner.Backend.Device is
       Packed      : Packed_Cache := Not_Packed;
       Sinks_At    : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0);
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0);
 
    --  Several products of the same activation, in one submission.
    --
@@ -1269,6 +1287,16 @@ package Model_Runner.Backend.Device is
    --  A caller must not carry out of a layer unless the next one will be
    --  taken whole as well: a layer that falls back reads the host's copy,
    --  and the host's copy is the thing carrying does not write.
+   --  @param Pages_At A cache in pages rather than in blocks: where the
+   --    batch's page table for this layer begins, in elements, a word a
+   --    page; K_Base and V_Base are then offsets inside a page. A round's
+   --    rows carry their own tables in the per-row table, where a block's
+   --    base was. Zero with Page_Shift for a cache in blocks.
+   --  @param Page_Shift The page's width in positions, as a shift, or
+   --    zero for a cache in blocks.
+   --  @param First_Position Which position of its session the batch's
+   --    first row is, for a cache in pages: where the step that places
+   --    puts it, At_Key and At_Value being offsets inside a page.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -1364,7 +1392,10 @@ package Model_Runner.Backend.Device is
       Numbers        : Model_Runner.Tensors.Real_Array_Access := null;
       Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
         (others => <>);
-      Linear_State_At : Natural := 0);
+      Linear_State_At : Natural := 0;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0);
 
    --  A gated feed-forward block, whole, in one submission.
    --

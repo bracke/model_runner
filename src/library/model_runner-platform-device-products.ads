@@ -1266,6 +1266,14 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Stride How far apart positions' values are.
    --  @param Kept False when nothing on the host reads the answer, which
    --    for keys placed in the cache is always.
+   --  @param Pages_At A cache in pages: where the batch's page table for
+   --    this layer begins, in elements. At_First and V_At_First are then
+   --    offsets inside a page. Zero with Page_Shift for a cache in
+   --    blocks.
+   --  @param Page_Shift The page's width in positions, as a shift; zero
+   --    for a cache in blocks.
+   --  @param First_Position Which position of its session the batch's
+   --    first row is, for a cache in pages.
    procedure Add_Heads
      (Steps       : in out Sequence;
       From_Step   : Positive;
@@ -1287,7 +1295,10 @@ package Model_Runner.Platform.Device.Products is
       V_Step      : Natural := 0;
       V_At_First  : Natural := 0;
       V_Stride    : Natural := 0;
-      Kept        : Boolean := True);
+      Kept        : Boolean := True;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0);
 
    --  Name a write into the device's cache for a sequence to perform.
    --
@@ -1328,6 +1339,15 @@ package Model_Runner.Platform.Device.Products is
    --  @param Cells How many rows an unpacking step unpacks.
    --  @param Half_At Where an unpacking step writes the first row, in
    --    halves of the cache buffer.
+   --  @param Pages_At A cache in pages: where the batch's page table for
+   --    this layer begins, in elements, and At_First then the layer's
+   --    offset inside a page. A round's rows carry their own tables in
+   --    the per-row table, where a block's base was. Zero with
+   --    Page_Shift for a cache in blocks.
+   --  @param Page_Shift The page's width in positions, as a shift; zero
+   --    for a cache in blocks.
+   --  @param First_Position Which position of its session a batch's
+   --    first row is, for a cache in pages.
    procedure Add_Place
      (Steps     : in out Sequence;
       Width     : Natural;
@@ -1339,7 +1359,10 @@ package Model_Runner.Platform.Device.Products is
       Packed    : Packing_Shape := Not_Packing;
       Unpack    : Boolean := False;
       Cells     : Natural := 0;
-      Half_At   : Interfaces.Unsigned_64 := 0);
+      Half_At   : Interfaces.Unsigned_64 := 0;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0);
 
    --  Name a root-mean-square normalization for a sequence to perform.
    --
@@ -1458,6 +1481,14 @@ package Model_Runner.Platform.Device.Products is
    --    that joins the softmax's denominator and takes no value. Zero for
    --    a layer without them. The caller puts Heads of them there before
    --    the sequence runs, as it puts a round's table.
+   --  @param Pages_At A cache in pages: where a batch's page table for
+   --    this layer begins, in elements -- a word a page, each the element
+   --    that page starts at -- and K_Base and V_Base then offsets inside
+   --    a page. A round's rows carry their own tables in the per-row
+   --    table, where a block's base was. Zero with Page_Shift for a
+   --    cache in blocks.
+   --  @param Page_Shift The page's width in positions, as a shift; zero
+   --    for a cache in blocks.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -1481,7 +1512,9 @@ package Model_Runner.Platform.Device.Products is
       From_Step  : Natural := 0;
       Table_At   : Natural := 0;
       Packed     : Packed_Cache := Not_Packed;
-      Sinks_At   : Natural := 0);
+      Sinks_At   : Natural := 0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0);
 
    --  Perform every product a sequence holds, in the order they were named.
    --
@@ -3054,6 +3087,18 @@ private
       --  Where the heads' sinks begin in the cache, in elements, or zero
       --  for a layer without them.
       Sinks      : Natural := 0;
+
+      --  A cache in pages rather than in blocks, for a step that reads
+      --  or writes one: where the batch's page table for this layer
+      --  begins, in elements, a word a page; the page's width in
+      --  positions as a shift; and which position of its session the
+      --  batch's first row is. The bases a step is given are then
+      --  offsets inside a page. A shift of zero is a cache in blocks,
+      --  which is what every step read before there were pages, and a
+      --  round's rows each carry their own table in the per-row table.
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0;
 
       --  And how a placing step packs its rows into one -- or, where
       --  Unpacks, how the rows it unpacks into the half-precision copy

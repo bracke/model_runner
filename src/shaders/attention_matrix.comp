@@ -137,7 +137,28 @@ layout(push_constant) uniform Shape {
     //  joins the softmax's denominator and takes no value. Where the
     //  heads' sinks begin in the cache, in elements, or zero for none.
     uint sinks_at;
+
+    //  A cache in pages rather than in blocks, as attention.comp has it:
+    //  where the batch's page table for this layer begins, a word a page
+    //  of page_shift's power of two positions, and k_base and v_base
+    //  offsets inside a page. Zero for page_shift is a cache in blocks.
+    //  A page holds a whole number of tiles of sixteen, so a tile is in
+    //  one page and is loaded as it always was, from wherever that is.
+    uint pages_at;
+    uint page_shift;
 } shape;
+
+//  Where a cached position's keys or values begin in the copy, in
+//  halves: the layer's offset and the position's stride, or the
+//  position's page and its place inside it.
+uint place_of (uint pos, uint offset, uint width) {
+    if (shape.page_shift == 0u) {
+        return offset + pos * width;
+    }
+
+    return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)])
+           + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
+}
 
 //  Query positions a workgroup answers, cached positions a tile holds, and
 //  the widest head this compilation stages. All three are multiples of the
@@ -215,9 +236,10 @@ void main() {
     uint dv    = shape.value_size;
     uint col   = lane & 31u;
 
-    //  Where this head's keys and values begin in the half-precision copy.
-    uint k_at = shape.k_base + group * dk;
-    uint v_at = shape.v_base + group * dv;
+    //  Where this head's keys and values begin in a position's row of the
+    //  half-precision copy.
+    uint k_at = group * dk;
+    uint v_at = group * dv;
 
     //  This head's rung of the slope ladder, worked out as attention.comp
     //  works it out.
@@ -249,6 +271,13 @@ void main() {
     if (shape.window > 0u) {
         first_min = last_low + 1u > shape.window
                     ? last_low + 1u - shape.window : 0u;
+    }
+
+    //  In pages, a tile of sixteen must lie in one page, so the tiles
+    //  begin on a sixteen: the positions before the window that brings
+    //  in are scored as they are past it, as nothing.
+    if (shape.page_shift != 0u) {
+        first_min &= ~15u;
     }
 
     //  The queries, in half precision. A row past the end of the batch is
@@ -327,7 +356,9 @@ void main() {
 
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                     coopMatLoad (km[n], kvh,
-                                 k_at + (base + n * 16u) * shape.kv_width + d0,
+                                 place_of (base + n * 16u, shape.k_base,
+                                           shape.kv_width)
+                                 + k_at + d0,
                                  shape.kv_width,
                                  gl_CooperativeMatrixLayoutColumnMajor);
                 }
@@ -451,8 +482,9 @@ void main() {
                                 gl_MatrixUseB> vm;
 
                         coopMatLoad (vm, kvh,
-                                     v_at + (base + n0) * shape.v_width
-                                     + t * 16u,
+                                     place_of (base + n0, shape.v_base,
+                                               shape.v_width)
+                                     + v_at + t * 16u,
                                      shape.v_width,
                                      gl_CooperativeMatrixLayoutRowMajor);
 

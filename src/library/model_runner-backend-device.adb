@@ -1352,7 +1352,9 @@ package body Model_Runner.Backend.Device is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Packed     : Packed_Cache := Not_Packed;
-      Sinks_At   : Natural := 0)
+      Sinks_At   : Natural := 0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1398,7 +1400,8 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Packed => Packed, Sinks_At => Sinks_At);
+         Kept => False, Packed => Packed, Sinks_At => Sinks_At,
+         Pages_At => Pages_At, Page_Shift => Page_Shift);
       if not Added then
          return;
       end if;
@@ -1476,7 +1479,9 @@ package body Model_Runner.Backend.Device is
       Packed      : Packed_Cache := Not_Packed;
       Sinks_At    : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
-      Limit : Model_Runner.Numerics.Real := 0.0)
+      Limit : Model_Runner.Numerics.Real := 0.0;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1563,7 +1568,8 @@ package body Model_Runner.Backend.Device is
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
          Kept => False, Table_At => Table_At, Packed => Packed,
-         Sinks_At => Sinks_At);
+         Sinks_At => Sinks_At,
+         Pages_At => Pages_At, Page_Shift => Page_Shift);
       if not Added then
          return;
       end if;
@@ -2170,7 +2176,10 @@ package body Model_Runner.Backend.Device is
       Numbers        : Model_Runner.Tensors.Real_Array_Access := null;
       Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
         (others => <>);
-      Linear_State_At : Natural := 0)
+      Linear_State_At : Natural := 0;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -2899,7 +2908,9 @@ package body Model_Runner.Backend.Device is
                   Key => Weight_Of (Key_Norm),
                   Into_Cache => True, At_First => At_Key, Stride => KV_Width,
                   V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
-                  Kept => False);
+                  Kept => False,
+                  Pages_At => Pages_At, Page_Shift => Page_Shift,
+                  First_Position => First_Position);
                if not Added then
                   return;
                end if;
@@ -2998,7 +3009,9 @@ package body Model_Runner.Backend.Device is
          Products.Add_Place
            (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
             From_Step => Step_K_Turned, Table_At => Table_At,
-            Packed => Pack_Keys);
+            Packed => Pack_Keys,
+            Pages_At => Pages_At, Page_Shift => Page_Shift,
+            First_Position => First_Position);
          if not Added then
             return;
          end if;
@@ -3007,7 +3020,9 @@ package body Model_Runner.Backend.Device is
          Products.Add_Place
            (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
             From_Step => Step_V, Table_At => Table_At,
-            Packed => Pack_Values);
+            Packed => Pack_Values,
+            Pages_At => Pages_At, Page_Shift => Page_Shift,
+            First_Position => First_Position);
          if not Added then
             return;
          end if;
@@ -3052,7 +3067,8 @@ package body Model_Runner.Backend.Device is
             K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
             Window => Window, Causal => Causal, Max_Bias => Max_Bias,
             Chained => True, From_Step => Step_Q_Turned, Kept => False,
-            Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At);
+            Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At,
+            Pages_At => Pages_At, Page_Shift => Page_Shift);
          if not Added then
             return;
          end if;
