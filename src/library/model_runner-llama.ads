@@ -1729,6 +1729,44 @@ package Model_Runner.Llama is
       Asked : out Interfaces.Unsigned_64;
       Kept  : out Interfaces.Unsigned_64);
 
+   --  Whether this session's cache is in a block of the device's, and
+   --  its ring of states in a seat of the device's room, at this moment.
+   --
+   --  There are sixteen of each and a session takes one the first time it
+   --  writes there, keeps it while anything else can be given one, and
+   --  loses it where a session that has asked more recently finds every
+   --  one held. A server deciding what to admit, or what to close, had no
+   --  way to ask: --show-stats counts what was turned over once the run
+   --  is done, which says what happened and not what is.
+   --
+   --  Both are False for a session on the processor, for one the device
+   --  has refused, and for one that has not evaluated anything yet.
+   --
+   --  @param Item Open session.
+   --  @return True where it holds a block of the device's cache.
+   function Holds_Block (Item : Session) return Boolean;
+
+   --  The same for a seat in the device's room of rings, which a hybrid
+   --  takes for its ring of linear states and no other architecture asks
+   --  for at all.
+   --
+   --  @param Item Open session.
+   --  @return True where it holds a seat.
+   function Holds_Seat (Item : Session) return Boolean;
+
+   --  How many of the sixteen are held, by any session.
+   --
+   --  What a server reads to know whether the next caller will be dealt
+   --  in or will turn somebody out. Zero where no device is open.
+   --
+   --  @return Blocks of the device's cache held by any session.
+   function Blocks_Held return Natural;
+
+   --  And seats of its room of rings.
+   --
+   --  @return Seats held by any session.
+   function Seats_Held return Natural;
+
    --  Whether the model carries a block past its stack for drafting the
    --  token after the next, and the session can run it: a hybrid file's
    --  nextn block, and a session holding its cache exactly.

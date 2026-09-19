@@ -260,7 +260,9 @@ gone unasked since before the asking session's previous token, so seventeen
 sessions reading a token apiece in turn leave each other alone and the
 seventeenth does without, which costs one session its speed rather than all
 seventeen a cache carried back and forth every token. `--show-stats` says how
-often either happened, and `tests speed --turns N` measures it: N sessions
+often either happened, and a caller can ask what is true now rather than what
+happened: `Holds_Block` and `Holds_Seat` of a session, `Blocks_Held` and
+`Seats_Held` of the device. `tests speed --turns N` measures the cost: N sessions
 taking turns a token apiece, which is the shape the sixteen blocks are a
 limit on where a round is not. On TinyLlama-1.1B Q8_0 at a context of 512,
 sixteen sessions read 49.3 tokens a second and turn no block over, seventeen
@@ -268,11 +270,12 @@ read 48.1 and turn one, and thirty-two read 43.6 and turn sixteen; the same
 counts on the processor read 39.1 to 39.4 whatever the count, having nothing
 to run out of. Take the guard away and the same thirty-two turn a block over
 528 times instead of sixteen; at a 1,419-token context, twenty sessions read
-7.9 tokens a second without the guard against 42.2 with it, which is a
+7.8 tokens a second without the guard against 42.1 with it, which is a
 64-megabyte cache written across the bus every token against four writes in
 the run. Where a session holds little the churn is nearly free and the guard
-costs about four per cent -- the unguarded thirty-two read 45.4 against 43.6
-at a context of 512 -- which is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
+costs about four per cent -- five alternated pairs at a context of 512 read
+43.2 guarded against 45.1, the unguarded binary ahead in every pair -- which
+is the price of not falling off the other end. That write was the whole of its cache, which is the room it has rather
 than what it has put there: twelve tokens of a 2,048-token context is 540
 kilobytes of ninety-two megabytes. It writes a layer at a time now, the cells
 that layer still holds. A round stamps every member before any of them asks,

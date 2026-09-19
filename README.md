@@ -2047,11 +2047,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.4 | 0 | 39.4 |
-| 16 | **49.3** | 0 | 39.2 |
-| 17 | 48.1 | 1 | 39.3 |
-| 20 | 46.4 | 4 | 39.1 |
-| 32 | 43.6 | 16 | 39.1 |
+| 8 | 49.3 | 0 | 39.4 |
+| 16 | **49.2** | 0 | 39.3 |
+| 17 | 48.2 | 1 | 39.3 |
+| 20 | 46.5 | 4 | 39.2 |
+| 32 | 43.6 | 16 | 39.2 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2064,12 +2064,17 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.9 tokens a second unguarded against 42.2 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 42.1 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
-writes in the run. The guard does cost in the other corner: where a session
-holds twenty-odd positions, carrying its cache back is nearly free and the
-unguarded thirty-two above read 45.4 against 43.6, four per cent the other
-way. The unguarded readings were taken with the guard disabled in a
+writes in the run -- medians of three alternated pairs, and the unguarded
+reading does not move at all. The guard does cost in the other corner: where
+a session holds twenty-odd positions, carrying its cache back is nearly free
+and doing without a block is not. **Five alternated pairs at a context of
+512, thirty-two sessions: 43.2 a second guarded against 45.1, the unguarded
+binary ahead in every pair.** Two single sittings had read that difference at
+under one per cent and at four; the pairs are what settles it, as they do for
+every other cell this size, and four per cent is the price of not falling off
+the five-and-a-half-times cliff beside it. The unguarded readings were taken with the guard disabled in a
 build made for the purpose, which is the only way to take them.
 
 The buffer is dealt a session at a time, each placed at the first gap that

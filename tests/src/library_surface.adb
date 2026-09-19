@@ -3,7 +3,7 @@ package body Library_Surface is
    type Text_Access is access constant String;
 
    --  The codec's other half.
-   Held : constant array (1 .. 39) of Text_Access :=
+   Held : constant array (1 .. 43) of Text_Access :=
      [new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
@@ -124,7 +124,18 @@ package body Library_Surface is
       --  needs to, and a test holding a reserved cache to what it should
       --  take -- six bytes an element with the copy and four without --
       --  is the one caller there is.
-      new String'("Keeps_Copy")];
+      new String'("Keeps_Copy"),
+
+      --  What a server asks of the device's sixteen blocks and sixteen
+      --  seats: how many are held, and whether this session is in one.
+      --  The command runs a session or two and never wonders; a caller
+      --  deciding whom to admit, or whom to close, has nothing else to
+      --  ask -- the statistics count what was turned over once the run is
+      --  over, which says what happened rather than what is.
+      new String'("Holds_Block"),
+      new String'("Holds_Seat"),
+      new String'("Blocks_Held"),
+      new String'("Seats_Held")];
 
    ---------------
    -- Is_Listed --

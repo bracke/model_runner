@@ -6183,6 +6183,47 @@ package body Model_Runner.Llama is
       end;
    end Take_Block;
 
+   ------------------
+   -- Holds_Block --
+   ------------------
+
+   --  A session's seat is set to minus one wherever its block is taken
+   --  away -- at its close, and where another session turns it out -- so
+   --  holding one is holding a number.
+   function Holds_Block (Item : Session) return Boolean
+   is (Item.Seat >= 0);
+
+   function Holds_Seat (Item : Session) return Boolean
+   is (Item.State_Seated);
+
+   -----------------
+   -- Blocks_Held --
+   -----------------
+
+   function Blocks_Held return Natural is
+      Held : Natural := 0;
+   begin
+      for Which in Block_Holder'Range loop
+         if Block_Holder (Which) /= null then
+            Held := Held + 1;
+         end if;
+      end loop;
+
+      return Held;
+   end Blocks_Held;
+
+   function Seats_Held return Natural is
+      Held : Natural := 0;
+   begin
+      for Seat in State_Seats'Range loop
+         if State_Seats (Seat) /= null then
+            Held := Held + 1;
+         end if;
+      end loop;
+
+      return Held;
+   end Seats_Held;
+
    --  Where a round's per-row table sits, in elements: past every block the
    --  cache has been dealt into. Zero where it holds no block yet, which is
    --  also what tells the kernel a call is not a round.
@@ -11290,11 +11331,26 @@ package body Model_Runner.Llama is
       then
          Block_Holder (Item.Seat) := null;
 
-         --  And how far the buffer has been dealt, forgotten with the last
-         --  block: what the table sits past is the blocks held, and with
-         --  none held it sits at the front again. Kept while any block is
-         --  held, because a table that moved under a round already formed
-         --  would be read where it is not.
+         --  And how far the buffer has been dealt, brought down to the
+         --  blocks that are left: the table a round reads and a layer's
+         --  sinks sit past that, so a block given back at the top of the
+         --  buffer used to leave both where they were and every reserve
+         --  after it asking for room nobody was in. A table that moved
+         --  under a round already formed would be read where it is not,
+         --  which is why this is said where a session closes and not
+         --  while one is being served.
+         Block_Taken := 0;
+
+         for Which in Block_Holder'Range loop
+            if Block_Holder (Which) /= null then
+               Block_Taken :=
+                 Element_Count'Max
+                   (Block_Taken,
+                    Block_Holder (Which).Cache_Base
+                    + Block_Span_Of (Block_Holder (Which).all));
+            end if;
+         end loop;
+
          if (for all Holder of Block_Holder => Holder = null) then
             Block_Taken := 0;
 

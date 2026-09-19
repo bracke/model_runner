@@ -3494,6 +3494,16 @@ package body Tests.Inference_Cases is
                      (Model_Runner.Backend.Device.Blocks_Turned)
                  & ", wanted one");
 
+         --  And what a server would ask: how many of the sixteen are
+         --  held, which of these sessions holds one, and which does not.
+         Assert (L.Blocks_Held = Seats,
+                 "blocks held:" & Natural'Image (L.Blocks_Held)
+                 & ", wanted" & Natural'Image (Seats));
+         Assert (L.Holds_Block (Beside (Beside'Last)),
+                 "the session that turned another out holds no block");
+         Assert (not L.Holds_Block (First),
+                 "the session turned out of its block still holds one");
+
          --  The first again, which is now the coldest session on the
          --  device: it asks, finds every block held by one warmer than
          --  itself, and attends on the processor rather than turning
@@ -4226,6 +4236,15 @@ package body Tests.Inference_Cases is
             Assert (Model_Runner.Backend.Device.Rings_Turned > 0,
                     "the seventeenth hybrid session was refused a seat"
                     & " rather than given one");
+
+            --  And what a server would ask of the room of rings.
+            Assert (L.Seats_Held = Seats,
+                    "seats held:" & Natural'Image (L.Seats_Held)
+                    & ", wanted" & Natural'Image (Seats));
+            Assert (L.Holds_Seat (Beside (Beside'Last)),
+                    "the hybrid that turned another out holds no seat");
+            Assert (not L.Holds_Seat (First),
+                    "the hybrid turned out of its seat still holds one");
          end if;
 
          --  The first again, once a seat comes free: it writes its ring

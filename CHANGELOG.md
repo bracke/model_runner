@@ -267,6 +267,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A server can ask which sessions are on the device.** `Holds_Block` and
+  `Holds_Seat` say whether a session's cache is in one of the device's
+  sixteen blocks and its ring in one of the sixteen seats; `Blocks_Held` and
+  `Seats_Held` say how many are held at all. `--show-stats` counts what was
+  turned over once a run is done, which says what happened rather than what
+  is, and a caller deciding whom to admit or whom to close had nothing to
+  ask.
+- **A block given back at the top of the buffer brings the table down with
+  it.** How far the cache has been dealt was only ever forgotten with the
+  last block, so a long session closing left the round's table and the
+  layer's sinks where they were and every reserve after it asking for room
+  nobody was in. It is recomputed from the blocks that are left when one is
+  given back -- at a close, where no round is formed, since a table that
+  moved under one would be read where it is not.
 - **The half-precision copy reaches as far as halves are read and no
   further.** The copy beside the cache was two bytes for every element of
   the buffer, whatever was in it. A block whose session keeps an exact cache
@@ -340,12 +354,13 @@ Keep a Changelog and the project uses semantic versioning.
   turned over, seventeen read 48.1 with one, and thirty-two read 43.6 with
   sixteen. The guard is what keeps those numbers flat: without it the same
   thirty-two sessions turn a block over 528 times rather than 16, and at a
-  1,419-token context twenty sessions read **7.9 tokens a second against
-  42.2** -- a 64-megabyte cache written across the bus every token against
+  1,419-token context twenty sessions read **7.8 tokens a second against
+  42.1** -- a 64-megabyte cache written across the bus every token against
   four writes in the whole run. Where a session's cache is small the churn
-  is nearly free and doing without a block costs something: at a context of
-  512 the unguarded thirty-two read 45.4 against 43.6, four per cent the
-  other way. The guard keeps the cliff away and pays that.
+  is nearly free and doing without a block is not: five alternated pairs at
+  a context of 512 read 43.2 a second guarded against 45.1, the unguarded
+  binary ahead in every pair. The guard pays four per cent there to keep the
+  five-and-a-half-times cliff away.
 - **A seventeenth hybrid session is dealt a seat in the room of rings, and
   no session turns another out while both are busy.** The room a hybrid's
   rings of states are seated in holds sixteen seats as the cache holds
