@@ -286,6 +286,23 @@ Keep a Changelog and the project uses semantic versioning.
   packing on any gap, no blocks moved, and the same 594 MB of cache** -- and
   the pattern the tests build, two gaps neither of which holds the arrival
   and both of which together do, still packs.
+- **A round whose members sit at different positions is tested, not only
+  measured.** The speed measurement gave every member one prompt and the
+  tests stepped them from nothing together, so every row of every round had
+  the same last -- and the spread that found the slice-count fault was a
+  measurement, which says a number and not an answer. Two members three
+  positions apart are stepped as a round now and each is held to what it
+  says alone, on the processor exactly and on the device to a thousandth.
+  Writing the same last for every row of the table, which is what a round
+  reading another member's context looks like, puts it 0.78 away.
+- **The two kernels' answers on cutting a round are named side by side.**
+  One said its refusal as a bare `if Rounding` and the other derived its
+  count, which is two things a reader has to notice rather than one to find.
+  They are `Exact_Cuts_A_Round` and `Packed_Cuts_A_Round` now, with the
+  measurement that separates them beside them: a packed workgroup unpacks
+  every element it reads and is slow enough that more of them wins by a
+  third, an exact one bundles eight heads and is quick, so the merge a cut
+  adds costs more than it saves.
 - **A round of members at different lengths is measured at last, and it
   found a slice count taken from the wrong row.** `tests speed --round N
   --spread` gives the members prompts from a fraction of the file to the

@@ -3623,6 +3623,247 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said;
 
+   -------------------------------------------------------------
+   -- A_Round_Of_Members_At_Different_Lengths_Says_The_Same --
+   -------------------------------------------------------------
+
+   --  A round whose members sit at different positions, which is what a
+   --  server's callers do and what every round measured here did not:
+   --  the speed measurement gave its members one prompt and the tests
+   --  stepped them from nothing together, so every row of every round
+   --  had the same last.
+   --
+   --  That matters on the device. A round's rows each carry their own
+   --  last in the per-row table, the kernel sweeps to the furthest of
+   --  them and every row masks what it may not see, and how far the
+   --  engine cuts the cache into slices is taken from the widest row --
+   --  which it was not, until a spread round was measured and read twice
+   --  what a level one did. So this steps two members whose contexts are
+   --  three tokens apart and holds each to what it says alone, as the
+   --  level round beside it does.
+   --
+   --  On both backends: the processor's answer is the one the device's
+   --  is held to, and the rows' lasts differ there too.
+   procedure A_Round_Of_Members_At_Different_Lengths_Says_The_Same
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Long_Prompt  : constant array (1 .. 5) of Vocab.Token_Id :=
+        [4, 5, 6, 7, 8];
+      Short_Prompt : constant array (1 .. 2) of Vocab.Token_Id := [9, 3];
+
+      Steps : constant := 3;
+
+      Long_Steps  : constant array (1 .. Steps) of Vocab.Token_Id :=
+        [2, 5, 7];
+      Short_Steps : constant array (1 .. Steps) of Vocab.Token_Id :=
+        [6, 4, 9];
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Image : B.Byte_Array_Access;
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind);
+
+      procedure On (Backend : Model_Runner.Backend.Backend_Kind) is
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+
+         Status : E.Error_Info;
+
+         Alone_Long, Alone_Short : Trail := [others => [others => 0.0]];
+
+         Name : constant String :=
+           Model_Runner.Backend.Backend_Name (Backend);
+
+         --  The device's round attends through a kernel of its own and
+         --  the processor's is the same arithmetic in the same order.
+         Bound : constant N.Real :=
+           (if Model_Runner.Backend."=" (Backend,
+                                         Model_Runner.Backend.Backend_CPU)
+            then 0.0 else 1.0E-3);
+      begin
+         Start (Under, Backend => Backend, Ready => Ready);
+
+         if not Ready then
+            return;
+         end if;
+
+         --  Each alone: the long one reads five tokens and then its
+         --  three, the short one two and then its three.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the long session did not open");
+
+            for Index in Long_Prompt'Range loop
+               declare
+                  Ignored : Logit_Vector;
+               begin
+                  L.Evaluate (Live, Under.Ready, Long_Prompt (Index),
+                              Ignored, Status => Status);
+                  Assert (E.Is_Ok (Status), "the long prompt failed");
+               end;
+            end loop;
+
+            for Step in 1 .. Steps loop
+               L.Evaluate (Live, Under.Ready, Long_Steps (Step),
+                           Alone_Long (Step), Status => Status);
+               Assert (E.Is_Ok (Status), "the long sequence failed");
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the short session did not open");
+
+            for Index in Short_Prompt'Range loop
+               declare
+                  Ignored : Logit_Vector;
+               begin
+                  L.Evaluate (Live, Under.Ready, Short_Prompt (Index),
+                              Ignored, Status => Status);
+                  Assert (E.Is_Ok (Status), "the short prompt failed");
+               end;
+            end loop;
+
+            for Step in 1 .. Steps loop
+               L.Evaluate (Live, Under.Ready, Short_Steps (Step),
+                           Alone_Short (Step), Status => Status);
+               Assert (E.Is_Ok (Status), "the short sequence failed");
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         --  The two must differ, or a collision would pass unseen.
+         declare
+            Same : Boolean := True;
+         begin
+            for Index in Logit_Vector'Range loop
+               if Alone_Long (Steps) (Index) /= Alone_Short (Steps) (Index)
+               then
+                  Same := False;
+                  exit;
+               end if;
+            end loop;
+
+            Assert (not Same,
+                    "the two sequences say the same thing on " & Name
+                    & ", so this fixture cannot tell a collision from a"
+                    & " coincidence");
+         end;
+
+         --  And as a round, the members three positions apart.
+         declare
+            Long_One, Short_One : aliased L.Session;
+
+            Both : Model_Runner.Tensors.Real_Array_Access := null;
+
+            Worst : N.Real := 0.0;
+         begin
+            L.Open (Long_One, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the long member did not open");
+
+            L.Open (Short_One, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the short member did not open");
+
+            for Index in Long_Prompt'Range loop
+               declare
+                  Ignored : Logit_Vector;
+               begin
+                  L.Evaluate (Long_One, Under.Ready, Long_Prompt (Index),
+                              Ignored, Status => Status);
+                  Assert (E.Is_Ok (Status), "the member's long prompt failed");
+               end;
+            end loop;
+
+            for Index in Short_Prompt'Range loop
+               declare
+                  Ignored : Logit_Vector;
+               begin
+                  L.Evaluate (Short_One, Under.Ready, Short_Prompt (Index),
+                              Ignored, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the member's short prompt failed");
+               end;
+            end loop;
+
+            Assert (L.Position (Long_One) = Long_Prompt'Length
+                    and then L.Position (Short_One) = Short_Prompt'Length,
+                    "the members are not where their prompts left them");
+
+            Model_Runner.Tensors.Allocate
+              (2 * N.Element_Count (Tiny_Model.Vocabulary), Both);
+            Assert (Both /= null, "the round had no room for its logits");
+
+            for Step in 1 .. Steps loop
+               L.Evaluate_Round
+                 (Members =>
+                    [Long_One'Unchecked_Access, Short_One'Unchecked_Access],
+                  Source  => Under.Ready,
+                  Tokens  => [Long_Steps (Step), Short_Steps (Step)],
+                  Logits  => Both,
+                  Status  => Status);
+
+               Assert (E.Is_Ok (Status),
+                       "a round of two lengths failed at step"
+                       & Integer'Image (Step) & " on " & Name & ": "
+                       & E.Error_Code'Image (Status.Code));
+
+               for Index in Logit_Vector'Range loop
+                  Worst :=
+                    N.Real'Max
+                      (Worst,
+                       abs (Both.all (Both.all'First + Index)
+                            - Alone_Long (Step) (Index)));
+                  Worst :=
+                    N.Real'Max
+                      (Worst,
+                       abs (Both.all (Both.all'First
+                                      + N.Element_Count
+                                          (Tiny_Model.Vocabulary)
+                                      + Index)
+                            - Alone_Short (Step) (Index)));
+               end loop;
+            end loop;
+
+            Assert (Worst <= Bound,
+                    "a member of a round whose rows are at different"
+                    & " lengths says" & N.Real'Image (Worst)
+                    & " away from the same sequence alone on " & Name);
+
+            Model_Runner.Tensors.Free (Both);
+            L.Close (Long_One);
+            L.Close (Short_One);
+         end;
+      end On;
+   begin
+      Tiny_Model.Build (Image);
+
+      On (Model_Runner.Backend.Backend_CPU);
+
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if Awake then
+            On (Model_Runner.Backend.Backend_Device);
+            Model_Runner.Backend.Device.Close;
+         end if;
+      end;
+
+      B.Free (Image);
+   end A_Round_Of_Members_At_Different_Lengths_Says_The_Same;
+
    -----------------------------------------------------------
    -- Sessions_Of_Different_Sizes_Share_The_Device_S_Cache --
    -----------------------------------------------------------
@@ -13281,6 +13522,10 @@ package body Tests.Inference_Cases is
         (T, A_Session_Turned_Out_Of_Its_Block_Says_What_It_Said'Access,
          "a session turned out of its block of the device's cache writes "
          & "it back and says what it said before");
+      Register_Routine
+        (T, A_Round_Of_Members_At_Different_Lengths_Says_The_Same'Access,
+         "a round whose members sit at different positions gives each what "
+         & "it would get alone, on the processor and on the device");
       Register_Routine
         (T, Sessions_Of_Different_Sizes_Share_The_Device_S_Cache'Access,
          "sessions of three context lengths share the device's cache, each "

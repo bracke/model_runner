@@ -658,19 +658,30 @@ package body Model_Runner.Platform.Device.Products is
    --  and would not suffer much for this one.
    Want_Workgroups : constant := 256;
 
-   --  How many slices the exact kernels cut the cache into.
+   --  Whether a round's cache is cut into slices, which the two kernels
+   --  answer differently because their workgroups cost differently.
    --
-   --  Not a round's, though the kernel would take one: it reads its span
-   --  from the per-row table and marks an empty slice as empty, which is
-   --  what let the packed kernel be cut. Measured on this part, sixteen
-   --  rounds of a 1,419-token prompt: two members 0.359 s cut against
-   --  0.364 whole, four 0.397 against 0.401, eight 0.588 against 0.605,
-   --  sixteen 0.750 against 0.717. A per cent or two at the small counts
-   --  and four per cent the wrong way at sixteen -- an exact round's
-   --  workgroup already bundles eight heads and is quick, so what the
-   --  cut adds in merging costs more than the workgroups it gains. The
-   --  packed kernel, whose workgroups unpack as they read, gains by a
-   --  third from the same cut.
+   --  Either kernel would take the cut: each reads a round's span from
+   --  the per-row table and marks an empty slice as empty. What differs
+   --  is whether the merge pass a cut adds is worth the workgroups it
+   --  wins. Sixteen rounds of a 1,419-token prompt on this part, cut
+   --  against whole:
+   --
+   --    exact    2 members  0.359 / 0.364 s    packed  0.431 / 0.784 s
+   --             4          0.397 / 0.401              0.525 / 0.794
+   --             8          0.588 / 0.605              0.834 / 0.953
+   --             16         0.750 / 0.717              1.293 / 1.473
+   --
+   --  A packed workgroup unpacks every element it reads and is slow
+   --  enough that more of them wins by a third; an exact one bundles
+   --  eight heads and is quick, so the merge costs more than it saves
+   --  and the wrong way at sixteen members. Named here rather than
+   --  written as a bare condition in each rule, so that the difference
+   --  is one thing a reader finds rather than two they must notice.
+   Exact_Cuts_A_Round  : constant Boolean := False;
+   Packed_Cuts_A_Round : constant Boolean := True;
+
+   --  How many slices the exact kernels cut the cache into.
    function Attend_Slices
      (Item       : Engine;
       Positions  : Natural;
@@ -679,7 +690,7 @@ package body Model_Runner.Platform.Device.Products is
       First      : Natural;
       Last       : Natural;
       Rounding   : Boolean) return Natural
-   is (if Rounding
+   is (if (Rounding and then not Exact_Cuts_A_Round)
          or else Item.Merge_Line = Null_Handle
          or else Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
          or else (Item.Tile_Line /= Null_Handle
@@ -6101,14 +6112,18 @@ package body Model_Runner.Platform.Device.Products is
    --  @param Wide How many workgroups the first two axes give.
    --  @param First The lowest cached position this call reads.
    --  @param Last The highest.
+   --  @param Rounding True where the rows are different sessions, whose
+   --    own lasts are in the table.
    function Packed_Slices
-     (Item  : Engine;
-      Wide  : Natural;
-      First : Natural;
-      Last  : Natural) return Natural
+     (Item     : Engine;
+      Wide     : Natural;
+      First    : Natural;
+      Last     : Natural;
+      Rounding : Boolean := False) return Natural
    is (if Item.Merge_Line = Null_Handle
          or else Last < First
          or else Wide = 0
+         or else (Rounding and then not Packed_Cuts_A_Round)
        then 1
        else Natural'Max
               (1,
@@ -10461,7 +10476,8 @@ package body Model_Runner.Platform.Device.Products is
                                (Item,
                                 (This.Heads + Bundle - 1) / Bundle
                                 * ((Count + Queries - 1) / Queries),
-                                This.First, This.Last));
+                                This.First, This.Last,
+                                Rounding => This.Table /= 0));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);

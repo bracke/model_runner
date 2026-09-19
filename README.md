@@ -2050,11 +2050,11 @@ the same TinyLlama-1.1B Q8_0 at a context of 512:
 
 | Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
 | --- | ---: | ---: | ---: |
-| 8 | 49.4 | 0 | 39.1 |
-| 16 | **49.2** | 0 | 39.2 |
-| 17 | 47.9 | 1 | 39.0 |
-| 20 | 46.5 | 4 | 38.7 |
-| 32 | 43.4 | 16 | 39.0 |
+| 8 | 49.1 | 0 | 39.1 |
+| 16 | **49.1** | 0 | 38.9 |
+| 17 | 48.0 | 1 | 38.9 |
+| 20 | 46.2 | 4 | 38.9 |
+| 32 | 42.2 | 16 | 38.9 |
 
 Tokens a second, all of them. The processor column is flat because it has
 nothing to run out of, and it is what the blocks are worth: **1.26 times at
@@ -2067,7 +2067,7 @@ asking session's own previous token, so thirty-two sessions turn sixteen
 blocks over in the whole run rather than one a token. **Without that guard
 the same run turns a block over 528 times**, and where the cache is long the
 difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 42.0 guarded**, a 64-megabyte cache
+**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
 written across the bus every token (84 turnovers in 80 tokens) against four
 writes in the run -- medians of three alternated pairs, and the unguarded
 reading does not move at all. The guard does cost in the other corner: where
@@ -16667,14 +16667,14 @@ N --kv-cache MODE` on the same 1,419-token prompt, sixteen rounds:
 
 | Members | `f32` | `q8` | `q8` before it was sliced |
 | --- | ---: | ---: | ---: |
-| 2 | 0.366 s | **0.437 s** | 0.784 s |
-| 4 | 0.399 s | **0.532 s** | 0.794 s |
-| 8 | 0.591 s | **0.838 s** | 0.953 s |
-| 16 | 0.666 s | **1.231 s** | 1.473 s |
+| 2 | 0.365 s | **0.436 s** | 0.784 s |
+| 4 | 0.386 s | **0.534 s** | 0.794 s |
+| 8 | 0.591 s | **0.843 s** | 0.953 s |
+| 16 | 0.662 s | **1.244 s** | 1.473 s |
 
 Members at one length, which is the shape a server does not have. `--spread`
 gives them prompts from a fraction of the file to the whole of it: eight
-members then read 0.530 s exact and 0.708 packed, sixteen 0.628 and 0.929 --
+members then read 0.557 s exact and 0.716 packed, sixteen 0.629 and 0.940 --
 less work for less time, as it should be. That measurement earned its keep
 the first time it was taken, at 2.150 s for the sixteen packed: a round's
 rows each carry their own last in the per-row table and the kernel takes its
