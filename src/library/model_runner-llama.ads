@@ -1805,6 +1805,20 @@ package Model_Runner.Llama is
    --    size for no bound.
    procedure Limit_Page_Pool (Pages : Natural);
 
+   --  Set how many positions of one layer a page of the device's cache
+   --  holds. A session filling little of its context wastes at most a page
+   --  short of a whole one, so a smaller page holds more sessions in less;
+   --  a larger one carries a narrower table and grows less often. The
+   --  default is sixty-four.
+   --
+   --  Ignored while any page is held -- the pool serves one page size at
+   --  once -- and ignored for a size that is not a power of two of at
+   --  least sixteen, which the shift-and-mask addressing and the matrix
+   --  instruction's tile require.
+   --
+   --  @param Positions Positions a page holds: a power of two, 16 or more.
+   procedure Set_Page_Size (Positions : Positive);
+
    --  How many paged sessions have been turned out of their pages since the
    --  device was opened: what a server reads to know a tighter pool is
    --  churning the cache. Zero where none has.

@@ -22102,3 +22102,27 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 # out over the run, which Pages_Turned reports.
 #
 # model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
+
+# ---------------------------------------------------------------------------
+# The page made smaller with Set_Page_Size, so the sessions -- filling
+# twenty-three of their context -- waste fewer of a page's positions. The same
+# eight, at three page sizes:
+#
+#   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
+#                --paged --page-size N
+#
+#   --page-size   cache     pages held   digest
+#   64 (default)  33.0 MB   176          104524498F840E7B
+#   32           16.5 MB    176          104524498F840E7B
+#   16           16.5 MB    352          104524498F840E7B
+#
+# The answer is the same to the bit at every size. Twenty-three positions round
+# up to one page of thirty-two, wasting nine rather than the forty-one a page of
+# sixty-four wastes, so thirty-two halves the cache at the same page count --
+# 16.5 MB, sixty-four times under the block cache. Sixteen rounds the same
+# twenty-three up to thirty-two too, so it saves no more cache and doubles the
+# pages, and the wider table it carries is not worth it here. The size that
+# wastes least without splitting the fill is the one to pick: a power of two, at
+# least sixteen, no larger than the sessions fill.
+#
+# model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.

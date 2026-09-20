@@ -4884,6 +4884,123 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Says_What_A_Block_Session_Says;
 
+   ----------------------------------------------------------
+   -- A_Paged_Session_At_A_Smaller_Page_Says_The_Same --
+   ----------------------------------------------------------
+
+   --  The page holds fewer positions, set with Set_Page_Size. A session
+   --  filling little of its context wastes at most a page short of a whole
+   --  one, so a smaller page holds it in less; the answer is the size's to
+   --  keep, not to change. Run at thirty-two positions a page and at
+   --  sixteen -- half and a quarter of the default -- each compared to the
+   --  same session in a block, and the page size given back afterwards so
+   --  it does not follow into another test.
+   procedure A_Paged_Session_At_A_Smaller_Page_Says_The_Same
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Steps : constant := 130;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Blocked : L.Session;
+
+            Said : Trail := [others => [others => 0.0]];
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               L.Open (Blocked, Under.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the block session did not open");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Blocked, Under.Ready, Token_Of (Step),
+                              Said (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "the block session failed at"
+                          & Integer'Image (Step));
+               end loop;
+               L.Close (Blocked);
+
+               --  Each smaller page in turn, a paged session compared to
+               --  the block above position for position.
+               for Size in reverse 4 .. 5 loop
+                  declare
+                     Positions : constant Positive := 2 ** Size;
+                     Paged     : L.Session;
+                     LP        : Logit_Vector;
+                     Worst     : N.Real := 0.0;
+                  begin
+                     L.Set_Page_Size (Positions);
+
+                     L.Open (Paged, Under.Ready, Context => Room,
+                             Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "the paged session did not open at a page of"
+                             & Integer'Image (Positions));
+
+                     for Step in 1 .. Steps loop
+                        L.Evaluate (Paged, Under.Ready, Token_Of (Step), LP,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "the paged session failed at"
+                                & Integer'Image (Step) & ", page"
+                                & Integer'Image (Positions));
+
+                        for Index in Logit_Vector'Range loop
+                           Worst :=
+                             N.Real'Max
+                               (Worst,
+                                abs (Said (Step) (Index) - LP (Index)));
+                        end loop;
+                     end loop;
+
+                     Assert (L.Holds_Pages (Paged),
+                             "the paged session did not reach the device in"
+                             & " pages at a page of"
+                             & Integer'Image (Positions));
+                     Assert (Worst = 0.0,
+                             "a paged session at a page of"
+                             & Integer'Image (Positions) & " says"
+                             & N.Real'Image (Worst)
+                             & " away from the same session in a block");
+
+                     L.Close (Paged);
+                  end;
+               end loop;
+
+               --  Given back, so the default page follows into no other.
+               L.Set_Page_Size (64);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Session_At_A_Smaller_Page_Says_The_Same;
+
    ------------------------------------------------------
    -- A_Paged_Session_Holds_Only_What_It_Fills --
    ------------------------------------------------------
@@ -14495,6 +14612,11 @@ package body Tests.Inference_Cases is
          "a session whose device cache is dealt in pages rather than one "
          & "block gives, bit for bit, the logits it gives in a block, past "
          & "two pages");
+      Register_Routine
+        (T, A_Paged_Session_At_A_Smaller_Page_Says_The_Same'Access,
+         "a paged session whose page holds fewer positions, set by "
+         & "Set_Page_Size, gives bit for bit what a block gives, at "
+         & "thirty-two positions a page and at sixteen");
       Register_Routine
         (T, A_Paged_Session_Holds_Only_What_It_Fills'Access,
          "a paged session takes a page of the device's cache only as a "

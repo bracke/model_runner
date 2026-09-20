@@ -4959,8 +4959,13 @@ package body Model_Runner.Llama is
    --  mask, which is what the kernels read the cache by. Sixty-four is a
    --  multiple of the matrix instruction's sixteen, so a tile of keys
    --  never straddles a page.
-   Page_Positions : constant := 64;
-   Page_Shift_Bits : constant := 6;
+   --
+   --  Set_Page_Size moves it, kept in step with the shift; a server whose
+   --  sessions fill little of a context holds fewer wasted positions in a
+   --  smaller page, at more pages and so a wider table. The two are one
+   --  geometry, changed only while no page is held.
+   Page_Positions  : Natural := 64;
+   Page_Shift_Bits : Natural := 6;
 
    --  Extra entries a layer's page table carries past its own pages, each
    --  the base of a valid page. A kernel reads its keys and values in
@@ -6956,6 +6961,37 @@ package body Model_Runner.Llama is
    begin
       Page_Pool_Limit := Natural'Max (1, Natural'Min (Pages, Page_Cap));
    end Limit_Page_Pool;
+
+   procedure Set_Page_Size (Positions : Positive) is
+      Bits : Natural := 0;
+      N    : Positive := Positions;
+   begin
+      --  Refused while any page is held: the pool serves one page size at
+      --  a time, since a slot the owner array counts is that size and a
+      --  base divides back to a slot by it. And refused for a size that is
+      --  not a power of two of at least sixteen: the kernels read a page
+      --  and a place inside it by a shift and a mask, and a tile of the
+      --  matrix instruction, sixteen wide, must not straddle a page.
+      if Pages_In_Use > 0 or else Positions < 16 then
+         return;
+      end if;
+
+      while N > 1 and then N mod 2 = 0 loop
+         N := N / 2;
+         Bits := Bits + 1;
+      end loop;
+
+      if N /= 1 then
+         return;
+      end if;
+
+      Page_Positions  := Positions;
+      Page_Shift_Bits := Bits;
+
+      --  The page's element count is worked out afresh from the new size
+      --  when the next session takes its first page.
+      Page_Elements := 0;
+   end Set_Page_Size;
 
    function Pages_Turned return Natural
    is (Pages_Turned_Count);

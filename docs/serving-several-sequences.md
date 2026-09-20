@@ -298,6 +298,20 @@ many times more of these in the cache it has. `tests speed --turns N --paged`
 and `--round N --paged` serve them, and `docs/measured-figures.txt` keeps the
 run.
 
+**And sized to the fill.** A page holds sixty-four positions of a layer by
+default, so a session filling twenty-three of its context wastes forty-one of
+the page's positions -- the page is taken whole as the first position reaches
+it. `Set_Page_Size` moves it: a server whose callers fill little may hold the
+page to thirty-two, where the same twenty-three round up wasting nine, and the
+cache halves -- 16.5 MB, sixty-four times under the block cache -- for the same
+answer to the bit. Smaller pays back less and costs more: sixteen rounds the
+same twenty-three up to thirty-two again, saving no cache and doubling the
+pages and the table each layer carries. The size is a power of two of at least
+sixteen -- a page and a place inside it are a shift and a mask, and a tile of
+the matrix instruction must not straddle a page -- and it is one geometry with
+the pages, so it is set before a session holds any. `--page-size N` measures
+it.
+
 ## Staging
 
 **One — done.** `Evaluate_Round` on the processor, the four substitutions

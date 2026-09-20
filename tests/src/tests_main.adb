@@ -2746,7 +2746,8 @@ begin
                Spread      => Given ("--spread"),
                Backend     => Backend_Of (Option ("--backend", "cpu")),
                Paged       => Given ("--paged"),
-               Page_Pool   => Whole ("--page-pool"));
+               Page_Pool   => Whole ("--page-pool"),
+               Page_Size   => Whole ("--page-size"));
             return;
          end if;
 

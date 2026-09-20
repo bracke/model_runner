@@ -1339,7 +1339,8 @@ package body Speed_Run is
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
       Paged       : Boolean := False;
-      Page_Pool   : Natural := 0)
+      Page_Pool   : Natural := 0;
+      Page_Size   : Natural := 0)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1532,6 +1533,13 @@ package body Speed_Run is
 
          Room_Of.Allocate (Width, Row);
          Room_Of.Allocate (Width, Aside);
+
+         --  A page size other than the default where one is asked, set
+         --  before any session takes a page: a smaller page wastes fewer
+         --  positions where the sessions fill little of their context.
+         if Paged and then Page_Size > 0 then
+            L.Set_Page_Size (Page_Size);
+         end if;
 
          --  A tighter bound on the page pool where one is asked, so that
          --  the sessions taking turns ask for more pages than the pool
