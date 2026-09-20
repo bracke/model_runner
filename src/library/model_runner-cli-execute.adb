@@ -2915,6 +2915,15 @@ package body Model_Runner.CLI.Execute is
                      end if;
                   end;
                end if;
+            exception
+               when others =>
+                  --  A cache that raised while being adopted is no failure
+                  --  either: the prompt is read in full. An explicit
+                  --  --load-session still faults.
+                  if not Auto then
+                     raise;
+                  end if;
+                  Prefix_Reused := False;
             end;
          end if;
 
@@ -3894,6 +3903,14 @@ package body Model_Runner.CLI.Execute is
                         return;
                      end if;
                   end if;
+               exception
+                  when others =>
+                     --  The auto cache breaks nothing: a snapshot or write
+                     --  that raised costs the next run a cache, not this one
+                     --  its answer. An explicit --save-session still faults.
+                     if not Auto then
+                        raise;
+                     end if;
                end;
             end if;
 
