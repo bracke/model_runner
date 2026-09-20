@@ -31,6 +31,7 @@ with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Hub;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Progress;
@@ -1216,6 +1217,106 @@ package body Model_Runner.CLI.Execute is
    end Asked_Rotation;
 
    --  Load and validate a container, and prepare a model when asked.
+   --  Offer to download a model named as a Hugging Face reference the local
+   --  search did not find, and, where the user takes the offer, fetch it
+   --  into the models directory. Fetched is true with Where the local path
+   --  only when the file arrived. Every branch says on the console what it
+   --  did; a name that resolves to no one file, no models directory, no
+   --  terminal to ask at, a declined offer and a failed download all leave
+   --  Fetched false so the caller reports the model as not found as before.
+   procedure Offer_Download
+     (Screen  : in out Pres.Console;
+      Named   : String;
+      Fetched : out Boolean;
+      Where   : out Model_Runner.Text.Bounded)
+   is
+      Repo, File_Name, Reason : Model_Runner.Text.Bounded;
+      Ok : Boolean;
+   begin
+      Fetched := False;
+      Where   := Model_Runner.Text.Empty;
+
+      Model_Runner.Hub.Resolve (Named, Repo, File_Name, Ok, Reason);
+      if not Ok then
+         Pres.Put_Note
+           (Screen, "cli.download.unresolved",
+            [Loc.Named ("detail", T.To_String (Reason))]);
+         return;
+      end if;
+
+      declare
+         Destination : constant String :=
+           Model_Runner.Platform.Models_File (T.To_String (File_Name));
+      begin
+         if Destination = "" then
+            Pres.Put_Note (Screen, "cli.download.no_directory");
+            return;
+         end if;
+
+         --  Already fetched by an earlier run: the reference resolves to a
+         --  file the models directory holds, so it is opened without asking
+         --  or downloading again.
+         if Ada.Directories.Exists (Destination) then
+            Where   := Model_Runner.Text.To_Bounded (Destination);
+            Fetched := True;
+            return;
+         end if;
+
+         --  Asked only at a terminal: a piped run has no one to answer and
+         --  its input is the prompt, not a yes.
+         if not Model_Runner.Platform.Is_Terminal (0) then
+            Pres.Put_Note (Screen, "cli.download.declined");
+            return;
+         end if;
+
+         Pres.Put_Note
+           (Screen, "cli.download.offer",
+            [Loc.Named ("name", Named),
+             Loc.Named
+               ("detail",
+                T.To_String (File_Name) & " from huggingface.co/"
+                & T.To_String (Repo) & " into " & Destination)]);
+
+         declare
+            Line : String (1 .. 256);
+            Last : Natural := 0;
+         begin
+            begin
+               Ada.Text_IO.Get_Line (Line, Last);
+            exception
+               when Ada.Text_IO.End_Error =>
+                  Last := 0;
+            end;
+            if Last < 1
+              or else not (Line (1) = 'y' or else Line (1) = 'Y')
+            then
+               Pres.Put_Note (Screen, "cli.download.declined");
+               return;
+            end if;
+         end;
+
+         Pres.Put_Note
+           (Screen, "cli.download.fetching",
+            [Loc.Named ("name", T.To_String (File_Name))]);
+
+         Model_Runner.Hub.Fetch
+           (T.To_String (Repo), T.To_String (File_Name), Destination,
+            Ok, Reason);
+
+         if Ok then
+            Pres.Put_Note
+              (Screen, "cli.download.saved",
+               [Loc.Named ("detail", Destination)]);
+            Where   := Model_Runner.Text.To_Bounded (Destination);
+            Fetched := True;
+         else
+            Pres.Put_Note
+              (Screen, "cli.download.failed",
+               [Loc.Named ("detail", T.To_String (Reason))]);
+         end if;
+      end;
+   end Offer_Download;
+
    procedure Load
      (Item      : Opt.Command;
       Screen    : in out Pres.Console;
@@ -1233,10 +1334,33 @@ package body Model_Runner.CLI.Execute is
       Instead   : String := "")
    is
       Bounds : constant Model_Runner.Limits.Model_Limits := Model_Bounds (Item);
+      Named  : constant String :=
+        (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
       Path   : constant String :=
-        Model_Runner.Platform.Resolve_Model_Path
-          (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
+        Model_Runner.Platform.Resolve_Model_Path (Named);
    begin
+      --  A model named for the Hugging Face hub and not on disk: the user
+      --  is offered its download, and where they take it the fetched file
+      --  is opened in its place. Only the model a run is for, not a draft
+      --  or an embedder loaded beside it (Instead names those), so a hub
+      --  reference reaches the network once and by the user's leave.
+      if Instead = ""
+        and then not Ada.Directories.Exists (Path)
+        and then Model_Runner.Hub.Is_Reference (Named)
+      then
+         declare
+            Fetched : Boolean := False;
+            Where   : Model_Runner.Text.Bounded;
+         begin
+            Offer_Download (Screen, Named, Fetched, Where);
+            if Fetched then
+               Load (Item, Screen, Source, Container, Prepared, Full,
+                     Observer, Cancel, Status,
+                     Instead => T.To_String (Where));
+               return;
+            end if;
+         end;
+      end if;
       Model_Runner.Progress.Publish
         (Observer,
          Model_Runner.Progress.Load_Progress

@@ -81,6 +81,14 @@ package Model_Runner.Platform is
    --  @return The path to open.
    function Resolve_Model_Path (Named : String) return String;
 
+   --  A path in the models directory for a file of this name, or an empty
+   --  string when no models directory is known -- where a downloaded model
+   --  is written so that a later run finds it by name.
+   --
+   --  @param Name The file name to place.
+   --  @return The path, or an empty string when there is no directory.
+   function Models_File (Name : String) return String;
+
    --  Directory a session named without a path is kept in.
    --
    --  MODEL_RUNNER_SESSIONS overrides it, and otherwise it sits beside the

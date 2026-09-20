@@ -284,6 +284,23 @@ package body Model_Runner.Platform is
    function Resolve_Model_Path (Named : String) return String
    is (Resolve_In (Named, Models_Directory));
 
+   ------------------
+   -- Models_File --
+   ------------------
+
+   function Models_File (Name : String) return String is
+      Directory : constant String := Models_Directory;
+   begin
+      if Directory = "" then
+         return "";
+      else
+         return Hostkit.Fs.Join (Directory, Name);
+      end if;
+   exception
+      when others =>
+         return "";
+   end Models_File;
+
    ---------------------------
    -- Resolve_Session_Path --
    ---------------------------
