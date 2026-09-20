@@ -5001,6 +5001,121 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_At_A_Smaller_Page_Says_The_Same;
 
+   ----------------------------------------------------------
+   -- A_Packed_Paged_Session_Says_What_A_Packed_Block_Says --
+   ----------------------------------------------------------
+
+   --  Paging and packing at once: a session whose cache is kept in bytes or
+   --  nibbles AND dealt in pages, against the same session in a packed
+   --  block. The two savings compound -- a fraction of the positions, and a
+   --  quarter or an eighth of each -- and the answer is the block's to the
+   --  bit, past two pages, in both packed storages. What it exercises that
+   --  the exact paged case does not is the packed kernels reading and
+   --  writing a page: pack.comp into the page's regions, attention_packed
+   --  out of them a position's page at a time.
+   procedure A_Packed_Paged_Session_Says_What_A_Packed_Block_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Steps : constant := 130;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Storages : constant array (1 .. 2) of L.Cache_Precision :=
+        [L.Eighth, L.Fourth];
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+            Status : E.Error_Info;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               for Storage of Storages loop
+                  declare
+                     Blocked, Paged : L.Session;
+                     Said : Trail := [others => [others => 0.0]];
+                     LP   : Logit_Vector;
+                     Worst : N.Real := 0.0;
+                  begin
+                     --  The packed block first, then closed, then the same
+                     --  session packed and paged: a cache in blocks and one
+                     --  in pages are dealt from the front of the one buffer.
+                     L.Open (Blocked, Under.Ready, Context => Room,
+                             Cache => Storage, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "the packed block session did not open");
+
+                     for Step in 1 .. Steps loop
+                        L.Evaluate (Blocked, Under.Ready, Token_Of (Step),
+                                    Said (Step), Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "the packed block session failed at"
+                                & Integer'Image (Step));
+                     end loop;
+                     L.Close (Blocked);
+
+                     L.Open (Paged, Under.Ready, Context => Room,
+                             Cache => Storage, Paged => True,
+                             Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "the packed paged session did not open");
+
+                     for Step in 1 .. Steps loop
+                        L.Evaluate (Paged, Under.Ready, Token_Of (Step), LP,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "the packed paged session failed at"
+                                & Integer'Image (Step) & ": "
+                                & E.Error_Code'Image (Status.Code));
+
+                        for Index in Logit_Vector'Range loop
+                           Worst :=
+                             N.Real'Max
+                               (Worst,
+                                abs (Said (Step) (Index) - LP (Index)));
+                        end loop;
+                     end loop;
+
+                     Assert (L.Holds_Pages (Paged),
+                             "the packed paged session did not reach the"
+                             & " device in pages, so an agreement says"
+                             & " nothing about paging");
+                     Assert (Worst = 0.0,
+                             "a packed paged session in "
+                             & L.Cache_Name (Storage) & " says"
+                             & N.Real'Image (Worst)
+                             & " away from the same session in a packed"
+                             & " block, past two pages");
+
+                     L.Close (Paged);
+                  end;
+               end loop;
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Packed_Paged_Session_Says_What_A_Packed_Block_Says;
+
    ------------------------------------------------------
    -- A_Paged_Session_Holds_Only_What_It_Fills --
    ------------------------------------------------------
@@ -14617,6 +14732,11 @@ package body Tests.Inference_Cases is
          "a paged session whose page holds fewer positions, set by "
          & "Set_Page_Size, gives bit for bit what a block gives, at "
          & "thirty-two positions a page and at sixteen");
+      Register_Routine
+        (T, A_Packed_Paged_Session_Says_What_A_Packed_Block_Says'Access,
+         "a session whose cache is kept packed and dealt in pages gives, "
+         & "bit for bit, what the same session gives in a packed block, "
+         & "past two pages, in bytes and in nibbles");
       Register_Routine
         (T, A_Paged_Session_Holds_Only_What_It_Fills'Access,
          "a paged session takes a page of the device's cache only as a "
