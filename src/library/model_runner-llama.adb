@@ -5029,12 +5029,6 @@ package body Model_Runner.Llama is
    State_Seats : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
-   --  And when each seat was last asked for, on the same clock the blocks
-   --  are stamped with, for the same reason: a session that finds every
-   --  seat taken takes the one gone longest unasked, where it used to run
-   --  every linear layer on the processor for the rest of its life.
-   State_Used : array (State_Seats'Range) of Natural := [others => 0];
-
    --  The runs' table at the front of the room: five words a run, one
    --  run a session of a round at most, in a stretch rounded up to the
    --  alignment below.
@@ -5327,10 +5321,6 @@ package body Model_Runner.Llama is
       Span : constant Element_Count := Device_Ring_Span (Item.all);
       Free : Integer := -1;
       Place : Element_Count := State_Table_Room;
-
-      --  What this session asked at its previous token, as a block's
-      --  guard reads.
-      Asked_Last : Natural := 0;
    begin
       Cleared := False;
 
@@ -5340,16 +5330,10 @@ package body Model_Runner.Llama is
          Item.State_Asked_Before := Item.State_Asked_At;
          Last_Asker := Item;
       end if;
-      Asked_Last := Item.State_Asked_Before;
       Item.State_Asked_At := Block_Clock;
 
       Ok := Item.State_Seated;
       if Ok then
-         for Seat in State_Seats'Range loop
-            if State_Seats (Seat) = Item then
-               State_Used (Seat) := Item.State_Asked_At;
-            end if;
-         end loop;
          return;
       end if;
 
@@ -5360,52 +5344,10 @@ package body Model_Runner.Llama is
          end if;
       end loop;
 
-      --  None free: the seat gone longest unasked is taken from the
-      --  session sitting in it, as a block of the cache is, and under the
-      --  same guard -- only from a session that has gone unasked since
-      --  before this one's last ask, so that seventeen hybrids reading a
-      --  token apiece in turn do not carry their rings back and forth
-      --  every token. The ring in that seat comes home first: the host's
-      --  copy is what the session writes back into the seat it is given
-      --  next, and a seat given up holds whatever the session before it
-      --  left there.
-      if Free < 0 then
-         declare
-            Oldest : Natural := 0;
-            Found  : Integer := -1;
-         begin
-            for Seat in State_Seats'Range loop
-               if State_Seats (Seat) /= null
-                 and then State_Seats (Seat) /= Item
-                 and then (Found < 0 or else State_Used (Seat) < Oldest)
-               then
-                  Found  := Seat;
-                  Oldest := State_Used (Seat);
-               end if;
-            end loop;
-
-            if Found < 0 or else State_Used (Found) >= Asked_Last then
-               return;
-            end if;
-
-            declare
-               Turned : constant Session_Access := State_Seats (Found);
-            begin
-               Fetch_States (Turned);
-
-               if Turned.State_On_Device then
-                  return;
-               end if;
-
-               State_Seats (Found) := null;
-               Turned.State_Seated := False;
-               Free := Found;
-
-               Model_Runner.Backend.Device.Note_Turned (Ring => True);
-            end;
-         end;
-      end if;
-
+      --  None free: the device's ring seats are all held, so this
+      --  session runs its linear layers on the processor until a seat
+      --  comes back. A seat is given up when its session closes, and a
+      --  personal tool holds one or two.
       if Free < 0 then
          return;
       end if;
@@ -5442,7 +5384,6 @@ package body Model_Runner.Llama is
       end if;
 
       State_Seats (Free) := Item;
-      State_Used (Free) := Item.State_Asked_At;
       Item.State_Base := Place;
       Item.State_Seated := True;
       Item.State_On_Device := False;
