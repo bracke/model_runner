@@ -22066,16 +22066,13 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 #   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
 #
 #                     tokens/s   cache      digest
-#   blocks            61.7       1056.0 MB  45557FE1E3FDFEFC
-#   pages             58.0         33.0 MB  45557FE1E3FDFEFC   (176 held)
+#   blocks            39.1       1056.0 MB  104524498F840E7B
+#   pages             39.1         33.0 MB  104524498F840E7B   (176 held)
 #
-# The cache is thirty-two times smaller for the same answer to the bit, at
-# six per cent fewer tokens a second -- the price of the page tables written
-# a token and the walk that grows them. A memory-bound server fits that many
-# times more of these sessions in the cache it has.
+# The cache is thirty-two times smaller for the same answer to the bit, and at
+# no cost a token: a paged batch places its keys and values by the same fused
+# head step a block does, reading its page table out of the cache it writes.
+# A memory-bound server fits that many times more of these sessions in the
+# cache it has.
 #
-# And a round of eight of the same, --round 8 --context-size 2048:
-#   blocks   0.464 s / 128 tokens    45557FE1E3FDFEFC
-#   pages    0.496 s / 128 tokens    45557FE1E3FDFEFC
-#
-# model: TinyLlama-1.1B-Chat q5_1 on the device; load ~0.4 of 16.
+# model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.

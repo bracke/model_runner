@@ -269,19 +269,25 @@ once a token where the pages grow, all the layers at their own places past the
 pages, not a table a layer every token; `Take_Pages` returns at once for the
 asks past the position its pages already reach, rather than walking every layer
 to find nothing to grow; and one release path frees a session's slots for both
-the close and the turn-out, where two copies could drift. The head step, which
-carried a paging path nothing reached, carries it no longer.
+the close and the turn-out, where two copies could drift.
+
+**And placed by the head step, as a block is.** A paged batch first placed its
+keys and values with a separate place step where a block folded that placement
+into the chained head step -- two dispatches a layer the pages did not save.
+The head step now reads the page table out of the cache it writes, through a
+read-only view of it at a binding of its own, and places into the page a
+position names, so a paged batch dispatches exactly what a block does. A round,
+whose rows carry their own per-row table, still mirrors.
 
 **And priced.** Eight sessions taking turns, each of a 2,048-position context
 and filling twenty-three of it, on the device: the blocks hold 1,056 MB of
-cache and read 61.7 tokens a second; the pages hold 33 MB -- one page a layer
-apiece -- and read 58.0, for the same answer to the bit (mark `45557FE1`). The
-cache is thirty-two times smaller at six per cent fewer tokens a second, which
-is the page tables written a token and the walk that grows them; a memory-bound
-server fits that many times more of these in the cache it has. A round of eight
-at the same context reads 0.496 s against the blocks' 0.464, the same mark
-again. `tests speed --turns N --paged` and `--round N --paged` serve them, and
-`docs/measured-figures.txt` keeps the run.
+cache and read 39.1 tokens a second; the pages hold 33 MB -- one page a layer
+apiece -- and read 39.1, for the same answer to the bit (mark `10452449`). The
+cache is thirty-two times smaller for no cost a token, because the head step
+places the pages where it placed the blocks; a memory-bound server fits that
+many times more of these in the cache it has. `tests speed --turns N --paged`
+and `--round N --paged` serve them, and `docs/measured-figures.txt` keeps the
+run.
 
 ## Staging
 

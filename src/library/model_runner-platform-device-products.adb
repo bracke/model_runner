@@ -1137,10 +1137,17 @@ package body Model_Runner.Platform.Device.Products is
       V_Width    : C.unsigned := 0;
       V_Into     : C.unsigned := 0;
       V_Stride   : C.unsigned := 0;
+
+      --  A cache in pages, for the dispatch that places: the batch's
+      --  page table, the page's width as a shift, and the session
+      --  position of the first row. Zero shift for a cache in blocks.
+      Pages_At       : C.unsigned := 0;
+      Page_Shift     : C.unsigned := 0;
+      First_Position : C.unsigned := 0;
    end record
      with Convention => C;
 
-   Heads_Bytes : constant := 18 * 4;
+   Heads_Bytes : constant := 21 * 4;
 
    --  What merge.comp is told.
    type Merge_Constants is record
@@ -8439,7 +8446,10 @@ package body Model_Runner.Platform.Device.Products is
       V_Step      : Natural := 0;
       V_At_First  : Natural := 0;
       V_Stride    : Natural := 0;
-      Kept        : Boolean := True)
+      Kept        : Boolean := True;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0)
    is
       Width : constant Natural := Heads * Head_Size;
    begin
@@ -8476,6 +8486,9 @@ package body Model_Runner.Platform.Device.Products is
          Into_Cache => Into_Cache, At_First => At_First, Stride => Stride,
          V_Rows => (if V_Step = 0 then 0 else Steps.Items (V_Step).Rows),
          V_At_First => V_At_First, V_Stride => V_Stride,
+         Pages_At => (if Into_Cache then Pages_At else 0),
+         Page_Shift => (if Into_Cache then Page_Shift else 0),
+         First_Position => (if Into_Cache then First_Position else 0),
          Attends => False, Blends => False, Norms => False,
          Rotates => False, Places => False,
          others => <>);
@@ -10895,7 +10908,10 @@ package body Model_Runner.Platform.Device.Products is
                            else 0),
                         V_Width   => C.unsigned (This.V_Rows),
                         V_Into    => C.unsigned (This.V_At_First),
-                        V_Stride  => C.unsigned (This.V_Stride));
+                        V_Stride  => C.unsigned (This.V_Stride),
+                        Pages_At       => C.unsigned (This.Pages_At),
+                        Page_Shift     => C.unsigned (This.Page_Shift),
+                        First_Position => C.unsigned (This.First_Position));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Heads_Bytes, Shape'Address);

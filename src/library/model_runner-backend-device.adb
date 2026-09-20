@@ -2908,7 +2908,9 @@ package body Model_Runner.Backend.Device is
                   Key => Weight_Of (Key_Norm),
                   Into_Cache => True, At_First => At_Key, Stride => KV_Width,
                   V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
-                  Kept => False);
+                  Kept => False,
+                  Pages_At => Pages_At, Page_Shift => Page_Shift,
+                  First_Position => First_Position);
                if not Added then
                   return;
                end if;

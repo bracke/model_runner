@@ -14542,12 +14542,13 @@ package body Model_Runner.Llama is
                           and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
                                       Natural (Index) + 1),
-                        --  A paged session places its keys and values with
-                        --  the place step rather than the chained head step:
-                        --  the two go into the cache the same way, but the
-                        --  head step's paged write is not yet right, so a
-                        --  paged session mirrors, which is the place step.
-                        Mirror    => (if Item.Paged then True else not Chaining),
+                        --  A paged session places its keys and values by
+                        --  the chained head step as a block session does: the
+                        --  head step reads the page table out of the cache it
+                        --  writes, at a binding of its own, and places into
+                        --  the page the position names. A round, whose rows
+                        --  carry their own per-row table, still mirrors.
+                        Mirror    => not Chaining,
                         Window   =>
                           (if Settings.Window > 0
                              and then Earliest (Settings,
@@ -16989,10 +16990,9 @@ package body Model_Runner.Llama is
                         --  device on the layer before as well, which
                         --  Carried says.
                         Carry_In  => Carried,
-                        --  A paged session places with the place step, not
-                        --  the chained head step, which mirroring is.
-                        Mirror    => (if Item.Paged then True
-                                      else not Deferring),
+                        --  A paged batch places by the chained head step
+                        --  as a block session does; a round still mirrors.
+                        Mirror    => not Deferring,
                         Carry_Out =>
                           Carrying
                           and then Index < Source.Layers.all'Last
