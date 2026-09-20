@@ -324,13 +324,6 @@ package Model_Runner.Presentation is
    --    every layer went over or none did.
    --  @param Handed_Why The message key naming why the first of those was
    --    handed back, or the empty string where none were.
-   --  @param Blocks_Turned How often a session was turned out of a block
-   --    of the device's cache to give it to another, and
-   --  @param Rings_Turned the same for a seat in the room of rings. There
-   --    are sixteen of each; a run that turns one over now and again pays
-   --    a cache written across the bus for it, and a run that turns one
-   --    over every token pays it every token. Said only where it happened,
-   --    which for one session is never.
    --  @param Blocks_Moved How often a block was moved to close a gap
    --    below it, and
    --  @param Rings_Moved the same for a seat. Blocks and seats are placed
@@ -353,8 +346,6 @@ package Model_Runner.Presentation is
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
       Handed_Why     : String := "";
-      Blocks_Turned  : Natural := 0;
-      Rings_Turned   : Natural := 0;
       Blocks_Moved   : Natural := 0;
       Rings_Moved    : Natural := 0);
 

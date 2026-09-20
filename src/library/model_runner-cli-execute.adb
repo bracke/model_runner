@@ -3671,10 +3671,6 @@ package body Model_Runner.CLI.Execute is
                      Layers_Handed  =>
                        Model_Runner.Backend.Device.Layers_Handed,
                      Handed_Why     => Handed_Key,
-                     Blocks_Turned  =>
-                       Model_Runner.Backend.Device.Blocks_Turned,
-                     Rings_Turned   =>
-                       Model_Runner.Backend.Device.Rings_Turned,
                      Blocks_Moved   =>
                        Model_Runner.Backend.Device.Blocks_Moved,
                      Rings_Moved    =>

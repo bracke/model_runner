@@ -244,27 +244,6 @@ package Model_Runner.Backend.Device is
    --  @return Why the first of those was, or Not_Handed for none.
    function First_Handing return Handing;
 
-   --  Note that a session was turned out of what it held here to give it
-   --  to another: a block of the cache, or a seat in the room of rings.
-   --
-   --  There are sixteen of each, and a session that finds every one held
-   --  takes the one gone longest unasked rather than doing without. What
-   --  that costs is the copy read back and written again when the session
-   --  turned out next runs, and a run where it happens once is not the
-   --  same as a run where it happens every token -- which nothing said,
-   --  the two reading alike in every other line of the report.
-   --
-   --  @param Ring True for a seat in the room of rings, False for a block
-   --    of the cache.
-   procedure Note_Turned (Ring : Boolean := False);
-
-   --  @return Blocks of the cache turned over since the device was
-   --    opened.
-   function Blocks_Turned return Natural;
-
-   --  @return Seats in the room of rings turned over since then.
-   function Rings_Turned return Natural;
-
    --  A stretch inside a block that holds something, and a list of them:
    --  the engine's names for what the products call the same.
    subtype Block_Run is

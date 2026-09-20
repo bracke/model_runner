@@ -4950,7 +4950,6 @@ package body Model_Runner.Llama is
    --  how recently it was granted -- and a session that finds every block
    --  held takes the one stamped longest ago. The clock counts asks and
    --  nothing else: it is compared and never read as a time.
-   Block_Clock : Natural := 0;
 
    --  The cache dealt in pages rather than blocks. A page holds this many
    --  positions of one layer, its keys and then its values -- a power of
@@ -5018,7 +5017,6 @@ package body Model_Runner.Llama is
 
    --  Who asked last, which is how a session's run of asks -- one a layer,
    --  through a token -- is told from the token before it.
-   Last_Asker : Session_Access := null;
 
    --  Which sessions hold a seat in the device's state room: a ring
    --  each, Kept_States + 1 slots of every linear layer's memories and
@@ -5323,14 +5321,6 @@ package body Model_Runner.Llama is
       Place : Element_Count := State_Table_Room;
    begin
       Cleared := False;
-
-      Block_Clock := Block_Clock + 1;
-      if Last_Asker /= Item then
-         Item.Asked_Before := Item.Asked_At;
-         Item.State_Asked_Before := Item.State_Asked_At;
-         Last_Asker := Item;
-      end if;
-      Item.State_Asked_At := Block_Clock;
 
       Ok := Item.State_Seated;
       if Ok then
@@ -6136,18 +6126,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  This ask, and the run of asks before it: what the session asked
-      --  at its previous token is what says whether it may turn another
-      --  session out, below. Its own last ask says nothing -- that was
-      --  the layer before, a tick ago.
       Blocks_Were_Held := False;
-      Block_Clock := Block_Clock + 1;
-      if Last_Asker /= Item then
-         Item.Asked_Before := Item.Asked_At;
-         Item.State_Asked_Before := Item.State_Asked_At;
-         Last_Asker := Item;
-      end if;
-      Item.Asked_At := Block_Clock;
 
       --  Already this session's, which is every call after the first:
       --  there is nothing to ask the device and nothing to write. Stamped
@@ -6730,17 +6709,6 @@ package body Model_Runner.Llama is
       V_Width := Element_Count (Item.Owner.Settings.KV_Heads
                                 * Item.Owner.Settings.Value_Size);
       KV_Width := Page_Row (Item.all) - V_Width;
-
-      --  This ask, and the run of asks before it, on the clock the blocks
-      --  are stamped with -- a paged session holds no block, so the two
-      --  cannot disagree. What the session asked at its previous token is
-      --  what says whether it may turn another out, below.
-      Block_Clock := Block_Clock + 1;
-      if Last_Asker /= Item then
-         Item.Asked_Before := Item.Asked_At;
-         Last_Asker := Item;
-      end if;
-      Item.Asked_At := Block_Clock;
 
       --  Already reaching this position, which every layer's ask but the
       --  first of a token does: the pages are all dealt, so there is no
@@ -11862,17 +11830,6 @@ package body Model_Runner.Llama is
          --  One entry a layer of the stack, and one more for each block
          --  past it, which attends in full over the same context and
          --  keeps its keys and values here like a layer of the stack.
-         --  New to the device, and warmer for it than anything asked
-         --  before it was opened: a session opened where every block of
-         --  the cache and every seat in the room of rings is held takes
-         --  one that has gone cold, and takes none where they are all as
-         --  warm as it is.
-         Block_Clock := Block_Clock + 1;
-         Item.Asked_At := Block_Clock;
-         Item.Asked_Before := Block_Clock;
-         Item.State_Asked_At := Block_Clock;
-         Item.State_Asked_Before := Block_Clock;
-
          Item.Cells := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
          Item.At_Keys := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
          Item.At_Values := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
