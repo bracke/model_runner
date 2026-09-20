@@ -9,6 +9,8 @@ with Model_Runner.Platform;
 
 package body Model_Runner.Hub is
 
+   use type Interfaces.Unsigned_64;
+
    package T renames Model_Runner.Text;
    package HC renames Http_Client.Clients;
    package HE renames Http_Client.Errors;
@@ -16,9 +18,11 @@ package body Model_Runner.Hub is
 
    Host : constant String := "https://huggingface.co";
 
+   function Upper (Item : String) return String
+     renames Ada.Characters.Handling.To_Upper;
+
    --  How many shards a shard-named file says its model is: the count in
-   --  its -of-000NN suffix, the five digits before ".gguf". Zero for a
-   --  name that is not a shard's or whose count will not read.
+   --  its -of-000NN suffix. Zero for a name that is not a shard's.
    function Shard_Total (Name : String) return Natural is
    begin
       if not GS.Is_Shard_Name (Name) then
@@ -30,10 +34,6 @@ package body Model_Runner.Hub is
          return 0;
    end Shard_Total;
 
-   function Upper (Item : String) return String
-     renames Ada.Characters.Handling.To_Upper;
-
-   --  Whether Whole ends with Suffix, ignoring case.
    function Ends_With (Whole : String; Suffix : String) return Boolean is
    begin
       return Whole'Length >= Suffix'Length
@@ -41,7 +41,6 @@ package body Model_Runner.Hub is
                  = Upper (Suffix);
    end Ends_With;
 
-   --  Whether Needle appears in Haystack, ignoring case.
    function Contains (Haystack : String; Needle : String) return Boolean is
       Up_Hay    : constant String := Upper (Haystack);
       Up_Needle : constant String := Upper (Needle);
@@ -57,6 +56,51 @@ package body Model_Runner.Hub is
       return False;
    end Contains;
 
+   --  The number that follows "size": at or soon after From in Body_Text,
+   --  which the hub's blobs listing puts a few fields past each rfilename.
+   --  Zero when none is close, so a file whose size the API did not give is
+   --  fetched without resume rather than not at all.
+   function Size_After
+     (Body_Text : String; From : Natural) return Interfaces.Unsigned_64
+   is
+      Marker : constant String := """size""";
+      Window : constant Natural :=
+        Natural'Min (Body_Text'Last, From + 300);
+      Cursor : Natural := From;
+   begin
+      while Cursor <= Window - Marker'Length + 1 loop
+         if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
+            declare
+               Scan  : Natural := Cursor + Marker'Length;
+               Value : Interfaces.Unsigned_64 := 0;
+               Any   : Boolean := False;
+            begin
+               while Scan <= Body_Text'Last
+                 and then Body_Text (Scan) not in '0' .. '9'
+                 and then Body_Text (Scan) /= '}'
+               loop
+                  Scan := Scan + 1;
+               end loop;
+               while Scan <= Body_Text'Last
+                 and then Body_Text (Scan) in '0' .. '9'
+               loop
+                  Value := Value * 10
+                    + Interfaces.Unsigned_64
+                        (Character'Pos (Body_Text (Scan)) - Character'Pos ('0'));
+                  Any := True;
+                  Scan := Scan + 1;
+               end loop;
+               if Any then
+                  return Value;
+               end if;
+               return 0;
+            end;
+         end if;
+         Cursor := Cursor + 1;
+      end loop;
+      return 0;
+   end Size_After;
+
    -------------------
    -- Is_Reference --
    -------------------
@@ -64,9 +108,6 @@ package body Model_Runner.Hub is
    function Is_Reference (Named : String) return Boolean is
       Colon : Natural := 0;
    begin
-      --  The last colon, so a repository with none and a quant with none
-      --  are told apart. A slash before it, so owner/repo:quant is a
-      --  reference and a bare path with a colon in it is not.
       for Index in reverse Named'Range loop
          if Named (Index) = ':' then
             Colon := Index;
@@ -86,9 +127,9 @@ package body Model_Runner.Hub is
       return False;
    end Is_Reference;
 
-   --------------
+   -----------
    -- Split --
-   --------------
+   -----------
 
    procedure Split (Reference : String; Repo : out T.Bounded;
                     Quant : out T.Bounded)
@@ -105,9 +146,9 @@ package body Model_Runner.Hub is
       Quant := T.To_Bounded (Reference (Colon + 1 .. Reference'Last));
    end Split;
 
-   ------------------------
+   ----------------
    -- Client_For --
-   ------------------------
+   ----------------
 
    --  A client configured to carry the hub token where the environment has
    --  one, so a gated repository is reached. A token that is not a valid
@@ -134,8 +175,8 @@ package body Model_Runner.Hub is
    procedure Resolve
      (Reference : String;
       Repo      : out Model_Runner.Text.Bounded;
-      File_Name : out Model_Runner.Text.Bounded;
-      Shards    : out Natural;
+      Files     : out File_Set;
+      Count     : out Natural;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded)
    is
@@ -143,27 +184,24 @@ package body Model_Runner.Hub is
       Result : HC.Client_Result;
       Status : HE.Result_Status;
 
-      Max_Candidates : constant := 64;
-      Candidate : array (1 .. Max_Candidates) of T.Bounded;
-      Matches   : Natural := 0;
+      Matches : Natural := 0;
 
-      procedure Note_Candidate (Name : String) is
+      procedure Note_Candidate
+        (Name : String; Size : Interfaces.Unsigned_64) is
       begin
-         if Matches < Max_Candidates then
+         if Matches < Max_Files then
             Matches := Matches + 1;
-            Candidate (Matches) := T.To_Bounded (Name);
+            Files (Matches) := (Name => T.To_Bounded (Name), Size => Size);
          end if;
       end Note_Candidate;
 
-      --  The candidates, comma-joined, for a message that names what
-      --  matched when the caller has to choose.
       function Listed return String is
          Room : String (1 .. 400) := [others => ' '];
          Used : Natural := 0;
       begin
          for I in 1 .. Matches loop
             declare
-               Name : constant String := T.To_String (Candidate (I));
+               Name : constant String := T.To_String (Files (I).Name);
             begin
                exit when Used + Name'Length + 2 > Room'Last;
                if Used > 0 then
@@ -177,16 +215,36 @@ package body Model_Runner.Hub is
          return Room (1 .. Used);
       end Listed;
 
+      --  Shards in order: -00001- sorts before -00002-, so a name sort puts
+      --  the first shard first, which is the one the loader opens.
+      procedure Sort_By_Name is
+      begin
+         for I in 1 .. Matches loop
+            for J in I + 1 .. Matches loop
+               if T.To_String (Files (J).Name)
+                 < T.To_String (Files (I).Name)
+               then
+                  declare
+                     Swap : constant Download_File := Files (I);
+                  begin
+                     Files (I) := Files (J);
+                     Files (J) := Swap;
+                  end;
+               end if;
+            end loop;
+         end loop;
+      end Sort_By_Name;
+
    begin
       Ok := False;
-      File_Name := T.Empty;
-      Shards := 0;
+      Count := 0;
       Reason := T.Empty;
 
       Split (Reference, Repo, Quant);
 
       Status := HC.Get
-        (URL           => Host & "/api/models/" & T.To_String (Repo),
+        (URL           => Host & "/api/models/" & T.To_String (Repo)
+                          & "?blobs=true",
          Result        => Result,
          Configuration => Client_For);
 
@@ -197,10 +255,6 @@ package body Model_Runner.Hub is
          return;
       end if;
 
-      --  The file list is the "rfilename" values of the response. Each is a
-      --  JSON string; the GGUF files whose name carries the quant are the
-      --  candidates. The body is scanned rather than parsed, which one key
-      --  read out of a known shape does not need a parser for.
       declare
          Body_Text : constant String := HC.Response_Text (Result);
          Marker    : constant String := """rfilename""";
@@ -211,7 +265,6 @@ package body Model_Runner.Hub is
                declare
                   Scan : Natural := Cursor + Marker'Length;
                begin
-                  --  Past the colon and the opening quote.
                   while Scan <= Body_Text'Last
                     and then Body_Text (Scan) /= '"'
                   loop
@@ -234,7 +287,7 @@ package body Model_Runner.Hub is
                            if Ends_With (Name, ".gguf")
                              and then Contains (Name, T.To_String (Quant))
                            then
-                              Note_Candidate (Name);
+                              Note_Candidate (Name, Size_After (Body_Text, Scan));
                            end if;
                         end;
                      end if;
@@ -258,49 +311,45 @@ package body Model_Runner.Hub is
          All_Shards : Boolean := True;
       begin
          for I in 1 .. Matches loop
-            if not GS.Is_Shard_Name (T.To_String (Candidate (I))) then
+            if not GS.Is_Shard_Name (T.To_String (Files (I).Name)) then
                All_Shards := False;
             end if;
          end loop;
 
          if Matches = 1 and then not All_Shards then
-            File_Name := Candidate (1);
-            Shards    := 1;
-            Ok        := True;
+            Count := 1;
+            Ok    := True;
 
          elsif All_Shards then
             --  A shard set: every shard carries the quant, so all matched.
-            --  The -of-000NN count is authoritative; the loader opens the
-            --  first shard and finds the rest beside it, so the first shard
-            --  is what to name and the count is how many to fetch.
+            --  One set only -- every shard the same count and, made the
+            --  first, the same name -- and the whole set present.
             declare
                Total : constant Natural :=
-                 Shard_Total (T.To_String (Candidate (1)));
+                 Shard_Total (T.To_String (Files (1).Name));
                First : constant String :=
                  (if Total >= 1
-                  then GS.Shard_Path (T.To_String (Candidate (1)), 1, Total)
+                  then GS.Shard_Path (T.To_String (Files (1).Name), 1, Total)
                   else "");
                Same  : Boolean := Total >= 1 and then First /= "";
             begin
-               --  One set only: every candidate the same count and the same
-               --  first shard, or the match is ambiguous.
                for I in 1 .. Matches loop
-                  if Shard_Total (T.To_String (Candidate (I))) /= Total
+                  if Shard_Total (T.To_String (Files (I).Name)) /= Total
                     or else GS.Shard_Path
-                              (T.To_String (Candidate (I)), 1, Total) /= First
+                              (T.To_String (Files (I).Name), 1, Total) /= First
                   then
                      Same := False;
                   end if;
                end loop;
 
-               if Same then
-                  File_Name := T.To_Bounded (First);
-                  Shards    := Total;
-                  Ok        := True;
+               if Same and then Matches = Total then
+                  Sort_By_Name;
+                  Count := Matches;
+                  Ok    := True;
                else
                   Reason := T.To_Bounded
-                    ("more than one shard set matched; name the quant more "
-                     & "exactly: " & Listed);
+                    ("the shard set is incomplete or ambiguous; name the "
+                     & "quant more exactly: " & Listed);
                end if;
             end;
 
@@ -319,6 +368,7 @@ package body Model_Runner.Hub is
    procedure Fetch
      (Repo      : String;
       File_Name : String;
+      Size      : Interfaces.Unsigned_64;
       Dest_Path : String;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded)
@@ -330,12 +380,27 @@ package body Model_Runner.Hub is
       Ok := False;
       Reason := T.Empty;
 
-      --  No size cap, since a model is larger than the in-memory default;
-      --  the parents are made; a non-success status is a failure rather
-      --  than a saved error page.
+      --  Written to the file itself, and a part left where it stops: a
+      --  later fetch of the same file asks for the bytes past what is there
+      --  and appends, so an interrupted download of a large model is not
+      --  begun again. No size cap; the parents are made; a non-success
+      --  status is a failure rather than a saved error page.
       Options.Max_Download_Size := 0;
       Options.Create_Parent_Dirs := True;
       Options.Require_Success_Status := True;
+      Options.File_Mode := HC.Overwrite;
+      Options.Enable_Resume := True;
+      Options.Preserve_Partial_File := True;
+
+      --  The whole size where it is known and fits the field, so the client
+      --  stops at it and a run that fills the file exactly is done. A size
+      --  past what the field holds is left zero: the resume still works
+      --  from the stream's own range, only the size check is skipped.
+      if Size > 0
+        and then Size <= Interfaces.Unsigned_64 (Natural'Last)
+      then
+         Options.Expected_Size := Natural (Size);
+      end if;
 
       Status := HC.Download_To_File
         (URL           => Host & "/" & Repo & "/resolve/main/" & File_Name,
@@ -348,8 +413,9 @@ package body Model_Runner.Hub is
          Ok := True;
       else
          Reason := T.To_Bounded
-           ("the download failed (" & HE.Result_Status'Image (Status)
-            & ", HTTP" & Natural'Image (Outcome.HTTP_Status_Code) & ")");
+           ("the download stopped (" & HE.Result_Status'Image (Status)
+            & ", HTTP" & Natural'Image (Outcome.HTTP_Status_Code)
+            & "); run it again to resume from where it left off");
       end if;
    end Fetch;
 

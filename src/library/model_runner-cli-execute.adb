@@ -1217,40 +1217,56 @@ package body Model_Runner.CLI.Execute is
    end Asked_Rotation;
 
    --  Load and validate a container, and prepare a model when asked.
+   --  Whether a downloaded file is whole: it is there, and its size is the
+   --  one the hub gave, so a part left by an interrupted download is not
+   --  taken for the file. An unknown size (zero) falls back to its being
+   --  there at all.
+   function Model_Complete
+     (File : Model_Runner.Hub.Download_File; Path : String) return Boolean
+   is
+      use type Ada.Directories.File_Size;
+   begin
+      return Ada.Directories.Exists (Path)
+        and then
+          (File.Size = 0
+           or else Ada.Directories.Size (Path)
+                   = Ada.Directories.File_Size (File.Size));
+   exception
+      when others =>
+         return False;
+   end Model_Complete;
+
    --  Offer to download a model named as a Hugging Face reference the local
    --  search did not find, and, where the user takes the offer, fetch it
    --  into the models directory. A model split into shards is fetched
-   --  whole, every shard beside the first, since the loader opens the set
-   --  from the first and finds the rest there. Fetched is true with Where
-   --  the first file's local path only when the whole model arrived; every
-   --  other outcome -- no one match, no models directory, no terminal to
-   --  ask at, a declined offer, a failed fetch -- leaves it false and says
-   --  on the console what it did, so the caller reports the model not found
-   --  as before.
+   --  whole, and a fetch that stops part way -- a dropped link, a Ctrl-C --
+   --  leaves what came on disk, so a run of the same reference resumes: the
+   --  files already whole are skipped and the part is continued. Fetched is
+   --  true with Where the first file's local path only when the whole model
+   --  is on disk; every other outcome -- no one match, no models directory,
+   --  no terminal to ask at, a declined offer, a stopped fetch -- leaves it
+   --  false and says on the console what it did.
    procedure Offer_Download
      (Screen  : in out Pres.Console;
       Named   : String;
       Fetched : out Boolean;
       Where   : out Model_Runner.Text.Bounded)
    is
-      Repo, First_File, Reason : Model_Runner.Text.Bounded;
+      Repo, Reason : Model_Runner.Text.Bounded;
+      Files : Model_Runner.Hub.File_Set;
       Count : Natural := 0;
       Ok : Boolean;
 
-      --  The name of shard Index of the set: the first file itself, and the
-      --  others by the loader's own shard naming.
-      function Shard_Name (Index : Positive) return String
-      is (if Count <= 1 or else Index = 1
-          then T.To_String (First_File)
-          else Shards.Shard_Path (T.To_String (First_File), Index, Count));
+      function Local (Index : Positive) return String
+      is (Model_Runner.Platform.Models_File
+            (T.To_String (Files (Index).Name)));
 
-      function Destination return String
-      is (Model_Runner.Platform.Models_File (T.To_String (First_File)));
+      function Destination return String is (Local (1));
    begin
       Fetched := False;
       Where   := Model_Runner.Text.Empty;
 
-      Model_Runner.Hub.Resolve (Named, Repo, First_File, Count, Ok, Reason);
+      Model_Runner.Hub.Resolve (Named, Repo, Files, Count, Ok, Reason);
       if not Ok then
          Pres.Put_Note
            (Screen, "cli.download.unresolved",
@@ -1263,20 +1279,18 @@ package body Model_Runner.CLI.Execute is
          return;
       end if;
 
-      --  Already fetched by an earlier run: every shard the models directory
-      --  holds, so the set is opened by its first without asking or
+      --  Already here whole from an earlier run: every file present and the
+      --  right size, so the set is opened by its first without asking or
       --  downloading again.
       declare
-         All_Present : Boolean := True;
+         All_Whole : Boolean := True;
       begin
          for I in 1 .. Count loop
-            if not Ada.Directories.Exists
-                     (Model_Runner.Platform.Models_File (Shard_Name (I)))
-            then
-               All_Present := False;
+            if not Model_Complete (Files (I), Local (I)) then
+               All_Whole := False;
             end if;
          end loop;
-         if All_Present then
+         if All_Whole then
             Where   := Model_Runner.Text.To_Bounded (Destination);
             Fetched := True;
             return;
@@ -1295,8 +1309,8 @@ package body Model_Runner.CLI.Execute is
          [Loc.Named ("name", Named),
           Loc.Named
             ("detail",
-             (if Count <= 1 then T.To_String (First_File)
-              else T.To_String (First_File) & " and"
+             (if Count <= 1 then T.To_String (Files (1).Name)
+              else T.To_String (Files (1).Name) & " and"
                    & Natural'Image (Count - 1) & " more shards")
              & " from huggingface.co/" & T.To_String (Repo)
              & " into " & Model_Runner.Platform.Models_Directory)]);
@@ -1320,24 +1334,20 @@ package body Model_Runner.CLI.Execute is
       end;
 
       for I in 1 .. Count loop
-         declare
-            Name : constant String := Shard_Name (I);
-            Dest : constant String := Model_Runner.Platform.Models_File (Name);
-         begin
-            if not Ada.Directories.Exists (Dest) then
+         if not Model_Complete (Files (I), Local (I)) then
+            Pres.Put_Note
+              (Screen, "cli.download.fetching",
+               [Loc.Named ("name", T.To_String (Files (I).Name))]);
+            Model_Runner.Hub.Fetch
+              (T.To_String (Repo), T.To_String (Files (I).Name),
+               Files (I).Size, Local (I), Ok, Reason);
+            if not Ok then
                Pres.Put_Note
-                 (Screen, "cli.download.fetching",
-                  [Loc.Named ("name", Name)]);
-               Model_Runner.Hub.Fetch
-                 (T.To_String (Repo), Name, Dest, Ok, Reason);
-               if not Ok then
-                  Pres.Put_Note
-                    (Screen, "cli.download.failed",
-                     [Loc.Named ("detail", T.To_String (Reason))]);
-                  return;
-               end if;
+                 (Screen, "cli.download.failed",
+                  [Loc.Named ("detail", T.To_String (Reason))]);
+               return;
             end if;
-         end;
+         end if;
       end loop;
 
       Pres.Put_Note
