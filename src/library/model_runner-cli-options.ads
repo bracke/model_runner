@@ -551,11 +551,10 @@ package Model_Runner.CLI.Options is
 
       --  Whether the device's cache is dealt in pages -- a context paying
       --  for the positions it fills rather than a block its whole width.
-      --  Off by default: a paged cache is bit-exact but its attention runs
-      --  on the host, so it is slower where a block would have fit, and its
-      --  gain is fitting a context that would not. --paged opts in,
-      --  --no-paged is the explicit default, and Paged_Named tells them
-      --  apart from silence.
+      --  On for the device by default: a paged cache attends whole on the
+      --  device, bit for bit and at a block's speed, so its saved memory
+      --  costs nothing where the context is partly filled. --paged and
+      --  --no-paged override, and Paged_Named tells a choice from silence.
       Paged       : Boolean := False;
       Paged_Named : Boolean := False;
 

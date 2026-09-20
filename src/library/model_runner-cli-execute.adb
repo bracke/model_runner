@@ -1039,13 +1039,17 @@ package body Model_Runner.CLI.Execute is
       return Result;
    end Session_Bounds;
 
-   --  Whether this session's cache is dealt in pages. Off unless the
-   --  caller asks: a paged cache pays only for the positions it fills, so
-   --  it fits a context a block could not, but its attention runs on the
-   --  host rather than whole on the device -- slower where the block would
-   --  have fit. --paged opts in, for the context that would not fit whole.
+   --  Whether this session's cache is dealt in pages. On for the device
+   --  where the caller said nothing: a paged cache attends whole on the
+   --  device, bit for bit and at a block's speed, and pays only for the
+   --  positions it fills rather than a block its whole width -- so a
+   --  partly filled context costs a fraction of the memory the target
+   --  hardware is short of. Off on the processor, whose cache is host
+   --  memory with no pages to deal. --paged and --no-paged override.
    function Session_Paging (Item : Opt.Command) return Boolean
-   is (Item.Paged);
+   is (if Item.Paged_Named then Item.Paged
+       else Model_Runner.Backend."="
+              (Item.Backend, Model_Runner.Backend.Backend_Device));
 
    --  What the device will not do with this session, said as it opens
    --  rather than left to be inferred from a run that was slower than it

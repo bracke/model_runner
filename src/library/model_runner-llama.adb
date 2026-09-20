@@ -6091,6 +6091,7 @@ package body Model_Runner.Llama is
       if Item = null
         or else Item.Owner = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
+        or else Item.Paged
         or else (Item.Held = Exact
                  and then (Item.Keys = null or else Item.Values = null))
         or else Item.Held = Halved
@@ -16456,11 +16457,12 @@ package body Model_Runner.Llama is
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then Whole_Layer_Fits
                                             (Current, Natural (Index))
-                                 --  A round's members all seated, with
-                                 --  the table its steps read; a batch
-                                 --  with its block.
-                                 and then Has_Block
-                                            (Item'Unchecked_Access)))
+                                 --  A batch with its block, or a paged
+                                 --  batch whose pages the road takes
+                                 --  itself below.
+                                 and then (if Item.Paged then True
+                                           else Has_Block
+                                                  (Item'Unchecked_Access))))
             then
                Charge (Item, Normalizing, Mark);
 
