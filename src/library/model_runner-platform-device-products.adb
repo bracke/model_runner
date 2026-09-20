@@ -10759,6 +10759,17 @@ package body Model_Runner.Platform.Device.Products is
                         Base    => C.unsigned (This.Pack.At_Scale),
                         Joins   => C.unsigned (This.Pack.Blocks),
                         Table   => C.unsigned (This.Table),
+
+                        --  A cache in pages, in the three words after the
+                        --  table: the batch's page table, the shift and
+                        --  the first row's position, which pack.comp reads
+                        --  as place.comp does. A gather's members, in every
+                        --  other step's reading of this block.
+                        Members =>
+                          [0 => C.unsigned (This.Pages_At),
+                           1 => C.unsigned (This.Page_Shift),
+                           2 => C.unsigned (This.First_Position),
+                           others => 0],
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,

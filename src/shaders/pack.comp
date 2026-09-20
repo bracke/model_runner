@@ -93,6 +93,16 @@ layout(push_constant) uniform Shape {
     //  as place.comp reads it -- where the row has got to, and where its
     //  block begins in words.
     uint table_at;
+
+    //  A cache in pages rather than blocks, as place.comp has it: where
+    //  this batch's page table for the layer begins, a word a page of
+    //  page_shift's power of two positions; at_byte and at_scale are then
+    //  a region's offset inside a page, and a position's page holds it. A
+    //  round's rows carry their own page table in the per-row table, where
+    //  a block's base was. Zero for page_shift is a cache in blocks.
+    uint pages_at;
+    uint page_shift;
+    uint first_position;
 } shape;
 
 #ifdef SUBGROUPS
@@ -172,10 +182,32 @@ void main() {
 
     uint from = slot * shape.width;
 
-    uint cell = shape.table_at != 0u ? kept[shape.table_at + slot * 2u] : slot;
-    uint block = shape.table_at != 0u ? kept[shape.table_at + slot * 2u + 1u] : 0u;
-    uint row_at = shape.at_byte + block * 4u + cell * shape.row_bytes;
-    uint scale_at = shape.at_scale + block + cell * shape.blocks;
+    //  Where this row's packed bytes and its scales go. A block: the
+    //  member's block in words, four bytes a word, and the position inside
+    //  it. A page: the position's page out of the table -- the batch's or,
+    //  for a round, the row's own -- and the place inside the page. The
+    //  page base is in words as a block is, so it turns to bytes the same
+    //  way.
+    uint row_at;
+    uint scale_at;
+
+    if (shape.page_shift == 0u) {
+        uint cell = shape.table_at != 0u ? kept[shape.table_at + slot * 2u] : slot;
+        uint block = shape.table_at != 0u ? kept[shape.table_at + slot * 2u + 1u] : 0u;
+        row_at = shape.at_byte + block * 4u + cell * shape.row_bytes;
+        scale_at = shape.at_scale + block + cell * shape.blocks;
+    } else {
+        uint table = shape.table_at != 0u
+                   ? kept[shape.table_at + slot * 2u + 1u]
+                   : shape.pages_at;
+        uint pos = shape.table_at != 0u
+                 ? kept[shape.table_at + slot * 2u]
+                 : shape.first_position + slot;
+        uint base = kept[table + (pos >> shape.page_shift)];
+        uint in_page = pos & ((1u << shape.page_shift) - 1u);
+        row_at = shape.at_byte + base * 4u + in_page * shape.row_bytes;
+        scale_at = shape.at_scale + base + in_page * shape.blocks;
+    }
 
     if (shape.bits == 8u) {
         float largest = 0.0;
