@@ -9693,7 +9693,18 @@ package body Model_Runner.Platform.Device.Products is
                Told (2) :=
                  (Buffer => Item.Result_Buffer, Offset => 0,
                   Extent => Result_Bytes);
-               Told (4) := Half_Descriptor (Item);
+               --  Binding three is the cache read-only where a head step
+               --  places into a paged cache -- it reads the page table
+               --  there -- and the half batch otherwise. The one buffer
+               --  cannot be bound both writeonly and readonly at the same
+               --  binding without a driver dropping the writes, so the
+               --  readable view is here.
+               Told (4) :=
+                 (if Steps.Items (Index).Into_Cache
+                     and then Steps.Items (Index).Page_Shift /= 0
+                  then (Buffer => Item.Cache_Buffer, Offset => 0,
+                        Extent => Item.Cache_Bytes)
+                  else Half_Descriptor (Item));
                Told (5) :=
                  (Buffer => Item.Turn_Buffer, Offset => 0,
                   Extent => Item.Turn_Bytes);

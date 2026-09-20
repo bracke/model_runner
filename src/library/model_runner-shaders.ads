@@ -32690,7 +32690,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/heads.comp when these
    --  words were made from it.
    Heads_Digest : constant Interfaces.Unsigned_64 :=
-     16#EEEAEACB9849E0AD#;
+     16#9F864738A6D7A308#;
 
    --  The compiled words, as the device is given them.
    Heads : constant Word_Array :=
@@ -32787,7 +32787,7 @@ package Model_Runner.Shaders is
       262215, 40, 6, 4, 196679, 41,
       3, 262216, 41, 0, 24, 327752,
       41, 0, 35, 0, 196679, 43,
-      24, 262215, 43, 33, 2, 262215,
+      24, 262215, 43, 33, 3, 262215,
       43, 34, 0, 262215, 74, 11,
       26, 262215, 79, 11, 27, 262215,
       147, 6, 4, 196679, 148, 3,

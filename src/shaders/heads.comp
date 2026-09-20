@@ -34,12 +34,13 @@ layout(std430, binding = 0) readonly  buffer Weight { float  g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float  x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float  y[]; };
 
-//  The same buffer, read: where this step places into a cache in pages,
-//  the page table it reads is in the cache it writes, so the one binding
-//  is declared twice, once each way, as attention.comp declares its
-//  cache once a word and once four at a time. Nothing this reads is a
-//  place it writes.
-layout(std430, binding = 2) readonly  buffer Kept   { float  kept[]; };
+//  The cache again, read-only, at a binding of its own: where this step
+//  places into a cache in pages, it reads the page table out of the cache
+//  it writes. Declaring the one buffer both ways at binding 2 -- writeonly
+//  and readonly -- made a driver drop the writes, so the readable view is
+//  bound separately, at binding 3, which this step does not otherwise use.
+//  The engine points binding 3 at the cache for a placing head step.
+layout(std430, binding = 3) readonly  buffer Kept   { float  kept[]; };
 //  The cache's half-precision copy, which has a buffer of its own so
 //  that neither it nor the cache proper is past what one storage buffer
 //  may hold. Written where this step places into the cache and left

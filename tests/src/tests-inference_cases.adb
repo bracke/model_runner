@@ -4773,6 +4773,117 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Hybrid_Turned_Out_Of_Its_Ring_Says_What_It_Said;
 
+   ----------------------------------------------------------
+   -- A_Paged_Session_Says_What_A_Block_Session_Says --
+   ----------------------------------------------------------
+
+   --  The cache dealt in pages rather than one block. A block is a
+   --  session's whole context, taken at once; a paged session is given a
+   --  run of positions of a layer at a time, scattered, and reads a
+   --  position's page out of a per-layer table rather than at a block's
+   --  base. What that must not change is the answer: a paged session gets,
+   --  bit for bit, the logits it gets in a block.
+   --
+   --  Past two pages of sixty-four, so the table is read for more than one
+   --  page and a position lands in a page other than the first -- the
+   --  shift and the mask, and the second page's own base. The device holds
+   --  it in pages and says so, which tells a paged session that reached
+   --  the device from one that quietly fell back to the host and would
+   --  have agreed for the wrong reason.
+   procedure A_Paged_Session_Says_What_A_Block_Session_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Steps : constant := 130;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Blocked, Paged : L.Session;
+
+            Said : Trail := [others => [others => 0.0]];
+            LP   : Logit_Vector;
+
+            Worst : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               --  The block session whole, then closed, then the paged one:
+               --  a cache in blocks and a cache in pages are dealt from the
+               --  front of the same buffer, so the two are run one after
+               --  the other rather than side by side.
+               L.Open (Blocked, Under.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the block session did not open");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Blocked, Under.Ready, Token_Of (Step),
+                              Said (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "the block session failed at"
+                          & Integer'Image (Step));
+               end loop;
+
+               Assert (L.Holds_Block (Blocked),
+                       "the block session is not in a block");
+               L.Close (Blocked);
+
+               L.Open (Paged, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the paged session did not open");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Paged, Under.Ready, Token_Of (Step), LP,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status), "the paged session failed at"
+                          & Integer'Image (Step) & ": "
+                          & E.Error_Code'Image (Status.Code));
+
+                  for Index in Logit_Vector'Range loop
+                     Worst :=
+                       N.Real'Max (Worst, abs (Said (Step) (Index) - LP (Index)));
+                  end loop;
+               end loop;
+
+               Assert (L.Holds_Pages (Paged),
+                       "the paged session did not reach the device in pages,"
+                       & " so an agreement says nothing about paging");
+
+               Assert (Worst = 0.0,
+                       "a paged session says" & N.Real'Image (Worst)
+                       & " away from the same session in a block, past"
+                       & Integer'Image (Steps) & " positions and two pages");
+
+               L.Close (Paged);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Session_Says_What_A_Block_Session_Says;
+
    --------------------------------------------------------------
    -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
    --------------------------------------------------------------
@@ -13742,6 +13853,11 @@ package body Tests.Inference_Cases is
         (T, A_Run_Says_Which_Layers_The_Device_Took'Access,
          "a run on the device says how many layers went over whole and "
          & "how many the processor took, and names what refused them");
+      Register_Routine
+        (T, A_Paged_Session_Says_What_A_Block_Session_Says'Access,
+         "a session whose device cache is dealt in pages rather than one "
+         & "block gives, bit for bit, the logits it gives in a block, past "
+         & "two pages");
       Register_Routine
         (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
          "a hybrid round whose members sit at different positions gives "

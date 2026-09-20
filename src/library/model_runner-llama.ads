@@ -1131,7 +1131,8 @@ package Model_Runner.Llama is
       Workers        : Model_Runner.Backend.CPU.Pool_Reference := null;
       Cache          : Cache_Precision := Exact;
       Status         : out Model_Runner.Errors.Error_Info;
-      Values         : Value_Precision := Same_As_Keys);
+      Values         : Value_Precision := Same_As_Keys;
+      Paged          : Boolean := False);
 
    --  The hidden state the last evaluated position left behind.
    --
@@ -1753,6 +1754,16 @@ package Model_Runner.Llama is
    --  @return True where it holds a block of the device's cache.
    function Holds_Block (Item : Session) return Boolean;
 
+   --  Whether the device holds this session's cache in pages rather than
+   --  one block, and the pages have been dealt: true only for a session
+   --  opened Paged on a device that has written to it, which is what tells
+   --  a paged session that reached the device from one that fell back to
+   --  the host.
+   --
+   --  @param Item Open session.
+   --  @return True where it holds pages of the device's cache.
+   function Holds_Pages (Item : Session) return Boolean;
+
    --  The same for a seat in the device's room of rings, which a hybrid
    --  takes for its ring of linear states and no other architecture asks
    --  for at all.
@@ -2235,6 +2246,23 @@ private
       --  as a ring is placed in the room of rings, so a block is the size
       --  of the session in it.
       Cache_Base : Model_Runner.Numerics.Element_Count := 0;
+
+      --  A cache dealt in pages rather than one block. A block is a
+      --  session's whole context, taken at once and held for its life, so
+      --  sixteen members that fill a fraction of their contexts hold the
+      --  room for sixteen whole ones. A paged session is given a run of
+      --  positions of one layer at a time -- a page -- wherever one is
+      --  free, and holds only as many as it has filled.
+      --
+      --  Pages is the element base of each page, flat across the layers;
+      --  Page_First is where each layer's pages begin in it, with a
+      --  sentinel last entry so a layer's count is the next entry less its
+      --  own. Null, and Paged false, for a session dealt a block, which is
+      --  everything until the engine lays one out in pages.
+      Paged      : Boolean := False;
+      Paged_In   : Boolean := False;
+      Pages      : Cell_Counts_Access := null;
+      Page_First : Cell_Counts_Access := null;
 
       --  When this session last asked for a block of that cache, and when
       --  it last asked for a seat in the room of rings, on the clock that
