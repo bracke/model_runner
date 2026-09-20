@@ -2702,48 +2702,6 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Roles_Named (Option ("--arith", "int8")));
 
-         --  Several sessions taking turns rather than stepped together,
-         --  which is where the device's sixteen blocks of cache are a
-         --  limit: seventeen sessions is sixteen blocks and one session
-         --  without, and more than that is a block turned over for every
-         --  one turned into.
-         if Option ("--turns", "") /= "" then
-            Speed_Run.Turns
-              (Path        => Option ("--model", ""),
-               Prompt_Path =>
-                 Option ("--prompt-file",
-                         "../tests/fixtures/speed-prompt-short.txt"),
-               Tokens      => Number ("--max-tokens", 12),
-               Threads     => Number ("--threads",
-                                      Model_Runner.Platform.Core_Count - 1),
-               Sessions    => Number ("--turns", 1),
-               Context     => Whole ("--context-size"),
-               Churn       => Whole ("--churn"),
-               Spread      => Given ("--spread"),
-               Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Paged       => Given ("--paged"),
-               Page_Pool   => Whole ("--page-pool"),
-               Page_Size   => Whole ("--page-size"),
-               Cache       =>
-                 (declare
-                    Named : constant String := Option ("--kv-cache", "f32");
-                  begin
-                    (if Named = Model_Runner.Llama.Cache_Name
-                                  (Model_Runner.Llama.Eighth)
-                     then Model_Runner.Llama.Eighth
-                     elsif Named = Model_Runner.Llama.Cache_Name
-                                     (Model_Runner.Llama.Fourth)
-                     then Model_Runner.Llama.Fourth
-                     else Model_Runner.Llama.Exact)),
-               Values      =>
-                 (declare
-                    Named : constant String := Option ("--kv-values", "");
-                  begin
-                    (if Named = "q8" then Model_Runner.Llama.Value_Eighth
-                     elsif Named = "q4" then Model_Runner.Llama.Value_Fourth
-                     else Model_Runner.Llama.Same_As_Keys)));
-            return;
-         end if;
 
          Speed_Run.Run
            (Path        => Option ("--model", ""),

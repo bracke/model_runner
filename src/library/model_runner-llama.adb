@@ -5005,11 +5005,9 @@ package body Model_Runner.Llama is
    --  coldest out rather than growing without end. The default is the
    --  pool's own size, which is no bound but the memory's.
    Pages_In_Use : Natural := 0;
-   Page_Pool_Limit : Natural := Page_Cap;
 
    --  Paged sessions turned out since the device was opened: the count a
    --  server reads to know a tighter pool is churning the cache.
-   Pages_Turned_Count : Natural := 0;
 
    --  Whether the last session to ask for a block and be refused was
    --  refused because every one of them was another session's, rather
@@ -6760,59 +6758,6 @@ package body Model_Runner.Llama is
    --  The session come back re-takes pages and writes its committed cache
    --  into them, a layer at a time, as it did the first time. A settle that
    --  cannot finish leaves the pages where they are, so nothing is lost.
-   procedure Free_Session_Pages (Victim : Session_Access; Ok : out Boolean) is
-      Settled : Boolean;
-   begin
-      Ok := False;
-
-      Settle_Cache (Victim.all, Settled);
-      if not Settled then
-         return;
-      end if;
-
-      Release_Session_Pages (Victim);
-
-      Pages_Turned_Count := Pages_Turned_Count + 1;
-      Ok := True;
-   end Free_Session_Pages;
-
-   --  Turn out the coldest paged session other than the one asking, so its
-   --  slots are free -- and only one gone unasked since before the asker's
-   --  own last ask, so two sessions reading a token apiece in turn leave
-   --  each other alone and one does without rather than each turning the
-   --  next out every token. Freed is false where no such session is held.
-   procedure Evict_Coldest_Pages
-     (Asker : Session_Access; Freed : out Boolean)
-   is
-      Oldest : Natural := Natural'Last;
-      Victim : Session_Access := null;
-
-      Highest : constant Natural :=
-        (if Page_Elements = 0 then 0
-         else Natural (Pages_Taken / Page_Elements));
-   begin
-      Freed := False;
-
-      for Slot in 0 .. Natural'Min (Highest, Page_Cap - 1) loop
-         declare
-            S : constant Session_Access := Page_Owner (Slot);
-         begin
-            if S /= null
-              and then S /= Asker
-              and then S.Asked_At < Oldest
-              and then S.Asked_At < Asker.Asked_Before
-            then
-               Oldest := S.Asked_At;
-               Victim := S;
-            end if;
-         end;
-      end loop;
-
-      if Victim /= null then
-         Free_Session_Pages (Victim, Freed);
-      end if;
-   end Evict_Coldest_Pages;
-
    --  How many pages a layer holds once its cells reach Upto: the cells a
    --  position at index Upto sits at, rounded up to the page, and never
    --  more than the layer's whole context. A window layer holds fewer
@@ -6941,22 +6886,6 @@ package body Model_Runner.Llama is
                   declare
                      Slot : Natural := 0;
                   begin
-                     --  The pool at its bound: the coldest other session's
-                     --  pages are turned out to make room, and where none
-                     --  may be -- every other session as warm as this one --
-                     --  the layer holds fewer pages than it wanted, which
-                     --  the caller reads as the cache being full.
-                     if Pages_In_Use >= Page_Pool_Limit then
-                        declare
-                           Freed : Boolean;
-                        begin
-                           Evict_Coldest_Pages (Item, Freed);
-                           if not Freed then
-                              return;
-                           end if;
-                        end;
-                     end if;
-
                      while Slot < Page_Cap and then Page_Owner (Slot) /= null
                      loop
                         Slot := Slot + 1;
@@ -7172,11 +7101,6 @@ package body Model_Runner.Llama is
       return Held;
    end Pages_Held;
 
-   procedure Limit_Page_Pool (Pages : Natural) is
-   begin
-      Page_Pool_Limit := Natural'Max (1, Natural'Min (Pages, Page_Cap));
-   end Limit_Page_Pool;
-
    procedure Set_Page_Size (Positions : Positive) is
       Bits : Natural := 0;
       N    : Positive := Positions;
@@ -7207,9 +7131,6 @@ package body Model_Runner.Llama is
       --  when the next session takes its first page.
       Page_Elements := 0;
    end Set_Page_Size;
-
-   function Pages_Turned return Natural
-   is (Pages_Turned_Count);
 
    function Seats_Held return Natural is
       Held : Natural := 0;

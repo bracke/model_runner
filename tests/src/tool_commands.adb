@@ -41,8 +41,8 @@ package body Tool_Commands is
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next"
-     & " --kv-cache --repeats --turns --churn --spread"
-     & " --no-reuse --paged --page-pool --page-size --kv-values"
+     & " --kv-cache --repeats"
+     & " --no-reuse --paged --page-size --kv-values"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
@@ -77,8 +77,7 @@ package body Tool_Commands is
      & " [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup] [--draft-next]"
-     & " [--kv-cache MODE] [--repeats N] [--turns N]"
-     & " [--churn N] [--spread] [--paged] [--page-pool N] [--page-size N]"
+     & " [--kv-cache MODE] [--repeats N] [--paged] [--page-size N]"
      & " [--no-reuse] [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N]"
      & " [--device-memory BYTES]";
