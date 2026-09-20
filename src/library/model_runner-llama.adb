@@ -6693,7 +6693,7 @@ package body Model_Runner.Llama is
         or else not Item.Paged
         or else Item.Owner = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-        or else Item.Held /= Exact
+        or else Item.Held not in Exact | Eighth | Fourth
         or else Item.Pages = null
         --  A cache dealt in blocks and one dealt in pages both grow from
         --  the front of the one buffer, so a device holds one kind or the
@@ -6702,6 +6702,16 @@ package body Model_Runner.Llama is
         --  are given back; nothing already this session's is disturbed,
         --  since Paged_In means its pages are already dealt.
         or else (not Item.Paged_In and then Block_Taken > 0)
+
+        --  A packed session whose pages were turned out reads them back a
+        --  page at a time when it comes again -- Write_Pages_Layer, which
+        --  writes the host's exact rows, not a packed session's bytes and
+        --  scales. Until that read-back is packed, a packed session evicted
+        --  of its pages is refused their return and attends on the host; a
+        --  packed session only growing, whose new pages the pack step
+        --  fills, is not touched.
+        or else (Item.Held /= Exact
+                 and then not Item.Paged_In and then Item.Committed > 0)
       then
          return;
       end if;
@@ -7437,14 +7447,33 @@ package body Model_Runner.Llama is
       V_Base   : Element_Count;
       KV_Width : Element_Count;
       V_Width  : Element_Count;
-      Seated   : Boolean := False)
+      Seated   : Boolean := False;
+      Paged    : Boolean := False)
       return Model_Runner.Backend.Device.Packed_Cache
    is
       Base : constant Element_Count := (if Seated then 0 else Block_Base (Item));
-      Laid : constant Packed_Block := Packed_Layout (Item);
+      Laid : constant Packed_Block :=
+        (if Paged then Packed_Page_Layout (Item) else Packed_Layout (Item));
    begin
       if Item.Held not in Eighth | Fourth then
          return Model_Runner.Backend.Device.Not_Packed;
+      end if;
+
+      --  A cache in pages: the bytes and scales are a region's offset
+      --  inside a page, and the attention adds the position's page and its
+      --  place inside it. No block base, and no per-position offset -- the
+      --  positions the batch attends are numbered from nought, and each
+      --  reads its own page.
+      if Paged then
+         return
+           (K_Bits   => (if Item.Held = Fourth then 4 else 8),
+            V_Bits   => (if Item.Held_Values = Fourth then 4 else 8),
+            K_Bytes  => 0,
+            V_Bytes  => Interfaces.Unsigned_64 (Laid.Values_At) * 4,
+            KS_At    => Natural (Laid.Key_Scales_At),
+            VS_At    => Natural (Laid.Value_Scales_At),
+            K_Blocks => Natural (Blocks_Of (Item.Held, KV_Width)),
+            V_Blocks => Natural (Blocks_Of (Item.Held_Values, V_Width)));
       end if;
 
       return
@@ -7483,16 +7512,33 @@ package body Model_Runner.Llama is
       Slot   : Element_Count;
       Width  : Element_Count;
       Keys   : Boolean;
-      Seated : Boolean := False)
+      Seated : Boolean := False;
+      Paged  : Boolean := False)
       return Model_Runner.Backend.Device.Packing_Shape
    is
       Base : constant Element_Count := (if Seated then 0 else Block_Base (Item));
-      Laid : constant Packed_Block := Packed_Layout (Item);
+      Laid : constant Packed_Block :=
+        (if Paged then Packed_Page_Layout (Item) else Packed_Layout (Item));
       Held : constant Cache_Precision :=
         (if Keys then Item.Held else Item.Held_Values);
    begin
       if Item.Held not in Eighth | Fourth then
          return Model_Runner.Backend.Device.Not_Packing;
+      end if;
+
+      --  A cache in pages: At_Byte and At_Scale are the region's offset in
+      --  a page, and the pack step adds the position's page and its place.
+      --  No block base, and no Slot -- First_Position and the shift place
+      --  the row.
+      if Paged then
+         return
+           (Bits      => (if Held = Fourth then 4 else 8),
+            Row_Bytes => Natural (Row_Bytes (Held, Width)),
+            At_Byte   => Interfaces.Unsigned_64
+                           (if Keys then 0 else Laid.Values_At) * 4,
+            At_Scale  => Natural (if Keys then Laid.Key_Scales_At
+                                  else Laid.Value_Scales_At),
+            Blocks    => Natural (Blocks_Of (Held, Width)));
       end if;
 
       return
@@ -11893,7 +11939,7 @@ package body Model_Runner.Llama is
            and then Model_Runner.Backend."="
                       (Source.Able.Kind,
                        Model_Runner.Backend.Backend_Device)
-           and then Cache = Exact
+           and then Cache in Exact | Eighth | Fourth
          then
             Item.Paged := True;
             Item.Page_First :=
@@ -14664,15 +14710,19 @@ package body Model_Runner.Llama is
                         Used        => Settings.Experts_Used,
                         Experts     => Settings.Experts,
 
-                        --  A packed session's block, and how its keys
-                        --  and values are packed into it as they are
-                        --  placed. Never a paged session, which this
-                        --  stage keeps exact.
+                        --  A packed session's block -- or, where it is
+                        --  paged, its page: the bytes and scales are then a
+                        --  region's offset in a page, and the page fields
+                        --  above place the row.
                         Packed      => Packed_Shape (Item, Base, V_Base,
-                                                     KV_Width, V_Width),
-                        Pack_Keys   => Packing_Of (Item, Slot, KV_Width, True),
-                        Pack_Values => Packing_Of (Item, V_Slot, V_Width,
-                                                   False),
+                                                     KV_Width, V_Width,
+                                                     Paged => Item.Paged),
+                        Pack_Keys   =>
+                          Packing_Of (Item, Slot, KV_Width, True,
+                                      Paged => Item.Paged),
+                        Pack_Values =>
+                          Packing_Of (Item, V_Slot, V_Width, False,
+                                      Paged => Item.Paged),
 
                         --  The layer's sinks, put where the attention
                         --  reads them.
@@ -17102,29 +17152,35 @@ package body Model_Runner.Llama is
                         --  the layer's offsets alone.
                         Packed      => Packed_Shape (Item, Base, V_Base,
                                                      KV_Width, V_Width,
-                                                     Seated => Rounding),
+                                                     Seated => Rounding,
+                                                     Paged => Item.Paged),
                         Pack_Keys   =>
                           Packing_Of
                             (Item,
                              Base + (if Rounding then 0
                                      else Cell_Of (Item, Natural (Index),
                                                    Reserved) * KV_Width),
-                             KV_Width, True, Seated => Rounding),
+                             KV_Width, True, Seated => Rounding,
+                             Paged => Item.Paged),
                         Pack_Values =>
                           Packing_Of
                             (Item,
                              V_Base + (if Rounding then 0
                                        else Cell_Of (Item, Natural (Index),
                                                      Reserved) * V_Width),
-                             V_Width, False, Seated => Rounding),
+                             V_Width, False, Seated => Rounding,
+                             Paged => Item.Paged),
 
                         --  And the layer unpacked into the copy for the
                         --  matrix instruction, where the batch is long
                         --  enough for it: every cell up to the batch's
-                        --  last. A round's rows read different blocks,
-                        --  and none is unpacked.
+                        --  last. A round's rows read different blocks, and
+                        --  none is unpacked; nor a paged session, whose
+                        --  scattered pages the row kernel reads a position's
+                        --  page at a time -- the matrix path over a gathered
+                        --  copy is a later stage.
                         Unpacked    =>
-                          (if Rounding
+                          (if Rounding or else Item.Paged
                            then Model_Runner.Backend.Device.Not_Unpacked
                            else Unpacking_Of
                                   (Item, Base, V_Base, KV_Width, V_Width,

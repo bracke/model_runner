@@ -2883,7 +2883,9 @@ package body Model_Runner.Backend.Device is
 
                   Products.Add_Place
                     (Steps, Natural (Key.Rows), KV_Width, 0, Added,
-                     From_Step => Step_K_Turned, Packed => Pack_Keys);
+                     From_Step => Step_K_Turned, Packed => Pack_Keys,
+                     Pages_At => Pages_At, Page_Shift => Page_Shift,
+                     First_Position => First_Position);
                   if not Added then
                      return;
                   end if;
@@ -2891,7 +2893,9 @@ package body Model_Runner.Backend.Device is
 
                   Products.Add_Place
                     (Steps, Natural (Value.Rows), V_Width, 0, Added,
-                     From_Step => Step_V, Packed => Pack_Values);
+                     From_Step => Step_V, Packed => Pack_Values,
+                     Pages_At => Pages_At, Page_Shift => Page_Shift,
+                     First_Position => First_Position);
                   if not Added then
                      return;
                   end if;

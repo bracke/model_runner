@@ -2747,7 +2747,18 @@ begin
                Backend     => Backend_Of (Option ("--backend", "cpu")),
                Paged       => Given ("--paged"),
                Page_Pool   => Whole ("--page-pool"),
-               Page_Size   => Whole ("--page-size"));
+               Page_Size   => Whole ("--page-size"),
+               Cache       =>
+                 (declare
+                    Named : constant String := Option ("--kv-cache", "f32");
+                  begin
+                    (if Named = Model_Runner.Llama.Cache_Name
+                                  (Model_Runner.Llama.Eighth)
+                     then Model_Runner.Llama.Eighth
+                     elsif Named = Model_Runner.Llama.Cache_Name
+                                     (Model_Runner.Llama.Fourth)
+                     then Model_Runner.Llama.Fourth
+                     else Model_Runner.Llama.Exact)));
             return;
          end if;
 

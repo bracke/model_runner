@@ -156,7 +156,9 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Paged       : Boolean := False;
       Page_Pool   : Natural := 0;
-      Page_Size   : Natural := 0);
+      Page_Size   : Natural := 0;
+      Cache       : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact);
 
    --  Serve several callers from one model, arriving and leaving.
    --

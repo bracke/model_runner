@@ -1340,7 +1340,9 @@ package body Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Paged       : Boolean := False;
       Page_Pool   : Natural := 0;
-      Page_Size   : Natural := 0)
+      Page_Size   : Natural := 0;
+      Cache       : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1476,7 +1478,8 @@ package body Speed_Run is
                else Natural'Max (8, Last * Index / Sessions));
          begin
             L.Open (Live (Index), Engine, Context => Room,
-                    Workers => Where, Paged => Paged, Status => Status);
+                    Workers => Where, Cache => Cache, Paged => Paged,
+                    Status => Status);
             if E.Is_Error (Status) then
                return;
             end if;
