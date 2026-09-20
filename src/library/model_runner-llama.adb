@@ -6183,6 +6183,14 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  And a block is not dealt while pages are: the two grow from the
+      --  front of the one buffer, so a device holds one kind or the other.
+      --  A block session that finds pages held attends on the host until
+      --  they are given back.
+      if Pages_In_Use > 0 then
+         return;
+      end if;
+
       --  The lowest free one. A closed session gives its block back, so
       --  what a long-running server deals out is the sessions it has open
       --  rather than the sessions it has ever opened.
@@ -6608,6 +6616,13 @@ package body Model_Runner.Llama is
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
         or else Item.Held /= Exact
         or else Item.Pages = null
+        --  A cache dealt in blocks and one dealt in pages both grow from
+        --  the front of the one buffer, so a device holds one kind or the
+        --  other, not both at once. Where a block is held, a paged session
+        --  is refused its pages and attends on the host until the blocks
+        --  are given back; nothing already this session's is disturbed,
+        --  since Paged_In means its pages are already dealt.
+        or else (not Item.Paged_In and then Block_Taken > 0)
       then
          return;
       end if;
@@ -15945,15 +15960,22 @@ package body Model_Runner.Llama is
                   Base_El : constant Element_Count := Pages_Taken;
                   Ok      : Boolean;
                begin
+                  --  A linear layer keeps a ring of states rather than
+                  --  pages, and its whole layer never reads the per-row
+                  --  table, so it holds no member table -- and Page_First
+                  --  of it is the sentinel a zero-page layer shares, which
+                  --  Pages has no room for.
                   for Layer in 0 .. Layers - 1 loop
                      for Which in 0 .. Rows - 1 loop
                         Offsets (Layer * Rows + Which) := Member_Words;
-                        Member_Words :=
-                          Member_Words
-                          + Natural
-                              (Held_By (Element_Count (Which)).Page_Count.all
-                                 (Layer))
-                          + Page_Table_Pad;
+                        if not Linear (Settings, Layer) then
+                           Member_Words :=
+                             Member_Words
+                             + Natural
+                                 (Held_By (Element_Count (Which)).Page_Count.all
+                                    (Layer))
+                             + Page_Table_Pad;
+                        end if;
                      end loop;
                   end loop;
 
@@ -15980,7 +16002,9 @@ package body Model_Runner.Llama is
                               --  The row's position, and where its member's
                               --  page table for this layer sits -- an
                               --  element of the cache the row reads its page
-                              --  out of.
+                              --  out of. A linear layer holds no pages and
+                              --  reads no table, so its words are left as
+                              --  they are and its member table is empty.
                               Table (Row + 1) :=
                                 Natural
                                   (Cell_Of (Member.all, Layer,
@@ -15990,19 +16014,21 @@ package body Model_Runner.Llama is
 
                               --  And the member's pages for the layer, with
                               --  the padding a masked over-read reads.
-                              for Page in 0 .. Natural (Held) + Page_Table_Pad
-                                                - 1
-                              loop
-                                 Table (At_Table + Page + 1) :=
-                                   Natural
-                                     (Member.Pages.all
-                                        (Natural (First)
-                                         + Natural
-                                             (Element_Count'Min
-                                                (Element_Count (Page),
-                                                 Element_Count'Max (Held, 1)
-                                                 - 1))));
-                              end loop;
+                              if not Linear (Settings, Layer) then
+                                 for Page in 0 .. Natural (Held)
+                                                  + Page_Table_Pad - 1
+                                 loop
+                                    Table (At_Table + Page + 1) :=
+                                      Natural
+                                        (Member.Pages.all
+                                           (Natural (First)
+                                            + Natural
+                                                (Element_Count'Min
+                                                   (Element_Count (Page),
+                                                    Element_Count'Max (Held, 1)
+                                                    - 1))));
+                                 end loop;
+                              end if;
                            end;
                         end loop;
                      end loop;
@@ -17324,7 +17350,15 @@ package body Model_Runner.Llama is
                --  attention moves every position's end along by one, and
                --  a batch with a run in it is attended on the host, which
                --  knows where each run ends.
+               --  Not a paged session: this fallback attends over block
+               --  offsets a paged cache does not hold -- Seat_At is the
+               --  block's base and the round's table is the block round's,
+               --  neither of which a paged batch or round has. A paged
+               --  session whose layer did not go over whole attends on the
+               --  host below, out of its host copy, which mirroring keeps
+               --  current.
                if Item.Held in Exact | Eighth | Fourth and then Resident
+                 and then not Item.Paged
                  and then not Fused
                  and then not Hybrid (Settings.Kind)
                  and then not Has_Runs
@@ -17467,6 +17501,7 @@ package body Model_Runner.Llama is
                if not Fused
                  and then (Hybrid (Settings.Kind)
                            or else Has_Runs
+                           or else Item.Paged
                            or else not (Item.Held = Exact and then Resident))
                then
                   declare

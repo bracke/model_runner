@@ -4985,6 +4985,127 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Holds_Only_What_It_Fills;
 
+   --------------------------------------------------------------
+   -- A_Block_And_A_Paged_Session_Do_Not_Corrupt_Each_Other --
+   --------------------------------------------------------------
+
+   --  A cache in blocks and one in pages both grow from the front of the
+   --  one device buffer, so a device holds one kind or the other, not both
+   --  at once. Where a block is held, a paged session opened beside it is
+   --  refused its pages and attends on the host -- and the block session's
+   --  cache is left untouched, where before the two dealt the same elements
+   --  and wrote over each other.
+   --
+   --  The block session says, bit for bit, what it says with no paged
+   --  session beside it; the paged session does without device pages and
+   --  says so.
+   procedure A_Block_And_A_Paged_Session_Do_Not_Corrupt_Each_Other
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Fill  : constant := 20;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      Probe : constant Vocab.Token_Id := 5;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+
+      procedure Fill_It (Under : in out Harness; Live : in out L.Session) is
+         Status  : E.Error_Info;
+         Ignored : Logit_Vector;
+      begin
+         for Step in 1 .. Fill loop
+            L.Evaluate (Live, Under.Ready, Token_Of (Step), Ignored,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "a session did not fill");
+         end loop;
+      end Fill_It;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Alone   : L.Session;
+            Block, Paged : L.Session;
+
+            Lone, With_Paged, Ignored : Logit_Vector;
+
+            Worst : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               --  A block session on its own: what it says next.
+               L.Open (Alone, Under.Ready, Context => Room, Status => Status);
+               Assert (E.Is_Ok (Status), "the lone block did not open");
+               Fill_It (Under, Alone);
+               L.Evaluate (Alone, Under.Ready, Probe, Lone, Status => Status);
+               Assert (E.Is_Ok (Status), "the lone block did not answer");
+               L.Close (Alone);
+
+               --  The same block session, with a paged session opened and
+               --  filled beside it -- which used to overwrite its cache.
+               L.Open (Block, Under.Ready, Context => Room, Status => Status);
+               Assert (E.Is_Ok (Status), "the block did not open");
+               Fill_It (Under, Block);
+
+               L.Open (Paged, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the paged did not open beside it");
+               Fill_It (Under, Paged);
+
+               --  The block held its cache, and the paged session did
+               --  without device pages -- one kind at a time.
+               Assert (L.Holds_Block (Block),
+                       "the block session lost its block to a paged one");
+               Assert (not L.Holds_Pages (Paged),
+                       "a paged session took pages while a block was held");
+
+               L.Evaluate (Block, Under.Ready, Probe, With_Paged,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the block did not answer beside it");
+
+               L.Evaluate (Paged, Under.Ready, Probe, Ignored,
+                           Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the paged session did not answer on the host: "
+                       & E.Error_Code'Image (Status.Code));
+
+               for Index in Logit_Vector'Range loop
+                  Worst :=
+                    N.Real'Max (Worst, abs (With_Paged (Index) - Lone (Index)));
+               end loop;
+
+               Assert (Worst = 0.0,
+                       "a block session says" & N.Real'Image (Worst)
+                       & " away from itself once a paged session is opened"
+                       & " beside it, so the two wrote over each other");
+
+               L.Close (Paged);
+               L.Close (Block);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Block_And_A_Paged_Session_Do_Not_Corrupt_Each_Other;
+
    ----------------------------------------------------------
    -- A_Paged_Session_Turned_Out_Says_What_It_Said --
    ----------------------------------------------------------
@@ -14379,6 +14500,11 @@ package body Tests.Inference_Cases is
          "a paged session takes a page of the device's cache only as a "
          & "position reaches it, so it holds a fraction of the pages a "
          & "block would for a context it fills little of");
+      Register_Routine
+        (T, A_Block_And_A_Paged_Session_Do_Not_Corrupt_Each_Other'Access,
+         "a block session and a paged one opened on the one device do not "
+         & "write over each other: the device holds one kind at a time and "
+         & "the paged one attends on the host");
       Register_Routine
         (T, A_Paged_Session_Turned_Out_Says_What_It_Said'Access,
          "a paged session turned out of its pages when the pool fills reads "
