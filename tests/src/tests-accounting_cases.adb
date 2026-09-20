@@ -237,6 +237,36 @@ package body Tests.Accounting_Cases is
               "an empty path was not answered zero");
    end Free_Disk_Space_Answers_For_A_Path;
 
+   --  Ensure_Parent_Directory makes the directory a file is about to be
+   --  written into, and its parents, where they are not there -- what a
+   --  download and a saved session call before the write.
+   procedure Ensure_Parent_Directory_Makes_The_Way
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package P renames Model_Runner.Platform;
+      use type Ada.Directories.File_Kind;
+
+      Root : constant String := "obj/ensure-parent-test";
+      Deep : constant String := Root & "/a/b/c";
+      File : constant String := Deep & "/model.gguf";
+   begin
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+
+      P.Ensure_Parent_Directory (File);
+      Assert (Ada.Directories.Exists (Deep)
+              and then Ada.Directories.Kind (Deep)
+                       = Ada.Directories.Directory,
+              "the parents of a file about to be written were not made");
+
+      --  A second call over a directory that now exists is no error.
+      P.Ensure_Parent_Directory (File);
+
+      Ada.Directories.Delete_Tree (Root);
+   end Ensure_Parent_Directory_Makes_The_Way;
+
    --  The rule the Linux core count applies to each line it reads.
    --
    --  Each processor has a file naming every processor that shares its core,
@@ -912,6 +942,10 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Free_Disk_Space_Answers_For_A_Path'Access,
          "free space is answered for a path, and for one not yet on disk");
+      Register_Routine
+        (T, Ensure_Parent_Directory_Makes_The_Way'Access,
+         "the directory a file is about to be written into is made, parents "
+         & "and all");
       Register_Routine
         (T, Leading_Number_Reads_What_It_Says'Access,
          "the rule the Linux core count applies to a line reads what it "

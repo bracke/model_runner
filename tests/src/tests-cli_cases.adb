@@ -2961,6 +2961,10 @@ package body Tests.CLI_Cases is
    begin
       Expect (E.CLI_Missing_Command, "");
       Expect (E.CLI_Unknown_Command, "frobnicate");
+      --  inspect must name a model, and so must models remove; run may be
+      --  given none and offers a choice at execution instead.
+      Expect (E.CLI_Missing_Model_Path, "inspect");
+      Expect (E.CLI_Missing_Model_Path, "models remove");
       --  Run with no model parses; a choice of the models on hand is
       --  offered at execution, so the model is not required here.
       Expect (E.No_Error, "run");

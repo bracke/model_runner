@@ -4435,7 +4435,6 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Block_And_A_Paged_Session_Do_Not_Corrupt_Each_Other;
 
-
    ------------------------------------------------------------
    -- A_Paged_Window_Says_What_A_Block_Window_Says --
    ------------------------------------------------------------

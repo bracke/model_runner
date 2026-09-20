@@ -1108,6 +1108,10 @@ package Model_Runner.Llama is
    --    Same_As_Keys, the default, stores both alike; otherwise one of the
    --    packed storages beside a packed Cache -- q8 keys with q4 values, or
    --    the other way -- and any other pairing is refused as a shape.
+   --  @param Paged Whether the session keeps its cache in the device's
+   --    shared paged pool rather than a block of its own. It has no effect
+   --    without the device backend, and a paged session holds no contiguous
+   --    block, so a context shift over it is refused rather than slid.
    --  @param Status Success, Lifecycle_Model_Not_Ready, Arch_Context_Too_Large,
    --    Tensor_Shape_Mismatch for a pairing this does not store, or a
    --    memory diagnostic.

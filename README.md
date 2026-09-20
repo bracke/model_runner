@@ -497,6 +497,12 @@ generated text in `answer.txt` — no trailing newline, no styling, no prefix.
 | `NO_COLOR` | suppresses automatic styling |
 | `LC_ALL` | locale, when `MODEL_RUNNER_LOCALE` is unset |
 | `LANG` | locale, when neither of the above is set |
+| `MODEL_RUNNER_CONFIG` | path to the settings file, overriding its default location |
+| `HF_TOKEN` | Hugging Face token, sent when downloading a gated model |
+| `XDG_CONFIG_HOME` | base for the settings file when `MODEL_RUNNER_CONFIG` is unset |
+| `XDG_DATA_HOME` | base for the models and sessions directories |
+| `XDG_CACHE_HOME` | base for the prompt cache |
+| `HOME` | fallback base for the above when the `XDG_*` variables are unset |
 
 Prompts are never taken from the environment. This table is the whole of what
 the program reads: the release checklist fails on a variable read but not

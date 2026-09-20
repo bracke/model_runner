@@ -121,7 +121,29 @@ package body Library_Surface is
       --  over, which says what happened rather than what is.
       new String'("Holds_Block"),
       new String'("Holds_Seat"),
-      new String'("Seats_Held")];
+      new String'("Seats_Held"),
+
+      --  Where a run's time went, phase by phase, from the engine's own
+      --  clock. `tests speed` asks so it can report it; a program timing a
+      --  run of its own asks the same, and the engine keeps the figures
+      --  either way.
+      new String'("Time_Spent"),
+
+      --  How far back a windowed session may be rewound before a slid layer
+      --  can no longer attend. The engine does not decide for the caller --
+      --  rewind no further, or clear and re-read -- so it answers rather
+      --  than acts, and a caller handed such a session asks before it meets
+      --  the wall by getting a wrong answer.
+      new String'("Reusable_From"),
+
+      --  A paged session's introspection: whether it keeps its cache in the
+      --  device's shared pool, how many pages that pool holds, and the size
+      --  a page is cut to. The engine pages or does not and needs no answer;
+      --  a program watching the pool, or setting the grain before it opens a
+      --  session, asks.
+      new String'("Holds_Pages"),
+      new String'("Pages_Held"),
+      new String'("Set_Page_Size")];
 
    ---------------
    -- Is_Listed --

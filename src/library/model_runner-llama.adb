@@ -15501,7 +15501,6 @@ package body Model_Runner.Llama is
       Row_Owner : constant array (0 .. Element_Count'Max (Count, 1) - 1)
         of Element_Count := [others => 0];
 
-
       --  Whether a token is one the given rows stand behind: the set's
       --  token, or its second where it has one.
       function Stands_Behind
@@ -15509,7 +15508,6 @@ package body Model_Runner.Llama is
       is (Token = Mine.Token
           or else (Mine.Second /= Model_Runner.Tokenizer.No_Token
                    and then Token = Mine.Second));
-
 
       --  Where row Which sits in that session's cache.
       function Sits_At (Which : Element_Count) return Element_Count
@@ -15757,7 +15755,6 @@ package body Model_Runner.Llama is
       is (Which * Stride);
    begin
       Logits := [others => 0.0];
-
 
       --  As in Evaluate: where the products can reach it, set on the way in
       --  by every entry point that reaches one.
@@ -16072,7 +16069,6 @@ package body Model_Runner.Llama is
             end if;
          end;
       end loop;
-
 
       --  Room for what this pass will add, in the layers that slide a
       --  window. A round's rows are different sessions at different

@@ -3065,7 +3065,6 @@ private
       Cap        : Model_Runner.Numerics.Real := 0.0;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
 
-
       --  A packed session's block, where the attention reads one.
       Packed     : Packed_Cache := Not_Packed;
 

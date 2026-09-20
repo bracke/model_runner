@@ -28,7 +28,6 @@ package body Speed_Run is
    package L renames Model_Runner.Llama;
    package T renames Model_Runner.Text;
 
-
    use type Ada.Real_Time.Time;
    use type Interfaces.Unsigned_64;
 

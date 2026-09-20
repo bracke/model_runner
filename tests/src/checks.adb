@@ -4008,7 +4008,7 @@ package body Checks is
          function Excused (Name : String) return Boolean
          is (Name in "Run_Process" | "Physical_Cores" | "Host_Name"
                      | "No_Color_Requested" | "Failure_Name" | "Interrupts"
-                     | "Row_Product");
+                     | "Row_Product" | "Reusable_From");
 
          procedure Examine (Relative : String) is
             Text   : constant String := Contents (Relative);

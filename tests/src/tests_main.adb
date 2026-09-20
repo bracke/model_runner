@@ -2702,7 +2702,6 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Roles_Named (Option ("--arith", "int8")));
 
-
          Speed_Run.Run
            (Path        => Option ("--model", ""),
             Prompt_Path =>

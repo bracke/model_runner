@@ -135,6 +135,11 @@ en.help.inspect.usage = Usage: model_runner inspect MODEL [options]
 en.help.inspect.summary = Parse and validate a model file and report what it contains, without generating anything.
 en.help.models.usage = Usage: model_runner models [remove NAME]
 en.help.models.summary = List the models in the models directory with their sizes, or remove one by name (with all its shards). The directory is MODEL_RUNNER_MODELS, or ~/.local/share/model_runner/models.
+en.help.models.options = Options:
+en.help.models.quiet =   --quiet                 suppress progress, notes and warnings
+en.help.models.verbose =   --verbose               report progress and detail on standard error
+en.help.models.locale =   --locale NAME           locale for program messages
+en.help.models.color =   --color=MODE            colour output: {value}
 en.help.inspect.options = Options:
 en.help.inspect.metadata =   --metadata              list metadata keys, types and values
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
@@ -691,6 +696,11 @@ da.help.inspect.usage = Brug: model_runner inspect MODEL [tilvalg]
 da.help.inspect.summary = Læs og validér en modelfil og vis hvad den indeholder, uden at generere noget.
 da.help.models.usage = Brug: model_runner models [remove NAVN]
 da.help.models.summary = Vis modellerne i modelmappen med deres størrelser, eller fjern en efter navn (med alle dens shards). Mappen er MODEL_RUNNER_MODELS eller ~/.local/share/model_runner/models.
+da.help.models.options = Tilvalg:
+da.help.models.quiet = --quiet                 undertryk status, noter og advarsler
+da.help.models.verbose = --verbose               vis status og detaljer på standardfejl
+da.help.models.locale = --locale NAVN           sprog for programmets beskeder
+da.help.models.color = --color=TILSTAND        farvet output: {value}
 da.help.inspect.options = Tilvalg:
 da.help.inspect.metadata = --metadata              vis metadatanogler, typer og vaerdier
 da.help.inspect.tensors = --tensors               vis tensorernes navne, former og formater
@@ -1328,6 +1338,11 @@ qps.help.inspect.usage = ⟦Úßágé: model_runner íñßpéçŧ MÓÐÉĹ [óp
 qps.help.inspect.summary = ⟦Páŕßé áñð váĺíðáŧé á móðéĺ fíĺé áñð ŕépóŕŧ wháŧ íŧ çóñŧáíñß, wíŧhóúŧ géñéŕáŧíñg áñýŧhíñg.⟧
 qps.help.models.usage = ⟦Ußágé: móðéĺ_ŕúññéŕ móðéĺß [ŕémóvé NAME]⟧
 qps.help.models.summary = ⟦Líßŧ ŧhé móðéĺß íñ ŧhé móðéĺß ðíŕéçŧóŕý wíŧh ŧhéíŕ ßízéß, óŕ ŕémóvé óñé ƀý ñámé (wíŧh áĺĺ íŧß ßháŕðß). Thé ðíŕéçŧóŕý íß MODEL_RUNNER_MODELS, óŕ ~/.ĺóçáĺ/ßháŕé/móðéĺ_ŕúññéŕ/móðéĺß.⟧
+qps.help.models.options = ⟦Ópŧíóñß:⟧
+qps.help.models.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
+qps.help.models.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
+qps.help.models.locale = ⟦  --locale ÑÁMÉ           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
+qps.help.models.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.inspect.options = ⟦Ópŧíóñß:⟧
 qps.help.inspect.metadata = ⟦  --metadata              ĺíßŧ méŧáðáŧá kéýß, ŧýpéß áñð váĺúéß⟧
 qps.help.inspect.tensors = ⟦  --tensors               ĺíßŧ ŧéñßóŕ ñáméß, ßhápéß áñð fóŕmáŧß⟧

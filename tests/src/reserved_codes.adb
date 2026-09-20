@@ -12,10 +12,10 @@ package body Reserved_Codes is
       --  removed fails to compile here instead of quietly falling off the
       --  list.
       --
-      --  Three came off it when a round arrived: a round refuses a member
-      --  that is closed or failed, and refuses more members than a batch may
-      --  hold, so the three codes that said those things and had never been
-      --  raised are raised now.
+      --  Three came off it when a round arrived -- a round refused a member
+      --  that was closed or failed, and refused more members than a batch
+      --  may hold -- and the three went back on when that serving path was
+      --  removed, since nothing produces them again.
       case Code is
          when E.CLI_Invalid_Locale
             | E.CLI_Invalid_Mapping_Mode
@@ -41,7 +41,14 @@ package body Reserved_Codes is
             | E.Conversation_Invalid_Role
             | E.Conversation_System_Unsupported
             | E.Internal_Not_Implemented
-            | E.Internal_Localization_Failed =>
+            | E.Internal_Localization_Failed
+
+            --  The three the serving round used to raise, unproduced again
+            --  now it is gone: a session closed or failed under a round, and
+            --  a batch with more members than one may hold.
+            | E.Lifecycle_Session_Closed
+            | E.Lifecycle_Session_Failed
+            | E.Generation_Batch_Too_Large =>
             return True;
 
          when others =>

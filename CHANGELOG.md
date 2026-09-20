@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **llama3 and LongRoPE rotary scaling are read now, not refused.** A file
+  naming `llama3` scaling, and one carrying LongRoPE's `rope_factors_long`
+  and `rope_factors_short` tables, were both turned away at load. Llama 3's
+  scaling is worked into per-dimension divisors as the file is read -- a
+  frequency faster than the high band left alone, one slower than the low
+  band divided by the factor, the band between eased across -- and LongRoPE's
+  two tables are read as any per-dimension factor table is, the long one
+  where the model is opened past the context it was trained on and the short
+  one otherwise. Llama-3.2 and Phi-3.5 mini answer correctly here now, and
+  both are back among the models `run` offers to download.
+- **A saved session no longer overflows the stack.** `--save-session` copied
+  the whole context onto the stack before writing it, so a large one -- Phi-3
+  mini at a 2,048 context is sixteen megabytes -- crashed with an internal
+  error. It is written a fixed chunk at a time now, so a session of any size
+  saves.
+- **A model to download can be named in the settings file, and the machine
+  checks it has room first.** A `suggest.NAME = reference [bytes]` line adds a
+  model to the list `run` offers when none is named, so a model can be added
+  without a rebuild, and a machine's own suggestions lead the built-in ones.
+  Before a download starts, the volume the models directory sits on is asked
+  whether it has room for what is not yet on disk, and a download that would
+  not fit is refused with both numbers rather than filling the disk part way.
+  A gated repository, and a disk that fills mid-download, now say what they
+  are and what fixes them rather than reading as a generic stop.
 - **A model with a next-token block drafts from it unasked.** `run` on a
   qwen35 or qwen35moe file used to draft from the block past the stack only
   when `--draft-tokens` was given; it drafts by default now, four at a time,
