@@ -38,9 +38,9 @@ package body Model_Runner.Serving is
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
       Cache   : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Eighth;
+        Model_Runner.Llama.Exact;
       Values  : Model_Runner.Llama.Value_Precision :=
-        Model_Runner.Llama.Value_Fourth;
+        Model_Runner.Llama.Same_As_Keys;
       Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info)
    is

@@ -150,21 +150,21 @@ package Model_Runner.Serving is
    --  @param Reuse True to let an arriving caller keep whatever its prompt
    --    has in common with the one the seat last held, instead of reading
    --    its prompt from nothing. See the note below.
-   --  @param Cache What each seat keeps its keys in. The default is a byte
-   --    an element (q8): a server holds many callers and the cache is what
-   --    bounds how many, so it is dealt tighter than a lone session's, at a
-   --    precision a served caller does not usually mind. A caller that wants
-   --    the exact cache asks for it.
-   --  @param Values What each seat keeps its values in. The default, one
-   --    precision below the keys where the keys are packed -- a nibble to
-   --    the keys' byte -- is the coarser storage values bear better than
-   --    keys: a weighted sum averages a value's rounding where a dot product
-   --    carries a key's into every score. Same_As_Keys keeps them alike.
+   --  @param Cache What each seat keeps its keys in. The default is the
+   --    exact cache: packing trades accuracy for room, and only the caller
+   --    knows what its answers are worth, so it asks for a packed cache
+   --    rather than being given one. Where cache is what bounds how many
+   --    seats fit, a caller passes q8 or q4 to fit more.
+   --  @param Values What each seat keeps its values in. Same_As_Keys by
+   --    default. Where the keys are packed, values bear a step coarser
+   --    better than keys -- a weighted sum averages a value's rounding
+   --    where a dot product carries a key's into every score -- so a caller
+   --    trading accuracy for room may pass Value_Fourth against q8 keys.
    --  @param Paged True to deal each seat's cache in pages rather than one
-   --    block, the default: a caller filling little of its context then
-   --    holds little, so the server fits far more callers in the cache it
-   --    has, for the same answer to the bit. Only the device pages; a seat
-   --    on the processor is dealt a block whatever this says.
+   --    block, the default: a caller filling little of its context holds
+   --    little, so far more seats fit, or a lone one holds less, for the
+   --    same answer to the bit -- paging gives up no precision. Only the
+   --    device pages; a seat on the processor is dealt a block regardless.
    --  @param Status Success or the first refusal.
    procedure Open
      (Item    : in out Server;
@@ -175,9 +175,9 @@ package Model_Runner.Serving is
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
       Cache   : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Eighth;
+        Model_Runner.Llama.Exact;
       Values  : Model_Runner.Llama.Value_Precision :=
-        Model_Runner.Llama.Value_Fourth;
+        Model_Runner.Llama.Same_As_Keys;
       Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info);
 
@@ -388,9 +388,9 @@ private
       Budget    : Boolean := False;
       Reuse     : Boolean := True;
       Cache     : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Eighth;
+        Model_Runner.Llama.Exact;
       Values    : Model_Runner.Llama.Value_Precision :=
-        Model_Runner.Llama.Value_Fourth;
+        Model_Runner.Llama.Same_As_Keys;
       Paged     : Boolean := True;
       Open_Now  : Boolean := False;
 
