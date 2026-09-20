@@ -227,6 +227,15 @@ up, and writes its cache into the pages it is given again when it next runs.
 session turned out and brought back says, to a ten-thousandth, what one that
 kept its pages says.
 
+And priced under the bound: the eight sessions above, whose pages want 176
+slots, held to a pool of twenty-four -- an eighth of what they want, 4.5 MB,
+two hundred and thirty-five times under the block cache -- say the same mark to
+the bit and read within about a ninth of the tokens a second the unbounded pool
+reads, at a matched device clock. The turning-out does not thrash, because a
+session turns out only one colder than itself: past the first squeeze, where
+seven of the eight are turned out once, the set settles. `tests speed --turns N
+--paged --page-pool P` measures it; `docs/measured-figures.txt` keeps the run.
+
 **Stage five -- a round whose members are paged.** A round of paged members
 costs its members' pages rather than their whole contexts. Each member holds
 its own scattered pages, and the round's per-row table points each row not at a

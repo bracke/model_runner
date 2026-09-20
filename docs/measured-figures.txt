@@ -22076,3 +22076,29 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 # cache it has.
 #
 # model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
+
+# ---------------------------------------------------------------------------
+# The pool bounded below what the sessions want, so the coldest is turned out
+# to make room -- what a server does to hold more sessions in less cache. The
+# same eight, whose pages want 176 slots, held to a tighter pool:
+#
+#   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
+#                --paged --page-pool N
+#
+#   --page-pool   cache     held  turned  tokens/s   digest
+#   none          33.0 MB   176     0     39.3       104524498F840E7B
+#   88            16.5 MB    88     4     36.6       104524498F840E7B
+#   44             8.3 MB    44     6     33.1       104524498F840E7B
+#   24             4.5 MB    24     7    ~33         104524498F840E7B
+#
+# The answer is the same to the bit at every bound: a session turned out reads
+# its pages back and, brought back, writes them anew. The cache falls to the
+# bound -- 4.5 MB at twenty-four pages, two hundred and thirty-five times under
+# the block cache -- and the throughput cost is about a ninth at a matched
+# device clock (34.9 against 39.3 at ~2,100 MHz), more as the device throttles
+# under the sustained pressure. The turning-out does not thrash: a session may
+# turn out only one colder than itself, so past the first squeeze -- seven of
+# the eight turned out once -- the set settles. "turned" counts sessions turned
+# out over the run, which Pages_Turned reports.
+#
+# model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.

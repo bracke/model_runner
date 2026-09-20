@@ -154,7 +154,8 @@ package Speed_Run is
       Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Paged       : Boolean := False);
+      Paged       : Boolean := False;
+      Page_Pool   : Natural := 0);
 
    --  Serve several callers from one model, arriving and leaving.
    --

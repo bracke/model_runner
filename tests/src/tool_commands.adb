@@ -43,7 +43,7 @@ package body Tool_Commands is
      & " --draft-lookup --draft-next"
      & " --kv-cache --repeats --round --turns --churn --spread --serve"
      & " --callers"
-     & " --no-reuse --paged"
+     & " --no-reuse --paged --page-pool"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
@@ -79,7 +79,7 @@ package body Tool_Commands is
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup] [--draft-next]"
      & " [--kv-cache MODE] [--repeats N] [--round N] [--turns N]"
-     & " [--churn N] [--spread] [--paged]"
+     & " [--churn N] [--spread] [--paged] [--page-pool N]"
      & " [--serve N]"
      & " [--callers N] [--no-reuse] [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N]"

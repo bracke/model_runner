@@ -2745,7 +2745,8 @@ begin
                Churn       => Whole ("--churn"),
                Spread      => Given ("--spread"),
                Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Paged       => Given ("--paged"));
+               Paged       => Given ("--paged"),
+               Page_Pool   => Whole ("--page-pool"));
             return;
          end if;
 

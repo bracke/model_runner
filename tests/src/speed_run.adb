@@ -1338,7 +1338,8 @@ package body Speed_Run is
       Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Paged       : Boolean := False)
+      Paged       : Boolean := False;
+      Page_Pool   : Natural := 0)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1531,6 +1532,14 @@ package body Speed_Run is
 
          Room_Of.Allocate (Width, Row);
          Room_Of.Allocate (Width, Aside);
+
+         --  A tighter bound on the page pool where one is asked, so that
+         --  the sessions taking turns ask for more pages than the pool
+         --  holds and the coldest is turned out to make room -- what a
+         --  server does to hold more sessions in less cache, priced here.
+         if Paged and then Page_Pool > 0 then
+            L.Limit_Page_Pool (Page_Pool);
+         end if;
 
          --  Each session opened and given the prompt, a token shorter
          --  for each after the first so that they sit at different
