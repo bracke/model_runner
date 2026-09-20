@@ -4599,6 +4599,13 @@ package body Model_Runner.CLI.Execute is
       Add_Suggestion ("Phi-3.5-mini-instruct", "2.4 GB",
                       "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",
                       2_393_232_672);
+      --  An Ada and SPARK coder, a Qwen2.5-Coder-14B fine-tune, which this
+      --  crate's own language makes the one specialist worth the size here.
+      --  Two Q4_K_M revisions carry the quant, so the reference names r6 --
+      --  the newer -- exactly, since the bare quant would match both.
+      Add_Suggestion ("Steelman-14B-Ada", "9.0 GB",
+                      "the-clanker-lover/steelman-14b-ada-GGUF:r6-Q4_K_M",
+                      9_020_550_464);
 
       if Count = 0 then
          return;
