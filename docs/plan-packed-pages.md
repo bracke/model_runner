@@ -33,11 +33,11 @@ the device, eight sessions filling twenty-three of a 2,048 context: the q8
 paged cache is 8.4 MB against the packed block's 259 and the exact block's
 1,056; the q4 paged cache is 5.2 MB, two hundred times under the exact block;
 and held to a pool of forty-four pages, six turned out, it is 2.1 MB and still
-the block's mark to the bit. What is left is an optimization rather than a
-stage: the matrix instruction over a gathered copy for a long packed prompt,
-which the row kernel does correctly meanwhile -- Unpacked is withheld for a
-paged session, so a packed prompt reads at the row kernel's rate until the
-unpack gather in pages is wired.
+the block's mark to the bit. And a long packed paged prompt attends by the
+cooperative-matrix kernel now, over its pages gathered into the copy, at the
+packed block's rate -- so nothing is left of this plan: the packed pages do
+everything the exact pages do, and take the matrix instruction where the batch
+is long enough for it, in both storages, to the bit.
 
 ## Where the two stand, and why they do not meet
 

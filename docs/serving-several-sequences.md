@@ -481,10 +481,11 @@ session says its packed block's mark to the bit, in both storages, past two
 pages, turned out under a bound, and as a round. The same eight sessions hold
 8.4 MB of q8 pages against the packed block's 259, or 5.2 MB of q4 against 160
 -- two hundred times under the exact block -- and 2.1 MB held to a pool of
-forty-four. `--kv-cache` on `tests speed --turns` and `--round` serves them;
-`docs/plan-packed-pages.md` has the plan. What is left is one optimization: the
-matrix instruction over a gathered copy for a long packed prompt, which the row
-kernel does correctly meanwhile.
+forty-four. A long packed prompt attends by the cooperative-matrix kernel, over
+its pages gathered into the copy the packed pages leave free, at the packed
+block's rate. `--kv-cache` on `tests speed --turns` and `--round` serves them;
+`docs/plan-packed-pages.md` has the plan. The packed pages now do everything
+the exact pages do, to the bit.
 
 ## How it will be checked
 

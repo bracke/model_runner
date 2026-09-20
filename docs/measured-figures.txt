@@ -22150,8 +22150,12 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 # is the packed block's own layout at one page of positions, and the packed
 # kernels read and write it a position's page at a time.
 #
-# The paged packed batch takes the row kernel, not the matrix instruction over
-# a gathered copy, so a long prompt pays the row kernel's rate until the unpack
-# gather in pages is built; a turn-taking decode is at the block's rate.
+# A long packed paged prompt attends by the cooperative-matrix kernel, over its
+# pages gathered into the copy the packed pages leave free: a 1,419-token q8
+# prompt reads 32.3 tokens a second against the packed block's 32.8, where the
+# row kernel it would otherwise take is markedly slower at that length. Three
+# sessions of it say the block's mark to the bit, in q8 (494CBCE1...) and q4
+# (6C001784...). A turn-taking decode, one position, takes the row kernel and
+# is at the block's rate either way.
 #
 # model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
