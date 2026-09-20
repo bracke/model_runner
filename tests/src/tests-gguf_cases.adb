@@ -5044,14 +5044,15 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
               "a yarn-scaled model was refused rather than read");
 
-      --  And two tables chosen by prompt length are refused by the tensors
-      --  as well, since a file may carry them without naming the method.
+      --  And LongRoPE's two tables are read now rather than refused: a
+      --  file carrying them reaches the tensors, as a yarn-scaled one does,
+      --  since the tables are applied as any per-dimension factor table is.
       Sound (Builder);
       Fixtures.Add_Tensor
         (Builder, "rope_factors_long.weight", [1 => 2], G.Type_F32,
          [1 .. 8 => 0]);
-      Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
-              "a model carrying two rotary tables was accepted");
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a model carrying rotary tables was refused rather than read");
 
       --  A mixture of experts is read rather than refused: the
       --  configuration is sound and preparation goes on to want the router

@@ -676,26 +676,17 @@ package body Model_Runner.Llama is
              (Source, Model_Key (Settings.Kind, "rope.scaling.type"));
       begin
          if Named /= "" and then Named /= "none" and then Named /= "linear"
-           and then Named /= "yarn"
+           and then Named /= "yarn" and then Named /= "llama3"
          then
             Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
             E.Add_Text (Status, "scaling", Named, E.Param_Identifier);
             return;
          end if;
 
-         --  Two tables, chosen by how long the prompt turned out to be, is
-         --  a different method again: it makes the rotation depend on the
-         --  whole sequence rather than on the position, and nothing here
-         --  does that. Refused by the tensors as well as by the name,
-         --  because a file may carry them without naming the method.
-         if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
-           or else Containers.Find_Tensor
-                     (Source, "rope_factors_short.weight") /= 0
-         then
-            Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
-            E.Add_Text (Status, "scaling", "longrope", E.Param_Identifier);
-            return;
-         end if;
+         --  LongRoPE -- two tables of per-dimension factors, the long one
+         --  or the short chosen by the context the model is opened at --
+         --  is read below, where the rotation's factors are, and applied
+         --  as any other per-dimension factor table is.
 
          Settings.Scaling.Kind :=
            (if Named = "yarn" then K.Yarn
@@ -719,6 +710,66 @@ package body Model_Runner.Llama is
             end if;
          end if;
       end;
+
+      --  Llama 3 and LongRoPE both stretch from the context the model was
+      --  trained on, read here for whichever uses it.
+      Containers.Get_Integer
+        (Source,
+         Model_Key (Settings.Kind, "rope.scaling.original_context_length"),
+         1, Long_Long_Integer (Bounds.Max_Context_Length), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      if E.Is_Ok (Local) then
+         Settings.Rope_Original := Natural (Number);
+      end if;
+
+      --  Llama 3's rotary scaling: the scale factor and the band it eases
+      --  across, worked into per-dimension divisors where the factors are
+      --  read. The scalar stretch is set aside; the divisors carry it.
+      if Containers.String_Value
+           (Source, Model_Key (Settings.Kind, "rope.scaling.type")) = "llama3"
+      then
+         Settings.Rope_Llama3 := True;
+         if Settings.Scaling.Frequency > 0.0 then
+            Settings.Rope_Llama3_Factor :=
+              Real (1.0 / Settings.Scaling.Frequency);
+         end if;
+         Settings.Scaling.Frequency := 1.0;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scaling.low_freq_factor"),
+            0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Ok (Local) and then Value > 0.0 then
+            Settings.Rope_Llama3_Low := Real (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scaling.high_freq_factor"),
+            0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Ok (Local) and then Value > 0.0 then
+            Settings.Rope_Llama3_High := Real (Value);
+         end if;
+      end if;
+
+      --  A model carrying LongRoPE's factor tables lets the tables do the
+      --  whole stretch, so no scalar factor is applied beside them.
+      if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
+        or else Containers.Find_Tensor
+                  (Source, "rope_factors_short.weight") /= 0
+      then
+         Settings.Scaling.Frequency := 1.0;
+         Settings.Scaling.Kind := K.Unscaled;
+      end if;
 
       --  What the ramp is derived from, which only Yarn reads. The context
       --  the model was trained on is the default for the context it was
@@ -3494,6 +3545,94 @@ package body Model_Runner.Llama is
                Fail (Status);
                return;
             end if;
+
+         elsif Item.Settings.Rope_Llama3 then
+            --  Llama 3's factors, one a rotation pair, where the file did
+            --  not write them out: one for a frequency faster than its high
+            --  band, the scale factor for one slower than its low band, and
+            --  an eased mix between.
+            declare
+               Two_Pi : constant N.Wide_Real := 6.283185307179586;
+               Rotary : constant Natural := Item.Settings.Rotary;
+               Pairs  : constant Natural := Rotary / 2;
+               Base   : constant N.Wide_Real := Item.Settings.Rope_Base;
+               Scale  : constant N.Wide_Real :=
+                 N.Wide_Real (Item.Settings.Rope_Llama3_Factor);
+               Low_F  : constant N.Wide_Real :=
+                 N.Wide_Real (Item.Settings.Rope_Llama3_Low);
+               High_F : constant N.Wide_Real :=
+                 N.Wide_Real (Item.Settings.Rope_Llama3_High);
+               Orig   : constant N.Wide_Real :=
+                 N.Wide_Real (Item.Settings.Rope_Original);
+               Low_Wave  : constant N.Wide_Real :=
+                 (if Low_F > 0.0 then Orig / Low_F else 0.0);
+               High_Wave : constant N.Wide_Real :=
+                 (if High_F > 0.0 then Orig / High_F else 0.0);
+            begin
+               if Pairs > 0 and then Orig > 0.0 and then Scale > 0.0
+                 and then High_F /= Low_F
+               then
+                  Item.Rope_Factors :=
+                    new Model_Runner.Tensors.Real_Array
+                      (0 .. Element_Count (Pairs - 1));
+                  for I in 0 .. Pairs - 1 loop
+                     declare
+                        Inv  : constant N.Wide_Real :=
+                          N.Power
+                            (Base,
+                             -2.0 * N.Wide_Real (I) / N.Wide_Real (Rotary));
+                        Wave : constant N.Wide_Real := Two_Pi / Inv;
+                        Fac  : N.Wide_Real;
+                     begin
+                        if Wave < High_Wave then
+                           Fac := 1.0;
+                        elsif Wave > Low_Wave then
+                           Fac := Scale;
+                        else
+                           declare
+                              Smooth : constant N.Wide_Real :=
+                                (Orig / Wave - Low_F) / (High_F - Low_F);
+                           begin
+                              Fac := 1.0 / ((1.0 - Smooth) / Scale + Smooth);
+                           end;
+                        end if;
+                        Item.Rope_Factors.all (Element_Count (I)) :=
+                          Real (Fac);
+                     end;
+                  end loop;
+               end if;
+            end;
+
+         elsif Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
+           or else Containers.Find_Tensor
+                     (Source, "rope_factors_short.weight") /= 0
+         then
+            --  LongRoPE: the long table where the model is opened past the
+            --  context it was trained on, the short table otherwise, applied
+            --  as any per-dimension factor table is.
+            declare
+               Long  : constant Boolean :=
+                 Item.Settings.Rope_Original > 0
+                 and then Item.Settings.Context_Length
+                          > Item.Settings.Rope_Original
+                 and then Containers.Find_Tensor
+                            (Source, "rope_factors_long.weight") /= 0;
+               Named : constant String :=
+                 (if Long then "rope_factors_long.weight"
+                  elsif Containers.Find_Tensor
+                          (Source, "rope_factors_short.weight") /= 0
+                  then "rope_factors_short.weight"
+                  else "rope_factors_long.weight");
+            begin
+               Resolve_Norm
+                 (Item, Source, Named,
+                  Element_Count (Item.Settings.Rotary / 2),
+                  Item.Rope_Factors, Status);
+               if E.Is_Error (Status) then
+                  Fail (Status);
+                  return;
+               end if;
+            end;
          end if;
 
          --  A model with no output projection ties the output to the embedding

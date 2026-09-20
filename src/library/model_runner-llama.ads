@@ -284,6 +284,20 @@ package Model_Runner.Llama is
       Scaling         : Model_Runner.Kernels.Rotary_Scaling :=
         Model_Runner.Kernels.No_Scaling;
 
+      --  Llama 3's rotary scaling, worked into per-dimension factors at
+      --  load rather than ramped at use: the scale factor, and the low and
+      --  high frequency factors that name the band it eases across. A model
+      --  that does not use it leaves Rope_Llama3 false.
+      Rope_Llama3        : Boolean := False;
+      Rope_Llama3_Factor : Real := 1.0;
+      Rope_Llama3_Low    : Real := 1.0;
+      Rope_Llama3_High   : Real := 4.0;
+
+      --  The context a rotary-scaled model was trained on, which Llama 3
+      --  eases from and which LongRoPE chooses its long or short factor
+      --  table by. Zero for a model that states none.
+      Rope_Original      : Natural := 0;
+
       --  How the rotation deals a head's pairs among a position's three
       --  parts -- time, row and column -- where the model has three: the
       --  Qwen3.5 family states the count for each under
