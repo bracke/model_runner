@@ -456,6 +456,22 @@ there are blocks.
 And two sessions on one device used to write over each other's keys, which
 nothing did and nothing caught; blocks are the answer to that as well.
 
+**Four — done.** The cache dealt in pages rather than blocks, built and
+priced in the **Pages** section above: the four kernels addressing the cache
+either way, an engine that gives a session a page of a layer only as a
+position reaches it, eviction of the coldest under a bound, and a round whose
+rows read their own pages. A block reserves a session's whole context whether
+it fills it or not; a page is taken as it is reached, so eight sessions
+filling twenty-three of a 2,048 context hold 33 MB where the blocks hold
+1,056 -- thirty-two times less cache for the same mark to the bit, and at no
+cost a token, because the chained head step places the pages where it placed
+the blocks. Held to a pool of twenty-four pages the cache falls to 4.5 MB and
+the answer still holds, within about a ninth of the tokens a second; sized to
+a page of thirty-two, where the sessions fill less than that, it halves again
+to 16.5 MB. `tests speed --turns N --paged`, with `--page-pool P` and
+`--page-size S`, measures the three; `Pages_Held`, `Pages_Turned`,
+`Limit_Page_Pool` and `Set_Page_Size` are what a server reads and turns.
+
 ## How it will be checked
 
 The correctness gate is the existing two-session test generalised, and it is a
