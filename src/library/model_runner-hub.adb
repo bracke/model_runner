@@ -876,6 +876,12 @@ package body Model_Runner.Hub is
          Reason := T.To_Bounded
            ("the download did not match the hub's checksum and was "
             & "discarded; run it again to fetch it anew");
+      elsif Status = HE.Write_Failed then
+         --  The bytes arrived; writing them did not. Resuming will not
+         --  help, so this says what will: room, or a writable directory.
+         Reason := T.To_Bounded
+           ("could not write " & Dest_Path
+            & " -- the disk may be full or the directory not writable");
       else
          Reason := T.To_Bounded
            ("the download stopped (" & HE.Result_Status'Image (Status)
