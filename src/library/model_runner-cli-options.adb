@@ -2645,7 +2645,9 @@ package body Model_Runner.CLI.Options is
          end if;
       end loop;
 
-      if Result.Kind in Command_Run | Command_Inspect
+      --  Inspect must name a model; run may be given none and offer a
+      --  choice of the models on hand at execution instead.
+      if Result.Kind = Command_Inspect
         and then T.Is_Empty (Result.Model_Path)
       then
          Status := E.Make (E.CLI_Missing_Model_Path);

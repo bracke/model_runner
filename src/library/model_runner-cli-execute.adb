@@ -4347,6 +4347,142 @@ package body Model_Runner.CLI.Execute is
    -- Dispatch --
    --------------
 
+   --  Offer a choice of the models on hand when a run names none. The
+   --  models directory is listed, a shard set shown once by its first
+   --  shard, and the user's number selects one; Path is its file and
+   --  Picked is true only then. No directory, no model in it, no terminal
+   --  to ask at and a blank or out-of-range answer all leave Picked false
+   --  so the caller reports a model as missing as before.
+   procedure Choose_Model
+     (Screen : in out Pres.Console;
+      Path   : out Model_Runner.Text.Bounded;
+      Picked : out Boolean)
+   is
+      use Ada.Directories;
+
+      Dir : constant String := Model_Runner.Platform.Models_Directory;
+      Max : constant := 500;
+      Shown : array (1 .. Max) of Model_Runner.Text.Bounded;
+      Full  : array (1 .. Max) of Model_Runner.Text.Bounded;
+      Count : Natural := 0;
+
+      procedure Add (Full_Path : String; Label : String) is
+      begin
+         --  Not a shard past the first: the set is one model, shown once.
+         if Shards.Is_Shard_Name (Label)
+           and then Label (Label'Last - 18 .. Label'Last - 14) /= "00001"
+         then
+            return;
+         end if;
+         if Count < Max then
+            Count := Count + 1;
+            Shown (Count) := Model_Runner.Text.To_Bounded (Label);
+            Full  (Count) := Model_Runner.Text.To_Bounded (Full_Path);
+         end if;
+      end Add;
+
+      procedure Scan (Base : String; Prefix : String) is
+         Search : Search_Type;
+         Found  : Directory_Entry_Type;
+      begin
+         Start_Search
+           (Search, Base, "",
+            Filter => [Ordinary_File => True, others => False]);
+         while More_Entries (Search) loop
+            Get_Next_Entry (Search, Found);
+            declare
+               Name : constant String := Simple_Name (Found);
+            begin
+               if Name'Length >= 5
+                 and then Name (Name'Last - 4 .. Name'Last) = ".gguf"
+               then
+                  Add (Full_Name (Found), Prefix & Name);
+               end if;
+            end;
+         end loop;
+         End_Search (Search);
+      exception
+         when others =>
+            null;
+      end Scan;
+   begin
+      Path   := Model_Runner.Text.Empty;
+      Picked := False;
+
+      if Dir = "" or else not Exists (Dir)
+        or else not Model_Runner.Platform.Is_Terminal (0)
+      then
+         return;
+      end if;
+
+      Scan (Dir, "");
+
+      --  One level of subdirectories, where a downloaded shard set is laid
+      --  out under a folder of its own.
+      declare
+         Search : Search_Type;
+         Found  : Directory_Entry_Type;
+      begin
+         Start_Search
+           (Search, Dir, "",
+            Filter => [Directory => True, others => False]);
+         while More_Entries (Search) loop
+            Get_Next_Entry (Search, Found);
+            declare
+               Name : constant String := Simple_Name (Found);
+            begin
+               if Name /= "." and then Name /= ".." then
+                  Scan (Full_Name (Found), Name & "/");
+               end if;
+            end;
+         end loop;
+         End_Search (Search);
+      exception
+         when others =>
+            null;
+      end;
+
+      if Count = 0 then
+         return;
+      end if;
+
+      Pres.Put_Note (Screen, "cli.choose.header");
+      for I in 1 .. Count loop
+         Pres.Put_Note
+           (Screen, "cli.choose.item",
+            [Loc.Named ("index", T.Image (Long_Long_Integer (I))),
+             Loc.Named ("name", Model_Runner.Text.To_String (Shown (I)))]);
+      end loop;
+      Pres.Put_Note
+        (Screen, "cli.choose.prompt",
+         [Loc.Named ("count", T.Image (Long_Long_Integer (Count)))]);
+
+      declare
+         Line : String (1 .. 64);
+         Last : Natural := 0;
+         N    : Integer := 0;
+      begin
+         begin
+            Ada.Text_IO.Get_Line (Line, Last);
+         exception
+            when Ada.Text_IO.End_Error =>
+               Last := 0;
+         end;
+         if Last >= 1 then
+            begin
+               N := Integer'Value (Line (1 .. Last));
+            exception
+               when others =>
+                  N := 0;
+            end;
+         end if;
+         if N in 1 .. Count then
+            Path   := Full (N);
+            Picked := True;
+         end if;
+      end;
+   end Choose_Model;
+
    procedure Dispatch
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
@@ -4366,7 +4502,22 @@ package body Model_Runner.CLI.Execute is
             Do_Inspect (Item, Screen, Status);
 
          when Opt.Command_Run =>
-            Do_Run (Item, Screen, Catalog, Status);
+            if T.Is_Empty (Item.Model_Path) then
+               declare
+                  Chosen : Opt.Command := Item;
+                  Picked : Boolean;
+               begin
+                  Choose_Model (Screen, Chosen.Model_Path, Picked);
+                  if Picked then
+                     Do_Run (Chosen, Screen, Catalog, Status);
+                  else
+                     Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
+                     Status := E.Exit_Usage;
+                  end if;
+               end;
+            else
+               Do_Run (Item, Screen, Catalog, Status);
+            end if;
 
          when Opt.Command_Embed =>
             Do_Embed (Item, Screen, Status);

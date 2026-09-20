@@ -2960,7 +2960,9 @@ package body Tests.CLI_Cases is
    begin
       Expect (E.CLI_Missing_Command, "");
       Expect (E.CLI_Unknown_Command, "frobnicate");
-      Expect (E.CLI_Missing_Model_Path, "run");
+      --  Run with no model parses; a choice of the models on hand is
+      --  offered at execution, so the model is not required here.
+      Expect (E.No_Error, "run");
       Expect (E.CLI_Unknown_Option, "run m.gguf --nope");
 
       --  A backend this build has is accepted; one it does not have is
