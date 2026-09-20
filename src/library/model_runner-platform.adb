@@ -9,6 +9,8 @@ with Model_Runner.Platform.Instructions;
 with Model_Runner.Platform.Topology;
 with Model_Runner.Text;
 
+with Model_Runner.Config;
+
 package body Model_Runner.Platform is
 
    -----------------
@@ -197,6 +199,34 @@ package body Model_Runner.Platform is
          return Conventional;
    end Catalog_Path;
 
+   -----------------
+   -- Config_File --
+   -----------------
+
+   function Config_File return String is
+      function Under (Base : String; Part : String) return String
+        renames Hostkit.Fs.Join;
+
+      Override    : constant String := Environment_Value ("MODEL_RUNNER_CONFIG");
+      Config_Home : constant String := Environment_Value ("XDG_CONFIG_HOME");
+      Home        : constant String := Environment_Value ("HOME");
+   begin
+      if Override /= "" then
+         return Override;
+      elsif Config_Home /= "" then
+         return Under (Under (Config_Home, Model_Runner.Program_Name), "config");
+      elsif Home /= "" then
+         return Under
+                  (Under (Under (Home, ".config"), Model_Runner.Program_Name),
+                   "config");
+      else
+         return "";
+      end if;
+   exception
+      when others =>
+         return "";
+   end Config_File;
+
    ---------------------
    -- Data_Directory --
    ---------------------
@@ -205,18 +235,22 @@ package body Model_Runner.Platform is
    --  variable when it is set, else <XDG_DATA_HOME or ~/.local/share>/
    --  model_runner/<Leaf>. Empty when neither the override nor a home is
    --  known.
-   function Data_Directory (Override_Var : String; Leaf : String)
+   function Data_Directory
+     (Override_Var : String; Config_Key : String; Leaf : String)
       return String
    is
       function Under (Base : String; Part : String) return String
         renames Hostkit.Fs.Join;
 
-      Override : constant String := Environment_Value (Override_Var);
-      Data     : constant String := Environment_Value ("XDG_DATA_HOME");
-      Home     : constant String := Environment_Value ("HOME");
+      Override   : constant String := Environment_Value (Override_Var);
+      From_Config : constant String := Model_Runner.Config.Value (Config_Key);
+      Data       : constant String := Environment_Value ("XDG_DATA_HOME");
+      Home       : constant String := Environment_Value ("HOME");
    begin
       if Override /= "" then
          return Override;
+      elsif From_Config /= "" then
+         return From_Config;
       elsif Data /= "" then
          return Under (Under (Data, Model_Runner.Program_Name), Leaf);
       elsif Home /= "" then
@@ -268,14 +302,14 @@ package body Model_Runner.Platform is
    -----------------------
 
    function Models_Directory return String
-   is (Data_Directory ("MODEL_RUNNER_MODELS", "models"));
+   is (Data_Directory ("MODEL_RUNNER_MODELS", "models-dir", "models"));
 
    -------------------------
    -- Sessions_Directory --
    -------------------------
 
    function Sessions_Directory return String
-   is (Data_Directory ("MODEL_RUNNER_SESSIONS", "sessions"));
+   is (Data_Directory ("MODEL_RUNNER_SESSIONS", "sessions-dir", "sessions"));
 
    -------------------------
    -- Resolve_Model_Path --

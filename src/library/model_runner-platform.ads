@@ -57,6 +57,16 @@ package Model_Runner.Platform is
    --  @return Catalog path; the conventional relative path when none exists.
    function Catalog_Path return String;
 
+   --  Path of the settings file.
+   --
+   --  MODEL_RUNNER_CONFIG names it outright; otherwise it is
+   --  <XDG_CONFIG_HOME>/model_runner/config where that is set, and
+   --  <HOME>/.config/model_runner/config where only HOME is. Empty when no
+   --  home is known, and then there is no settings file.
+   --
+   --  @return The path, or an empty string when none is known.
+   function Config_File return String;
+
    --  Directory searched for a model named without a path.
    --
    --  MODEL_RUNNER_MODELS overrides it. Otherwise it is

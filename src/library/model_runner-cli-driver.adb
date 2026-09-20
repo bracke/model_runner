@@ -1,4 +1,9 @@
+with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Vectors;
+with Ada.Strings.Fixed;
+
 with Model_Runner.CLI.Execute;
+with Model_Runner.Config;
 with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
@@ -16,6 +21,24 @@ package body Model_Runner.CLI.Driver is
    package Opt renames Model_Runner.CLI.Options;
    package Pres renames Model_Runner.Presentation;
 
+   --  The settings file's values become options for a command that takes
+   --  them, so this composes them ahead of the command line's own -- an
+   --  argument source of the command word, then the file's options a flag
+   --  did not already give, then the rest of the arguments as typed.
+   package Token_Vectors is
+     new Ada.Containers.Indefinite_Vectors (Positive, String);
+
+   type Composed_Arguments
+     (Store : access constant Token_Vectors.Vector) is
+     new Opt.Arguments with null record;
+
+   overriding function Count (Self : Composed_Arguments) return Natural
+   is (Natural (Self.Store.Length));
+
+   overriding function Value
+     (Self : Composed_Arguments; Index : Positive) return String
+   is (Self.Store.Element (Index));
+
    --  Environment variables. Names are protocol and are never localized.
    Locale_Variable : constant String := "MODEL_RUNNER_LOCALE";
    Color_Variable  : constant String := "MODEL_RUNNER_COLOR";
@@ -32,6 +55,75 @@ package body Model_Runner.CLI.Driver is
       Screen  : Pres.Console;
       Item    : Opt.Command;
       Parsed  : E.Error_Info;
+
+      --  The command line's own arguments composed with the settings file's.
+      Tokens : aliased Token_Vectors.Vector;
+
+      --  Whether a setting's key was given on the command line, so the file
+      --  does not override a flag the caller typed.
+      function On_Command_Line (Name : String) return Boolean is
+      begin
+         for Index in 2 .. Source.Count loop
+            declare
+               Arg  : constant String := Source.Value (Index);
+               Mark : constant Natural := Ada.Strings.Fixed.Index (Arg, "=");
+               Head : constant String :=
+                 (if Mark = 0 then Arg else Arg (Arg'First .. Mark - 1));
+            begin
+               if Head = "--" & Name or else Head = "--no-" & Name then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end On_Command_Line;
+
+      --  Fill Tokens with the command word, the settings the command takes
+      --  and the command line did not give (a true/false setting as its
+      --  --flag or --no-flag), and the arguments as typed. Left empty when
+      --  there is no command word, so the parser sees the source unchanged.
+      procedure Compose is
+         Kind : Opt.Command_Kind;
+         function Lower (Item : String) return String
+           renames Ada.Characters.Handling.To_Lower;
+         function Truthy (V : String) return Boolean
+           is (V = "true" or else V = "yes" or else V = "on");
+         function Falsy (V : String) return Boolean
+           is (V = "false" or else V = "no" or else V = "off");
+      begin
+         if Source.Count = 0 then
+            return;
+         end if;
+         Tokens.Append (Source.Value (1));
+         Kind := Opt.Command_Of (Source.Value (1));
+
+         for Index in 1 .. Model_Runner.Config.Count loop
+            declare
+               Key : constant String := Model_Runner.Config.Key_At (Index);
+               Val : constant String := Model_Runner.Config.Value_At (Index);
+               Low : constant String := Lower (Val);
+            begin
+               if On_Command_Line (Key) then
+                  null;
+               elsif Falsy (Low) then
+                  if Opt.Accepts (Kind, "--no-" & Key) then
+                     Tokens.Append ("--no-" & Key);
+                  end if;
+               elsif Truthy (Low) then
+                  if Opt.Accepts (Kind, "--" & Key) then
+                     Tokens.Append ("--" & Key);
+                  end if;
+               elsif Opt.Accepts (Kind, "--" & Key) then
+                  Tokens.Append ("--" & Key);
+                  Tokens.Append (Val);
+               end if;
+            end;
+         end loop;
+
+         for Index in 2 .. Source.Count loop
+            Tokens.Append (Source.Value (Index));
+         end loop;
+      end Compose;
 
       --  Terminal capabilities are read once. Automatic styling is then
       --  decided per destination, so a piped standard output and a terminal
@@ -108,7 +200,16 @@ package body Model_Runner.CLI.Driver is
          end;
       end if;
 
-      Opt.Parse (Source, Item, Parsed);
+      Compose;
+      if Tokens.Is_Empty then
+         Opt.Parse (Source, Item, Parsed);
+      else
+         declare
+            Composed : Composed_Arguments (Tokens'Access);
+         begin
+            Opt.Parse (Composed, Item, Parsed);
+         end;
+      end if;
 
       if E.Is_Error (Parsed) then
          --  The hint comes from the diagnostic's own recovery class now,

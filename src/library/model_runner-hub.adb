@@ -7,6 +7,7 @@ with Http_Client.Clients;
 with Http_Client.Errors;
 with Http_Client.Headers;
 
+with Model_Runner.Config;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Platform;
 
@@ -208,8 +209,11 @@ package body Model_Runner.Hub is
    --  header value is left off rather than raised on.
    function Client_For return HC.Client_Configuration is
       Config : HC.Client_Configuration := HC.Default_Client_Configuration;
-      Token  : constant String :=
+      Env_Token : constant String :=
         Model_Runner.Platform.Environment_Value ("HF_TOKEN");
+      Token  : constant String :=
+        (if Env_Token /= "" then Env_Token
+         else Model_Runner.Config.Value ("hf-token"));
       Value  : constant String := "Bearer " & Token;
    begin
       if Token /= ""
