@@ -7827,21 +7827,35 @@ package body Model_Runner.Llama is
       V_Base   : Element_Count;
       KV_Width : Element_Count;
       V_Width  : Element_Count;
-      Cells    : Element_Count)
+      Cells    : Element_Count;
+      Paged    : Boolean := False)
       return Model_Runner.Backend.Device.Unpacking_Shape
    is
-      Base : constant Element_Count := Block_Base (Item);
+      Base : constant Element_Count := (if Paged then 0 else Block_Base (Item));
    begin
-      if Item.Held not in Eighth | Fourth
-        or else Cells = 0
-        or else Cells * (KV_Width + V_Width) > Packed_Layout (Item).Span
+      if Item.Held not in Eighth | Fourth or else Cells = 0 then
+         return Model_Runner.Backend.Device.Not_Unpacked;
+      end if;
+
+      --  A block's rows unpack into the room its own front holds, which is
+      --  the block's bytes read as halves and a fraction of it; where they
+      --  do not fit -- a shallow model's short block -- the layer stays
+      --  packed and takes the row kernel. A paged session unpacks into the
+      --  copy buffer instead, which the packed pages leave untouched, so
+      --  the room is the whole of it and the check is not this one.
+      if not Paged
+        and then Cells * (KV_Width + V_Width) > Packed_Layout (Item).Span
       then
          return Model_Runner.Backend.Device.Not_Unpacked;
       end if;
 
+      --  Paged: the keys and values are read out of their pages, a region's
+      --  offset in a page, and laid one after another at the copy's front,
+      --  where the matrix attention then reads them. A block reads from its
+      --  own front.
       return
-        (Keys   => Packing_Of (Item, K_Base, KV_Width, True),
-         Values => Packing_Of (Item, V_Base, V_Width, False),
+        (Keys   => Packing_Of (Item, K_Base, KV_Width, True, Paged => Paged),
+         Values => Packing_Of (Item, V_Base, V_Width, False, Paged => Paged),
          Cells  => Natural (Cells),
          K_Base => Natural (Base),
          V_Base => Natural (Base + Cells * KV_Width));
@@ -17336,19 +17350,19 @@ package body Model_Runner.Llama is
 
                         --  And the layer unpacked into the copy for the
                         --  matrix instruction, where the batch is long
-                        --  enough for it: every cell up to the batch's
-                        --  last. A round's rows read different blocks, and
-                        --  none is unpacked; nor a paged session, whose
-                        --  scattered pages the row kernel reads a position's
-                        --  page at a time -- the matrix path over a gathered
-                        --  copy is a later stage.
+                        --  enough for it: every cell up to the batch's last.
+                        --  A round's rows read different blocks and none is
+                        --  unpacked. A paged session gathers its scattered
+                        --  pages into the copy, which the packed pages leave
+                        --  free, and the matrix reads them there.
                         Unpacked    =>
-                          (if Rounding or else Item.Paged
+                          (if Rounding
                            then Model_Runner.Backend.Device.Not_Unpacked
                            else Unpacking_Of
                                   (Item, Base, V_Base, KV_Width, V_Width,
                                    Cell_Of (Item, Natural (Index), Reserved)
-                                   + Count)),
+                                   + Count,
+                                   Paged => Item.Paged)),
                         Sinks_At    => Sinks_Ready (Current.Sinks),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit,

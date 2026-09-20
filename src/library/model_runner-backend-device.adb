@@ -1306,14 +1306,21 @@ package body Model_Runner.Backend.Device is
       KV_Width : Natural;
       V_Width  : Natural;
       From     : Natural;
-      Added    : out Boolean) is
+      Added    : out Boolean;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0) is
    begin
+      --  A paged session gathers its scattered pages into the copy's front,
+      --  reading each position's page out of the layer's page table: the
+      --  first row is position nought and the rows run from there, so the
+      --  first-position word is nought here, not the batch's write cell.
       Products.Add_Place
         (Steps, KV_Width, KV_Width, 0, Added,
          From_Step => From, Packed => Unpacked.Keys, Unpack => True,
          Cells => Unpacked.Cells,
          Half_At => Interfaces.Unsigned_64 (Unpacked.K_Base)
-                    + Products.Copy_At (Engine));
+                    + Products.Copy_At (Engine),
+         Pages_At => Pages_At, Page_Shift => Page_Shift, First_Position => 0);
       if not Added then
          return;
       end if;
@@ -1323,7 +1330,8 @@ package body Model_Runner.Backend.Device is
          From_Step => From, Packed => Unpacked.Values, Unpack => True,
          Cells => Unpacked.Cells,
          Half_At => Interfaces.Unsigned_64 (Unpacked.V_Base)
-                    + Products.Copy_At (Engine));
+                    + Products.Copy_At (Engine),
+         Pages_At => Pages_At, Page_Shift => Page_Shift, First_Position => 0);
    end Add_Unpacking;
 
    ------------------------
@@ -3044,7 +3052,8 @@ package body Model_Runner.Backend.Device is
          then
             Add_Unpacking
               (Steps, Unpacked, KV_Width, V_Width,
-               From => Products.Length (Steps), Added => Added);
+               From => Products.Length (Steps), Added => Added,
+               Pages_At => Pages_At, Page_Shift => Page_Shift);
             if not Added then
                return;
             end if;
