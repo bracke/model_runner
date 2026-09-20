@@ -13,11 +13,9 @@ with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
-with Model_Runner.Bytes;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
-with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Interleave;
@@ -1312,6 +1310,61 @@ package body Model_Runner.CLI.Execute is
          if All_Whole then
             Where   := Model_Runner.Text.To_Bounded (Destination);
             Fetched := True;
+            return;
+         end if;
+      end;
+
+      --  Room for what is not yet here, checked before a byte is fetched
+      --  rather than found halfway through a write that then stops. What a
+      --  file still needs is its size less the part already on disk; the
+      --  volume the models directory sits on is asked how much it has free.
+      --  Zero free is the host declining to say, and the check is skipped
+      --  then -- a stalled write still reports itself.
+      declare
+         Needed : Interfaces.Unsigned_64 := 0;
+         Free   : constant Interfaces.Unsigned_64 :=
+           Model_Runner.Platform.Free_Disk_Space (Destination);
+
+         --  A byte count as gigabytes to two decimals, in integers so no
+         --  float is formatted.
+         function Giga (Bytes : Interfaces.Unsigned_64) return String is
+            Cents : constant Interfaces.Unsigned_64 := Bytes / 10_000_000;
+            Whole : constant Interfaces.Unsigned_64 := Cents / 100;
+            Frac  : constant Interfaces.Unsigned_64 := Cents mod 100;
+            Shown : constant String :=
+              Interfaces.Unsigned_64'Image (Whole);
+         begin
+            return Shown (Shown'First + 1 .. Shown'Last) & "."
+              & Character'Val (Character'Pos ('0') + Natural (Frac / 10))
+              & Character'Val (Character'Pos ('0') + Natural (Frac mod 10))
+              & " GB";
+         end Giga;
+      begin
+         for I in 1 .. Count loop
+            declare
+               On_Disk : Interfaces.Unsigned_64 := 0;
+            begin
+               if Ada.Directories.Exists (Local (I)) then
+                  On_Disk :=
+                    Interfaces.Unsigned_64 (Ada.Directories.Size (Local (I)));
+               end if;
+               if Files (I).Size > On_Disk then
+                  Needed := Needed + (Files (I).Size - On_Disk);
+               end if;
+            end;
+         end loop;
+
+         --  A little headroom over the bytes themselves, for the filesystem
+         --  and for anything else the machine is writing meanwhile.
+         if Free > 0 and then Needed > 0
+           and then Free < Needed + 64 * 1024 * 1024
+         then
+            Pres.Put_Note
+              (Screen, "cli.download.no_space",
+               [Loc.Named
+                  ("detail",
+                   Giga (Needed) & " needed, " & Giga (Free) & " free in "
+                   & Model_Runner.Platform.Models_Directory)]);
             return;
          end if;
       end;

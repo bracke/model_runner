@@ -175,6 +175,17 @@ package Model_Runner.Platform is
    --  @return Bytes, or 0 when the host cannot be asked.
    function Physical_Memory return Interfaces.Unsigned_64;
 
+   --  Bytes free on the filesystem that holds a path, or zero where the
+   --  host will not say -- what a download checks it has room for before it
+   --  starts, rather than discovering halfway that it has not.
+   --
+   --  The path need not exist; its directory is asked about, so a file
+   --  about to be written is sized against the volume it will land on.
+   --
+   --  @param Path A path on the volume to ask about.
+   --  @return Bytes free, or 0 when the host cannot be asked.
+   function Free_Disk_Space (Path : String) return Interfaces.Unsigned_64;
+
    --  Whether this processor offers the wider vector instructions -- the
    --  per-lane variable shift and the gather -- that four of the fifteen
    --  quantized formats decode faster with.

@@ -210,6 +210,33 @@ package body Tests.Accounting_Cases is
       --  an assertion would only say that Positive holds no zero.
    end Core_Count_Keeps_Its_Contract;
 
+   --  Free space is what a download checks it has before it starts. The
+   --  host answers about a path that exists; a file about to be written
+   --  does not, so the query walks up to an ancestor that does, and a
+   --  path with none to walk up to is answered zero rather than raised on.
+   procedure Free_Disk_Space_Answers_For_A_Path
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package P renames Model_Runner.Platform;
+   begin
+      --  The working directory is on a mounted filesystem with room, so a
+      --  real host answers a positive number for it.
+      Assert (P.Free_Disk_Space (".") > 0,
+              "no free space was reported for the working directory, which "
+              & "is on a filesystem the tests are writing to");
+
+      --  A file that is not there yet is sized against the volume it will
+      --  land on: the query ascends to the directory that holds it.
+      Assert (P.Free_Disk_Space ("./a-file-not-yet-written.gguf") > 0,
+              "a path not yet on disk was not sized against its directory");
+
+      --  Nothing to ask about is zero, not a raise: the caller reads zero
+      --  as the host declining and skips the check.
+      Assert (P.Free_Disk_Space ("") = 0,
+              "an empty path was not answered zero");
+   end Free_Disk_Space_Answers_For_A_Path;
+
    --  The rule the Linux core count applies to each line it reads.
    --
    --  Each processor has a file naming every processor that shares its core,
@@ -882,6 +909,9 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Core_Count_Keeps_Its_Contract'Access,
          "the core count that sets the worker default keeps its contract");
+      Register_Routine
+        (T, Free_Disk_Space_Answers_For_A_Path'Access,
+         "free space is answered for a path, and for one not yet on disk");
       Register_Routine
         (T, Leading_Number_Reads_What_It_Says'Access,
          "the rule the Linux core count applies to a line reads what it "

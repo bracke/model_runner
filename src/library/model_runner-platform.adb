@@ -4,6 +4,7 @@ with System.Multiprocessors;
 
 with Hostkit.Fs;
 with Hostkit.Host;
+with Hostkit.Metadata;
 
 with Model_Runner.Platform.Instructions;
 with Model_Runner.Platform.Topology;
@@ -482,6 +483,45 @@ package body Model_Runner.Platform is
       when others =>
          return 0;
    end Physical_Memory;
+
+   ---------------------
+   -- Free_Disk_Space --
+   ---------------------
+
+   function Free_Disk_Space (Path : String) return Interfaces.Unsigned_64 is
+
+      --  The host answers about a path that exists. A file about to be
+      --  written does not yet, and its directory may not either on a first
+      --  download, so the query walks up to the nearest ancestor that does
+      --  -- the same volume -- and gives up where a path has none above it.
+      function Ascend (Location : String) return Interfaces.Unsigned_64 is
+         Capacity : constant Hostkit.Metadata.Volume_Capacity :=
+           Hostkit.Metadata.Volume_Capacity_Of (Location);
+      begin
+         if Capacity.Available and then Capacity.Free_Bytes > 0 then
+            return Interfaces.Unsigned_64 (Capacity.Free_Bytes);
+         end if;
+
+         declare
+            Parent : constant String :=
+              Ada.Directories.Containing_Directory (Location);
+         begin
+            if Parent'Length = 0 or else Parent = Location then
+               return 0;
+            end if;
+            return Ascend (Parent);
+         end;
+      exception
+         when others =>
+            return 0;
+      end Ascend;
+
+   begin
+      if Path = "" then
+         return 0;
+      end if;
+      return Ascend (Path);
+   end Free_Disk_Space;
 
    ----------------
    -- Core_Count --
