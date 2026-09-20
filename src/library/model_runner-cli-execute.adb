@@ -1039,6 +1039,14 @@ package body Model_Runner.CLI.Execute is
       return Result;
    end Session_Bounds;
 
+   --  Whether this session's cache is dealt in pages. Off unless the
+   --  caller asks: a paged cache pays only for the positions it fills, so
+   --  it fits a context a block could not, but its attention runs on the
+   --  host rather than whole on the device -- slower where the block would
+   --  have fit. --paged opts in, for the context that would not fit whole.
+   function Session_Paging (Item : Opt.Command) return Boolean
+   is (Item.Paged);
+
    --  What the device will not do with this session, said as it opens
    --  rather than left to be inferred from a run that was slower than it
    --  looked: three things keep a session's attention off the device --
@@ -2413,7 +2421,7 @@ package body Model_Runner.CLI.Execute is
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
             Workers => Team, Cache => Item.Cache, Status => Condition,
-            Values => Item.Values);
+            Values => Item.Values, Paged => Session_Paging (Item));
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;
@@ -2470,7 +2478,7 @@ package body Model_Runner.CLI.Execute is
               (Draft_Session, Draft_Model, Item.Context_Size,
                Session_Bounds => Session_Bounds (Item),
                Workers => Team, Cache => Item.Cache, Status => Condition,
-            Values => Item.Values);
+               Values => Item.Values, Paged => Session_Paging (Item));
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;
@@ -3885,7 +3893,7 @@ package body Model_Runner.CLI.Execute is
            (Session, Prepared, Item.Context_Size,
             Session_Bounds => Session_Bounds (Item),
             Workers => Team, Cache => Item.Cache, Status => Condition,
-            Values => Item.Values);
+            Values => Item.Values, Paged => Session_Paging (Item));
          if E.Is_Error (Condition) then
             Fail (Condition);
             return;

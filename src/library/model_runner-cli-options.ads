@@ -549,6 +549,16 @@ package Model_Runner.CLI.Options is
       Values     : Model_Runner.Llama.Value_Precision :=
         Model_Runner.Llama.Same_As_Keys;
 
+      --  Whether the device's cache is dealt in pages -- a context paying
+      --  for the positions it fills rather than a block its whole width.
+      --  Off by default: a paged cache is bit-exact but its attention runs
+      --  on the host, so it is slower where a block would have fit, and its
+      --  gain is fitting a context that would not. --paged opts in,
+      --  --no-paged is the explicit default, and Paged_Named tells them
+      --  apart from silence.
+      Paged       : Boolean := False;
+      Paged_Named : Boolean := False;
+
       --  How a matrix product multiplies. Quantized, because it is twice
       --  the speed for a bound the conformance sweep states and holds, and
       --  because a default nobody selects is a path nobody exercises.
