@@ -41,8 +41,7 @@ package body Tool_Commands is
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next"
-     & " --kv-cache --repeats --round --turns --churn --spread --serve"
-     & " --callers"
+     & " --kv-cache --repeats --round --turns --churn --spread"
      & " --no-reuse --paged --page-pool --page-size --kv-values"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory ";
@@ -80,8 +79,7 @@ package body Tool_Commands is
      & " [--draft-lookup] [--draft-next]"
      & " [--kv-cache MODE] [--repeats N] [--round N] [--turns N]"
      & " [--churn N] [--spread] [--paged] [--page-pool N] [--page-size N]"
-     & " [--serve N]"
-     & " [--callers N] [--no-reuse] [--anyway] [--wait MINUTES]"
+     & " [--no-reuse] [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N]"
      & " [--device-memory BYTES]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";

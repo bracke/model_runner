@@ -1,5 +1,14 @@
 # Serving several sequences in one pass
 
+> **Being removed.** The purpose of this engine is to run one model on
+> hardware that can barely hold it; serving several sequences at once is the
+> opposite workload, and nothing a user runs from the command line reaches it.
+> The `Serving` server it describes is gone (stage one of
+> `docs/plan-remove-serving.md`); the round and the shared-room eviction it
+> also describes are being taken out after. What stays is a single session's
+> cache dealt in pages and kept packed. This page is kept for the reasoning
+> and the figures while the removal runs; read it as history.
+
 ## What this is
 
 A design, not a description. Nothing here is built yet. It is written down

@@ -55,27 +55,6 @@ package body Library_Surface is
       new String'("To_Natural"),
       new String'("Wide_Bits"),
 
-      --  Serving several callers from one model. The command serves one
-      --  caller and has no reason to ask for any of this; a program serving
-      --  several has every reason, and the figures that say what it is worth
-      --  are in docs/serving-several-sequences.md -- a second caller is
-      --  nearly free where a second run is not.
-      --
-      --  Admit is how a caller joins, Retire is how one leaves before it has
-      --  finished, and Gathered is how many were in the last round -- which
-      --  is what tells a scheduler its queue is emptying. `tests speed
-      --  --serve N` is what exercises them here.
-      new String'("Admit"),
-      new String'("Retire"),
-
-      --  And where a server's time went. Where a run's own phases --
-      --  Llama.Time_Spent -- were on this list until the server started
-      --  summing them, which is what took that one off it: a library
-      --  operation the library itself calls is not surface nobody reaches.
-      --  Named apart from it because the two answer about different things
-      --  and a list of names cannot tell them apart.
-      new String'("Time_Taken"),
-
       --  And where the device's time went, step by step, from its own
       --  clock. `tests speed --device-timeline` is what asks; the command
       --  has --budget for the host's phases and no reason to hold a run

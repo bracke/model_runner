@@ -2702,30 +2702,6 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Roles_Named (Option ("--arith", "int8")));
 
-         --  Several sequences in one pass rather than one, which is a
-         --  different measurement and takes a different loop: a round has
-         --  no draft, no sampler beyond the greedy one and no repeats,
-         --  because what it answers is what a token costs a member.
-         --  Several callers arriving and leaving, which is the policy over
-         --  the round rather than the round itself: members with different
-         --  limits, and a caller admitted for every one that finishes.
-         if Option ("--serve", "") /= "" then
-            Speed_Run.Serve
-              (Path        => Option ("--model", ""),
-               Prompt_Path =>
-                 Option ("--prompt-file",
-                         "../tests/fixtures/speed-prompt-short.txt"),
-               Tokens      => Number ("--max-tokens", 12),
-               Threads     => Number ("--threads",
-                                      Model_Runner.Platform.Core_Count - 1),
-               Members     => Number ("--serve", 1),
-               Arrivals    => Number ("--callers", Number ("--serve", 1)),
-               Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Budget      => Given ("--budget"),
-               Reuse       => not Given ("--no-reuse"));
-            return;
-         end if;
-
          --  Several sessions taking turns rather than stepped together,
          --  which is where the device's sixteen blocks of cache are a
          --  limit: seventeen sessions is sixteen blocks and one session
