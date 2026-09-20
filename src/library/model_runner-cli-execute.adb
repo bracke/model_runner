@@ -4405,13 +4405,29 @@ package body Model_Runner.CLI.Execute is
          when others =>
             null;
       end Scan;
+
+      --  A model this engine runs well, offered for download: its label
+      --  carries the size, and the reference stands in for a model file so
+      --  that choosing it hands the run a name not on disk, whose download
+      --  offer fetches it into the models directory.
+      procedure Add_Suggestion (Name, Size, Reference : String) is
+      begin
+         if Count < Max then
+            Count := Count + 1;
+            Shown (Count) :=
+              Model_Runner.Text.To_Bounded
+                ("download " & Name & " (" & Size & ")");
+            Full (Count) := Model_Runner.Text.To_Bounded (Reference);
+         end if;
+      end Add_Suggestion;
    begin
       Path   := Model_Runner.Text.Empty;
       Picked := False;
 
-      if Dir = "" or else not Exists (Dir)
-        or else not Model_Runner.Platform.Is_Terminal (0)
-      then
+      --  A terminal to ask at, and a models directory to work in -- even
+      --  one not made yet, since a suggestion downloads into it. Dir empty
+      --  is no home and nowhere to keep a model, so nothing is offered.
+      if Dir = "" or else not Model_Runner.Platform.Is_Terminal (0) then
          return;
       end if;
 
@@ -4441,6 +4457,23 @@ package body Model_Runner.CLI.Execute is
          when others =>
             null;
       end;
+
+      --  And a few models this engine runs well, smallest first, so a
+      --  first run with nothing on hand still has somewhere to start.
+      Add_Suggestion ("SmolLM2-360M-Instruct", "0.3 GB",
+                      "bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M");
+      Add_Suggestion ("Qwen2.5-0.5B-Instruct", "0.5 GB",
+                      "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M");
+      Add_Suggestion ("Llama-3.2-1B-Instruct", "0.8 GB",
+                      "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M");
+      Add_Suggestion ("Qwen2.5-1.5B-Instruct", "1.1 GB",
+                      "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M");
+      Add_Suggestion ("gemma-2-2b-it", "1.7 GB",
+                      "bartowski/gemma-2-2b-it-GGUF:Q4_K_M");
+      Add_Suggestion ("Llama-3.2-3B-Instruct", "2.0 GB",
+                      "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M");
+      Add_Suggestion ("Phi-3.5-mini-instruct", "2.4 GB",
+                      "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M");
 
       if Count = 0 then
          return;
