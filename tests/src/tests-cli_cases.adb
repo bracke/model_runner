@@ -8,6 +8,7 @@ with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
+with Model_Runner.CLI.Execute;
 
 with Ada.Strings.Unbounded;
 with Ada.Text_IO.Text_Streams;
@@ -11421,6 +11422,72 @@ package body Tests.CLI_Cases is
               & Natural'Image (Without_Marker));
    end Beginning_Marker_Follows_The_Vocabulary;
 
+   --  A saved context runs to many megabytes, and the write once copied the
+   --  whole of it onto the stack, which a large one overflowed. A payload
+   --  larger than any fixture session -- larger than a stack -- is written
+   --  and read back, so the write is held to any size and not to what fits
+   --  on a stack.
+   procedure A_Large_Write_Is_Not_Bounded_By_The_Stack
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type B.Byte;
+      use type B.Byte_Count;
+      use type B.Byte_Array_Access;
+
+      Path   : constant String := "obj/large-session.kv";
+      Length : constant B.Byte_Count := 12 * 1024 * 1024;
+      Data   : B.Byte_Array_Access;
+      Status : E.Error_Info;
+
+      --  Each byte its own offset, so a byte read back at the wrong place
+      --  is a byte that does not match.
+      function Expected (Offset : B.Byte_Count) return B.Byte
+      is (B.Byte (Offset mod 251));
+   begin
+      B.Allocate (Length, Data);
+      Assert (Data /= null, "the test could not allocate its payload");
+      for I in Data.all'Range loop
+         Data.all (I) := Expected (I - Data.all'First);
+      end loop;
+
+      Model_Runner.CLI.Execute.Write_File (Path, Data.all, Status);
+      Assert (E.Is_Ok (Status),
+              "a large write failed: " & E.Error_Code'Image (Status.Code));
+      Assert (Ada.Directories.Exists (Path)
+              and then B.Byte_Count (Ada.Directories.Size (Path)) = Length,
+              "the file written is not the payload's size");
+
+      --  Sampled either side of the chunk boundary and at the ends, where
+      --  a chunked write is likeliest to drop or repeat a byte.
+      declare
+         use Ada.Streams;
+         use Ada.Streams.Stream_IO;
+         Handle : File_Type;
+         Checks : constant array (Positive range <>) of B.Byte_Count :=
+           [0, 1, 65_535, 65_536, 65_537, Length / 2, Length - 1];
+
+         function Byte_At (Offset : B.Byte_Count) return B.Byte is
+            One  : Stream_Element_Array (1 .. 1);
+            Last : Stream_Element_Offset;
+         begin
+            Set_Index (Handle, Positive_Count (Offset + 1));
+            Read (Handle, One, Last);
+            return B.Byte (One (One'First));
+         end Byte_At;
+      begin
+         Open (Handle, In_File, Path);
+         for Offset of Checks loop
+            Assert (Byte_At (Offset) = Expected (Offset),
+                    "a byte read back differs at" & B.Byte_Count'Image (Offset));
+         end loop;
+         Close (Handle);
+      end;
+
+      Ada.Directories.Delete_File (Path);
+      B.Free (Data);
+   end A_Large_Write_Is_Not_Bounded_By_The_Stack;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -11677,6 +11744,9 @@ package body Tests.CLI_Cases is
         (T, Turns_Parse_In_Order'Access,
          "the turns that close a tool loop parse in the order they were "
          & "written");
+      Register_Routine
+        (T, A_Large_Write_Is_Not_Bounded_By_The_Stack'Access,
+         "a saved context larger than a stack is written and read back");
    end Register_Tests;
 
 end Tests.CLI_Cases;

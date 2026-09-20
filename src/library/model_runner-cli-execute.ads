@@ -1,4 +1,6 @@
+with Model_Runner.Bytes;
 with Model_Runner.CLI.Options;
+with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Presentation;
 
@@ -26,5 +28,19 @@ package Model_Runner.CLI.Execute is
       Screen  : in out Model_Runner.Presentation.Console;
       Catalog : Model_Runner.Localization.Catalog;
       Status  : out Natural);
+
+   --  Write bytes to a path, replacing whatever was there, a fixed chunk at
+   --  a time so a payload of any size writes without a stack buffer sized to
+   --  it. A saved context reaches many megabytes -- a copy of it onto the
+   --  stack overflowed it -- which is why this is here to be driven by the
+   --  suite with a payload larger than any fixture session.
+   --
+   --  @param Path Destination file.
+   --  @param Data Bytes to write.
+   --  @param Status Success, or the reason the write did not happen.
+   procedure Write_File
+     (Path   : String;
+      Data   : Model_Runner.Bytes.Byte_Array;
+      Status : out Model_Runner.Errors.Error_Info);
 
 end Model_Runner.CLI.Execute;
