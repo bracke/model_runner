@@ -2758,7 +2758,14 @@ begin
                      elsif Named = Model_Runner.Llama.Cache_Name
                                      (Model_Runner.Llama.Fourth)
                      then Model_Runner.Llama.Fourth
-                     else Model_Runner.Llama.Exact)));
+                     else Model_Runner.Llama.Exact)),
+               Values      =>
+                 (declare
+                    Named : constant String := Option ("--kv-values", "");
+                  begin
+                    (if Named = "q8" then Model_Runner.Llama.Value_Eighth
+                     elsif Named = "q4" then Model_Runner.Llama.Value_Fourth
+                     else Model_Runner.Llama.Same_As_Keys)));
             return;
          end if;
 

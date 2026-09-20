@@ -22159,3 +22159,29 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 # is at the block's rate either way.
 #
 # model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
+
+# ---------------------------------------------------------------------------
+# The values kept one precision below the keys. A weighted sum averages a
+# value's rounding where a dot product carries a key's into every score, so
+# values bear the coarser storage better -- what a server keeps by default
+# (q8 keys, q4 values). The same eight sessions of a 2,048 context:
+#
+#   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
+#                --kv-cache q8 [--kv-values q4] [--paged]
+#
+#   keys/values     block      paged      digest
+#   q8 / q8        259.0 MB    8.4 MB     8CAE8781...
+#   q8 / q4        209.6 MB    6.8 MB     D6B209D9...
+#
+# The q4 values are about a fifth off the packed block and a fifth off the
+# paged cache too -- the value half of each halved -- for a different mark,
+# which is the point: it is a precision traded, not paging's bit-for-bit
+# saving. Paged against its own block it is exact (D6B209D9 either way). With
+# paging the server's default -- q8 keys, q4 values, in pages -- holds 6.8 MB
+# where the exact block holds 1,056: a hundred and fifty-five times less.
+#
+# And the gather, which a server leaves to the backend, is four on the
+# processor -- its byte kernel's strip-of-four kink -- and eight on the
+# device, which has no such kink and is still climbing at sixteen.
+#
+# model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.

@@ -70,18 +70,21 @@ package Model_Runner.Serving is
    type Member_Id is new Natural;
    No_Member : constant Member_Id := 0;
 
-   --  Members a round gathers at once, at most.
+   --  Members a round gathers at once, at most, where the caller leaves it
+   --  to the backend -- four on the processor, eight on the device.
    --
-   --  Four rather than five or six, and it is a measurement rather than a
-   --  preference: the processor's byte kernel takes vectors in fours, so a
-   --  batch of six costs more in total than a batch of four and a batch of
-   --  three costs nearly what four does. A server that gathers in fours
-   --  spends every pass it makes on a full one.
+   --  Four on the processor rather than five or six, and it is a measurement
+   --  rather than a preference: the processor's byte kernel takes vectors in
+   --  fours, so a batch of six costs more in total than a batch of four and
+   --  a batch of three costs nearly what four does. A server that gathers in
+   --  fours spends every pass it makes on a full one.
    --
    --  A device does not have that kink and is still climbing at sixteen, so
-   --  this is the floor of what to gather and not the ceiling: Step takes
-   --  everything ready up to Gather, and Gather is the caller's to set.
-   Default_Gather : constant := 8;
+   --  four would cap it below where it wants to be: it is dealt eight, and a
+   --  caller that knows its workload sets its own. Step takes everything
+   --  ready up to Gather.
+   Default_Gather : constant := 4;
+   Device_Gather  : constant := 8;
 
    --  What one member is served with.
    type Terms is record
@@ -137,7 +140,9 @@ package Model_Runner.Serving is
    --    members take turns rather than run at once: a round is one pass and
    --    the pass is what the pool divides.
    --  @param Context Positions a member may hold, or zero for the model's.
-   --  @param Gather Members a round takes at most.
+   --  @param Gather Members a round takes at most, or zero to leave it to
+   --    the backend -- four on the processor, at its strip-of-four kink,
+   --    and eight on the device, which keeps climbing past four.
    --  @param Budget True to keep the phase clock on every seat, so that
    --    Time_Spent can say where a server's time went. Off by default,
    --    because it reads the clock at every phase boundary of every pass
@@ -145,11 +150,16 @@ package Model_Runner.Serving is
    --  @param Reuse True to let an arriving caller keep whatever its prompt
    --    has in common with the one the seat last held, instead of reading
    --    its prompt from nothing. See the note below.
-   --  @param Cache What each seat keeps its context in. The default is a
-   --    byte an element (q8): a server holds many callers and the cache is
-   --    what bounds how many, so it is dealt tighter than a lone session's,
-   --    at a precision a served caller does not usually mind. A caller that
-   --    wants the exact cache asks for it.
+   --  @param Cache What each seat keeps its keys in. The default is a byte
+   --    an element (q8): a server holds many callers and the cache is what
+   --    bounds how many, so it is dealt tighter than a lone session's, at a
+   --    precision a served caller does not usually mind. A caller that wants
+   --    the exact cache asks for it.
+   --  @param Values What each seat keeps its values in. The default, one
+   --    precision below the keys where the keys are packed -- a nibble to
+   --    the keys' byte -- is the coarser storage values bear better than
+   --    keys: a weighted sum averages a value's rounding where a dot product
+   --    carries a key's into every score. Same_As_Keys keeps them alike.
    --  @param Paged True to deal each seat's cache in pages rather than one
    --    block, the default: a caller filling little of its context then
    --    holds little, so the server fits far more callers in the cache it
@@ -161,11 +171,13 @@ package Model_Runner.Serving is
       Source  : in out Model_Runner.Llama.Model'Class;
       Workers : Model_Runner.Backend.CPU.Pool_Reference := null;
       Context : Natural := 0;
-      Gather  : Positive := Default_Gather;
+      Gather  : Natural := 0;
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
       Cache   : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Eighth;
+      Values  : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Value_Fourth;
       Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info);
 
@@ -377,6 +389,8 @@ private
       Reuse     : Boolean := True;
       Cache     : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Eighth;
+      Values    : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Value_Fourth;
       Paged     : Boolean := True;
       Open_Now  : Boolean := False;
 

@@ -158,7 +158,9 @@ package Speed_Run is
       Page_Pool   : Natural := 0;
       Page_Size   : Natural := 0;
       Cache       : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Exact);
+        Model_Runner.Llama.Exact;
+      Values      : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys);
 
    --  Serve several callers from one model, arriving and leaving.
    --

@@ -34,15 +34,37 @@ package body Model_Runner.Serving is
       Source  : in out Model_Runner.Llama.Model'Class;
       Workers : Model_Runner.Backend.CPU.Pool_Reference := null;
       Context : Natural := 0;
-      Gather  : Positive := Default_Gather;
+      Gather  : Natural := 0;
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
       Cache   : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Eighth;
+      Values  : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Value_Fourth;
       Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info)
    is
+      use type Model_Runner.Backend.Backend_Kind;
+
       Settings : constant L.Configuration := L.Config (Source);
+
+      --  Where the caller left the gather to the backend, four on the
+      --  processor -- its strip-of-four kink -- and eight on the device,
+      --  which keeps climbing past four.
+      On_Device : constant Boolean :=
+        L.Capability (Source).Kind = Model_Runner.Backend.Backend_Device;
+
+      Gathering : constant Positive :=
+        (if Gather > 0 then Gather
+         elsif On_Device then Device_Gather
+         else Default_Gather);
+
+      --  A value precision below the keys is stored only where the keys are
+      --  packed; where they are not, the values are kept as the keys are,
+      --  whatever was asked, since the exact and half caches hold one kind.
+      Values_Held : constant Model_Runner.Llama.Value_Precision :=
+        (if L.Stores_Pair (Cache, Values) then Values
+         else Model_Runner.Llama.Same_As_Keys);
    begin
       Status := E.Success;
 
@@ -53,10 +75,11 @@ package body Model_Runner.Serving is
       Item.Source := Source'Unchecked_Access;
       Item.Workers := Workers;
       Item.Context := Context;
-      Item.Gather := Positive'Min (Gather, Item.Capacity);
+      Item.Gather := Positive'Min (Gathering, Item.Capacity);
       Item.Budget := Budget;
       Item.Reuse := Reuse;
       Item.Cache := Cache;
+      Item.Values := Values_Held;
       Item.Paged := Paged;
       Item.Width := N.Element_Count (Settings.Vocabulary);
 
@@ -290,6 +313,7 @@ package body Model_Runner.Serving is
                Session_Bounds => Model_Runner.Limits.Default_Session_Limits,
                Workers => Item.Workers,
                Cache => Item.Cache,
+               Values => Item.Values,
                Paged => Item.Paged,
                Status => Status);
 

@@ -43,7 +43,7 @@ package body Tool_Commands is
      & " --draft-lookup --draft-next"
      & " --kv-cache --repeats --round --turns --churn --spread --serve"
      & " --callers"
-     & " --no-reuse --paged --page-pool --page-size"
+     & " --no-reuse --paged --page-pool --page-size --kv-values"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";

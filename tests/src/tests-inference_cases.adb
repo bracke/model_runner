@@ -6614,7 +6614,12 @@ package body Tests.Inference_Cases is
             Terms.Sampling.Repeat_Penalty := 1.0;
             Terms.Limit := Steps;
 
-            Model_Runner.Serving.Open (Serve, Under.Ready, Status => Status);
+            --  Exact and in blocks, to compare against Said_Alone above,
+            --  which runs so: this case is the round's logic, not the
+            --  server's packed paged default, which is tested apart.
+            Model_Runner.Serving.Open
+              (Serve, Under.Ready,
+               Cache => L.Exact, Paged => False, Status => Status);
             Assert (E.Is_Ok (Status), "the server did not open");
 
             Model_Runner.Serving.Admit
@@ -6784,8 +6789,15 @@ package body Tests.Inference_Cases is
             Then_Terms.Sampling := First_Terms.Sampling;
             Then_Terms.Limit := Steps;
 
+            --  Against the exact cache dealt in blocks, which is what
+            --  Said_Alone above ran with: this case is about a round giving
+            --  each member what it gives alone, which the server's packed
+            --  paged default would compare across two precisions and flip
+            --  an argmax on. The packed and paged serving is tested on its
+            --  own terms elsewhere.
             Model_Runner.Serving.Open
-              (Serve, Under.Ready, Status => Status);
+              (Serve, Under.Ready,
+               Cache => L.Exact, Paged => False, Status => Status);
             Assert (E.Is_Ok (Status),
                     "the server did not open: "
                     & E.Error_Code'Image (Status.Code));
