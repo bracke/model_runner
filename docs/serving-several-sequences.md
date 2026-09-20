@@ -188,16 +188,28 @@ and `Attend_And_Project`. The engine asks for a shift of zero everywhere
 today, which is the same arithmetic and the whole device suite unchanged, so
 what is added is the room to page and not a page.
 
-**Stage two -- the engine.** A free list of pages, a session's pages a
-layer, the per-layer tables written into the cache as the round's table is,
-and growth as a session adds positions rather than all at once at open. The
-block allocator's other halves come with it: settling a paged session reads
-its scattered pages back into the host's contiguous copy, a round of paged
-members writes each row's page table, and a session gives its pages back page
-by page at close. It is where the capacity win is spent, and where the
-correctness gate below is generalised once more: a paged member of a round,
-and a session larger than one page, must each produce bit for bit what it
-produces in blocks.
+**Stage two -- the engine, in part.** A session opened paged is given pages
+of the device's cache instead of a block: `Page_Owner` deals the slots,
+`Pages` records each page's base and `Page_First` where a layer's pages begin,
+the per-layer table is written into the cache a layer at a time as the round's
+is, settling reads the scattered pages back into the host's contiguous copy,
+and close gives the pages back. The gate is met: a paged session gives, bit
+for bit, the logits it gives in a block, past a hundred and thirty positions
+and two pages, on the device.
+
+Two things the building settled. A layer's page table carries a couple of
+entries past its own pages, each a valid page, because a kernel reads a chunk
+past the last position that attends -- masked out of the answer, but a wild
+read through a table with no slack. And a paged session places with the place
+step, not the chained head step: the head step read the page table from the
+same binding it wrote the cache through, and a driver dropped the writes, so
+until that is bound apart and proven the same way a paged session mirrors.
+
+What is left is the capacity win itself. A paged session still takes every
+page at open, so it holds a block's worth; taking a page only as a position
+needs it -- growth, and with it eviction and the round of paged members -- is
+the stage after, and it is a change to when pages are taken and not to how
+they are read.
 
 ## Staging
 
