@@ -1,5 +1,7 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Text_IO;
 
 with Http_Client.Clients;
 with Http_Client.Errors;
@@ -431,6 +433,96 @@ package body Model_Runner.Hub is
    -- Fetch --
    -----------
 
+   ---------------------
+   -- Download line --
+   ---------------------
+
+   --  The download's progress, kept at package level because the client's
+   --  callback is a plain access-to-function with nowhere to carry state.
+   --  One download runs at a time, from one task, as the package says.
+   Progress_Started : Ada.Calendar.Time := Ada.Calendar.Clock;
+   Progress_Base    : Interfaces.Unsigned_64 := 0;
+   Progress_Based   : Boolean := False;
+
+   --  An unsigned number without the space Image leads with.
+   function Image (Value : Interfaces.Unsigned_64) return String is
+      Raw : constant String := Interfaces.Unsigned_64'Image (Value);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Image;
+
+   --  A byte count as gigabytes to two decimals, in integers so no float is
+   --  formatted: 1_070_000_000 reads "1.07".
+   function Giga (Bytes : Interfaces.Unsigned_64) return String is
+      Cents : constant Interfaces.Unsigned_64 := Bytes / 10_000_000;
+      Whole : constant Interfaces.Unsigned_64 := Cents / 100;
+      Frac  : constant Interfaces.Unsigned_64 := Cents mod 100;
+   begin
+      return Image (Whole) & "."
+        & Character'Val (Character'Pos ('0') + Natural (Frac / 10))
+        & Character'Val (Character'Pos ('0') + Natural (Frac mod 10));
+   end Giga;
+
+   --  A rate as megabytes a second to one decimal, from the bytes since the
+   --  download's start and the milliseconds since. Integers throughout.
+   function Speed_MBps
+     (Bytes : Interfaces.Unsigned_64; Elapsed_Ms : Long_Long_Integer)
+      return String
+   is
+      Ms     : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Long_Long_Integer'Max (1, Elapsed_Ms));
+      Tenths : constant Interfaces.Unsigned_64 := Bytes / (100 * Ms);
+   begin
+      return Image (Tenths / 10) & "."
+        & Character'Val (Character'Pos ('0') + Natural (Tenths mod 10))
+        & " MB/s";
+   end Speed_MBps;
+
+   --  Repaint the download's progress on one line of standard error: the
+   --  percentage where a total is known, the gigabytes so far of the whole,
+   --  and the rate. A carriage return and no newline, so it overwrites in
+   --  place at the terminal a download is offered at.
+   function Show_Progress
+     (Bytes_Written : Interfaces.Unsigned_64;
+      Total_Bytes   : Interfaces.Unsigned_64)
+      return Http_Client.Errors.Result_Status
+   is
+      use type Ada.Calendar.Time;
+      Elapsed_Ms : constant Long_Long_Integer :=
+        Long_Long_Integer ((Ada.Calendar.Clock - Progress_Started) * 1000);
+      Since      : Interfaces.Unsigned_64;
+      Percent    : constant String :=
+        (if Total_Bytes > 0
+         then Image (Bytes_Written * 100 / Total_Bytes) & "%"
+         else "--");
+      Total_Text : constant String :=
+        (if Total_Bytes > 0 then Giga (Total_Bytes) else "?");
+   begin
+      if not Progress_Based then
+         Progress_Base  := Bytes_Written;
+         Progress_Based := True;
+      end if;
+      Since :=
+        (if Bytes_Written >= Progress_Base
+         then Bytes_Written - Progress_Base else 0);
+
+      Ada.Text_IO.Put
+        (Ada.Text_IO.Standard_Error,
+         ASCII.CR & "downloading  " & Percent & "   "
+         & Giga (Bytes_Written) & " / " & Total_Text & " GB   "
+         & (if Elapsed_Ms > 0 then Speed_MBps (Since, Elapsed_Ms) else "")
+         & "          ");
+      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      return Http_Client.Errors.Ok;
+   exception
+      when others =>
+         return Http_Client.Errors.Ok;
+   end Show_Progress;
+
+   -----------
+   -- Fetch --
+   -----------
+
    procedure Fetch
      (Repo      : String;
       File      : Download_File;
@@ -457,14 +549,11 @@ package body Model_Runner.Hub is
       Options.Enable_Resume := True;
       Options.Preserve_Partial_File := True;
 
-      --  The whole size where it is known and fits the field, so the client
-      --  stops at it and a run that fills the file exactly is done. A size
-      --  past what the field holds is left zero: the resume still works
-      --  from the stream's own range, only the size check is skipped.
-      if File.Size > 0
-        and then File.Size <= Interfaces.Unsigned_64 (Natural'Last)
-      then
-         Options.Expected_Size := Natural (File.Size);
+      --  The whole size where it is known, so the client stops at it and a run
+      --  that fills the file exactly is done. The download's size field is now
+      --  64-bit, so a multi-gigabyte model size is carried through directly.
+      if File.Size > 0 then
+         Options.Expected_Size := File.Size;
       end if;
 
       --  And the digest the hub records, where it gave one, so the bytes on
@@ -474,6 +563,13 @@ package body Model_Runner.Hub is
          Options.Expected_SHA256_Hex := File.SHA256;
       end if;
 
+      --  A progress line as it runs: the client calls back every few
+      --  megabytes, and the callback repaints one line of standard error.
+      Progress_Started := Ada.Calendar.Clock;
+      Progress_Based   := False;
+      Options.Progress_Callback := Show_Progress'Access;
+      Options.Progress_Interval_Bytes := 4 * 1024 * 1024;
+
       Status := HC.Download_To_File
         (URL           => Host & "/" & Repo & "/resolve/main/"
                           & T.To_String (File.Name),
@@ -481,6 +577,11 @@ package body Model_Runner.Hub is
          Result        => Outcome,
          Options       => Options,
          Configuration => Client_For);
+
+      --  End the progress line the callback left without a newline.
+      if Progress_Based then
+         Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+      end if;
 
       if HE.Is_Success (Status) then
          Ok := True;
