@@ -7223,12 +7223,6 @@ package body Model_Runner.Llama is
       return Held;
    end Seats_Held;
 
-   --  Where a round's per-row table sits, in elements: past every block the
-   --  cache has been dealt into. Zero where it holds no block yet, which is
-   --  also what tells the kernel a call is not a round.
-   function Table_At return Element_Count
-   is (if Block_Taken > 0 then Block_Taken else 0);
-
    --  Where a layer's sinks sit, in elements: after the table. Zero where
    --  the cache holds no block yet.
    function Sinks_Room_At return Element_Count
@@ -15610,16 +15604,6 @@ package body Model_Runner.Llama is
       --  a round is a different answer rather than a different procedure.
       Rounding  : constant Boolean := False;
 
-      --  Whether every row of a round found a block of the device's cache.
-      --  False for a batch, which reads the cache from its start as it
-      --  always did.
-      Seated    : constant Boolean := False;
-
-      --  Where a round's per-row table begins, in elements: past the blocks
-      --  for a round in blocks, past the pages for one in pages. Set when
-      --  the round is seated and read by every layer's whole-layer.
-      Round_Table_Base : constant Element_Count := 0;
-
       --  How many members a round has. A batch is one member contributing
       --  every row.
       Members : constant Element_Count := 1;
@@ -16010,7 +15994,7 @@ package body Model_Runner.Llama is
       --  a member with no room left is the round refused rather than that
       --  member quietly writing past its cache.
       for Which in 0 .. Count - 1 loop
-         if Sits_At (Which) + (if Rounding then 1 else Count - Which)
+         if Sits_At (Which) + (Count - Which)
               > Element_Count (Item'Unchecked_Access.Context)
          then
             Status := E.Make (E.Generation_Context_Exhausted);
@@ -16238,10 +16222,6 @@ package body Model_Runner.Llama is
         and then Item.Delta_State /= null
         and then Count > 0
         and then not Has_Runs
-        --  A round's attention layers go whole only with every member
-        --  seated, and a linear layer carrying into one that will not
-        --  would carry into nothing.
-        and then (not Rounding or else Seated)
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
@@ -16309,11 +16289,10 @@ package body Model_Runner.Llama is
             --  table instead, so this is for a single session's batch.
             Paged_Table_At : Element_Count := 0;
 
-            --  Whether this batch's positions reached the device's cache.
-            --  Set as they are written and read where they are attended to,
-            --  which is a loop later. A round starts from whether its rows
-            --  found blocks and takes away any row that did not reach one.
-            Resident : Boolean := Rounding and then Seated;
+            --  Whether this batch's positions reached the device's cache,
+            --  set as they are written and read where they are attended to,
+            --  which is a loop later.
+            Resident : Boolean := False;
 
             --  Whether a device took the normalization and the three
             --  matrices that read it as one sequence, and whether it turned
@@ -16753,9 +16732,8 @@ package body Model_Runner.Llama is
                                  --  A round's members all seated, with
                                  --  the table its steps read; a batch
                                  --  with its block.
-                                 and then (if Rounding then Seated
-                                           else Has_Block
-                                                  (Item'Unchecked_Access))))
+                                 and then Has_Block
+                                            (Item'Unchecked_Access)))
             then
                Charge (Item, Normalizing, Mark);
 
@@ -16832,12 +16810,11 @@ package body Model_Runner.Llama is
                      --  the member here is only the round's first.
                      Take_Pages
                        (Item'Unchecked_Access, Reserved + Count - 1, Resident,
-                        Write_Tables => not Rounding);
+                        Write_Tables => True);
 
-                     --  A single session's batch reads its own page table,
-                     --  which Take_Pages wrote for every layer; a round reads
-                     --  the per-row table it was given.
-                     if Resident and then not Rounding then
+                     --  A batch reads its own page table, which Take_Pages
+                     --  wrote for every layer.
+                     if Resident then
                         Paged_Table_At :=
                           Item.Page_Table_At.all (Natural (Index));
                      end if;
@@ -16900,14 +16877,11 @@ package body Model_Runner.Llama is
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
                         Natural ((if Item.Paged then 0
-                                  elsif Rounding then Base
                                   else Block_Base (Item)
                                        + Cell_Of (Item, Natural (Index),
                                                   Reserved) * KV_Width
                                        + Base)),
                         Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  elsif Rounding
-                                  then Exact_Keys (Item) + V_Base
                                   else Block_Base (Item)
                                        + Cell_Of (Item, Natural (Index),
                                                   Reserved) * V_Width
@@ -16929,11 +16903,8 @@ package body Model_Runner.Llama is
                         Natural (Lowest_Cell (Natural (Index))),
                         Natural (Highest_Cell (Natural (Index))),
                         Natural ((if Item.Paged then 0
-                                  elsif Rounding then Base
                                   else Block_Base (Item) + Base)),
                         Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  elsif Rounding
-                                  then Exact_Keys (Item) + V_Base
                                   else Block_Base (Item)
                                        + Exact_Keys (Item) + V_Base)),
                         Natural (KV_Width), Natural (V_Width),
@@ -16953,11 +16924,7 @@ package body Model_Runner.Llama is
                            else 0),
                         Causal    => Settings.Causal,
                         Max_Bias  => Settings.Max_Bias,
-                        Table_At  =>
-                          (if Rounding
-                           then Natural (Round_Table_Base
-                                         + 2 * Element_Count (Index) * Count)
-                           else 0),
+                        Table_At  => 0,
 
                         --  A paged batch reads its own page table for the
                         --  layer, and where each new position lands follows
@@ -16969,7 +16936,7 @@ package body Model_Runner.Llama is
                         Page_Shift =>
                           (if Item.Paged then Page_Shift_Bits else 0),
                         First_Position =>
-                          (if Item.Paged and then not Rounding
+                          (if Item.Paged
                            then Natural (Cell_Of (Item, Natural (Index),
                                                   Reserved))
                            else 0),
@@ -17015,23 +16982,21 @@ package body Model_Runner.Llama is
                         --  the layer's offsets alone.
                         Packed      => Packed_Shape (Item, Base, V_Base,
                                                      KV_Width, V_Width,
-                                                     Seated => Rounding,
+                                                     Seated => False,
                                                      Paged => Item.Paged),
                         Pack_Keys   =>
                           Packing_Of
                             (Item,
-                             Base + (if Rounding then 0
-                                     else Cell_Of (Item, Natural (Index),
-                                                   Reserved) * KV_Width),
-                             KV_Width, True, Seated => Rounding,
+                             Base + Cell_Of (Item, Natural (Index),
+                                             Reserved) * KV_Width,
+                             KV_Width, True, Seated => False,
                              Paged => Item.Paged),
                         Pack_Values =>
                           Packing_Of
                             (Item,
-                             V_Base + (if Rounding then 0
-                                       else Cell_Of (Item, Natural (Index),
-                                                     Reserved) * V_Width),
-                             V_Width, False, Seated => Rounding,
+                             V_Base + Cell_Of (Item, Natural (Index),
+                                               Reserved) * V_Width,
+                             V_Width, False, Seated => False,
                              Paged => Item.Paged),
 
                         --  And the layer unpacked into the copy for the
@@ -17042,9 +17007,7 @@ package body Model_Runner.Llama is
                         --  pages into the copy, which the packed pages leave
                         --  free, and the matrix reads them there.
                         Unpacked    =>
-                          (if Rounding
-                           then Model_Runner.Backend.Device.Not_Unpacked
-                           else Unpacking_Of
+                          (Unpacking_Of
                                   (Item, Base, V_Base, KV_Width, V_Width,
                                    Cell_Of (Item, Natural (Index), Reserved)
                                    + Count,
@@ -17386,10 +17349,7 @@ package body Model_Runner.Llama is
                               Put_Packed_Position
                                 (Item'Unchecked_Access, Place, V_Place, KV_Width,
                                  V_Width, Placed);
-                              Resident :=
-                                (if Rounding
-                                 then Resident and Placed
-                                 else Placed);
+                              Resident := Placed;
                            end;
                         end if;
                      elsif Item.Held = Exact then
@@ -17428,10 +17388,7 @@ package body Model_Runner.Llama is
                                  Values.all (V_At .. V_At + V_Width - 1),
                                  Placed);
 
-                              Resident :=
-                                (if Rounding
-                                 then Resident and Placed
-                                 else Placed);
+                              Resident := Placed;
                            end;
                         end if;
                      else
@@ -17512,18 +17469,13 @@ package body Model_Runner.Llama is
                      --  which follows from the batch's first position, because
                      --  a round's rows do not sit one after another in one
                      --  sequence.
-                     Table : constant Natural :=
-                       (if Rounding
-                        then Natural (Table_At
-                                      + 2 * Element_Count (Index) * Count)
-                        else 0);
+                     Table : constant Natural := 0;
 
                      --  Where this session's own block begins, for a batch. A
                      --  round says nothing here: the kernel adds each row's
                      --  own block out of the table, and a base added twice
                      --  would read past the cache.
-                     Seat_At : constant Element_Count :=
-                       (if Rounding then 0 else Block_Base (Item));
+                     Seat_At : constant Element_Count := Block_Base (Item);
 
                      Usable : Boolean;
                   begin
@@ -17571,7 +17523,7 @@ package body Model_Runner.Llama is
                            Table_At  => Table,
                            Packed    => Packed_Shape (Item, Base, V_Base,
                                                       KV_Width, V_Width,
-                                                      Seated => Rounding),
+                                                      Seated => False),
                            Sinks_At  => Sinks_Ready (Current.Sinks),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit);
@@ -17581,9 +17533,7 @@ package body Model_Runner.Llama is
                      --  sequence is attended on the host below: the
                      --  single call reads one block, and a round's rows
                      --  are in several.
-                     if Fused
-                       or else (Rounding and then Item.Held in Eighth | Fourth)
-                     then
+                     if Fused then
                         Usable := True;
                      else
                         Attend_There
@@ -17649,7 +17599,7 @@ package body Model_Runner.Llama is
                               --  The window is measured from the position
                               --  itself either way.
                               Last_Step : constant Element_Count :=
-                                (if Rounding or else Settings.Causal
+                                (if Settings.Causal
                                  then Sits_At (Sees_To (Which))
                                  else Reserved + Count - 1);
                               First_Step : constant Element_Count :=
@@ -17997,7 +17947,7 @@ package body Model_Runner.Llama is
            and then (for all Index in Source.Layers.all'Range =>
                        Deferred (Index));
 
-         Owing : constant Boolean := All_Deferred and then not Rounding;
+         Owing : constant Boolean := All_Deferred;
 
          Owing_Round : constant Boolean := All_Deferred and then Rounding;
       begin
