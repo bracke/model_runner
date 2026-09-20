@@ -261,6 +261,7 @@ package body Model_Runner.CLI.Options is
          when Command_Run     => "run",
          when Command_Embed   => "embed",
          when Command_Inspect => "inspect",
+         when Command_Models  => "models",
          when Command_Help    => "help",
          when Command_Version => "version");
 
@@ -2577,6 +2578,8 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Embed;
                   elsif Argument = "inspect" then
                      Result.Kind := Command_Inspect;
+                  elsif Argument = "models" then
+                     Result.Kind := Command_Models;
                   elsif Argument = "help" then
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
@@ -2585,6 +2588,23 @@ package body Model_Runner.CLI.Options is
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;
                   end if;
+
+               elsif Operands = 2 and then Result.Kind = Command_Models then
+                  if Argument = "remove" or else Argument = "rm" then
+                     Result.Models_Remove := True;
+                  elsif Argument = "list" then
+                     null;
+                  else
+                     Fail (E.CLI_Unexpected_Operand, "", Argument);
+                     return;
+                  end if;
+
+               elsif Operands = 3
+                 and then Result.Kind = Command_Models
+                 and then Result.Models_Remove
+               then
+                  --  models remove NAME: the model to delete.
+                  Result.Model_Path := T.To_Bounded (Argument);
 
                elsif Operands = 2 then
                   case Result.Kind is
@@ -2648,6 +2668,15 @@ package body Model_Runner.CLI.Options is
       --  Inspect must name a model; run may be given none and offer a
       --  choice of the models on hand at execution instead.
       if Result.Kind = Command_Inspect
+        and then T.Is_Empty (Result.Model_Path)
+      then
+         Status := E.Make (E.CLI_Missing_Model_Path);
+         return;
+      end if;
+
+      --  models remove needs the model to remove named.
+      if Result.Kind = Command_Models
+        and then Result.Models_Remove
         and then T.Is_Empty (Result.Model_Path)
       then
          Status := E.Make (E.CLI_Missing_Model_Path);

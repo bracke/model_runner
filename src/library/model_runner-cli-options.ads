@@ -63,6 +63,7 @@ package Model_Runner.CLI.Options is
       Command_Run,
       Command_Embed,
       Command_Inspect,
+      Command_Models,
       Command_Help,
       Command_Version);
 
@@ -557,6 +558,10 @@ package Model_Runner.CLI.Options is
       --  --no-paged override, and Paged_Named tells a choice from silence.
       Paged       : Boolean := False;
       Paged_Named : Boolean := False;
+
+      --  The models command with 'remove': the model named by the operand
+      --  after it is deleted rather than the directory listed.
+      Models_Remove : Boolean := False;
 
       --  How a matrix product multiplies. Quantized, because it is twice
       --  the speed for a bound the conformance sweep states and holds, and

@@ -1735,7 +1735,8 @@ package body Model_Runner.CLI.Execute is
                end if;
             end;
 
-         when Opt.Command_Help | Opt.Command_Version =>
+         when Opt.Command_Help | Opt.Command_Version
+            | Opt.Command_Models =>
             declare
                Word : constant String :=
                  Opt.Command_Word (Opt.Command_Of (Topic));
@@ -4548,6 +4549,195 @@ package body Model_Runner.CLI.Execute is
       end;
    end Choose_Model;
 
+   --  How many files a shard-named model is, from its -of-000NN suffix;
+   --  one for a name that is not a shard's.
+   function Shard_Count (Name : String) return Natural is
+   begin
+      if not Shards.Is_Shard_Name (Name) then
+         return 1;
+      end if;
+      return Natural'Value (Name (Name'Last - 9 .. Name'Last - 5));
+   exception
+      when others =>
+         return 1;
+   end Shard_Count;
+
+   --  A byte count as gigabytes to two decimals, in integers.
+   function Giga_Bytes (Bytes : Long_Long_Integer) return String is
+      Cents : constant Long_Long_Integer := Bytes / 10_000_000;
+   begin
+      return T.Image (Cents / 100) & "."
+        & Character'Val (Character'Pos ('0') + Natural ((Cents / 10) mod 10))
+        & Character'Val (Character'Pos ('0') + Natural (Cents mod 10))
+        & " GB";
+   end Giga_Bytes;
+
+   --------------
+   -- Do_Models --
+   --------------
+
+   --  The models command: list the models on hand with their sizes, or,
+   --  with remove, delete a named one and all its shards.
+   procedure Do_Models
+     (Item   : Opt.Command;
+      Screen : in out Pres.Console;
+      Status : out Natural)
+   is
+      use Ada.Directories;
+      Dir : constant String := Model_Runner.Platform.Models_Directory;
+
+      --  Every file of a model whose first is First (a single file, or a
+      --  shard set derived from the first shard's name), and their total
+      --  size. Missing pieces are skipped, so a broken set still lists.
+      procedure For_Model
+        (First_Path : String; Name : String;
+         Bytes : out Long_Long_Integer; Delete : Boolean)
+      is
+         Count : constant Natural := Shard_Count (Name);
+         Base  : constant String :=
+           Containing_Directory (First_Path);
+      begin
+         Bytes := 0;
+         for Index in 1 .. Count loop
+            declare
+               File_Name : constant String :=
+                 (if Count = 1 then Simple_Name (First_Path)
+                  else Shards.Shard_Path (Simple_Name (First_Path), Index, Count));
+               Path : constant String :=
+                 (if Count = 1 then First_Path
+                  else (if Base = "" then File_Name
+                        else Base & "/" & File_Name));
+            begin
+               if Exists (Path) then
+                  Bytes := Bytes + Long_Long_Integer (Size (Path));
+                  if Delete then
+                     Delete_File (Path);
+                  end if;
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end For_Model;
+
+   begin
+      Status := E.Exit_Success;
+
+      if Dir = "" or else not Exists (Dir) then
+         Pres.Put_Note
+           (Screen, "cli.models.empty",
+            [Loc.Named ("detail", (if Dir = "" then "-" else Dir))]);
+         return;
+      end if;
+
+      --  Remove a named model.
+      if Item.Models_Remove then
+         declare
+            Name  : constant String := T.To_String (Item.Model_Path);
+            Path  : constant String := Model_Runner.Platform.Models_File (Name);
+            Bytes : Long_Long_Integer := 0;
+         begin
+            if Path = "" or else not Exists (Path) then
+               Pres.Put_Note
+                 (Screen, "cli.models.not_found",
+                  [Loc.Named ("name", Name), Loc.Named ("detail", Dir)]);
+               Status := E.Exit_Usage;
+               return;
+            end if;
+            For_Model (Path, Name, Bytes, Delete => True);
+            Pres.Put_Note
+              (Screen, "cli.models.removed",
+               [Loc.Named ("name", Name),
+                Loc.Named ("detail", Giga_Bytes (Bytes))]);
+         end;
+         return;
+      end if;
+
+      --  List the models on hand.
+      declare
+         Total   : Long_Long_Integer := 0;
+         Shown   : Natural := 0;
+
+         procedure Consider (Full_Path : String; Label : String) is
+            Bytes : Long_Long_Integer;
+         begin
+            --  A shard set is one model, listed by its first shard.
+            if Shards.Is_Shard_Name (Label)
+              and then Label (Label'Last - 18 .. Label'Last - 14) /= "00001"
+            then
+               return;
+            end if;
+            For_Model (Full_Path, Label, Bytes, Delete => False);
+            Total := Total + Bytes;
+            Shown := Shown + 1;
+            Pres.Put_Note
+              (Screen, "cli.models.item",
+               [Loc.Named ("name", Label),
+                Loc.Named ("detail", Giga_Bytes (Bytes))]);
+         end Consider;
+
+         procedure Scan (Base : String; Prefix : String) is
+            Search : Search_Type;
+            Found  : Directory_Entry_Type;
+         begin
+            Start_Search
+              (Search, Base, "",
+               Filter => [Ordinary_File => True, others => False]);
+            while More_Entries (Search) loop
+               Get_Next_Entry (Search, Found);
+               declare
+                  Name : constant String := Simple_Name (Found);
+               begin
+                  if Name'Length >= 5
+                    and then Name (Name'Last - 4 .. Name'Last) = ".gguf"
+                  then
+                     Consider (Full_Name (Found), Prefix & Name);
+                  end if;
+               end;
+            end loop;
+            End_Search (Search);
+         exception
+            when others =>
+               null;
+         end Scan;
+      begin
+         Scan (Dir, "");
+         declare
+            Search : Search_Type;
+            Found  : Directory_Entry_Type;
+         begin
+            Start_Search
+              (Search, Dir, "",
+               Filter => [Directory => True, others => False]);
+            while More_Entries (Search) loop
+               Get_Next_Entry (Search, Found);
+               declare
+                  Name : constant String := Simple_Name (Found);
+               begin
+                  if Name /= "." and then Name /= ".." then
+                     Scan (Full_Name (Found), Name & "/");
+                  end if;
+               end;
+            end loop;
+            End_Search (Search);
+         exception
+            when others =>
+               null;
+         end;
+
+         if Shown = 0 then
+            Pres.Put_Note
+              (Screen, "cli.models.empty", [Loc.Named ("detail", Dir)]);
+         else
+            Pres.Put_Note
+              (Screen, "cli.models.total",
+               [Loc.Named ("count", T.Image (Long_Long_Integer (Shown))),
+                Loc.Named ("detail", Giga_Bytes (Total))]);
+         end if;
+      end;
+   end Do_Models;
+
    procedure Dispatch
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
@@ -4565,6 +4755,9 @@ package body Model_Runner.CLI.Execute is
 
          when Opt.Command_Inspect =>
             Do_Inspect (Item, Screen, Status);
+
+         when Opt.Command_Models =>
+            Do_Models (Item, Screen, Status);
 
          when Opt.Command_Run =>
             if T.Is_Empty (Item.Model_Path) then
