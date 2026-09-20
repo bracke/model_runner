@@ -15608,22 +15608,21 @@ package body Model_Runner.Llama is
       --  cache a row attends and where in it the row sits -- and everything
       --  below is written through the two functions that give them, so that
       --  a round is a different answer rather than a different procedure.
-      Rounding  : constant Boolean := Beside'Length > 0;
+      Rounding  : constant Boolean := False;
 
       --  Whether every row of a round found a block of the device's cache.
       --  False for a batch, which reads the cache from its start as it
       --  always did.
-      Seated    : Boolean := False;
+      Seated    : constant Boolean := False;
 
       --  Where a round's per-row table begins, in elements: past the blocks
       --  for a round in blocks, past the pages for one in pages. Set when
       --  the round is seated and read by every layer's whole-layer.
-      Round_Table_Base : Element_Count := 0;
+      Round_Table_Base : constant Element_Count := 0;
 
       --  How many members a round has. A batch is one member contributing
       --  every row.
-      Members : constant Element_Count :=
-        (if Rounding then Element_Count (Beside'Length) + 1 else 1);
+      Members : constant Element_Count := 1;
 
       --  Which member each row belongs to, and how far into that member's
       --  own share it sits.
@@ -15634,20 +15633,9 @@ package body Model_Runner.Llama is
       --  are written down rather than derived, which is what lets one
       --  procedure answer for a batch, for a decode round and for a round
       --  with a prompt in it.
-      Row_Owner : array (0 .. Element_Count'Max (Count, 1) - 1)
-        of Element_Count := [others => 0];
-      Row_Slot  : array (0 .. Element_Count'Max (Count, 1) - 1)
+      Row_Owner : constant array (0 .. Element_Count'Max (Count, 1) - 1)
         of Element_Count := [others => 0];
 
-      --  Whether the shares given add up to the rows given.
-      Shares_Fit : Boolean := True;
-
-      --  The session row Which belongs to. Row nought is always the one the
-      --  call was made on.
-      function Held_By (Which : Element_Count) return Session_Access
-      is (if not Rounding or else Row_Owner (Which) = 0
-          then Item'Unchecked_Access
-          else Beside (Beside'First + Natural (Row_Owner (Which)) - 1));
 
       --  Whether a token is one the given rows stand behind: the set's
       --  token, or its second where it has one.
@@ -15657,21 +15645,10 @@ package body Model_Runner.Llama is
           or else (Mine.Second /= Model_Runner.Tokenizer.No_Token
                    and then Token = Mine.Second));
 
-      --  The rows given for row Which's member: the round's set for that
-      --  member where sets were given a member -- a round of one member
-      --  is a batch, whose every row is the first set's -- else the one
-      --  set.
-      function Given_Of (Which : Element_Count) return Given_Rows
-      is (if Givens'Length > 0
-            and then Natural (Row_Owner (Which)) < Givens'Length
-          then Givens (Givens'First + Natural (Row_Owner (Which)))
-          else Given);
 
       --  Where row Which sits in that session's cache.
       function Sits_At (Which : Element_Count) return Element_Count
-      is (if Rounding
-          then Element_Count (Held_By (Which).Committed) + Row_Slot (Which)
-          else Reserved + Which);
+      is (Reserved + Which);
 
       --  The lowest and the highest cell this call reads of a layer,
       --  over every row: one session's own for a batch, and for a round
@@ -15682,37 +15659,18 @@ package body Model_Runner.Llama is
       function Highest_Cell (Layer : Natural) return Element_Count;
 
       function Lowest_Cell (Layer : Natural) return Element_Count is
-         Least : Element_Count :=
+         Least : constant Element_Count :=
            Cell_Of (Item, Layer, Earliest (Settings, Reserved, Layer));
       begin
-         if Rounding then
-            for Which in 0 .. Count - 1 loop
-               Least :=
-                 Element_Count'Min
-                   (Least,
-                    Cell_Of (Held_By (Which).all, Layer,
-                             Earliest (Settings, Sits_At (Which), Layer)));
-            end loop;
-         end if;
-
          return Least;
       end Lowest_Cell;
 
       function Highest_Cell (Layer : Natural) return Element_Count is
-         Most : Element_Count :=
+         Most : constant Element_Count :=
            Cell_Of (Item, Layer,
                     (if Settings.Causal then Reserved
                      else Reserved + Count - 1));
       begin
-         if Rounding then
-            for Which in 0 .. Count - 1 loop
-               Most :=
-                 Element_Count'Max
-                   (Most,
-                    Cell_Of (Held_By (Which).all, Layer, Sits_At (Which)));
-            end loop;
-         end if;
-
          return Most;
       end Highest_Cell;
 
@@ -15949,51 +15907,6 @@ package body Model_Runner.Llama is
    begin
       Logits := [others => 0.0];
 
-      --  Which member owns each row, before anything asks. One row a member
-      --  where no shares are given, which is a decode round; a batch is one
-      --  member owning every row and the map is left as it starts.
-      if Rounding then
-         if Shares'Length = 0 then
-            Shares_Fit := Count = Members;
-
-            if Shares_Fit then
-               for Which in 0 .. Count - 1 loop
-                  Row_Owner (Which) := Which;
-                  Row_Slot (Which) := 0;
-               end loop;
-            end if;
-         else
-            declare
-               At_Row : Element_Count := 0;
-            begin
-               Shares_Fit := Element_Count (Shares'Length) = Members;
-
-               if Shares_Fit then
-                  for Index in Shares'Range loop
-                     for Slot in 0 .. Element_Count (Shares (Index)) - 1 loop
-                        exit when At_Row >= Count;
-
-                        Row_Owner (At_Row) :=
-                          Element_Count (Index - Shares'First);
-                        Row_Slot (At_Row) := Slot;
-                        At_Row := At_Row + 1;
-                     end loop;
-                  end loop;
-
-                  Shares_Fit := At_Row = Count;
-               end if;
-            end;
-         end if;
-
-         --  A share list that does not add up to the rows given would put
-         --  a row in nobody's cache. Refused by name rather than clamped.
-         if not Shares_Fit then
-            Status := E.Make (E.Tensor_Shape_Mismatch);
-            E.Add_Integer (Status, "rows", Long_Long_Integer (Count));
-            E.Add_Integer (Status, "members", Long_Long_Integer (Members));
-            return;
-         end if;
-      end if;
 
       --  As in Evaluate: where the products can reach it, set on the way in
       --  by every entry point that reaches one.
@@ -16098,12 +16011,12 @@ package body Model_Runner.Llama is
       --  member quietly writing past its cache.
       for Which in 0 .. Count - 1 loop
          if Sits_At (Which) + (if Rounding then 1 else Count - Which)
-              > Element_Count (Held_By (Which).Context)
+              > Element_Count (Item'Unchecked_Access.Context)
          then
             Status := E.Make (E.Generation_Context_Exhausted);
             E.Add_Integer
               (Status, "capacity",
-               Long_Long_Integer (Held_By (Which).Context), E.Param_Tokens);
+               Long_Long_Integer (Item'Unchecked_Access.Context), E.Param_Tokens);
             return;
          end if;
       end loop;
@@ -16168,7 +16081,7 @@ package body Model_Runner.Llama is
       begin
          while Which < Count loop
             declare
-               Mine : constant Given_Rows := Given_Of (Which);
+               Mine : constant Given_Rows := Given;
             begin
                if Mine.Rows /= null
                  and then not Mine.Causal
@@ -16211,11 +16124,11 @@ package body Model_Runner.Llama is
             Token  : constant Token_Id :=
               Tokens (Tokens'First + Natural (Which));
          begin
-            if Given_Of (Which).Rows /= null
-              and then Stands_Behind (Token, Given_Of (Which))
+            if Given.Rows /= null
+              and then Stands_Behind (Token, Given)
             then
                declare
-                  Mine   : constant Given_Rows := Given_Of (Which);
+                  Mine   : constant Given_Rows := Given;
                   Taken  : Element_Count renames Taken_By (Row_Owner (Which));
                   Row_At : constant Element_Count :=
                     (Mine.First + Taken) * Width;
@@ -16236,16 +16149,16 @@ package body Model_Runner.Llama is
                        and then Mine.First + Taken in Mine.Places.all'Range
                      then
                         Set_Mark
-                          (Held_By (Which).all, Natural (Sits_At (Which)),
+                          (Item'Unchecked_Access.all, Natural (Sits_At (Which)),
                            Mine.Places.all (Mine.First + Taken), True);
                      else
-                        Set_Mark (Held_By (Which).all, Natural (Sits_At (Which)));
+                        Set_Mark (Item'Unchecked_Access.all, Natural (Sits_At (Which)));
                      end if;
                      Taken := Taken + 1;
                   end if;
                end;
             else
-               Set_Mark (Held_By (Which).all, Natural (Sits_At (Which)));
+               Set_Mark (Item'Unchecked_Access.all, Natural (Sits_At (Which)));
                T.Dequantize_Row
                  (Source.Embeddings, Element_Count (Token),
                   Acts.all (Origin .. Origin + Width - 1), Status);
@@ -16309,244 +16222,12 @@ package body Model_Runner.Llama is
          end;
       end loop;
 
-      --  A round's rows, each reading the block its own session holds.
-      --
-      --  Every member has a block already, or takes one here and keeps it;
-      --  nothing of a member's cache is written for a round to form, which
-      --  is what a round forming has to be cheap enough to do. What the
-      --  kernel is told is a table at the end of the cache: where each row
-      --  has got to, and where its block begins.
-      --
-      --  Settled here rather than as the positions are written because a
-      --  row that could not be seated sends the whole round to the host,
-      --  and the layer has to know that before it starts rather than after
-      --  it has written half a round's positions to a device.
-      --  And every member laid out alike. The table says where each row's
-      --  block begins and where in its layer the row sits; where a layer's
-      --  rows begin inside a block it does not say, that being the layer's
-      --  offset and the same for every row -- so two members of different
-      --  contexts, which the cache now seats side by side, would read each
-      --  other's layers. A round of members that are not laid out alike
-      --  goes to the host, which answers the same and says so nowhere.
-      if Rounding
-        and then Item.Held in Exact | Eighth | Fourth
-        and then Members <= Element_Count (Model_Runner.Backend.Device
-                                             .Block_Limit)
-        and then Count * Element_Count (Item.Owner.Settings.Layers)
-                 <= Element_Count (Model_Runner.Backend.Device.Table_Rows)
-        and then (for all Which in 0 .. Count - 1 =>
-                    Held_By (Which) /= null
-                    and then Block_Span_Of (Held_By (Which).all)
-                             = Block_Span_Of (Item))
-        and then Model_Runner.Backend."="
-                   (Item.Owner.Able.Kind,
-                    Model_Runner.Backend.Backend_Device)
-      then
-         Seated := True;
-
-         if Item.Paged then
-            --  A round whose members are paged. Each takes the pages its
-            --  own position reaches, and the per-row table points each row
-            --  not at a block's base but at where that member's page table
-            --  for the layer sits -- so a row reads its own session's pages
-            --  and no other's. The tables live past the pages: the per-row
-            --  table first, then each member's page table for each layer,
-            --  which the row's second word names by its place in the cache.
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Took : Boolean;
-               begin
-                  Take_Pages (Held_By (Which), Sits_At (Which), Took,
-                              Write_Tables => False);
-                  Seated := Seated and Took;
-               end;
-            end loop;
-
-            if Seated then
-               declare
-                  Rows    : constant Natural := Natural (Count);
-                  Layers  : constant Natural := Settings.Layers;
-                  Per_Row : constant Natural := 2 * Rows * Layers;
-
-                  --  Where each member's page table for each layer begins,
-                  --  in words past the per-row table, and how many words the
-                  --  member tables take together.
-                  Offsets : array (0 .. Layers * Rows - 1) of Natural;
-                  Member_Words : Natural := 0;
-
-                  Base_El : constant Element_Count := Pages_Taken;
-                  Ok      : Boolean;
-               begin
-                  --  A linear layer keeps a ring of states rather than
-                  --  pages, and its whole layer never reads the per-row
-                  --  table, so it holds no member table -- and Page_First
-                  --  of it is the sentinel a zero-page layer shares, which
-                  --  Pages has no room for.
-                  for Layer in 0 .. Layers - 1 loop
-                     for Which in 0 .. Rows - 1 loop
-                        Offsets (Layer * Rows + Which) := Member_Words;
-                        if not Linear (Settings, Layer) then
-                           Member_Words :=
-                             Member_Words
-                             + Natural
-                                 (Held_By (Element_Count (Which)).Page_Count.all
-                                    (Layer))
-                             + Page_Table_Pad;
-                        end if;
-                     end loop;
-                  end loop;
-
-                  declare
-                     Table : Model_Runner.Backend.Device.Word_List
-                               (1 .. Per_Row + Member_Words);
-                  begin
-                     for Layer in 0 .. Layers - 1 loop
-                        for Which in 0 .. Rows - 1 loop
-                           declare
-                              Member : constant Session_Access :=
-                                Held_By (Element_Count (Which));
-                              Row : constant Natural :=
-                                2 * (Layer * Rows + Which);
-
-                              First : constant Element_Count :=
-                                Member.Page_First.all (Layer);
-                              Held  : constant Element_Count :=
-                                Member.Page_Count.all (Layer);
-
-                              At_Table : constant Natural :=
-                                Per_Row + Offsets (Layer * Rows + Which);
-                           begin
-                              --  The row's position, and where its member's
-                              --  page table for this layer sits -- an
-                              --  element of the cache the row reads its page
-                              --  out of. A linear layer holds no pages and
-                              --  reads no table, so its words are left as
-                              --  they are and its member table is empty.
-                              Table (Row + 1) :=
-                                Natural
-                                  (Cell_Of (Member.all, Layer,
-                                            Sits_At (Element_Count (Which))));
-                              Table (Row + 2) :=
-                                Natural (Base_El) + At_Table;
-
-                              --  And the member's pages for the layer, with
-                              --  the padding a masked over-read reads.
-                              if not Linear (Settings, Layer) then
-                                 for Page in 0 .. Natural (Held)
-                                                  + Page_Table_Pad - 1
-                                 loop
-                                    Table (At_Table + Page + 1) :=
-                                      Natural
-                                        (Member.Pages.all
-                                           (Natural (First)
-                                            + Natural
-                                                (Element_Count'Min
-                                                   (Element_Count (Page),
-                                                    Element_Count'Max (Held, 1)
-                                                    - 1))));
-                                 end loop;
-                              end if;
-                           end;
-                        end loop;
-                     end loop;
-
-                     --  Room for the pages, the per-row table and the member
-                     --  tables past them, and a layer's sinks past that.
-                     Model_Runner.Backend.Device.Reserve_Cache
-                       (Base_El + Element_Count (Per_Row + Member_Words)
-                        + Element_Count (Model_Runner.Backend.Device.Sink_Room),
-                        Copy_Upto => Pages_Taken, Ok => Ok);
-
-                     if Ok then
-                        Model_Runner.Backend.Device.Put_Table
-                          (Base_El, Table, Ok);
-                     end if;
-
-                     Round_Table_Base := Base_El;
-                     Seated := Ok;
-                  end;
-               end;
-            end if;
-         else
-            --  A round in blocks. Every member's block stamped before any of
-            --  them asks, so that a member seated late in the round does not
-            --  turn out one seated early -- or one not yet asked, which
-            --  would have it carry its cache into another block a line later.
-            --  A round holds at most as many members as there are blocks, so
-            --  stamping them all leaves a block to turn out only where
-            --  somebody outside the round holds one.
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Member : constant Session_Access := Held_By (Which);
-               begin
-                  if Member /= null
-                    and then Member.Seat >= 0
-                    and then Member.Seat <= Block_Holder'Last
-                    and then Block_Holder (Member.Seat) = Member
-                  then
-                     Block_Clock := Block_Clock + 1;
-                     Member.Asked_At := Block_Clock;
-                     Block_Used (Member.Seat) := Block_Clock;
-                  end if;
-               end;
-            end loop;
-
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Took : Boolean;
-               begin
-                  Take_Block (Held_By (Which), Took);
-                  Seated := Seated and Took;
-               end;
-            end loop;
-
-            if Seated then
-               declare
-                  Table : Model_Runner.Backend.Device.Word_List
-                            (1 .. 2 * Natural (Count) * Settings.Layers);
-                  Ok    : Boolean;
-               begin
-                  --  Two words a row rather than a member: rows of one member
-                  --  read the same block and sit at different positions,
-                  --  which is what a round with a prompt in it needs said.
-                  --
-                  --  AND THE ROWS ARE REPEATED FOR EVERY LAYER, because what
-                  --  the shader wants is where a position sits and a layer
-                  --  that slides a window holds it somewhere of its own --
-                  --  which differs by layer and, a round's rows being
-                  --  different sessions, by row. The whole table goes over
-                  --  once and each layer is handed the offset of its own
-                  --  slice, so this costs a longer write rather than a write
-                  --  a layer.
-                  for Layer in 0 .. Element_Count (Settings.Layers) - 1 loop
-                     for Which in 0 .. Count - 1 loop
-                        declare
-                           Row : constant Natural :=
-                             2 * Natural (Layer * Count + Which);
-                        begin
-                           Table (Row + 1) :=
-                             Natural (Cell_Of (Held_By (Which).all,
-                                               Natural (Layer),
-                                               Sits_At (Which)));
-                           Table (Row + 2) :=
-                             Natural (Block_Base (Held_By (Which).all));
-                        end;
-                     end loop;
-                  end loop;
-
-                  Model_Runner.Backend.Device.Put_Table (Table_At, Table, Ok);
-                  Round_Table_Base := Table_At;
-                  Seated := Ok;
-               end;
-            end if;
-         end if;
-      end if;
 
       --  Room for what this pass will add, in the layers that slide a
       --  window. A round's rows are different sessions at different
       --  positions, so each is asked for its own.
       for Which in 0 .. Count - 1 loop
-         Make_Room (Held_By (Which).all, Settings, Sits_At (Which));
+         Make_Room (Item'Unchecked_Access.all, Settings, Sits_At (Which));
       end loop;
 
       --  Every member's ring over, and the runs' table: one run a
@@ -16585,12 +16266,12 @@ package body Model_Runner.Llama is
                      Finish := Finish + 1;
                   end loop;
 
-                  Send_States (Held_By (Start), Sent);
+                  Send_States (Item'Unchecked_Access, Sent);
                   Linear_Ready := Linear_Ready and then Sent;
 
                   Many := Many + 1;
                   Runs (Many) :=
-                    (Whose => Held_By (Start),
+                    (Whose => Item'Unchecked_Access,
                      First => Natural (Sits_At (Start)),
                      Count => Natural (Finish - Start + 1),
                      Row   => Natural (Start));
@@ -17045,8 +16726,8 @@ package body Model_Runner.Llama is
                if Whole_Layer_Done then
                   --  Each member's ring reaches to the end of its rows.
                   for Which in 0 .. Count - 1 loop
-                     Held_By (Which).Kept_Newest :=
-                       Natural'Max (Held_By (Which).Kept_Newest,
+                     Item'Unchecked_Access.Kept_Newest :=
+                       Natural'Max (Item'Unchecked_Access.Kept_Newest,
                                     Natural (Sits_At (Which)) + 1);
                   end loop;
                   Projected := True;
@@ -17122,7 +16803,7 @@ package body Model_Runner.Llama is
                                  Cosines => Cosines, Sines => Sines,
                                  Sections => Settings.Sections,
                                  Place =>
-                                   Place_At (Held_By (Which).all,
+                                   Place_At (Item'Unchecked_Access.all,
                                              Natural (Sits_At (Which))));
 
                               for Pair in 0 .. Pairs - 1 loop
@@ -17527,7 +17208,7 @@ package body Model_Runner.Llama is
                         end loop;
 
                         Linear_Chunk
-                          (Held_By (Start).all, Source, Current,
+                          (Item'Unchecked_Access.all, Source, Current,
                            Natural (Index), Natural (Sits_At (Start)),
                            (First => (Mixed => Mix_Rows, Z_Gate => Z_Rows,
                                       Alpha => Alpha_Rows, Beta => Beta_Rows,
@@ -17680,19 +17361,19 @@ package body Model_Runner.Llama is
                            Settings.Pairing,
                            Sections => Settings.Sections,
                            Place =>
-                             Place_At (Held_By (Which).all,
+                             Place_At (Item'Unchecked_Access.all,
                                        Natural (Sits_At (Which))));
                      end if;
 
                      if Item.Held in Eighth | Fourth then
                         Pack_Row
                           (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                           Held_By (Which).Byte_Keys.all, Place, KV_Width,
-                           Held_By (Which).Key_Scales.all, Item.Held);
+                           Item'Unchecked_Access.Byte_Keys.all, Place, KV_Width,
+                           Item'Unchecked_Access.Key_Scales.all, Item.Held);
                         Pack_Row
                           (Values.all (V_At .. V_At + V_Width - 1),
-                           Held_By (Which).Byte_Values.all, V_Place, V_Width,
-                           Held_By (Which).Value_Scales.all, Item.Held_Values);
+                           Item'Unchecked_Access.Byte_Values.all, V_Place, V_Width,
+                           Item'Unchecked_Access.Value_Scales.all, Item.Held_Values);
 
                         --  And the device's copy of the packed block --
                         --  a round's into each row's own member's block.
@@ -17703,7 +17384,7 @@ package body Model_Runner.Llama is
                               Placed : Boolean;
                            begin
                               Put_Packed_Position
-                                (Held_By (Which), Place, V_Place, KV_Width,
+                                (Item'Unchecked_Access, Place, V_Place, KV_Width,
                                  V_Width, Placed);
                               Resident :=
                                 (if Rounding
@@ -17713,11 +17394,11 @@ package body Model_Runner.Llama is
                         end if;
                      elsif Item.Held = Exact then
                         for Offset in 0 .. KV_Width - 1 loop
-                           Held_By (Which).Keys.all (Place + Offset) :=
+                           Item'Unchecked_Access.Keys.all (Place + Offset) :=
                              Keys.all (KV_At + Offset);
                         end loop;
                         for Offset in 0 .. V_Width - 1 loop
-                           Held_By (Which).Values.all (V_Place + Offset) :=
+                           Item'Unchecked_Access.Values.all (V_Place + Offset) :=
                              Values.all (V_At + Offset);
                         end loop;
 
@@ -17740,7 +17421,7 @@ package body Model_Runner.Llama is
                               Placed : Boolean;
                            begin
                               Put_Position
-                                (Held_By (Which),
+                                (Item'Unchecked_Access,
                                  Place,
                                  Keys.all (KV_At .. KV_At + KV_Width - 1),
                                  V_Place,
@@ -17755,11 +17436,11 @@ package body Model_Runner.Llama is
                         end if;
                      else
                         for Offset in 0 .. KV_Width - 1 loop
-                           Held_By (Which).Half_Keys.all (Place + Offset) :=
+                           Item'Unchecked_Access.Half_Keys.all (Place + Offset) :=
                              N.To_Half (Keys.all (KV_At + Offset));
                         end loop;
                         for Offset in 0 .. V_Width - 1 loop
-                           Held_By (Which).Half_Values.all (V_Place + Offset) :=
+                           Item'Unchecked_Access.Half_Values.all (V_Place + Offset) :=
                              N.To_Half (Values.all (V_At + Offset));
                         end loop;
                      end if;
@@ -17981,10 +17662,10 @@ package body Model_Runner.Llama is
                               --  own. Every distance the blend takes is a
                               --  difference between two of these.
                               First_Cell : constant Element_Count :=
-                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                Cell_Of (Item'Unchecked_Access.all, Natural (Index),
                                          First_Step);
                               Last_Cell  : constant Element_Count :=
-                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                Cell_Of (Item'Unchecked_Access.all, Natural (Index),
                                          Last_Step);
 
                               --  The query's own position, which is not the
@@ -17993,7 +17674,7 @@ package body Model_Runner.Llama is
                               --  last position, and the fall-off with distance
                               --  is measured from where the query is.
                               Query_Cell : constant Element_Count :=
-                                Cell_Of (Held_By (Which).all, Natural (Index),
+                                Cell_Of (Item'Unchecked_Access.all, Natural (Index),
                                          Sits_At (Which));
 
                               Q_At   : constant Element_Count :=
@@ -18006,10 +17687,10 @@ package body Model_Runner.Llama is
                                  Blend_Eighth
                                    (Item.Held, Item.Held_Values,
                                     Query.all (Q_At .. Q_At + Wide - 1),
-                                    Held_By (Which).Byte_Keys.all,
-                                    Held_By (Which).Byte_Values.all,
-                                    Held_By (Which).Key_Scales.all,
-                                    Held_By (Which).Value_Scales.all,
+                                    Item'Unchecked_Access.Byte_Keys.all,
+                                    Item'Unchecked_Access.Byte_Values.all,
+                                    Item'Unchecked_Access.Key_Scales.all,
+                                    Item'Unchecked_Access.Value_Scales.all,
                                     Base, V_Base, Rows_Base, KV_Width, V_Width,
                                     Heads, Head_Size, Value_Size,
                                     Element_Count (Settings.Group_Size),
@@ -18022,8 +17703,8 @@ package body Model_Runner.Llama is
                               elsif Item.Held = Exact then
                                  Blend_Exact
                                    (Query.all (Q_At .. Q_At + Wide - 1),
-                                    Held_By (Which).Keys.all,
-                                    Held_By (Which).Values.all,
+                                    Item'Unchecked_Access.Keys.all,
+                                    Item'Unchecked_Access.Values.all,
                                     Base, V_Base, KV_Width, V_Width, Heads,
                                     Head_Size, Value_Size,
                                     Element_Count (Settings.Group_Size),
@@ -18036,8 +17717,8 @@ package body Model_Runner.Llama is
                               else
                                  Blend_Halved
                                    (Query.all (Q_At .. Q_At + Wide - 1),
-                                    Held_By (Which).Half_Keys.all,
-                                    Held_By (Which).Half_Values.all,
+                                    Item'Unchecked_Access.Half_Keys.all,
+                                    Item'Unchecked_Access.Half_Values.all,
                                     Base, V_Base, KV_Width, V_Width, Heads,
                                     Head_Size, Value_Size,
                                     Element_Count (Settings.Group_Size),
@@ -18336,7 +18017,7 @@ package body Model_Runner.Llama is
          elsif Owing_Round then
             for Which in 0 .. Count - 1 loop
                declare
-                  Whose : constant Session_Access := Held_By (Which);
+                  Whose : constant Session_Access := Item'Unchecked_Access;
                   Where : constant Natural := Natural (Sits_At (Which));
                begin
                   if Whose.Owed_Count = 0 then
@@ -18374,7 +18055,7 @@ package body Model_Runner.Llama is
                   if Rounding then
                      for Which in 0 .. Count - 1 loop
                         declare
-                           Whose : constant Session_Access := Held_By (Which);
+                           Whose : constant Session_Access := Item'Unchecked_Access;
 
                            At_Key : constant Element_Count :=
                              Layer_Keys + Sits_At (Which) * KV_Width;
@@ -18692,13 +18373,13 @@ package body Model_Runner.Llama is
       --  round, one position in each member, which is the same rule said
       --  once a row.
       for Which in 0 .. Count - 1 loop
-         Held_By (Which).History.all (Natural (Sits_At (Which))) :=
+         Item'Unchecked_Access.History.all (Natural (Sits_At (Which))) :=
            Tokens (Tokens'First + Natural (Which));
       end loop;
 
       if Rounding then
          for Which in 0 .. Count - 1 loop
-            Held_By (Which).Committed := Held_By (Which).Committed + 1;
+            Item'Unchecked_Access.Committed := Item'Unchecked_Access.Committed + 1;
          end loop;
       else
          Item.Committed := Item.Committed + Natural (Count);
