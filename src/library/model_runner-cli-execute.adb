@@ -1245,6 +1245,82 @@ package body Model_Runner.CLI.Execute is
          return False;
    end Model_Complete;
 
+   --  A download's progress, painted on one line of standard error at the
+   --  terminal a download is offered at. The hub reaches no terminal and
+   --  hands the numbers here, where this layer paints them; the state sits
+   --  at package level because a progress callback carries none, and one
+   --  download runs at a time.
+   Download_Start   : Ada.Calendar.Time := Ada.Calendar.Clock;
+   Download_Base    : Interfaces.Unsigned_64 := 0;
+   Download_Based   : Boolean := False;
+   Download_Painted : Boolean := False;
+
+   --  An unsigned number without the space Image leads with.
+   function Image_U64 (Value : Interfaces.Unsigned_64) return String is
+      Raw : constant String := Interfaces.Unsigned_64'Image (Value);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Image_U64;
+
+   --  A byte count as gigabytes to two decimals, in integers so no float is
+   --  formatted: 1_070_000_000 reads "1.07".
+   function Giga_U64 (Bytes : Interfaces.Unsigned_64) return String is
+      Cents : constant Interfaces.Unsigned_64 := Bytes / 10_000_000;
+   begin
+      return Image_U64 (Cents / 100) & "."
+        & Character'Val (Character'Pos ('0') + Natural (Cents mod 100 / 10))
+        & Character'Val (Character'Pos ('0') + Natural (Cents mod 100 mod 10));
+   end Giga_U64;
+
+   --  Repaint the download's progress on one line of standard error: the
+   --  percentage where a total is known, the gigabytes so far of the whole,
+   --  and the rate. A carriage return and no newline, so it overwrites in
+   --  place. Handed to the hub as its reporter.
+   procedure Report_Download
+     (Written : Interfaces.Unsigned_64;
+      Total   : Interfaces.Unsigned_64)
+   is
+      use type Ada.Calendar.Time;
+      Elapsed_Ms : constant Long_Long_Integer :=
+        Long_Long_Integer ((Ada.Calendar.Clock - Download_Start) * 1000);
+      Percent : constant String :=
+        (if Total > 0 then Image_U64 (Written * 100 / Total) & "%" else "--");
+      Total_Text : constant String :=
+        (if Total > 0 then Giga_U64 (Total) else "?");
+      Since : Interfaces.Unsigned_64;
+   begin
+      if not Download_Based then
+         Download_Base  := Written;
+         Download_Based := True;
+      end if;
+      Since :=
+        (if Written >= Download_Base then Written - Download_Base else 0);
+
+      declare
+         Ms : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64 (Long_Long_Integer'Max (1, Elapsed_Ms));
+         Tenths : constant Interfaces.Unsigned_64 := Since / (100 * Ms);
+         Rate   : constant String :=
+           (if Elapsed_Ms > 0
+            then Image_U64 (Tenths / 10) & "."
+                 & Character'Val
+                     (Character'Pos ('0') + Natural (Tenths mod 10))
+                 & " MB/s"
+            else "");
+      begin
+         Ada.Text_IO.Put
+           (Ada.Text_IO.Standard_Error,
+            ASCII.CR & "downloading  " & Percent & "   "
+            & Giga_U64 (Written) & " / " & Total_Text & " GB   "
+            & Rate & "          ");
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+         Download_Painted := True;
+      end;
+   exception
+      when others =>
+         null;
+   end Report_Download;
+
    --  Offer to download a model named as a Hugging Face reference the local
    --  search did not find, and, where the user takes the offer, fetch it
    --  into the models directory. A model split into shards is fetched
@@ -1410,8 +1486,19 @@ package body Model_Runner.CLI.Execute is
             Pres.Put_Note
               (Screen, "cli.download.fetching",
                [Loc.Named ("name", T.To_String (Files (I).Name))]);
+
+            Download_Start   := Ada.Calendar.Clock;
+            Download_Based   := False;
+            Download_Painted := False;
             Model_Runner.Hub.Fetch
-              (T.To_String (Repo), Files (I), Local (I), Ok, Reason);
+              (T.To_String (Repo), Files (I), Local (I), Ok, Reason,
+               Report => Report_Download'Access);
+
+            --  End the progress line the reporter left without a newline.
+            if Download_Painted then
+               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+            end if;
+
             if not Ok then
                Pres.Put_Note
                  (Screen, "cli.download.failed",

@@ -69,6 +69,15 @@ package body Model_Runner.Platform is
          return False;
    end Environment_Exists;
 
+   ---------------
+   -- Hub_Token --
+   ---------------
+
+   function Hub_Token return String is
+   begin
+      return Environment_Value ("HF_TOKEN");
+   end Hub_Token;
+
    -----------------
    -- Host_Locale --
    -----------------

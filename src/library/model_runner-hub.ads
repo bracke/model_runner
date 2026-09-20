@@ -117,16 +117,29 @@ package Model_Runner.Hub is
    --  not a model, and the file it left is removed so a run does not open
    --  it or take it for done.
    --
+   --  Told how a download is going, so a caller can paint a progress line:
+   --  the bytes fetched so far and the whole size where it is known, zero
+   --  where it is not. It runs on the downloading task, one call at a time,
+   --  every few megabytes. Null asks for no progress. The hub does not
+   --  reach the terminal itself -- what a progress line looks like, and
+   --  whether there is one, belongs to the layer that has a terminal.
+   type Progress_Reporter is
+     access procedure
+       (Written : Interfaces.Unsigned_64;
+        Total   : Interfaces.Unsigned_64);
+
    --  @param Repo The owner/repo the file belongs to.
    --  @param File The file to fetch: its name, size and digest.
    --  @param Dest_Path Where to write it.
    --  @param Ok True when the file arrived whole and matched its digest.
    --  @param Reason A short account when Ok is false.
+   --  @param Report Told the download's progress, or null for none.
    procedure Fetch
      (Repo      : String;
       File      : Download_File;
       Dest_Path : String;
       Ok        : out Boolean;
-      Reason    : out Model_Runner.Text.Bounded);
+      Reason    : out Model_Runner.Text.Bounded;
+      Report    : Progress_Reporter := null);
 
 end Model_Runner.Hub;

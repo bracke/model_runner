@@ -1,5 +1,5 @@
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
-with Ada.Text_IO;
 
 with Model_Runner.Platform;
 
@@ -30,8 +30,11 @@ package body Model_Runner.Config is
    --  the store as it is, so a broken file is no settings rather than a
    --  failure.
    procedure Ensure_Loaded is
+      use Ada.Streams;
+      use Ada.Streams.Stream_IO;
+
       Path : constant String := Model_Runner.Platform.Config_File;
-      File : Ada.Text_IO.File_Type;
+      File : File_Type;
 
       procedure Remember (Key : String; Value : String) is
       begin
@@ -51,6 +54,22 @@ package body Model_Runner.Config is
             Store (Filled).Value_Text (1 .. Value'Length) := Value;
          end if;
       end Remember;
+
+      --  One line: text before a `#` is the line, `key = value` splits on
+      --  the first `=`, both sides trimmed. A trailing carriage return from
+      --  a CRLF file is dropped as the line is gathered.
+      procedure Handle_Line (Raw : String) is
+         Hash : constant Natural := Ada.Strings.Fixed.Index (Raw, "#");
+         Line : constant String :=
+           (if Hash = 0 then Raw else Raw (Raw'First .. Hash - 1));
+         Eq   : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+      begin
+         if Eq /= 0 then
+            Remember
+              (Trim (Line (Line'First .. Eq - 1)),
+               Trim (Line (Eq + 1 .. Line'Last)));
+         end if;
+      end Handle_Line;
    begin
       if Loaded then
          return;
@@ -61,29 +80,50 @@ package body Model_Runner.Config is
          return;
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
-      while not Ada.Text_IO.End_Of_File (File) loop
-         declare
-            Raw  : constant String := Ada.Text_IO.Get_Line (File);
-            Hash : constant Natural :=
-              Ada.Strings.Fixed.Index (Raw, "#");
-            Line : constant String :=
-              (if Hash = 0 then Raw else Raw (Raw'First .. Hash - 1));
-            Eq   : constant Natural :=
-              Ada.Strings.Fixed.Index (Line, "=");
-         begin
-            if Eq /= 0 then
-               Remember
-                 (Trim (Line (Line'First .. Eq - 1)),
-                  Trim (Line (Eq + 1 .. Line'Last)));
-            end if;
-         end;
-      end loop;
-      Ada.Text_IO.Close (File);
+      --  Read the whole file and walk it a line at a time. Stream_IO rather
+      --  than Text_IO: a settings file is small and read whole, and nothing
+      --  in this layer reaches for Text_IO. An implausibly large file is
+      --  left unread rather than pulled onto the stack.
+      Open (File, In_File, Path);
+      declare
+         Length : constant Ada.Streams.Stream_IO.Count := Size (File);
+      begin
+         if Length <= 1_048_576 then
+            declare
+               Buffer : Stream_Element_Array
+                          (1 .. Stream_Element_Offset (Length));
+               Last   : Stream_Element_Offset := 0;
+               Line   : String (1 .. Natural (Length)) := [others => ' '];
+               Fill   : Natural := 0;
+            begin
+               if Length > 0 then
+                  Read (File, Buffer, Last);
+               end if;
+               for I in 1 .. Last loop
+                  declare
+                     Ch : constant Character :=
+                       Character'Val (Natural (Buffer (I)));
+                  begin
+                     if Ch = Character'Val (10) then
+                        Handle_Line (Line (1 .. Fill));
+                        Fill := 0;
+                     elsif Ch /= Character'Val (13) then
+                        Fill := Fill + 1;
+                        Line (Fill) := Ch;
+                     end if;
+                  end;
+               end loop;
+               if Fill > 0 then
+                  Handle_Line (Line (1 .. Fill));
+               end if;
+            end;
+         end if;
+      end;
+      Close (File);
    exception
       when others =>
-         if Ada.Text_IO.Is_Open (File) then
-            Ada.Text_IO.Close (File);
+         if Is_Open (File) then
+            Close (File);
          end if;
    end Ensure_Loaded;
 

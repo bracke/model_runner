@@ -37,6 +37,13 @@ package Model_Runner.Platform is
    --  @return True when the variable exists, even when its value is empty.
    function Environment_Exists (Name : String) return Boolean;
 
+   --  The Hugging Face token from the environment, or an empty string when
+   --  none is set. Sent to authorize a gated download. Read here, where the
+   --  environment is reached, so the hub -- which is not -- need not.
+   --
+   --  @return The token, or an empty string.
+   function Hub_Token return String;
+
    --  Locale reported by the host, derived from LC_ALL then LANG.
    --
    --  @return Locale identifier, or an empty string when none is set.
