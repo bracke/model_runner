@@ -181,6 +181,23 @@ package body Model_Runner.Hub is
       return False;
    end Is_Reference;
 
+   -------------
+   -- Is_Repo --
+   -------------
+
+   function Is_Repo (Named : String) return Boolean is
+      Slash : Boolean := False;
+   begin
+      for C of Named loop
+         if C = ':' then
+            return False;
+         elsif C = '/' then
+            Slash := True;
+         end if;
+      end loop;
+      return Slash and then not Ends_With (Named, ".gguf");
+   end Is_Repo;
+
    -----------
    -- Split --
    -----------
@@ -432,6 +449,231 @@ package body Model_Runner.Hub is
          end if;
       end;
    end Resolve;
+
+   ----------
+   -- Pick --
+   ----------
+
+   procedure Pick
+     (Reference : String;
+      Budget    : Interfaces.Unsigned_64;
+      Repo      : out Model_Runner.Text.Bounded;
+      Files     : out File_Set;
+      Count     : out Natural;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded)
+   is
+      Result : HC.Client_Result;
+      Status : HE.Result_Status;
+
+      Max_All : constant := 256;
+      All_Files : array (1 .. Max_All) of Download_File;
+      All_N     : Natural := 0;
+
+      --  The index in All_Files of a file of this name, or zero.
+      function Find (Name : String) return Natural is
+      begin
+         for I in 1 .. All_N loop
+            if T.To_String (All_Files (I).Name) = Name then
+               return I;
+            end if;
+         end loop;
+         return 0;
+      end Find;
+
+      --  The whole size of the model a representative names -- a single
+      --  file's size, or the sum of a shard set's, the pieces it can find.
+      function Group_Total (Rep : String) return Interfaces.Unsigned_64 is
+         Total : Interfaces.Unsigned_64 := 0;
+         Shards_Count : constant Natural := Shard_Total (Rep);
+      begin
+         if Shards_Count <= 1 then
+            declare
+               At_Rep : constant Natural := Find (Rep);
+            begin
+               return (if At_Rep = 0 then 0 else All_Files (At_Rep).Size);
+            end;
+         end if;
+         for K in 1 .. Shards_Count loop
+            declare
+               At_K : constant Natural := Find (GS.Shard_Path (Rep, K, Shards_Count));
+            begin
+               if At_K /= 0 then
+                  Total := Total + All_Files (At_K).Size;
+               end if;
+            end;
+         end loop;
+         return Total;
+      end Group_Total;
+
+      --  Whether a file is the one that stands for its model -- a single
+      --  file, or the first shard of a set.
+      function Is_Representative (Name : String) return Boolean
+      is (not GS.Is_Shard_Name (Name)
+          or else Name (Name'Last - 18 .. Name'Last - 14) = "00001");
+
+      Best_Fit   : Natural := 0;
+      Best_Total : Interfaces.Unsigned_64 := 0;
+      Smallest   : Natural := 0;
+      Small_Total : Interfaces.Unsigned_64 := 0;
+      Chosen     : Natural := 0;
+      None_Fit   : Boolean := False;
+   begin
+      Ok := False;
+      Count := 0;
+      Reason := T.Empty;
+      Repo := T.To_Bounded (Reference);
+
+      if Budget = 0 then
+         Reason := T.To_Bounded
+           ("could not read this machine's memory to pick a quant; name one "
+            & "as " & Reference & ":QUANT");
+         return;
+      end if;
+
+      Status := HC.Get
+        (URL           => Host & "/api/models/" & Reference & "?blobs=true",
+         Result        => Result,
+         Configuration => Client_For);
+
+      if not HE.Is_Success (Status) then
+         Reason := T.To_Bounded
+           ("could not reach huggingface.co (" & HE.Result_Status'Image (Status)
+            & ")");
+         return;
+      end if;
+
+      declare
+         Body_Text : constant String := HC.Response_Text (Result);
+         Marker    : constant String := """rfilename""";
+         Cursor    : Natural := Body_Text'First;
+      begin
+         while Cursor <= Body_Text'Last - Marker'Length + 1 loop
+            if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
+               declare
+                  Scan : Natural := Cursor + Marker'Length;
+               begin
+                  while Scan <= Body_Text'Last and then Body_Text (Scan) /= '"'
+                  loop
+                     Scan := Scan + 1;
+                  end loop;
+                  Scan := Scan + 1;
+                  declare
+                     Start : constant Natural := Scan;
+                  begin
+                     while Scan <= Body_Text'Last
+                       and then Body_Text (Scan) /= '"'
+                     loop
+                        Scan := Scan + 1;
+                     end loop;
+                     if Scan <= Body_Text'Last then
+                        declare
+                           Name : constant String :=
+                             Body_Text (Start .. Scan - 1);
+                           Digest : String (1 .. 64);
+                           Have   : Boolean;
+                        begin
+                           if Ends_With (Name, ".gguf")
+                             and then All_N < Max_All
+                           then
+                              Hash_After (Body_Text, Scan, Digest, Have);
+                              All_N := All_N + 1;
+                              All_Files (All_N) :=
+                                (Name     => T.To_Bounded (Name),
+                                 Size     => Size_After (Body_Text, Scan),
+                                 SHA256   => Digest,
+                                 Has_Hash => Have);
+                           end if;
+                        end;
+                     end if;
+                     Cursor := Scan + 1;
+                  end;
+               end;
+            else
+               Cursor := Cursor + 1;
+            end if;
+         end loop;
+      end;
+
+      if All_N = 0 then
+         Reason := T.To_Bounded
+           ("no .gguf file in " & Reference
+            & " -- the repository may be wrong");
+         return;
+      end if;
+
+      --  Weigh each model: the largest that fits the budget, and the
+      --  smallest of all as a fallback where none does.
+      for I in 1 .. All_N loop
+         if Is_Representative (T.To_String (All_Files (I).Name)) then
+            declare
+               Total : constant Interfaces.Unsigned_64 :=
+                 Group_Total (T.To_String (All_Files (I).Name));
+            begin
+               if Total > 0 then
+                  if Total <= Budget
+                    and then (Best_Fit = 0 or else Total > Best_Total)
+                  then
+                     Best_Fit := I;
+                     Best_Total := Total;
+                  end if;
+                  if Smallest = 0 or else Total < Small_Total then
+                     Smallest := I;
+                     Small_Total := Total;
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      if Best_Fit /= 0 then
+         Chosen := Best_Fit;
+      else
+         Chosen := Smallest;
+         None_Fit := True;
+      end if;
+
+      if Chosen = 0 then
+         Reason := T.To_Bounded ("no quant to choose from in " & Reference);
+         return;
+      end if;
+
+      --  The chosen model's files: itself, or its shards in order.
+      declare
+         Rep   : constant String := T.To_String (All_Files (Chosen).Name);
+         Total : constant Natural := Shard_Total (Rep);
+      begin
+         if Total <= 1 then
+            Files (1) := All_Files (Chosen);
+            Count := 1;
+         else
+            Count := 0;
+            for K in 1 .. Natural'Min (Total, Max_Files) loop
+               declare
+                  At_K : constant Natural :=
+                    Find (GS.Shard_Path (Rep, K, Total));
+               begin
+                  if At_K /= 0 then
+                     Count := Count + 1;
+                     Files (Count) := All_Files (At_K);
+                  end if;
+               end;
+            end loop;
+         end if;
+      end;
+
+      if Count = 0 then
+         Reason := T.To_Bounded ("the chosen quant's files could not be listed");
+         return;
+      end if;
+
+      if None_Fit then
+         Reason := T.To_Bounded
+           ("none of the quants fit this machine; the smallest was taken and "
+            & "may be slow or fail");
+      end if;
+      Ok := True;
+   end Pick;
 
    -----------
    -- Fetch --

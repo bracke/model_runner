@@ -31,6 +31,7 @@ with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Config;
 with Model_Runner.Hub;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Signals;
@@ -1266,7 +1267,15 @@ package body Model_Runner.CLI.Execute is
       Fetched := False;
       Where   := Model_Runner.Text.Empty;
 
-      Model_Runner.Hub.Resolve (Named, Repo, Files, Count, Ok, Reason);
+      --  A reference names its quant; a bare repository lets the machine's
+      --  memory choose one -- two thirds of it, the room a model may take.
+      if Model_Runner.Hub.Is_Reference (Named) then
+         Model_Runner.Hub.Resolve (Named, Repo, Files, Count, Ok, Reason);
+      else
+         Model_Runner.Hub.Pick
+           (Named, Model_Runner.Platform.Physical_Memory * 2 / 3,
+            Repo, Files, Count, Ok, Reason);
+      end if;
       if not Ok then
          Pres.Put_Note
            (Screen, "cli.download.unresolved",
@@ -1356,6 +1365,14 @@ package body Model_Runner.CLI.Execute is
       Fetched := True;
    end Offer_Download;
 
+   --  A model named by an alias in the settings file becomes what the
+   --  alias stands for -- a reference or a path -- so a run of `tiny` runs
+   --  whatever alias.tiny names. A name with no such alias is itself.
+   function Resolve_Alias (Named : String) return String
+   is (if Model_Runner.Config.Has ("alias." & Named)
+       then Model_Runner.Config.Value ("alias." & Named)
+       else Named);
+
    procedure Load
      (Item      : Opt.Command;
       Screen    : in out Pres.Console;
@@ -1374,7 +1391,8 @@ package body Model_Runner.CLI.Execute is
    is
       Bounds : constant Model_Runner.Limits.Model_Limits := Model_Bounds (Item);
       Named  : constant String :=
-        (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
+        Resolve_Alias
+          (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
       Path   : constant String :=
         Model_Runner.Platform.Resolve_Model_Path (Named);
    begin
@@ -1385,7 +1403,8 @@ package body Model_Runner.CLI.Execute is
       --  reference reaches the network once and by the user's leave.
       if Instead = ""
         and then not Ada.Directories.Exists (Path)
-        and then Model_Runner.Hub.Is_Reference (Named)
+        and then (Model_Runner.Hub.Is_Reference (Named)
+                  or else Model_Runner.Hub.Is_Repo (Named))
       then
          declare
             Fetched : Boolean := False;

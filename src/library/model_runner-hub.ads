@@ -43,6 +43,41 @@ package Model_Runner.Hub is
    --  @return True when Named has the shape of a hub reference.
    function Is_Reference (Named : String) return Boolean;
 
+   --  Whether a name is a repository without a quant -- owner/repo, a slash
+   --  in it and no colon, and not a .gguf path -- for which Pick chooses
+   --  the quant rather than the caller naming one.
+   --
+   --  @param Named The model name as the caller gave it.
+   --  @return True when Named is a bare repository.
+   function Is_Repo (Named : String) return Boolean;
+
+   --  Choose the quant of owner/repo that best fits a memory budget.
+   --
+   --  Every GGUF quant in the repository is weighed by its size (a shard
+   --  set by its whole size), and the largest that is no bigger than Budget
+   --  is chosen -- the best quality that fits. Where none fits, the
+   --  smallest is chosen so that something runs, with a word in Reason.
+   --  A zero Budget -- the machine would not say how much memory it has --
+   --  leaves Ok false, asking for a quant by name. The result is the
+   --  chosen quant's files, as Resolve gives a named quant's.
+   --
+   --  @param Reference The owner/repo name, without a quant.
+   --  @param Budget The bytes a model may be, or zero when it is not known.
+   --  @param Repo The owner/repo, echoed for building the download URL.
+   --  @param Files The chosen quant's file, or shards in order, with sizes.
+   --  @param Count How many files it is, one for a single file.
+   --  @param Ok True when a quant was chosen.
+   --  @param Reason A short account -- why none was chosen, or that the one
+   --    chosen is the smallest because none fit.
+   procedure Pick
+     (Reference : String;
+      Budget    : Interfaces.Unsigned_64;
+      Repo      : out Model_Runner.Text.Bounded;
+      Files     : out File_Set;
+      Count     : out Natural;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded);
+
    --  Resolve owner/repo:quant to the GGUF file or shard set that matches.
    --
    --  The repository's file list, with sizes, is read over the hub API and
