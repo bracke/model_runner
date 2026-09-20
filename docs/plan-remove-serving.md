@@ -1,5 +1,15 @@
 # Taking the several-sequences server back out
 
+> **Status: done.** Stage one (the `Serving` module), stage two (the round and
+> its per-row table, through the engine, the device backend and the shaders)
+> and stage three (the page, block and ring turn-out, the warmth clock and the
+> turn-out counters) are all removed; the single-session suite is green and
+> device runs stay coherent. One deviation from the plan below: the *sharing*
+> of the block and ring rooms across sessions was **kept**, not removed. A
+> draft model runs as a second session beside the target and the two share the
+> device's sixteen block and ring seats -- which a personal tool does reach, so
+> the seating stays and only the turn-out (dead for one or two sessions) went.
+
 The purpose of this engine is to run one language model on hardware that can
 barely hold it. Serving several sequences at once is the opposite workload --
 it spends memory and compute the target hardware does not have to raise a
