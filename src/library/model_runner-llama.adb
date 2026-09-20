@@ -15554,10 +15554,7 @@ package body Model_Runner.Llama is
       States : T.Real_Array_Access := null;
       Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
-      Beside : Session_Group := Alone;
-      Shares : Row_Counts := Even_Shares;
       Given  : Given_Rows := No_Given_Rows;
-      Givens : Given_Rows_List := No_Givens;
       Status : out E.Error_Info)
    is
       Settings  : constant Configuration := Source.Settings;
@@ -15565,7 +15562,7 @@ package body Model_Runner.Llama is
 
       --  How many of the given rows each member has taken so far: one
       --  count for a batch, one a member for a round.
-      Taken_By  : array (0 .. Element_Count (Beside'Length)) of Element_Count :=
+      Taken_By  : array (Element_Count range 0 .. 0) of Element_Count :=
         [others => 0];
 
       --  Where each position's run of given rows ends: a picture's rows

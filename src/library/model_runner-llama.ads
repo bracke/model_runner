@@ -986,33 +986,8 @@ package Model_Runner.Llama is
    --  committed position.
    type Session is tagged limited private;
 
-   --  A session named rather than passed, so that a round can hold several.
+   --  A session named rather than passed.
    type Session_Access is access all Session;
-
-   --  The sessions a round's rows belong to after the first, which is the
-   --  one the call is made on. Empty is a batch: one session's own
-   --  consecutive positions, which is what evaluation has always been.
-   type Session_Group is array (Positive range <>) of Session_Access;
-
-   --  No others, which is every call that is not a round.
-   Alone : constant Session_Group (1 .. 0) := [others => null];
-
-   --  How many rows each member of a round contributes, in the members'
-   --  order.
-   --
-   --  One apiece is a decode round: every member says its next token and the
-   --  pass produces one apiece. More than one is a member reading a prompt,
-   --  and the two mix -- a member joining with a hundred tokens to read and
-   --  seven members carrying on with one each is a round of a hundred and
-   --  seven rows, which costs one pass over the weights rather than two.
-   --
-   --  A row is a member and a position and nothing else, so nothing in an
-   --  evaluation cares which of the two kinds it is.
-   type Row_Counts is array (Positive range <>) of Positive;
-
-   --  One row a member, which is what a decode round asks for and what an
-   --  empty share list means.
-   Even_Shares : constant Row_Counts (1 .. 0) := [others => 1];
 
    --  Ask a session to keep account of where its time goes, or to stop.
    --
@@ -1365,11 +1340,6 @@ package Model_Runner.Llama is
 
    No_Given_Rows : constant Given_Rows := (others => <>);
 
-   --  One set of given rows a member of a round, in the members' order.
-   type Given_Rows_List is array (Positive range <>) of Given_Rows;
-
-   No_Givens : constant Given_Rows_List (1 .. 0) := [others => <>];
-
    --  Largest number of tokens one batched call will evaluate. A batch holds
    --  activations for every token in it, so this bounds that working set
    --  rather than letting a long prompt decide it.
@@ -1454,10 +1424,7 @@ package Model_Runner.Llama is
       States : Model_Runner.Tensors.Real_Array_Access := null;
       Every  : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
-      Beside : Session_Group := Alone;
-      Shares : Row_Counts := Even_Shares;
       Given  : Given_Rows := No_Given_Rows;
-      Givens : Given_Rows_List := No_Givens;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  What a session has committed, as bytes.
