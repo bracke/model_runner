@@ -227,10 +227,24 @@ up, and writes its cache into the pages it is given again when it next runs.
 session turned out and brought back says, to a ten-thousandth, what one that
 kept its pages says.
 
-What is left is a round whose members are paged, so that a round of short
-sessions costs its members' pages rather than its members' whole contexts --
-the per-row table pointing each row at its own session's pages. It is how pages
-are dealt to a round, not how one session's are read.
+**Stage five -- a round whose members are paged.** A round of paged members
+costs its members' pages rather than their whole contexts. Each member holds
+its own scattered pages, and the round's per-row table points each row not at a
+block's base but at where that member's page table for the layer sits -- a
+per-row table with the member page tables laid out past it, a member's a row,
+the base word naming one by its place in the cache. The kernels needed nothing:
+`place_of` already reads a round's base word as a page table where the shift
+says so, so the whole change is the engine laying the tables out and the round's
+whole layer carrying the shift. The gate is the round's, in pages: a member of
+a round of four paged members, two of them past a page, gets to a thousandth
+what it gets paged alone.
+
+**The design is built.** The cache is dealt in pages -- taken as a position
+reaches one, turned out coldest-first under a bound, and read by a round a
+member's own -- so a server holds as many sessions as their filled positions
+fit rather than as many as sixteen whole contexts. Blocks remain for a single
+long session, where a block is one contiguous reserve and nothing is dealt
+between sessions; pages are what a churn of many wants.
 
 ## Staging
 

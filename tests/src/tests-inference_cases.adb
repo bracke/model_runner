@@ -5122,6 +5122,184 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Turned_Out_Says_What_It_Said;
 
+   --------------------------------------------------------
+   -- A_Round_Of_Paged_Members_Says_What_Each_Says --
+   --------------------------------------------------------
+
+   --  A round whose members are paged. Each member holds its own scattered
+   --  pages, and the round's per-row table points each row not at a block's
+   --  base but at where that member's page table for the layer sits, so a
+   --  row reads its own session's pages out of the table and no other's. A
+   --  member of the round must get, to a thousandth, what it gets paged
+   --  alone.
+   --
+   --  The members are of four lengths, two of them past a page of
+   --  sixty-four, so a row's page is read out of a table with more than one
+   --  page in it and the rows sit at four different lasts -- what a round of
+   --  members reading each other's pages, or the wrong page of their own,
+   --  would show.
+   procedure A_Round_Of_Paged_Members_Says_What_Each_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Members : constant := 4;
+      Steps   : constant := 2;
+      Room    : constant := 200;
+
+      --  Member N reads twenty-five N tokens of its own before the round,
+      --  so the four sit at four lasts and two are past a page.
+      function Prompt_Of (Member : Positive) return Positive
+      is (25 * Member);
+
+      function Token_Of (Member, Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Member * 5 + Place * 3) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+      type Trails is array (1 .. Members) of Trail;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Alone : Trails := [others => [others => [others => 0.0]]];
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               --  Each paged alone: its own prompt, then its own two steps.
+               for Member in 1 .. Members loop
+                  declare
+                     Live    : L.Session;
+                     Ignored : Logit_Vector;
+                  begin
+                     L.Open (Live, Under.Ready, Context => Room,
+                             Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status), "a lone paged member did not open");
+
+                     for Place in 1 .. Prompt_Of (Member) loop
+                        L.Evaluate (Live, Under.Ready,
+                                    Token_Of (Member, Place), Ignored,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status), "a lone paged prompt failed");
+                     end loop;
+
+                     for Step in 1 .. Steps loop
+                        L.Evaluate (Live, Under.Ready,
+                                    Token_Of (Member, Prompt_Of (Member) + Step),
+                                    Alone (Member) (Step), Status => Status);
+                        Assert (E.Is_Ok (Status), "a lone paged step failed");
+                     end loop;
+
+                     L.Close (Live);
+                  end;
+               end loop;
+
+               --  And as a round of paged members, each where its prompt
+               --  left it.
+               declare
+                  Live : array (1 .. Members) of aliased L.Session;
+
+                  Group : L.Session_Group (1 .. Members);
+                  Said  : Vocab.Token_Array (1 .. Members);
+
+                  Rows : Model_Runner.Tensors.Real_Array_Access := null;
+
+                  Worst : N.Real := 0.0;
+               begin
+                  for Member in 1 .. Members loop
+                     declare
+                        Ignored : Logit_Vector;
+                     begin
+                        L.Open (Live (Member), Under.Ready, Context => Room,
+                                Paged => True, Status => Status);
+                        Assert (E.Is_Ok (Status), "a paged member did not open");
+
+                        Group (Member) := Live (Member)'Unchecked_Access;
+
+                        for Place in 1 .. Prompt_Of (Member) loop
+                           L.Evaluate (Live (Member), Under.Ready,
+                                       Token_Of (Member, Place), Ignored,
+                                       Status => Status);
+                           Assert (E.Is_Ok (Status),
+                                   "a paged member's prompt failed");
+                        end loop;
+
+                        Assert (L.Holds_Pages (Live (Member)),
+                                "a paged member holds no pages");
+                     end;
+                  end loop;
+
+                  Model_Runner.Tensors.Allocate
+                    (N.Element_Count (Members)
+                     * N.Element_Count (Tiny_Model.Vocabulary), Rows);
+                  Assert (Rows /= null, "the paged round had no room for logits");
+
+                  for Step in 1 .. Steps loop
+                     for Member in 1 .. Members loop
+                        Said (Member) :=
+                          Token_Of (Member, Prompt_Of (Member) + Step);
+                     end loop;
+
+                     L.Evaluate_Round
+                       (Members => Group, Source => Under.Ready,
+                        Tokens  => Said, Logits => Rows, Status => Status);
+
+                     Assert (E.Is_Ok (Status),
+                             "a round of paged members failed at step"
+                             & Integer'Image (Step) & ": "
+                             & E.Error_Code'Image (Status.Code));
+
+                     for Member in 1 .. Members loop
+                        declare
+                           Base : constant N.Element_Count :=
+                             N.Element_Count (Member - 1)
+                             * N.Element_Count (Tiny_Model.Vocabulary);
+                        begin
+                           for Index in Logit_Vector'Range loop
+                              Worst :=
+                                N.Real'Max
+                                  (Worst,
+                                   abs (Rows.all (Rows.all'First + Base + Index)
+                                        - Alone (Member) (Step) (Index)));
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+
+                  Assert (Worst <= 1.0E-3,
+                          "a member of a round of paged members says"
+                          & N.Real'Image (Worst)
+                          & " away from the same sequence paged alone, past"
+                          & " a page and at four lengths");
+
+                  Model_Runner.Tensors.Free (Rows);
+
+                  for Member in 1 .. Members loop
+                     L.Close (Live (Member));
+                  end loop;
+               end;
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Round_Of_Paged_Members_Says_What_Each_Says;
+
    --------------------------------------------------------------
    -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
    --------------------------------------------------------------
@@ -14106,6 +14284,11 @@ package body Tests.Inference_Cases is
          "a paged session turned out of its pages when the pool fills reads "
          & "them back and, brought back, writes them anew and says what it "
          & "said before");
+      Register_Routine
+        (T, A_Round_Of_Paged_Members_Says_What_Each_Says'Access,
+         "a round whose members are paged gives each member, past a page "
+         & "and at four lengths, what it gets paged alone, each row reading "
+         & "its own session's pages out of the per-row table");
       Register_Routine
         (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
          "a hybrid round whose members sit at different positions gives "

@@ -15184,6 +15184,11 @@ package body Model_Runner.Llama is
       --  always did.
       Seated    : Boolean := False;
 
+      --  Where a round's per-row table begins, in elements: past the blocks
+      --  for a round in blocks, past the pages for one in pages. Set when
+      --  the round is seated and read by every layer's whole-layer.
+      Round_Table_Base : Element_Count := 0;
+
       --  How many members a round has. A batch is one member contributing
       --  every row.
       Members : constant Element_Count :=
@@ -15908,75 +15913,189 @@ package body Model_Runner.Llama is
       then
          Seated := True;
 
-         --  Every member's block stamped before any of them asks, so that
-         --  a member seated late in the round does not turn out one seated
-         --  early -- or one not yet asked, which would have it carry its
-         --  cache into another block a line later. A round holds at most
-         --  as many members as there are blocks, so stamping them all
-         --  leaves a block to turn out only where somebody outside the
-         --  round holds one.
-         for Which in 0 .. Count - 1 loop
-            declare
-               Member : constant Session_Access := Held_By (Which);
-            begin
-               if Member /= null
-                 and then Member.Seat >= 0
-                 and then Member.Seat <= Block_Holder'Last
-                 and then Block_Holder (Member.Seat) = Member
-               then
-                  Block_Clock := Block_Clock + 1;
-                  Member.Asked_At := Block_Clock;
-                  Block_Used (Member.Seat) := Block_Clock;
-               end if;
-            end;
-         end loop;
+         if Item.Paged then
+            --  A round whose members are paged. Each takes the pages its
+            --  own position reaches, and the per-row table points each row
+            --  not at a block's base but at where that member's page table
+            --  for the layer sits -- so a row reads its own session's pages
+            --  and no other's. The tables live past the pages: the per-row
+            --  table first, then each member's page table for each layer,
+            --  which the row's second word names by its place in the cache.
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Took : Boolean;
+               begin
+                  Take_Pages (Held_By (Which), Sits_At (Which), Took);
+                  Seated := Seated and Took;
+               end;
+            end loop;
 
-         for Which in 0 .. Count - 1 loop
-            declare
-               Took : Boolean;
-            begin
-               Take_Block (Held_By (Which), Took);
-               Seated := Seated and Took;
-            end;
-         end loop;
+            if Seated then
+               declare
+                  Rows    : constant Natural := Natural (Count);
+                  Layers  : constant Natural := Settings.Layers;
+                  Per_Row : constant Natural := 2 * Rows * Layers;
 
-         if Seated then
-            declare
-               Table : Model_Runner.Backend.Device.Word_List
-                         (1 .. 2 * Natural (Count) * Settings.Layers);
-               Ok    : Boolean;
-            begin
-               --  Two words a row rather than a member: rows of one member
-               --  read the same block and sit at different positions, which
-               --  is what a round with a prompt in it needs said.
-               --
-               --  AND THE ROWS ARE REPEATED FOR EVERY LAYER, because what
-               --  the shader wants is where a position sits and a layer
-               --  that slides a window holds it somewhere of its own --
-               --  which differs by layer and, a round's rows being
-               --  different sessions, by row. The whole table goes over
-               --  once and each layer is handed the offset of its own
-               --  slice, so this costs a longer write rather than a write
-               --  a layer.
-               for Layer in 0 .. Element_Count (Settings.Layers) - 1 loop
-                  for Which in 0 .. Count - 1 loop
-                     declare
-                        Row : constant Natural :=
-                          2 * Natural (Layer * Count + Which);
-                     begin
-                        Table (Row + 1) :=
-                          Natural (Cell_Of (Held_By (Which).all,
-                                            Natural (Layer),
-                                            Sits_At (Which)));
-                        Table (Row + 2) :=
-                          Natural (Block_Base (Held_By (Which).all));
-                     end;
+                  --  Where each member's page table for each layer begins,
+                  --  in words past the per-row table, and how many words the
+                  --  member tables take together.
+                  Offsets : array (0 .. Layers * Rows - 1) of Natural;
+                  Member_Words : Natural := 0;
+
+                  Base_El : constant Element_Count := Pages_Taken;
+                  Ok      : Boolean;
+               begin
+                  for Layer in 0 .. Layers - 1 loop
+                     for Which in 0 .. Rows - 1 loop
+                        Offsets (Layer * Rows + Which) := Member_Words;
+                        Member_Words :=
+                          Member_Words
+                          + Natural
+                              (Held_By (Element_Count (Which)).Page_Count.all
+                                 (Layer))
+                          + Page_Table_Pad;
+                     end loop;
                   end loop;
-               end loop;
 
-               Model_Runner.Backend.Device.Put_Table (Table_At, Table, Ok);
-               Seated := Ok;
-            end;
+                  declare
+                     Table : Model_Runner.Backend.Device.Word_List
+                               (1 .. Per_Row + Member_Words);
+                  begin
+                     for Layer in 0 .. Layers - 1 loop
+                        for Which in 0 .. Rows - 1 loop
+                           declare
+                              Member : constant Session_Access :=
+                                Held_By (Element_Count (Which));
+                              Row : constant Natural :=
+                                2 * (Layer * Rows + Which);
+
+                              First : constant Element_Count :=
+                                Member.Page_First.all (Layer);
+                              Held  : constant Element_Count :=
+                                Member.Page_Count.all (Layer);
+
+                              At_Table : constant Natural :=
+                                Per_Row + Offsets (Layer * Rows + Which);
+                           begin
+                              --  The row's position, and where its member's
+                              --  page table for this layer sits -- an
+                              --  element of the cache the row reads its page
+                              --  out of.
+                              Table (Row + 1) :=
+                                Natural
+                                  (Cell_Of (Member.all, Layer,
+                                            Sits_At (Element_Count (Which))));
+                              Table (Row + 2) :=
+                                Natural (Base_El) + At_Table;
+
+                              --  And the member's pages for the layer, with
+                              --  the padding a masked over-read reads.
+                              for Page in 0 .. Natural (Held) + Page_Table_Pad
+                                                - 1
+                              loop
+                                 Table (At_Table + Page + 1) :=
+                                   Natural
+                                     (Member.Pages.all
+                                        (Natural (First)
+                                         + Natural
+                                             (Element_Count'Min
+                                                (Element_Count (Page),
+                                                 Element_Count'Max (Held, 1)
+                                                 - 1))));
+                              end loop;
+                           end;
+                        end loop;
+                     end loop;
+
+                     --  Room for the pages, the per-row table and the member
+                     --  tables past them, and a layer's sinks past that.
+                     Model_Runner.Backend.Device.Reserve_Cache
+                       (Base_El + Element_Count (Per_Row + Member_Words)
+                        + Element_Count (Model_Runner.Backend.Device.Sink_Room),
+                        Copy_Upto => Pages_Taken, Ok => Ok);
+
+                     if Ok then
+                        Model_Runner.Backend.Device.Put_Table
+                          (Base_El, Table, Ok);
+                     end if;
+
+                     Round_Table_Base := Base_El;
+                     Seated := Ok;
+                  end;
+               end;
+            end if;
+         else
+            --  A round in blocks. Every member's block stamped before any of
+            --  them asks, so that a member seated late in the round does not
+            --  turn out one seated early -- or one not yet asked, which
+            --  would have it carry its cache into another block a line later.
+            --  A round holds at most as many members as there are blocks, so
+            --  stamping them all leaves a block to turn out only where
+            --  somebody outside the round holds one.
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Member : constant Session_Access := Held_By (Which);
+               begin
+                  if Member /= null
+                    and then Member.Seat >= 0
+                    and then Member.Seat <= Block_Holder'Last
+                    and then Block_Holder (Member.Seat) = Member
+                  then
+                     Block_Clock := Block_Clock + 1;
+                     Member.Asked_At := Block_Clock;
+                     Block_Used (Member.Seat) := Block_Clock;
+                  end if;
+               end;
+            end loop;
+
+            for Which in 0 .. Count - 1 loop
+               declare
+                  Took : Boolean;
+               begin
+                  Take_Block (Held_By (Which), Took);
+                  Seated := Seated and Took;
+               end;
+            end loop;
+
+            if Seated then
+               declare
+                  Table : Model_Runner.Backend.Device.Word_List
+                            (1 .. 2 * Natural (Count) * Settings.Layers);
+                  Ok    : Boolean;
+               begin
+                  --  Two words a row rather than a member: rows of one member
+                  --  read the same block and sit at different positions,
+                  --  which is what a round with a prompt in it needs said.
+                  --
+                  --  AND THE ROWS ARE REPEATED FOR EVERY LAYER, because what
+                  --  the shader wants is where a position sits and a layer
+                  --  that slides a window holds it somewhere of its own --
+                  --  which differs by layer and, a round's rows being
+                  --  different sessions, by row. The whole table goes over
+                  --  once and each layer is handed the offset of its own
+                  --  slice, so this costs a longer write rather than a write
+                  --  a layer.
+                  for Layer in 0 .. Element_Count (Settings.Layers) - 1 loop
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Row : constant Natural :=
+                             2 * Natural (Layer * Count + Which);
+                        begin
+                           Table (Row + 1) :=
+                             Natural (Cell_Of (Held_By (Which).all,
+                                               Natural (Layer),
+                                               Sits_At (Which)));
+                           Table (Row + 2) :=
+                             Natural (Block_Base (Held_By (Which).all));
+                        end;
+                     end loop;
+                  end loop;
+
+                  Model_Runner.Backend.Device.Put_Table (Table_At, Table, Ok);
+                  Round_Table_Base := Table_At;
+                  Seated := Ok;
+               end;
+            end if;
          end if;
       end if;
 
@@ -16638,16 +16757,19 @@ package body Model_Runner.Llama is
                          else No_Turns),
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
-                        Natural ((if Rounding then 0
+                        Natural ((if Item.Paged then 0
+                                  elsif Rounding then Base
                                   else Block_Base (Item)
                                        + Cell_Of (Item, Natural (Index),
-                                                  Reserved) * KV_Width)
-                                 + Base),
-                        Natural ((if Rounding then 0
+                                                  Reserved) * KV_Width
+                                       + Base)),
+                        Natural ((if Item.Paged then Page_Value_Base (Item)
+                                  elsif Rounding
+                                  then Exact_Keys (Item) + V_Base
                                   else Block_Base (Item)
                                        + Cell_Of (Item, Natural (Index),
-                                                  Reserved) * V_Width)
-                                 + Exact_Keys (Item) + V_Base),
+                                                  Reserved) * V_Width
+                                       + Exact_Keys (Item) + V_Base)),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         --  The lowest and highest cached positions this
@@ -16664,11 +16786,14 @@ package body Model_Runner.Llama is
                         --  s against 1.23 for sixteen at 1,419.
                         Natural (Lowest_Cell (Natural (Index))),
                         Natural (Highest_Cell (Natural (Index))),
-                        Natural ((if Rounding then 0
-                                  else Block_Base (Item)) + Base),
-                        Natural ((if Rounding then 0
-                                  else Block_Base (Item))
-                                 + Exact_Keys (Item) + V_Base),
+                        Natural ((if Item.Paged then 0
+                                  elsif Rounding then Base
+                                  else Block_Base (Item) + Base)),
+                        Natural ((if Item.Paged then Page_Value_Base (Item)
+                                  elsif Rounding
+                                  then Exact_Keys (Item) + V_Base
+                                  else Block_Base (Item)
+                                       + Exact_Keys (Item) + V_Base)),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -16688,8 +16813,26 @@ package body Model_Runner.Llama is
                         Max_Bias  => Settings.Max_Bias,
                         Table_At  =>
                           (if Rounding
-                           then Natural (Table_At
+                           then Natural (Round_Table_Base
                                          + 2 * Element_Count (Index) * Count)
+                           else 0),
+
+                        --  A paged batch reads its own page table for the
+                        --  layer, and where each new position lands follows
+                        --  from the first. A paged round reads the per-row
+                        --  table above instead, a member's table a row, so
+                        --  it needs neither -- only the shift that tells the
+                        --  kernel the base words there are page tables.
+                        Pages_At   =>
+                          (if Item.Paged and then not Rounding
+                           then Natural (Paged_Table_Base (Item, Natural (Index)))
+                           else 0),
+                        Page_Shift =>
+                          (if Item.Paged then Page_Shift_Bits else 0),
+                        First_Position =>
+                          (if Item.Paged and then not Rounding
+                           then Natural (Cell_Of (Item, Natural (Index),
+                                                  Reserved))
                            else 0),
                         Cancel    => Item.Stopping,
 
@@ -16700,7 +16843,10 @@ package body Model_Runner.Llama is
                         --  device on the layer before as well, which
                         --  Carried says.
                         Carry_In  => Carried,
-                        Mirror    => not Deferring,
+                        --  A paged session places with the place step, not
+                        --  the chained head step, which mirroring is.
+                        Mirror    => (if Item.Paged then True
+                                      else not Deferring),
                         Carry_Out =>
                           Carrying
                           and then Index < Source.Layers.all'Last
