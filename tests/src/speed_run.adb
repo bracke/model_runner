@@ -1254,6 +1254,9 @@ package body Speed_Run is
                & Said (Spent / Duration (Produced * Members))
                & " a token, mark "
                & Shown (Mark)
+               & (if Paged
+                  then ", pages held" & Integer'Image (L.Pages_Held)
+                  else "")
                & (if Stopped
                   then "; MEMBERS DISAGREED, which is a collision"
                   else "")
