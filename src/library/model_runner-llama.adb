@@ -15594,20 +15594,6 @@ package body Model_Runner.Llama is
       Reserved  : constant Element_Count := Element_Count (Item.Committed);
       Count     : constant Element_Count := Element_Count (Tokens'Length);
 
-      --  Whether the rows of this pass belong to different sequences.
-      --
-      --  A batch is one session's own positions, consecutive after what it
-      --  had committed; a round is one token each from several sessions,
-      --  each at its own. The two differ in exactly two answers -- which
-      --  cache a row attends and where in it the row sits -- and everything
-      --  below is written through the two functions that give them, so that
-      --  a round is a different answer rather than a different procedure.
-      Rounding  : constant Boolean := False;
-
-      --  How many members a round has. A batch is one member contributing
-      --  every row.
-      Members : constant Element_Count := 1;
-
       --  Which member each row belongs to, and how far into that member's
       --  own share it sits.
       --
@@ -15658,20 +15644,6 @@ package body Model_Runner.Llama is
          return Most;
       end Highest_Cell;
 
-      --  The last row a member contributes, which is the row whose
-      --  distribution that member is answered with.
-      function Last_Row (Of_Member : Element_Count) return Element_Count;
-
-      function Last_Row (Of_Member : Element_Count) return Element_Count is
-      begin
-         for Which in reverse 0 .. Count - 1 loop
-            if Row_Owner (Which) = Of_Member then
-               return Which;
-            end if;
-         end loop;
-
-         return 0;
-      end Last_Row;
       Scale     : constant Real := Score_Scale (Settings);
 
       --  Where the last phase boundary was, for a caller that asked for a
@@ -17949,7 +17921,6 @@ package body Model_Runner.Llama is
 
          Owing : constant Boolean := All_Deferred;
 
-         Owing_Round : constant Boolean := All_Deferred and then Rounding;
       begin
          if Owing then
             if Item.Owed_Count = 0 then
@@ -17964,28 +17935,10 @@ package body Model_Runner.Llama is
                  - Item.Owed_At;
             end if;
 
-         elsif Owing_Round then
-            for Which in 0 .. Count - 1 loop
-               declare
-                  Whose : constant Session_Access := Item'Unchecked_Access;
-                  Where : constant Natural := Natural (Sits_At (Which));
-               begin
-                  if Whose.Owed_Count = 0 then
-                     Whose.Owed_At := Where;
-                     Whose.Owed_Count := 1;
-                  else
-                     Whose.Owed_Count :=
-                       Natural'Max (Whose.Owed_At + Whose.Owed_Count,
-                                    Where + 1)
-                       - Whose.Owed_At;
-                  end if;
-               end;
-            end loop;
          end if;
 
          for Index in Source.Layers.all'Range loop
             if Deferred (Index) and then not Owing
-              and then not Owing_Round
               and then not Linear (Settings, Natural (Index))
             then
                declare
@@ -18002,74 +17955,38 @@ package body Model_Runner.Llama is
                   --  in different blocks, so each row is fetched into the
                   --  member whose cache it belongs to -- which is the same
                   --  bytes and the same one wait, said a row at a time.
-                  if Rounding then
-                     for Which in 0 .. Count - 1 loop
-                        declare
-                           Whose : constant Session_Access := Item'Unchecked_Access;
+                  declare
+                     Cell : constant Element_Count :=
+                       Cell_Of (Item, Natural (Index),
+                                Element_Count (Item.Committed));
 
-                           At_Key : constant Element_Count :=
-                             Layer_Keys + Sits_At (Which) * KV_Width;
+                     Base : constant Element_Count :=
+                       Layer_Keys + Cell * KV_Width;
 
-                           At_Val : constant Element_Count :=
-                             Layer_Vals + Sits_At (Which) * V_Width;
-                        begin
-                           if Whose.Held in Eighth | Fourth then
-                              Read_Back_Packed
-                                (Whose.all, At_Key, At_Val, 1, KV_Width,
-                                 V_Width, Read);
-                           else
-                              Model_Runner.Backend.Device.Get_Cache
-                                (Block_Base (Whose.all) + At_Key,
-                                 Whose.Keys.all
-                                   (At_Key .. At_Key + KV_Width - 1), Read);
+                     V_At : constant Element_Count :=
+                       Layer_Vals + Cell * V_Width;
+                  begin
+                     if Item.Held in Eighth | Fourth then
+                        Read_Back_Packed
+                          (Item, Base, V_At, Count, KV_Width, V_Width,
+                           Read);
+                     else
+                        Model_Runner.Backend.Device.Get_Cache
+                          (Block_Base (Item) + Base,
+                           Item.Keys.all
+                             (Base .. Base + Count * KV_Width - 1),
+                           Read);
 
-                              if Read then
-                                 Model_Runner.Backend.Device.Get_Cache
-                                   (Block_Base (Whose.all)
-                                    + Whose.Keys.all'Length + At_Val,
-                                    Whose.Values.all
-                                      (At_Val .. At_Val + V_Width - 1),
-                                    Read);
-                              end if;
-                           end if;
-
-                           exit when not Read;
-                        end;
-                     end loop;
-                  else
-                     declare
-                        Cell : constant Element_Count :=
-                          Cell_Of (Item, Natural (Index),
-                                   Element_Count (Item.Committed));
-
-                        Base : constant Element_Count :=
-                          Layer_Keys + Cell * KV_Width;
-
-                        V_At : constant Element_Count :=
-                          Layer_Vals + Cell * V_Width;
-                     begin
-                        if Item.Held in Eighth | Fourth then
-                           Read_Back_Packed
-                             (Item, Base, V_At, Count, KV_Width, V_Width,
-                              Read);
-                        else
+                        if Read then
                            Model_Runner.Backend.Device.Get_Cache
-                             (Block_Base (Item) + Base,
-                              Item.Keys.all
-                                (Base .. Base + Count * KV_Width - 1),
+                             (Block_Base (Item) + Item.Keys.all'Length
+                              + V_At,
+                              Item.Values.all
+                                (V_At .. V_At + Count * V_Width - 1),
                               Read);
-
-                           if Read then
-                              Model_Runner.Backend.Device.Get_Cache
-                                (Block_Base (Item) + Item.Keys.all'Length
-                                 + V_At,
-                                 Item.Values.all
-                                   (V_At .. V_At + Count * V_Width - 1),
-                                 Read);
-                           end if;
                         end if;
-                     end;
-                  end if;
+                     end if;
+                  end;
 
                   if not Read then
                      Release;
@@ -18112,89 +18029,7 @@ package body Model_Runner.Llama is
       --  Every position's logits, for a caller checking what another model
       --  proposed. The output projection once per position, which is the
       --  largest matrix here: asked for and never given away.
-      --  A round asks for every row's logits and there are as many rows as
-      --  members, so the projection that is the largest matrix in the model
-      --  is done for all of them at once rather than one at a time. That is
-      --  the same saving the round exists for, applied to the last product
-      --  of the pass: a row at a time here would give back a fifteenth of
-      --  what the layers just saved.
-      if Rounding and then Every /= null
-        and then Every.all'Length
-                 >= Members * Element_Count (Settings.Vocabulary)
-      then
-         declare
-            Wide_Logits : T.Real_Array_Access := null;
-            Vocabulary  : constant Element_Count :=
-              Element_Count (Settings.Vocabulary);
-         begin
-            T.Allocate (Members * Vocabulary, Wide_Logits);
-
-            if Wide_Logits = null then
-               Release;
-               Status := E.Make (E.Memory_Allocation_Failed);
-               E.Add_Text
-                 (Status, "category", "round_logits", E.Param_Identifier);
-               return;
-            end if;
-
-            --  A row a member and not a row a row: what a member is
-            --  answered with is where its own share ends, and a member
-            --  reading a hundred tokens has no use for the ninety-nine
-            --  distributions in front of that. It is also the difference
-            --  between a projection over a hundred rows and one over
-            --  eight, which for the largest matrix in the model is the
-            --  difference the round exists for.
-            for Member in 0 .. Members - 1 loop
-               declare
-                  Origin : constant Element_Count :=
-                    Slot (Last_Row (Member), Width);
-
-                  Into : constant Element_Count := Member * Width;
-               begin
-                  Final_State
-                    (Source, Acts.all (Origin .. Origin + Width - 1),
-                     Norm.all (Into .. Into + Width - 1));
-               end;
-            end loop;
-
-            Product_Batch
-              (Item, Source.Output, Norm, Members, Wide_Logits, Status);
-
-            if E.Is_Error (Status) then
-               T.Free (Wide_Logits);
-               Release;
-               Item.Current := Failed;
-               return;
-            end if;
-
-            for Member in 0 .. Members - 1 loop
-               declare
-                  Into : constant Element_Count := Member * Vocabulary;
-               begin
-                  Finish_Logits
-                    (Source,
-                     Wide_Logits.all (Into .. Into + Vocabulary - 1));
-
-                  Every.all (Every.all'First + Into
-                             .. Every.all'First + Into + Vocabulary - 1) :=
-                    Wide_Logits.all (Into .. Into + Vocabulary - 1);
-               end;
-            end loop;
-
-            --  The caller's single row is the last member's, so that a
-            --  round answers the same shape a batch does and the block
-            --  below has nothing left to compute.
-            if Settings.Has_Head then
-               Logits :=
-                 Wide_Logits.all
-                   ((Members - 1) * Vocabulary
-                    .. (Members - 1) * Vocabulary + Vocabulary - 1);
-            end if;
-
-            T.Free (Wide_Logits);
-         end;
-
-      elsif Every /= null
+      if Every /= null
         and then Every.all'Length
                  >= Count * Element_Count (Settings.Vocabulary)
       then
@@ -18262,7 +18097,7 @@ package body Model_Runner.Llama is
             --  head is not read a second time for it: on a small model
             --  the head is a third of the file, and a draft's every round
             --  asks for every row.
-            if Settings.Has_Head and then not Rounding then
+            if Settings.Has_Head then
                declare
                   Into : constant Element_Count := (Count - 1) * Vocabulary;
                   Origin : constant Element_Count := Slot (Count - 1, Width);
@@ -18287,7 +18122,7 @@ package body Model_Runner.Llama is
       --  prompt in order to continue it. A headless model has none and was
       --  refused the ask on the way in, so there is nothing to compute and
       --  nothing to hand back.
-      if Settings.Has_Head and then not Rounding and then not Took_Last then
+      if Settings.Has_Head and then not Took_Last then
          declare
             Origin : constant Element_Count := Slot (Count - 1, Width);
          begin
@@ -18327,13 +18162,7 @@ package body Model_Runner.Llama is
            Tokens (Tokens'First + Natural (Which));
       end loop;
 
-      if Rounding then
-         for Which in 0 .. Count - 1 loop
-            Item'Unchecked_Access.Committed := Item'Unchecked_Access.Committed + 1;
-         end loop;
-      else
-         Item.Committed := Item.Committed + Natural (Count);
-      end if;
+      Item.Committed := Item.Committed + Natural (Count);
       Status := E.Success;
       Charge (Item, Reading_Out, Mark);
       Release;
