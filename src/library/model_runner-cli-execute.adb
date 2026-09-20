@@ -2325,6 +2325,46 @@ package body Model_Runner.CLI.Execute is
       Prepared  : aliased L.Model;
       Session   : L.Session;
 
+      --  The prefill cache: a run reuses and rewrites one file per model,
+      --  so a repeated prompt prefix is not read again -- unless the caller
+      --  opts out, manages a session by hand, or the run is interactive or
+      --  an agent's, which own their sessions. The file is keyed by the
+      --  model and the settings a reused cache must match.
+      Auto_Cache : constant Boolean :=
+        not Item.No_Cache
+        and then T.Is_Empty (Item.Load_Session)
+        and then T.Is_Empty (Item.Save_Session)
+        and then Item.Prompt_Kind /= Opt.Prompt_Interactive
+        and then not Item.Agent;
+      Cache_Path : constant String :=
+        (if Auto_Cache
+         then Model_Runner.Platform.Cache_File
+                (Model_Runner.Platform.Resolve_Model_Path
+                   (Resolve_Alias (T.To_String (Item.Model_Path)))
+                 & "|" & L.Cache_Name (Item.Cache)
+                 & "|" & L.Value_Precision'Image (Item.Values)
+                 & "|" & Item.Context_Size'Image
+                 & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic))
+         else "");
+      Load_Path : constant String :=
+        (if not T.Is_Empty (Item.Load_Session)
+         then Model_Runner.Platform.Resolve_Session_Path
+                (T.To_String (Item.Load_Session), For_Saving => False)
+         elsif Cache_Path /= ""
+               and then Ada.Directories.Exists (Cache_Path)
+         then Cache_Path
+         else "");
+      Save_Path : constant String :=
+        (if not T.Is_Empty (Item.Save_Session)
+         then Model_Runner.Platform.Resolve_Session_Path
+                (T.To_String (Item.Save_Session), For_Saving => True)
+         elsif Cache_Path /= "" then Cache_Path
+         else "");
+
+      --  Whether the load below adopted a cache, so the prompt reuses the
+      --  prefix it shares with it.
+      Prefix_Reused : Boolean := False;
+
       --  A second session on the same model, opened only for the agent's
       --  retrieve tool to embed with, so embedding a passage never disturbs
       --  the generation session's committed conversation.
@@ -2826,46 +2866,55 @@ package body Model_Runner.CLI.Execute is
          --  A restore that fails ends the run. It was asked for, and going
          --  on without it would silently do the slow thing after being told
          --  to do the fast one.
-         if not T.Is_Empty (Item.Load_Session) then
+         if Load_Path /= "" then
             declare
+               --  The auto cache is tolerant: a stale or unreadable one is
+               --  no failure, only a prompt read in full. An explicit
+               --  session was asked for and its failure ends the run.
+               Auto : constant Boolean :=
+                 Cache_Path /= "" and then Load_Path = Cache_Path;
                Kept : Files.File_Source;
             begin
-               Files.Open
-                 (Kept,
-                  Model_Runner.Platform.Resolve_Session_Path
-                    (T.To_String (Item.Load_Session), For_Saving => False),
-                  Status => Condition);
+               Files.Open (Kept, Load_Path, Status => Condition);
                if E.Is_Error (Condition) then
-                  Fail (Condition);
-                  return;
-               end if;
-
-               declare
-                  Length : constant Model_Runner.Bytes.Byte_Count :=
-                    Files.Size (Kept);
-                  Room   : Model_Runner.Bytes.Byte_Array_Access;
-               begin
-                  Model_Runner.Bytes.Allocate (Length, Room);
-                  if Room = null then
-                     Files.Close (Kept);
-                     Fail (E.Make (E.Memory_Allocation_Failed));
-                     return;
-                  end if;
-
-                  Files.Read (Kept, 0, Room.all, Condition);
-                  Files.Close (Kept);
-
-                  if E.Is_Ok (Condition) then
-                     L.Adopt (Session, Prepared, Room.all, Condition);
-                  end if;
-
-                  Model_Runner.Bytes.Free (Room);
-
-                  if E.Is_Error (Condition) then
+                  if not Auto then
                      Fail (Condition);
                      return;
                   end if;
-               end;
+               else
+                  declare
+                     Length : constant Model_Runner.Bytes.Byte_Count :=
+                       Files.Size (Kept);
+                     Room   : Model_Runner.Bytes.Byte_Array_Access;
+                  begin
+                     Model_Runner.Bytes.Allocate (Length, Room);
+                     if Room = null then
+                        Files.Close (Kept);
+                        if not Auto then
+                           Fail (E.Make (E.Memory_Allocation_Failed));
+                           return;
+                        end if;
+                     else
+                        Files.Read (Kept, 0, Room.all, Condition);
+                        Files.Close (Kept);
+
+                        if E.Is_Ok (Condition) then
+                           L.Adopt (Session, Prepared, Room.all, Condition);
+                        end if;
+
+                        Model_Runner.Bytes.Free (Room);
+
+                        if E.Is_Error (Condition) then
+                           if not Auto then
+                              Fail (Condition);
+                              return;
+                           end if;
+                        else
+                           Prefix_Reused := True;
+                        end if;
+                     end if;
+                  end;
+               end if;
             end;
          end if;
 
@@ -3719,8 +3768,7 @@ package body Model_Runner.CLI.Execute is
                   --  session already holds a conversation; this is what makes
                   --  restoring it worth anything, and where they diverge the
                   --  engine resets and reads the prompt as it would have.
-                  Request.Reuse_Committed_Prefix :=
-                    not T.Is_Empty (Item.Load_Session);
+                  Request.Reuse_Committed_Prefix := Prefix_Reused;
 
                   --  What the last prompt retained goes before this one
                   --  begins: Generate starts from an empty result and would
@@ -3821,29 +3869,30 @@ package body Model_Runner.CLI.Execute is
             --  rather than before it, because what is worth saving is the
             --  prompt and the reply together: the next run continues from
             --  where this one stopped.
-            if not T.Is_Empty (Item.Save_Session) then
+            if Save_Path /= "" then
                declare
+                  --  Writing the auto cache is tolerant: the run already
+                  --  produced its answer, so a snapshot or write that fails
+                  --  costs the next run a cache, not this run its output.
+                  Auto : constant Boolean :=
+                    Cache_Path /= "" and then Save_Path = Cache_Path;
                   Room : Model_Runner.Bytes.Byte_Array_Access;
                begin
                   L.Snapshot (Session, Prepared, Room, Condition);
                   if E.Is_Error (Condition) then
-                     Fail (Condition);
-                     return;
-                  end if;
+                     if not Auto then
+                        Fail (Condition);
+                        return;
+                     end if;
+                  else
+                     Model_Runner.Platform.Ensure_Parent_Directory (Save_Path);
+                     Write_File (Save_Path, Room.all, Condition);
+                     Model_Runner.Bytes.Free (Room);
 
-                  declare
-                     Where : constant String :=
-                       Model_Runner.Platform.Resolve_Session_Path
-                         (T.To_String (Item.Save_Session), For_Saving => True);
-                  begin
-                     Model_Runner.Platform.Ensure_Parent_Directory (Where);
-                     Write_File (Where, Room.all, Condition);
-                  end;
-                  Model_Runner.Bytes.Free (Room);
-
-                  if E.Is_Error (Condition) then
-                     Fail (Condition);
-                     return;
+                     if E.Is_Error (Condition) and then not Auto then
+                        Fail (Condition);
+                        return;
+                     end if;
                   end if;
                end;
             end if;

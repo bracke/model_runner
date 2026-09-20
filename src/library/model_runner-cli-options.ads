@@ -563,6 +563,9 @@ package Model_Runner.CLI.Options is
       --  after it is deleted rather than the directory listed.
       Models_Remove : Boolean := False;
 
+      --  Do not reuse or write the prefill cache for this run.
+      No_Cache : Boolean := False;
+
       --  How a matrix product multiplies. Quantized, because it is twice
       --  the speed for a bound the conformance sweep states and holds, and
       --  because a default nobody selects is a path nobody exercises.

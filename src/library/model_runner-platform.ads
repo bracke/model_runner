@@ -67,6 +67,24 @@ package Model_Runner.Platform is
    --  @return The path, or an empty string when none is known.
    function Config_File return String;
 
+   --  Directory the prefill cache is kept in.
+   --
+   --  <XDG_CACHE_HOME>/model_runner/prefill where that is set, else
+   --  <HOME>/.cache/model_runner/prefill. Empty when no home is known,
+   --  and then nothing is cached.
+   --
+   --  @return The directory, or an empty string when none is known.
+   function Cache_Directory return String;
+
+   --  A cache file path for a key -- the key hashed, under Cache_Directory.
+   --  Empty when there is no cache directory. The same key gives the same
+   --  path, so a run keys the file by the model and the settings that must
+   --  match for a cache to be reused.
+   --
+   --  @param Key What the cache is for.
+   --  @return The path, or an empty string when there is no directory.
+   function Cache_File (Key : String) return String;
+
    --  Directory searched for a model named without a path.
    --
    --  MODEL_RUNNER_MODELS overrides it. Otherwise it is

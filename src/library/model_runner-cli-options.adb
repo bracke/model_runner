@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 108) of Registry_Row :=
+   Registry : constant array (1 .. 109) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -71,6 +71,8 @@ package body Model_Runner.CLI.Options is
        Text ("paged")),
       (Text ("--no-paged"), [Command_Run => True, others => False],
        Text ("no_paged")),
+      (Text ("--no-cache"), [Command_Run => True, others => False],
+       Text ("no_cache")),
       (Text ("--arith"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("arith")),
@@ -1648,6 +1650,14 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Paged := False;
                      Result.Paged_Named := True;
+
+                  elsif Name = "--no-cache" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.No_Cache := True;
 
                   elsif Name = "--no-normalize" then
                      No_Value (Name, Value_Present,

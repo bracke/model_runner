@@ -9,6 +9,9 @@ with Model_Runner.Platform.Instructions;
 with Model_Runner.Platform.Topology;
 with Model_Runner.Text;
 
+with Ada.Containers;
+with Ada.Strings.Hash;
+
 with Model_Runner.Config;
 
 package body Model_Runner.Platform is
@@ -226,6 +229,53 @@ package body Model_Runner.Platform is
       when others =>
          return "";
    end Config_File;
+
+   ---------------------
+   -- Cache_Directory --
+   ---------------------
+
+   function Cache_Directory return String is
+      function Under (Base : String; Part : String) return String
+        renames Hostkit.Fs.Join;
+
+      Cache_Home : constant String := Environment_Value ("XDG_CACHE_HOME");
+      Home       : constant String := Environment_Value ("HOME");
+   begin
+      if Cache_Home /= "" then
+         return Under (Under (Cache_Home, Model_Runner.Program_Name), "prefill");
+      elsif Home /= "" then
+         return Under
+                  (Under (Under (Home, ".cache"), Model_Runner.Program_Name),
+                   "prefill");
+      else
+         return "";
+      end if;
+   exception
+      when others =>
+         return "";
+   end Cache_Directory;
+
+   ----------------
+   -- Cache_File --
+   ----------------
+
+   function Cache_File (Key : String) return String is
+      Dir : constant String := Cache_Directory;
+   begin
+      if Dir = "" then
+         return "";
+      end if;
+      declare
+         Image : constant String :=
+           Ada.Containers.Hash_Type'Image (Ada.Strings.Hash (Key));
+      begin
+         return Hostkit.Fs.Join
+                  (Dir, Image (Image'First + 1 .. Image'Last) & ".kv");
+      end;
+   exception
+      when others =>
+         return "";
+   end Cache_File;
 
    ---------------------
    -- Data_Directory --
