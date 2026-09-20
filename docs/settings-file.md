@@ -73,6 +73,26 @@ alias.work = /srv/models/my-finetune.gguf
 Then `model_runner run tiny` runs whatever `alias.tiny` stands for. A name
 with no matching alias is taken as itself.
 
+## Download suggestions
+
+A key beginning `suggest.` adds a model to the list `model_runner run`
+offers when no model is named. The part after `suggest.` is the label
+shown; the value is a Hugging Face reference and, after a space, the file
+size in bytes:
+
+```
+suggest.My-Coder-7B  = some-org/My-Coder-7B-GGUF:Q4_K_M 4_100_000_000
+suggest.Tiny-Starter = another-org/Tiny-GGUF:Q4_K_M
+```
+
+The size may be grouped with underscores. It is what the shown size and
+the "too big to run here" mark are read from; leave it off and the size
+shows as unknown and the model is never marked too big, since nothing is
+known of its size until it is fetched. Your suggestions are listed before
+the built-in starters. Where a repository carries more than one file of a
+quant, name one exactly — `…:r6-Q4_K_M` rather than `…:Q4_K_M` — or the
+reference is refused as ambiguous.
+
 ## Precedence
 
 A command-line flag beats the file, and the file beats a built-in default:

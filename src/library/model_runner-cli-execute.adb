@@ -4534,6 +4534,21 @@ package body Model_Runner.CLI.Execute is
       function Too_Big (Bytes : Long_Long_Integer) return Boolean
       is (Budget > 0 and then Bytes > Budget * 2 / 3);
 
+      --  A byte count as gigabytes to two decimals, in integers so no float
+      --  is formatted -- the shown size for a settings-file suggestion that
+      --  gave its bytes.
+      function Giga (Bytes : Long_Long_Integer) return String is
+         Cents : constant Long_Long_Integer := Bytes / 10_000_000;
+         Whole : constant Long_Long_Integer := Cents / 100;
+         Frac  : constant Long_Long_Integer := Cents mod 100;
+         Shown : constant String := Long_Long_Integer'Image (Whole);
+      begin
+         return Shown (Shown'First + 1 .. Shown'Last) & "."
+           & Character'Val (Character'Pos ('0') + Natural (Frac / 10))
+           & Character'Val (Character'Pos ('0') + Natural (Frac mod 10))
+           & " GB";
+      end Giga;
+
       procedure Add (Full_Path : String; Label : String) is
       begin
          --  Not a shard past the first: the set is one model, shown once.
@@ -4634,6 +4649,65 @@ package body Model_Runner.CLI.Execute is
          when others =>
             null;
       end;
+
+      --  Suggestions the settings file adds, before the built-in starters
+      --  so a machine's own list leads. Each is `suggest.NAME = reference`,
+      --  with an optional byte count after the reference that the shown
+      --  size and the too-big mark are read from; without it the size shows
+      --  as unknown and the model is never marked too big, since nothing
+      --  here knows how large it is until it is fetched.
+      for I in 1 .. Model_Runner.Config.Count loop
+         declare
+            Key : constant String := Model_Runner.Config.Key_At (I);
+            Tag : constant String := "suggest.";
+         begin
+            if Key'Length > Tag'Length
+              and then Key (Key'First .. Key'First + Tag'Length - 1) = Tag
+            then
+               declare
+                  Label : constant String :=
+                    Key (Key'First + Tag'Length .. Key'Last);
+                  Spec  : constant String := Model_Runner.Config.Value_At (I);
+                  Cut   : Natural := 0;
+                  Bytes : Long_Long_Integer := 0;
+               begin
+                  for J in Spec'Range loop
+                     if Spec (J) = ' ' or else Spec (J) = ASCII.HT then
+                        Cut := J;
+                        exit;
+                     end if;
+                  end loop;
+
+                  declare
+                     Reference : constant String :=
+                       (if Cut = 0 then Spec else Spec (Spec'First .. Cut - 1));
+                     Tail : constant String :=
+                       (if Cut = 0 then "" else Spec (Cut + 1 .. Spec'Last));
+                  begin
+                     --  'Value ignores the blanks around the count and reads
+                     --  an underscore-grouped literal; a tail that is not a
+                     --  number leaves the size unknown rather than refusing
+                     --  the suggestion.
+                     if Tail /= "" then
+                        begin
+                           Bytes := Long_Long_Integer'Value (Tail);
+                        exception
+                           when others =>
+                              Bytes := 0;
+                        end;
+                     end if;
+
+                     if Label /= "" and then Reference /= "" then
+                        Add_Suggestion
+                          (Label,
+                           (if Bytes > 0 then Giga (Bytes) else "size unknown"),
+                           Reference, Bytes);
+                     end if;
+                  end;
+               end;
+            end if;
+         end;
+      end loop;
 
       --  And a few models this engine runs well, smallest first, so a
       --  first run with nothing on hand still has somewhere to start.
