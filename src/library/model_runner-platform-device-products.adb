@@ -893,7 +893,7 @@ package body Model_Runner.Platform.Device.Products is
    --  rows' in bytes and the scales' in floats -- the bits an element of
    --  each side, how many heads and positions a workgroup answers, a
    --  round's table and the sinks.
-   Packed_Bytes    : constant := 104;
+   Packed_Bytes    : constant := 116;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Shape_Bytes     : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -1052,6 +1052,13 @@ package body Model_Runner.Platform.Device.Products is
       Queries    : C.unsigned := 1;
       Table_At   : C.unsigned := 0;
       Sinks_At   : C.unsigned := 0;
+
+      --  A cache in pages: the batch's page table, the page's shift, and
+      --  the first row's position -- as place.comp and pack.comp carry
+      --  them. Zero shift is a cache in blocks.
+      Pages_At       : C.unsigned := 0;
+      Page_Shift     : C.unsigned := 0;
+      First_Position : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -6333,7 +6340,13 @@ package body Model_Runner.Platform.Device.Products is
             Bundle     => C.unsigned (Bundle),
             Queries    => C.unsigned (Queries),
             Table_At   => 0,
-            Sinks_At   => 0);
+            Sinks_At   => 0,
+
+            --  The single call reads one session's cache whole, never a
+            --  round and never in pages.
+            Pages_At       => 0,
+            Page_Shift     => 0,
+            First_Position => 0);
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -10513,7 +10526,14 @@ package body Model_Runner.Platform.Device.Products is
                         Bundle     => C.unsigned (Bundle),
                         Queries    => C.unsigned (Queries),
                         Table_At   => C.unsigned (This.Table),
-                        Sinks_At   => C.unsigned (This.Sinks));
+                        Sinks_At   => C.unsigned (This.Sinks),
+
+                        --  A cache in pages, from the step's own fields,
+                        --  which Add_Attention carries as it does for the
+                        --  exact kernels. Zero shift is a cache in blocks.
+                        Pages_At       => C.unsigned (This.Pages_At),
+                        Page_Shift     => C.unsigned (This.Page_Shift),
+                        First_Position => C.unsigned (This.First_Position));
 
                      Slices : constant Natural :=
                        (if Barrier = null then 1

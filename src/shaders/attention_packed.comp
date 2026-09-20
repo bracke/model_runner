@@ -149,6 +149,18 @@ layout(push_constant, std430) uniform Shape {
     //  joins the softmax's denominator and takes no value. Where the
     //  heads' sinks begin in the cache, in floats, or zero for none.
     uint sinks_at;
+
+    //  A cache in pages: where this batch's page table for the layer
+    //  begins, a word a page of page_shift's power of two positions, so a
+    //  cached position's page is read out of it and k_bytes, v_bytes,
+    //  ks_at and vs_at are a region's offset inside a page. A round's rows
+    //  read their own page table, where a block's base was in the per-row
+    //  table. Zero for page_shift is a cache in blocks. first_position is
+    //  unread here: the positions this attends are the session's own,
+    //  numbered from nought, and a position is its own page's index.
+    uint pages_at;
+    uint page_shift;
+    uint first_position;
 } shape;
 
 //  The widest query head this takes, and the widest value head: four
@@ -304,6 +316,21 @@ uint row_bytes (uint bits, uint width) {
     return bits == 8u ? width : (width + 1u) / 2u;
 }
 
+//  A cached position's page, in words of the buffer: the workgroup's one
+//  block for a cache in blocks -- nothing for a batch, the member's for a
+//  round -- and the position's own page out of the table for a cache in
+//  pages. blk is the block for a block cache, tbl the page table for a page.
+uint page_base (uint pos, uint blk, uint tbl) {
+    return shape.page_shift == 0u ? blk : kvw[tbl + (pos >> shape.page_shift)];
+}
+
+//  Its place inside that: the position for a block, its low bits for a page.
+uint page_at (uint pos) {
+    return shape.page_shift == 0u
+         ? pos
+         : (pos & ((1u << shape.page_shift) - 1u));
+}
+
 //  The head's rung of the slope ladder, as attention.comp has it.
 float slope_of (uint head) {
     if (shape.max_bias <= 0.0) {
@@ -398,12 +425,16 @@ void main () {
     uint k_off = group * shape.head_size;
     uint v_off = group * shape.value_size;
 
-    //  Where this row's block begins: nothing for a batch, the row's own
-    //  for a round, in bytes for the rows and in floats for the scales.
-    uint k_bytes = shape.k_bytes + block * 4u;
-    uint v_bytes = shape.v_bytes + block * 4u;
-    uint ks_at = shape.ks_at + block;
-    uint vs_at = shape.vs_at + block;
+    //  Where a cached position's keys and values sit is worked out a
+    //  position at a time below, because a paged position's page does not
+    //  follow from the one before: page_base gives a position's page in
+    //  words -- the workgroup's one block where the cache is in blocks --
+    //  and the region offsets k_bytes, v_bytes, ks_at and vs_at are past
+    //  it. A batch reads its page table where pages_at says, a round its
+    //  own where a block's base was.
+    uint page_table = shape.table_at != 0u
+                    ? kvw[shape.table_at + slot0 * 2u + 1u]
+                    : shape.pages_at;
 
     //  The value components this lane owns: one, two or four in a run,
     //  which is one word's worth of bytes at most and never straddles a
@@ -449,8 +480,10 @@ void main () {
             //  read a word of the row at a time and dotted into each
             //  row's query, then scaled, sloped and bounded -- and
             //  nothing for a row that may not see this position.
-            uint row_at = k_bytes + pos * k_row;
-            uint scale_at = ks_at + pos * shape.k_blocks;
+            uint pb = page_base (pos, block, page_table);
+            uint pp = page_at (pos);
+            uint row_at = shape.k_bytes + pb * 4u + pp * k_row;
+            uint scale_at = shape.ks_at + pb + pp * shape.k_blocks;
             float row_scale = kvf[scale_at];
             float acc[ROWS];
             for (uint r = 0u; r < ROWS; r++) {
@@ -531,9 +564,11 @@ void main () {
 
             for (uint t = 0u; t < count; t++) {
                 uint p = base + t;
-                uint row_at = v_bytes + p * v_row;
+                uint pb = page_base (p, block, page_table);
+                uint pp = page_at (p);
+                uint row_at = shape.v_bytes + pb * 4u + pp * v_row;
                 vec4 held = four_of (shape.v_bits, row_at, e4);
-                float sc = kvf[vs_at + p * shape.v_blocks
+                float sc = kvf[shape.vs_at + pb + pp * shape.v_blocks
                                + scale_of (shape.v_bits, e0)];
                 held *= sc;
 
