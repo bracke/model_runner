@@ -5683,6 +5683,43 @@ package body Model_Runner.Llama is
                    Halves));
    end Packed_Layout;
 
+   --  How a packed session's page is laid out, in words of four bytes from
+   --  the page's base -- the region-major page the paged packed kernels
+   --  read. It is Packed_Layout at one page's worth of positions rather
+   --  than the whole block, and it holds no half-precision copy: the copy
+   --  a packed session unpacks into is the block's front, nobody's while
+   --  the block is packed, and a page keeps only its four regions -- the
+   --  keys' bytes, the values' bytes, the key scales and the value scales,
+   --  each a whole number of words along, a position's row at its place
+   --  inside the region. The keys and the values may hold different
+   --  storages, so each region is sized by its own.
+   function Packed_Page_Layout (Item : Session) return Packed_Block is
+      KV_Width : constant Element_Count :=
+        Element_Count (Item.Owner.Settings.KV_Heads
+                       * Item.Owner.Settings.Head_Size);
+      V_Width  : constant Element_Count :=
+        Element_Count (Item.Owner.Settings.KV_Heads
+                       * Item.Owner.Settings.Value_Size);
+      Rows : constant Element_Count := Element_Count (Page_Positions);
+
+      Key_Words : constant Element_Count :=
+        (Rows * Element_Count (Row_Bytes (Item.Held, KV_Width)) + 3) / 4;
+      Value_Words : constant Element_Count :=
+        (Rows * Element_Count (Row_Bytes (Item.Held_Values, V_Width)) + 3) / 4;
+      Key_Scales : constant Element_Count :=
+        Rows * Blocks_Of (Item.Held, KV_Width);
+      Value_Scales : constant Element_Count :=
+        Rows * Blocks_Of (Item.Held_Values, V_Width);
+   begin
+      return (Key_Words       => Key_Words,
+              Value_Words     => Value_Words,
+              Values_At       => Key_Words,
+              Key_Scales_At   => Key_Words + Value_Words,
+              Value_Scales_At => Key_Words + Value_Words + Key_Scales,
+              Span            =>
+                Key_Words + Value_Words + Key_Scales + Value_Scales);
+   end Packed_Page_Layout;
+
    --  How wide a session's block is, in elements: the exact cache's keys
    --  and values, or the packed cache's words.
    function Block_Span_Of (Item : Session) return Element_Count
@@ -6678,8 +6715,14 @@ package body Model_Runner.Llama is
       --  the pool serves one geometry at a time, as it serves one kind.
       --  Where none are held the size is the new session's.
       declare
+         --  A page holds a position's keys and values -- in full for an
+         --  exact session, or its four packed regions for a packed one,
+         --  which is a smaller page again. The pool serves one of these at
+         --  a time, so a page that is not the held size is refused.
          Want : constant Element_Count :=
-           Element_Count (Page_Positions) * Page_Row (Item.all);
+           (if Item.Held in Eighth | Fourth
+            then Packed_Page_Layout (Item.all).Span
+            else Element_Count (Page_Positions) * Page_Row (Item.all));
       begin
          if not Item.Paged_In
            and then Pages_In_Use > 0
