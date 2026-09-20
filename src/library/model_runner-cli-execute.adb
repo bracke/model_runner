@@ -4715,6 +4715,14 @@ package body Model_Runner.CLI.Execute is
                       "bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M", 270_000_000);
       Add_Suggestion ("Qwen2.5-0.5B-Instruct", "0.5 GB",
                       "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", 500_000_000);
+      --  A small agentic tool-use model that reasons in a think block. It
+      --  is a MiniCPM exported as llama with its scaling folded in, so it
+      --  runs on the llama path; two Q4_K_M files carry the quant, so the
+      --  reference names the Nemotron-DPO one exactly.
+      Add_Suggestion
+        ("MiniCPM5-1B-Tooluse", "0.7 GB",
+         "ewin-reg/MiniCPM5-1B-Agentic-Tooluse-GGUF:Nemotron-DPO.Q4_K_M",
+         688_066_560);
       Add_Suggestion ("Llama-3.2-1B-Instruct", "0.8 GB",
                       "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", 807_694_464);
       Add_Suggestion ("Qwen2.5-1.5B-Instruct", "1.1 GB",
