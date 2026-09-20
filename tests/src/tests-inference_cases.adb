@@ -5300,6 +5300,106 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Round_Of_Paged_Members_Says_What_Each_Says;
 
+   ------------------------------------------------------------
+   -- A_Paged_Window_Says_What_A_Block_Window_Says --
+   ------------------------------------------------------------
+
+   --  Paging holds for a sliding-window layer too. Such a layer keeps only
+   --  the window's worth of positions, so its cells ring: as the window
+   --  slides, a cell is rewritten for a new position and its page reused,
+   --  where a layer that keeps everything only ever takes another. A paged
+   --  session on a windowed model must still say, bit for bit, what a block
+   --  session says -- past far more positions than the window holds, so the
+   --  cells ring many times over.
+   procedure A_Paged_Window_Says_What_A_Block_Window_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Steps : constant := 130;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      --  A sliding window of three, so a cell is reused every few
+      --  positions and paging is put through the ring many times.
+      Tiny_Model.Build (Image, Room => Room, Window => 3);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Blocked, Paged : L.Session;
+
+            Said : Trail := [others => [others => 0.0]];
+            LP   : Logit_Vector;
+
+            Worst : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               L.Open (Blocked, Under.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the block window did not open");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Blocked, Under.Ready, Token_Of (Step),
+                              Said (Step), Status => Status);
+                  Assert (E.Is_Ok (Status), "the block window failed");
+               end loop;
+
+               L.Close (Blocked);
+
+               L.Open (Paged, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the paged window did not open");
+
+               for Step in 1 .. Steps loop
+                  L.Evaluate (Paged, Under.Ready, Token_Of (Step), LP,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status), "the paged window failed at"
+                          & Integer'Image (Step) & ": "
+                          & E.Error_Code'Image (Status.Code));
+
+                  for Index in Logit_Vector'Range loop
+                     Worst :=
+                       N.Real'Max (Worst, abs (Said (Step) (Index) - LP (Index)));
+                  end loop;
+               end loop;
+
+               Assert (L.Holds_Pages (Paged),
+                       "the paged window did not reach the device in pages");
+
+               Assert (Worst = 0.0,
+                       "a paged session on a windowed model says"
+                       & N.Real'Image (Worst)
+                       & " away from the same session in a block, past a"
+                       & " window that slid many times");
+
+               L.Close (Paged);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Window_Says_What_A_Block_Window_Says;
+
    --------------------------------------------------------------
    -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
    --------------------------------------------------------------
@@ -14289,6 +14389,11 @@ package body Tests.Inference_Cases is
          "a round whose members are paged gives each member, past a page "
          & "and at four lengths, what it gets paged alone, each row reading "
          & "its own session's pages out of the per-row table");
+      Register_Routine
+        (T, A_Paged_Window_Says_What_A_Block_Window_Says'Access,
+         "a paged session on a sliding-window model, whose cells ring as "
+         & "the window slides and whose pages are reused, says bit for bit "
+         & "what a block session says");
       Register_Routine
         (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
          "a hybrid round whose members sit at different positions gives "
