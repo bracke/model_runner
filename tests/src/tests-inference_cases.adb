@@ -5783,6 +5783,170 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Round_Of_Paged_Members_Says_What_Each_Says;
 
+   ------------------------------------------------------------------
+   -- A_Round_Of_Packed_Paged_Members_Says_What_Each_Says --
+   ------------------------------------------------------------------
+
+   --  The round, packed: members kept packed and dealt in pages, each where
+   --  its own prompt left it, against the same sequence packed and paged
+   --  alone. What it exercises past the packed batch is the packed kernels'
+   --  read of a round's per-row page table -- each row its own session's
+   --  pages -- with the cache in bytes.
+   procedure A_Round_Of_Packed_Paged_Members_Says_What_Each_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Members : constant := 4;
+      Steps   : constant := 2;
+      Room    : constant := 200;
+
+      function Prompt_Of (Member : Positive) return Positive
+      is (25 * Member);
+
+      function Token_Of (Member, Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Member * 5 + Place * 3) mod 12));
+
+      type Trail is array (1 .. Steps) of Logit_Vector;
+      type Trails is array (1 .. Members) of Trail;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+            Status : E.Error_Info;
+            Alone : Trails := [others => [others => [others => 0.0]]];
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               for Member in 1 .. Members loop
+                  declare
+                     Live    : L.Session;
+                     Ignored : Logit_Vector;
+                  begin
+                     L.Open (Live, Under.Ready, Context => Room,
+                             Cache => L.Eighth, Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "a lone packed paged member did not open");
+
+                     for Place in 1 .. Prompt_Of (Member) loop
+                        L.Evaluate (Live, Under.Ready,
+                                    Token_Of (Member, Place), Ignored,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "a lone packed paged prompt failed");
+                     end loop;
+
+                     for Step in 1 .. Steps loop
+                        L.Evaluate (Live, Under.Ready,
+                                    Token_Of (Member, Prompt_Of (Member) + Step),
+                                    Alone (Member) (Step), Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "a lone packed paged step failed");
+                     end loop;
+
+                     L.Close (Live);
+                  end;
+               end loop;
+
+               declare
+                  Live : array (1 .. Members) of aliased L.Session;
+                  Group : L.Session_Group (1 .. Members);
+                  Said  : Vocab.Token_Array (1 .. Members);
+                  Rows : Model_Runner.Tensors.Real_Array_Access := null;
+                  Worst : N.Real := 0.0;
+               begin
+                  for Member in 1 .. Members loop
+                     declare
+                        Ignored : Logit_Vector;
+                     begin
+                        L.Open (Live (Member), Under.Ready, Context => Room,
+                                Cache => L.Eighth, Paged => True,
+                                Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "a packed paged member did not open");
+                        Group (Member) := Live (Member)'Unchecked_Access;
+
+                        for Place in 1 .. Prompt_Of (Member) loop
+                           L.Evaluate (Live (Member), Under.Ready,
+                                       Token_Of (Member, Place), Ignored,
+                                       Status => Status);
+                           Assert (E.Is_Ok (Status),
+                                   "a packed paged member's prompt failed");
+                        end loop;
+
+                        Assert (L.Holds_Pages (Live (Member)),
+                                "a packed paged member holds no pages");
+                     end;
+                  end loop;
+
+                  Model_Runner.Tensors.Allocate
+                    (N.Element_Count (Members)
+                     * N.Element_Count (Tiny_Model.Vocabulary), Rows);
+                  Assert (Rows /= null,
+                          "the packed paged round had no room for logits");
+
+                  for Step in 1 .. Steps loop
+                     for Member in 1 .. Members loop
+                        Said (Member) :=
+                          Token_Of (Member, Prompt_Of (Member) + Step);
+                     end loop;
+
+                     L.Evaluate_Round
+                       (Members => Group, Source => Under.Ready,
+                        Tokens  => Said, Logits => Rows, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "a round of packed paged members failed at step"
+                             & Integer'Image (Step) & ": "
+                             & E.Error_Code'Image (Status.Code));
+
+                     for Member in 1 .. Members loop
+                        declare
+                           Base : constant N.Element_Count :=
+                             N.Element_Count (Member - 1)
+                             * N.Element_Count (Tiny_Model.Vocabulary);
+                        begin
+                           for Index in Logit_Vector'Range loop
+                              Worst :=
+                                N.Real'Max
+                                  (Worst,
+                                   abs (Rows.all (Rows.all'First + Base + Index)
+                                        - Alone (Member) (Step) (Index)));
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+
+                  Assert (Worst <= 1.0E-3,
+                          "a member of a round of packed paged members says"
+                          & N.Real'Image (Worst)
+                          & " away from the same sequence packed and paged"
+                          & " alone, past a page and at four lengths");
+
+                  Model_Runner.Tensors.Free (Rows);
+                  for Member in 1 .. Members loop
+                     L.Close (Live (Member));
+                  end loop;
+               end;
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Round_Of_Packed_Paged_Members_Says_What_Each_Says;
+
    ------------------------------------------------------------
    -- A_Paged_Window_Says_What_A_Block_Window_Says --
    ------------------------------------------------------------
@@ -14892,6 +15056,11 @@ package body Tests.Inference_Cases is
          "a round whose members are paged gives each member, past a page "
          & "and at four lengths, what it gets paged alone, each row reading "
          & "its own session's pages out of the per-row table");
+      Register_Routine
+        (T, A_Round_Of_Packed_Paged_Members_Says_What_Each_Says'Access,
+         "a round whose members are packed and paged gives each member what "
+         & "it gets packed and paged alone, each row reading its own "
+         & "session's packed pages out of the per-row table");
       Register_Routine
         (T, A_Paged_Window_Says_What_A_Block_Window_Says'Access,
          "a paged session on a sliding-window model, whose cells ring as "
