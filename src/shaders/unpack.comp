@@ -56,6 +56,16 @@ layout(push_constant) uniform Shape {
 
     //  Where the first position's halves go, in halves of the buffer.
     uint half_at;
+
+    //  A cache in pages: where the layer's page table begins and the
+    //  page's shift, and which position of the session the first row is --
+    //  a position's packed keys or values are read out of its page, while
+    //  the halves still go to the copy one after another, which is the
+    //  gather. at_byte and at_scale are then a region's offset inside a
+    //  page. Zero for page_shift is a cache in blocks.
+    uint pages_at;
+    uint page_shift;
+    uint first_position;
 } shape;
 
 void main() {
@@ -66,8 +76,19 @@ void main() {
         return;
     }
 
-    uint row_at = shape.at_byte + slot * shape.row_bytes;
-    uint scale_at = shape.at_scale + slot * shape.blocks;
+    //  Where this position's packed row and scales are read: for a cache
+    //  in blocks the row after the first, and for a cache in pages the
+    //  position's page out of the table and the place inside it. The page
+    //  base is in words, four bytes a word for the rows and a word a float
+    //  for the scales. The halves go one after another either way.
+    uint pos = shape.first_position + slot;
+    uint base = shape.page_shift == 0u
+              ? 0u : kvw[shape.pages_at + (pos >> shape.page_shift)];
+    uint place = shape.page_shift == 0u
+               ? slot
+               : (pos & ((1u << shape.page_shift) - 1u));
+    uint row_at = shape.at_byte + base * 4u + place * shape.row_bytes;
+    uint scale_at = shape.at_scale + base + place * shape.blocks;
     uint into = shape.half_at + slot * shape.width;
 
     if (shape.bits == 8u) {
