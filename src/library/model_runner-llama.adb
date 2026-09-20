@@ -6492,7 +6492,59 @@ package body Model_Runner.Llama is
           * (Item.Owner.Settings.Head_Size
              + Item.Owner.Settings.Value_Size)));
 
-   --  Give every page a session holds back, its host copy settled first.
+   --  Give every page a session holds back to the pool: its slots freed,
+   --  the count of pages in use brought down, and where the buffer has been
+   --  dealt recomputed to the pages that are left. Not cleared: a slot
+   --  taken again is written over. What a session closing and a session
+   --  turned out both do, so that the pool's count -- Page_Owner,
+   --  Pages_In_Use, Pages_Taken kept in step -- is dealt with in one place
+   --  and cannot drift between the two.
+   procedure Release_Session_Pages (Item : Session_Access) is
+   begin
+      if Item.Page_Count = null or else Page_Elements = 0 then
+         return;
+      end if;
+
+      --  Only the pages the session was dealt, which its Page_Count says a
+      --  layer at a time -- not every entry of Pages, most of which a
+      --  session that filled a fraction of its context never took.
+      for Layer in Item.Page_Count.all'Range loop
+         for Page in 0 .. Natural (Item.Page_Count.all (Layer)) - 1 loop
+            declare
+               Slot : constant Natural :=
+                 Natural
+                   (Item.Pages.all
+                      (Natural (Item.Page_First.all (Layer)) + Page)
+                    / Page_Elements);
+            begin
+               if Slot in Page_Owner'Range
+                 and then Page_Owner (Slot) = Item
+               then
+                  Page_Owner (Slot) := null;
+                  if Pages_In_Use > 0 then
+                     Pages_In_Use := Pages_In_Use - 1;
+                  end if;
+               end if;
+            end;
+         end loop;
+      end loop;
+
+      Item.Page_Count.all := [others => 0];
+      Item.Paged_In := False;
+      Item.Paged_Upto := 0;
+
+      Pages_Taken := 0;
+      for Slot in Page_Owner'Range loop
+         if Page_Owner (Slot) /= null then
+            Pages_Taken :=
+              Element_Count'Max
+                (Pages_Taken, Element_Count (Slot + 1) * Page_Elements);
+         end if;
+      end loop;
+   end Release_Session_Pages;
+
+   --  Turn a paged session out: its host copy settled, then its pages
+   --  given back.
    --
    --  What turning a paged session out costs: its scattered pages read into
    --  the host's copy -- which, the session mirroring, is already there --
@@ -6510,42 +6562,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Victim.Page_Count /= null and then Page_Elements > 0 then
-         for Layer in Victim.Page_Count.all'Range loop
-            for Page in 0 .. Natural (Victim.Page_Count.all (Layer)) - 1 loop
-               declare
-                  Slot : constant Natural :=
-                    Natural
-                      (Victim.Pages.all
-                         (Natural (Victim.Page_First.all (Layer)) + Page)
-                       / Page_Elements);
-               begin
-                  if Slot in Page_Owner'Range
-                    and then Page_Owner (Slot) = Victim
-                  then
-                     Page_Owner (Slot) := null;
-                     if Pages_In_Use > 0 then
-                        Pages_In_Use := Pages_In_Use - 1;
-                     end if;
-                  end if;
-               end;
-            end loop;
-         end loop;
-
-         Victim.Page_Count.all := [others => 0];
-      end if;
-
-      Victim.Paged_In := False;
-
-      --  Where the buffer has been dealt, brought down to the pages left.
-      Pages_Taken := 0;
-      for Slot in Page_Owner'Range loop
-         if Page_Owner (Slot) /= null then
-            Pages_Taken :=
-              Element_Count'Max
-                (Pages_Taken, Element_Count (Slot + 1) * Page_Elements);
-         end if;
-      end loop;
+      Release_Session_Pages (Victim);
 
       Pages_Turned_Count := Pages_Turned_Count + 1;
       Ok := True;
@@ -6618,14 +6635,15 @@ package body Model_Runner.Llama is
    --  every slot held. What was committed before -- a session evicted and
    --  come back -- is written into the pages it is given again.
    procedure Take_Pages
-     (Item : Session_Access; Upto : Element_Count; Ok : out Boolean)
+     (Item         : Session_Access;
+      Upto         : Element_Count;
+      Ok           : out Boolean;
+      Write_Tables : Boolean := True)
    is
       use type Model_Runner.Backend.Backend_Kind;
 
       KV_Width : Element_Count;
       V_Width  : Element_Count;
-
-      Grew : Boolean := False;
    begin
       Ok := False;
 
@@ -6685,6 +6703,16 @@ package body Model_Runner.Llama is
       end if;
       Item.Asked_At := Block_Clock;
 
+      --  Already reaching this position, which every layer's ask but the
+      --  first of a token does: the pages are all dealt, so there is no
+      --  layer to walk, no reserve to grow and nothing to write. Stamped
+      --  above still, so a page turned out elsewhere is the one nobody has
+      --  read for longest.
+      if Item.Paged_In and then Upto <= Element_Count (Item.Paged_Upto) then
+         Ok := True;
+         return;
+      end if;
+
       --  Each layer up to the page its highest new position reaches. A
       --  page is a slot at the front the buffer has not dealt, and taking
       --  it may grow how far the buffer is dealt and so the reserve.
@@ -6738,18 +6766,92 @@ package body Model_Runner.Llama is
                        Element_Count'Max
                          (Pages_Taken,
                           Element_Count (Slot + 1) * Page_Elements);
-                     Grew := True;
                   end;
                end loop;
             end;
          end if;
       end loop;
 
-      --  Room for every page dealt, the per-layer table a paged attention
-      --  reads past them -- the widest a layer holds, written a layer at a
-      --  time -- and a layer's sinks past that. Grown only where a page was
-      --  taken, since a reserve that only grows costs nothing to skip.
-      if Grew or else not Item.Paged_In then
+      --  Room for every page dealt, the per-layer page tables past them --
+      --  a table a layer, its pages and the over-read's padding -- and a
+      --  layer's sinks past that; and the tables laid out and written, all
+      --  at once. A table a layer at its own place, read by that layer's
+      --  whole layer, rather than one table rewritten a layer: the write is
+      --  once a token where the pages grow and not once a layer. Where the
+      --  buffer's front has moved under another session the tables move
+      --  with it, so their places are worked out afresh here each time.
+      --
+      --  A round's members do not write their tables here: the next member
+      --  takes a page where this one's table sat, so a round lays them out
+      --  once its members are all seated, past its per-row table, and gives
+      --  only the room for the write back to a member come again.
+      if Write_Tables then
+         declare
+            Where : Element_Count := Pages_Taken;
+            Words : Natural := 0;
+         begin
+            for Layer in Item.Page_Count.all'Range loop
+               Item.Page_Table_At.all (Layer) := Where;
+               if not Linear (Item.Owner.Settings, Layer) then
+                  declare
+                     Count : constant Natural :=
+                       Natural (Item.Page_Count.all (Layer)) + Page_Table_Pad;
+                  begin
+                     Where := Where + Element_Count (Count);
+                     Words := Words + Count;
+                  end;
+               end if;
+            end loop;
+
+            Model_Runner.Backend.Device.Reserve_Cache
+              (Pages_Taken + Element_Count (Words)
+               + Element_Count (Model_Runner.Backend.Device.Sink_Room),
+               Copy_Upto => Pages_Taken, Ok => Ok);
+            if not Ok then
+               return;
+            end if;
+
+            declare
+               Table : Model_Runner.Backend.Device.Word_List
+                         (1 .. Natural'Max (Words, 1));
+            begin
+               for Layer in Item.Page_Count.all'Range loop
+                  if not Linear (Item.Owner.Settings, Layer) then
+                     declare
+                        First : constant Element_Count :=
+                          Item.Page_First.all (Layer);
+                        Held  : constant Element_Count :=
+                          Item.Page_Count.all (Layer);
+                        Off   : constant Natural :=
+                          Natural
+                            (Item.Page_Table_At.all (Layer) - Pages_Taken);
+                     begin
+                        --  The layer's pages, and the padding a masked
+                        --  over-read reads, each pointing at a real page.
+                        for Page in 0 .. Natural (Held) + Page_Table_Pad - 1
+                        loop
+                           Table (Off + Page + 1) :=
+                             Natural
+                               (Item.Pages.all
+                                  (Natural
+                                     (First
+                                      + Element_Count'Min
+                                          (Element_Count (Page),
+                                           Element_Count'Max (Held, 1) - 1))));
+                        end loop;
+                     end;
+                  end if;
+               end loop;
+
+               Model_Runner.Backend.Device.Put_Table (Pages_Taken, Table, Ok);
+               if not Ok then
+                  return;
+               end if;
+            end;
+         end;
+      else
+         --  A round member: room for its pages and the widest layer's
+         --  table the round will write past them, and the sinks.
          declare
             Widest : Element_Count := 0;
          begin
@@ -6796,44 +6898,9 @@ package body Model_Runner.Llama is
       end if;
 
       Item.Paged_In := True;
+      Item.Paged_Upto := Natural (Upto);
       Ok := True;
    end Take_Pages;
-
-   --  Where a layer's page table sits in the cache, in elements, and its
-   --  bases written there: a word a page, the element that page begins at,
-   --  read back by the kernels with floatBitsToUint. Past every page the
-   --  cache holds; rewritten each layer, which costs a few words.
-   function Paged_Layer_Table
-     (Item : Session; Layer : Natural; Ok : out Boolean)
-      return Element_Count
-   is
-      First : constant Element_Count := Item.Page_First.all (Layer);
-
-      --  As many pages as the layer has been dealt, which is as many as its
-      --  filled cells reach and not its whole context.
-      Count : constant Element_Count := Item.Page_Count.all (Layer);
-
-      --  The layer's pages, and the padding past them: a masked over-read
-      --  a chunk past the last position indexes here, so the extras point
-      --  at a real page rather than off the end of the table.
-      Table : Model_Runner.Backend.Device.Word_List
-                (1 .. Natural'Max (Natural (Count), 1) + Page_Table_Pad);
-   begin
-      for Page in Table'Range loop
-         Table (Page) :=
-           Natural
-             (Item.Pages.all
-                (Natural
-                   (First
-                    + Element_Count'Min
-                        (Element_Count (Page - 1),
-                         Element_Count'Max (Count, 1) - 1))));
-      end loop;
-
-      Model_Runner.Backend.Device.Put_Table (Pages_Taken, Table, Ok);
-      return Pages_Taken;
-   end Paged_Layer_Table;
-
 
    --  Where a page's values begin inside it: after its positions' keys.
    function Page_Value_Base (Item : Session) return Element_Count
@@ -11755,6 +11822,9 @@ package body Model_Runner.Llama is
             Item.Page_Count :=
               new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
             Item.Page_Count.all := [others => 0];
+            Item.Page_Table_At :=
+              new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
+            Item.Page_Table_At.all := [others => 0];
 
             declare
                Total : Element_Count := 0;
@@ -12075,41 +12145,7 @@ package body Model_Runner.Llama is
       --  taken again is written over or holds nothing committed.
       if Item.Paged_In and then Item.Pages /= null and then Page_Elements > 0
       then
-         --  Only the pages the session was dealt, which its Page_Count says
-         --  a layer at a time -- not every entry of Pages, most of which a
-         --  session that filled a fraction of its context never took.
-         for Layer in Item.Page_Count.all'Range loop
-            for Page in 0 .. Natural (Item.Page_Count.all (Layer)) - 1 loop
-               declare
-                  Slot : constant Natural :=
-                    Natural
-                      (Item.Pages.all (Natural (Item.Page_First.all (Layer))
-                                       + Page)
-                       / Page_Elements);
-               begin
-                  if Slot in Page_Owner'Range
-                    and then Page_Owner (Slot) = Item'Unchecked_Access
-                  then
-                     Page_Owner (Slot) := null;
-                     if Pages_In_Use > 0 then
-                        Pages_In_Use := Pages_In_Use - 1;
-                     end if;
-                  end if;
-               end;
-            end loop;
-         end loop;
-
-         Item.Paged_In := False;
-         Item.Page_Count.all := [others => 0];
-
-         Pages_Taken := 0;
-         for Slot in Page_Owner'Range loop
-            if Page_Owner (Slot) /= null then
-               Pages_Taken :=
-                 Element_Count'Max
-                   (Pages_Taken, Element_Count (Slot + 1) * Page_Elements);
-            end if;
-         end loop;
+         Release_Session_Pages (Item'Unchecked_Access);
 
          if (for all Owner of Page_Owner => Owner = null)
            and then (for all Holder of Block_Holder => Holder = null)
@@ -12171,6 +12207,7 @@ package body Model_Runner.Llama is
       Free_Cells (Item.Pages);
       Free_Cells (Item.Page_First);
       Free_Cells (Item.Page_Count);
+      Free_Cells (Item.Page_Table_At);
       Item.Paged := False;
       Item.Paged_In := False;
 
@@ -14429,17 +14466,12 @@ package body Model_Runner.Llama is
                   if Item.Paged then
                      --  Up to the one position this token writes: it needs
                      --  the pages its own cell reaches and no more, and its
-                     --  page table for the layer written where the sequence
-                     --  reads it.
+                     --  page tables written where the sequence reads them,
+                     --  which Take_Pages does for every layer at once.
                      Take_Pages (Item'Unchecked_Access, Reserved, Resident);
                      if Resident then
-                        declare
-                           Wrote : Boolean;
-                        begin
-                           Paged_Table_At :=
-                             Paged_Layer_Table (Item, Natural (Index), Wrote);
-                           Resident := Wrote;
-                        end;
+                        Paged_Table_At :=
+                          Item.Page_Table_At.all (Natural (Index));
                      end if;
                   else
                      Take_Block (Item'Unchecked_Access, Resident);
@@ -16012,7 +16044,8 @@ package body Model_Runner.Llama is
                declare
                   Took : Boolean;
                begin
-                  Take_Pages (Held_By (Which), Sits_At (Which), Took);
+                  Take_Pages (Held_By (Which), Sits_At (Which), Took,
+                              Write_Tables => False);
                   Seated := Seated and Took;
                end;
             end loop;
@@ -16800,22 +16833,20 @@ package body Model_Runner.Llama is
                   --  once.
                   if Item.Paged then
                      --  Up to the last position of the batch, which is the
-                     --  furthest cell any row of it reaches.
+                     --  furthest cell any row of it reaches. A round wrote
+                     --  its tables when it seated its members, past the
+                     --  per-row table, so this does not write them again --
+                     --  the member here is only the round's first.
                      Take_Pages
-                       (Item'Unchecked_Access, Reserved + Count - 1, Resident);
+                       (Item'Unchecked_Access, Reserved + Count - 1, Resident,
+                        Write_Tables => not Rounding);
 
-                     --  A single session's batch reads its own page table;
-                     --  a round reads the per-row table it was given. Where
-                     --  the write could not finish the layer goes to the
-                     --  host rather than read a table that is not there.
+                     --  A single session's batch reads its own page table,
+                     --  which Take_Pages wrote for every layer; a round reads
+                     --  the per-row table it was given.
                      if Resident and then not Rounding then
-                        declare
-                           Wrote : Boolean;
-                        begin
-                           Paged_Table_At :=
-                             Paged_Layer_Table (Item, Natural (Index), Wrote);
-                           Resident := Wrote;
-                        end;
+                        Paged_Table_At :=
+                          Item.Page_Table_At.all (Natural (Index));
                      end if;
 
                      No_Block := not Resident;

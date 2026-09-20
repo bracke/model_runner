@@ -1266,14 +1266,6 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Stride How far apart positions' values are.
    --  @param Kept False when nothing on the host reads the answer, which
    --    for keys placed in the cache is always.
-   --  @param Pages_At A cache in pages: where the batch's page table for
-   --    this layer begins, in elements. At_First and V_At_First are then
-   --    offsets inside a page. Zero with Page_Shift for a cache in
-   --    blocks.
-   --  @param Page_Shift The page's width in positions, as a shift; zero
-   --    for a cache in blocks.
-   --  @param First_Position Which position of its session the batch's
-   --    first row is, for a cache in pages.
    procedure Add_Heads
      (Steps       : in out Sequence;
       From_Step   : Positive;
@@ -1295,10 +1287,7 @@ package Model_Runner.Platform.Device.Products is
       V_Step      : Natural := 0;
       V_At_First  : Natural := 0;
       V_Stride    : Natural := 0;
-      Kept        : Boolean := True;
-      Pages_At       : Natural := 0;
-      Page_Shift     : Natural := 0;
-      First_Position : Natural := 0);
+      Kept        : Boolean := True);
 
    --  Name a write into the device's cache for a sequence to perform.
    --

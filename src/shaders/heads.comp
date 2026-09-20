@@ -33,14 +33,6 @@ layout(local_size_x = LANES) in;
 layout(std430, binding = 0) readonly  buffer Weight { float  g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float  x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float  y[]; };
-
-//  The cache again, read-only, at a binding of its own: where this step
-//  places into a cache in pages, it reads the page table out of the cache
-//  it writes. Declaring the one buffer both ways at binding 2 -- writeonly
-//  and readonly -- made a driver drop the writes, so the readable view is
-//  bound separately, at binding 3, which this step does not otherwise use.
-//  The engine points binding 3 at the cache for a placing head step.
-layout(std430, binding = 3) readonly  buffer Kept   { float  kept[]; };
 //  The cache's half-precision copy, which has a buffer of its own so
 //  that neither it nor the cache proper is past what one storage buffer
 //  may hold. Written where this step places into the cache and left
@@ -87,29 +79,14 @@ layout(push_constant) uniform Shape {
     uint v_width;
     uint v_into;
     uint v_stride;
-
-    //  A cache in pages rather than in blocks, as place.comp has it:
-    //  where this batch's page table for the layer begins, a word a page
-    //  of page_shift's power of two positions, which position of its
-    //  session the batch's first row is, and into and v_into then
-    //  offsets inside a page. Zero for page_shift is a cache in blocks,
-    //  and a dispatch over the queries, which places nothing.
-    uint pages_at;
-    uint page_shift;
-    uint first_position;
 } shape;
 
-//  Where a placed row begins: the first row's place and one stride a
-//  row after it, or its position's page and its place inside that.
+//  Where a placed row begins: the first row's place and one stride a row
+//  after it. This step places for a cache in blocks only -- a paged
+//  session places with place.comp, whose read of the page table out of the
+//  cache it writes this step is not the one to make.
 uint placed_at (uint pos, uint offset, uint stride) {
-    if (shape.page_shift == 0u) {
-        return offset + pos * stride;
-    }
-
-    uint at = shape.first_position + pos;
-
-    return floatBitsToUint (kept[shape.pages_at + (at >> shape.page_shift)])
-           + offset + (at & ((1u << shape.page_shift) - 1u)) * stride;
+    return offset + pos * stride;
 }
 
 shared float row[LANES];

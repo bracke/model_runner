@@ -2302,6 +2302,18 @@ private
       Page_First : Cell_Counts_Access := null;
       Page_Count : Cell_Counts_Access := null;
 
+      --  Where each layer's page table was written in the cache, in
+      --  elements: the kernels read a position's page out of it. All of
+      --  them are written together when the pages grow, a table a layer at
+      --  its own place, rather than one rewritten a layer.
+      Page_Table_At : Cell_Counts_Access := null;
+
+      --  The highest position the session's pages already reach. Take_Pages
+      --  is asked once a layer, all with the one position, so it walks the
+      --  layers to grow them only where that position is past this; below
+      --  it the pages are all there and it has nothing to do.
+      Paged_Upto : Natural := 0;
+
       --  When this session last asked for a block of that cache, and when
       --  it last asked for a seat in the room of rings, on the clock that
       --  counts asks. Set where the session is opened, so that a session
