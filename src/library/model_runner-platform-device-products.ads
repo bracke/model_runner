@@ -1319,10 +1319,6 @@ package Model_Runner.Platform.Device.Products is
    --    hold together, or when the engine holds no cache.
    --  @param From_Step Which step's result to write, or zero for the step
    --    before this one.
-   --  @param Table_At A round: where in the cache its per-row table
-   --    begins, in elements. Each row then goes into its own member's block
-   --    at its own position, and At_First is the layer's offset alone. Zero
-   --    for a batch, whose rows go one stride apart from the first.
    --  @param Packed How the rows are packed, for a packed session's block:
    --    the step then rounds each row to bytes or nibbles and a scale as
    --    the host rounds it, through pack.comp, and At_First and Stride go
@@ -1355,7 +1351,6 @@ package Model_Runner.Platform.Device.Products is
       At_First  : Natural;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Table_At  : Natural := 0;
       Packed    : Packing_Shape := Not_Packing;
       Unpack    : Boolean := False;
       Cells     : Natural := 0;
@@ -1463,12 +1458,6 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads this step's answer,
    --    which saves Run the copy back and leaves it where the step after it
    --    will read it.
-   --  @param Table_At Where in the cache a round's per-row table begins,
-   --    counted in elements, or zero for a batch. The table is two words a
-   --    row: where that row has got to, and where its cache begins. A batch
-   --    needs neither -- its rows are one sequence, so the last position
-   --    follows from the batch's first and every row reads the cache from
-   --    its start.
    --  @param From_Step Which step the queries come from, or zero for the
    --    step before this one. A layer named whole rotates them several
    --    steps before it attends with them.
@@ -1510,7 +1499,6 @@ package Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Table_At   : Natural := 0;
       Packed     : Packed_Cache := Not_Packed;
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
@@ -3077,9 +3065,6 @@ private
       Cap        : Model_Runner.Numerics.Real := 0.0;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
 
-      --  A round: where in the cache the per-row table begins, in
-      --  elements. Zero for a batch, which needs no table.
-      Table      : Natural := 0;
 
       --  A packed session's block, where the attention reads one.
       Packed     : Packed_Cache := Not_Packed;

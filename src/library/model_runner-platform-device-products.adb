@@ -8321,7 +8321,6 @@ package body Model_Runner.Platform.Device.Products is
       At_First  : Natural;
       Added     : out Boolean;
       From_Step : Natural := 0;
-      Table_At  : Natural := 0;
       Packed    : Packing_Shape := Not_Packing;
       Unpack    : Boolean := False;
       Cells     : Natural := 0;
@@ -8356,7 +8355,6 @@ package body Model_Runner.Platform.Device.Products is
         --  does and the unpacking kernel does not.
         or else (Packed.Bits /= 0
                  and then (Packed.Bits not in 4 | 8
-                           or else (Unpack and then Table_At /= 0)
                            or else Width mod 4 /= 0
                            or else Packed.Row_Bytes
                                    /= (if Packed.Bits = 4 then Width / 2
@@ -8376,7 +8374,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Width, Columns => Width, Key => System.Null_Address,
          Chained => True, Reads => Source,
          Kept => False, Places => True, Stride => Stride,
-         At_First => At_First, Table => Table_At, Pack => Packed,
+         At_First => At_First, Pack => Packed,
          Unpacks => Unpack, Half_At => Half_At,
          Cells => (if Unpack then Cells else 0),
          Pages_At => Pages_At, Page_Shift => Page_Shift,
@@ -8583,7 +8581,6 @@ package body Model_Runner.Platform.Device.Products is
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       Kept       : Boolean := True;
       From_Step  : Natural := 0;
-      Table_At   : Natural := 0;
       Packed     : Packed_Cache := Not_Packed;
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
@@ -8630,7 +8627,7 @@ package body Model_Runner.Platform.Device.Products is
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
          Causal => Causal, Max_Bias => Max_Bias,
-         Table => Table_At, Packed => Packed, Sinks => Sinks_At,
+         Packed => Packed, Sinks => Sinks_At,
          Pages_At => Pages_At, Page_Shift => Page_Shift,
          others => <>);
       Added := True;
@@ -10258,11 +10255,8 @@ package body Model_Runner.Platform.Device.Products is
                   --  Attention only where the tile kernel is the one that
                   --  will run: the scalar one writes the blend the way it
                   --  always has, and the engine picks between them by the
-                  --  same test. A round is never the tile kernel, however
-                  --  many rows it has, because its rows do not share a
-                  --  cache -- so it is never halved either.
+                  --  same test.
                   or else (Steps.Items (Which).Attends
-                           and then Steps.Items (Which).Table = 0
                            and then Steps.Items (Which).Packed.K_Bits = 0
                            and then Attends_By_Matrix
                                       (Item, Count,
@@ -10485,8 +10479,7 @@ package body Model_Runner.Platform.Device.Products is
                      --  A round's rows share no keys, so a workgroup
                      --  takes one position's heads and no more.
                      Queries : constant Positive :=
-                       (if This.Table /= 0 then 1
-                        else Packed_Queries (Count));
+                       Packed_Queries (Count);
                      --  The bundle is what makes a packed round bearable:
                      --  a workgroup of eight heads unpacks the key it
                      --  reads once and dots it into eight queries. A
@@ -10525,7 +10518,7 @@ package body Model_Runner.Platform.Device.Products is
                         Causal     => (if This.Causal then 1 else 0),
                         Bundle     => C.unsigned (Bundle),
                         Queries    => C.unsigned (Queries),
-                        Table_At   => C.unsigned (This.Table),
+                        Table_At   => 0,
                         Sinks_At   => C.unsigned (This.Sinks),
 
                         --  A cache in pages, from the step's own fields,
@@ -10542,7 +10535,7 @@ package body Model_Runner.Platform.Device.Products is
                                 (This.Heads + Bundle - 1) / Bundle
                                 * ((Count + Queries - 1) / Queries),
                                 This.First, This.Last,
-                                Rounding => This.Table /= 0));
+                                Rounding => False));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);
@@ -10594,7 +10587,7 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute,
                      Attend_Kernel (Item, Count, This.Head_Size,
                                     This.Value_Size, This.Group_Size,
-                                    Rounding => This.Table > 0,
+                                    Rounding => False,
                                     K_Base => This.K_Base,
                                     V_Base => This.V_Base,
                                     KV_Width => This.KV_Width,
@@ -10627,7 +10620,7 @@ package body Model_Runner.Platform.Device.Products is
                             (Interfaces.Unsigned_64 (This.K_Base)
                              + (if Reads_Copy
                                      (Item, Count, This.Head_Size,
-                                      This.Value_Size, This.Table > 0)
+                                      This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)),
                         V_Base     =>
@@ -10635,7 +10628,7 @@ package body Model_Runner.Platform.Device.Products is
                             (Interfaces.Unsigned_64 (This.V_Base)
                              + (if Reads_Copy
                                      (Item, Count, This.Head_Size,
-                                      This.Value_Size, This.Table > 0)
+                                      This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
@@ -10661,7 +10654,7 @@ package body Model_Runner.Platform.Device.Products is
                              + (if Halved (Index)
                                 then 2 * Whole_Tiles (Count) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
-                        Table_At   => C.unsigned (This.Table),
+                        Table_At   => 0,
                         Sinks_At   => C.unsigned (This.Sinks),
                         Pages_At   => C.unsigned (This.Pages_At),
                         Page_Shift => C.unsigned (This.Page_Shift));
@@ -10671,7 +10664,7 @@ package body Model_Runner.Platform.Device.Products is
                         else Attend_Slices
                                (Item, Count, This.Head_Size, This.Value_Size,
                                 This.First, This.Last,
-                                Rounding => This.Table > 0));
+                                Rounding => False));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
@@ -10680,7 +10673,7 @@ package body Model_Runner.Platform.Device.Products is
                         Attend_Heads
                           (Item, This.Heads, This.Group_Size, Count,
                            This.Head_Size, This.Value_Size,
-                           Rounding => This.Table > 0,
+                           Rounding => False,
                            K_Base => This.K_Base, V_Base => This.V_Base,
                            KV_Width => This.KV_Width,
                            V_Width => This.V_Width,
@@ -10690,7 +10683,7 @@ package body Model_Runner.Platform.Device.Products is
                            (if Halved (Index) then Whole_Tiles (Count)
                             else Count),
                            This.Head_Size, This.Value_Size,
-                           Rounding => This.Table > 0),
+                           Rounding => False),
                         C.unsigned (Slices));
 
                      --  The slices put together, once every one of them
@@ -10789,7 +10782,7 @@ package body Model_Runner.Platform.Device.Products is
                         Packing => C.unsigned (This.Pack.Bits),
                         Base    => C.unsigned (This.Pack.At_Scale),
                         Joins   => C.unsigned (This.Pack.Blocks),
-                        Table   => C.unsigned (This.Table),
+                        Table   => 0,
 
                         --  A cache in pages, in the three words after the
                         --  table: the batch's page table, the shift and
@@ -10843,7 +10836,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  goes into its own member's block at its own
                         --  position, and neither follows from the first
                         --  row's place.
-                        Table   => C.unsigned (This.Table),
+                        Table   => 0,
 
                         --  And a cache in pages, in the three words after
                         --  it, which the kernel reads as the batch's page
