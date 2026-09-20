@@ -81,6 +81,35 @@ package Model_Runner.Platform is
    --  @return The path to open.
    function Resolve_Model_Path (Named : String) return String;
 
+   --  Directory a session named without a path is kept in.
+   --
+   --  MODEL_RUNNER_SESSIONS overrides it, and otherwise it sits beside the
+   --  models, under model_runner's data home. Empty when no home is known.
+   --
+   --  @return The directory, or an empty string when none is known.
+   function Sessions_Directory return String;
+
+   --  Resolve a session name a caller typed to the file to read or write.
+   --
+   --  As with a model, a name that carries a path is taken as one. A bare
+   --  name to load is read from the current directory where it is there,
+   --  else from Sessions_Directory. A bare name to save is written into
+   --  Sessions_Directory, so a name saved is a name loaded.
+   --
+   --  @param Named The session path or name as given.
+   --  @param For_Saving True to resolve where it will be written, False to
+   --    resolve where it is read from.
+   --  @return The path to open.
+   function Resolve_Session_Path
+     (Named : String; For_Saving : Boolean) return String;
+
+   --  Make the directory a path is written into, and its parents, where
+   --  they are not there. A path in a directory that exists, and one the
+   --  directory cannot be made for, are both left to the write to report.
+   --
+   --  @param Path The file about to be written.
+   procedure Ensure_Parent_Directory (Path : String);
+
    --  Number of processors usable by this process.
    --
    --  @return Processor count, at least 1.

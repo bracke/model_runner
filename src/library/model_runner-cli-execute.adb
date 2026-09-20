@@ -2648,7 +2648,10 @@ package body Model_Runner.CLI.Execute is
                Kept : Files.File_Source;
             begin
                Files.Open
-                 (Kept, T.To_String (Item.Load_Session), Status => Condition);
+                 (Kept,
+                  Model_Runner.Platform.Resolve_Session_Path
+                    (T.To_String (Item.Load_Session), For_Saving => False),
+                  Status => Condition);
                if E.Is_Error (Condition) then
                   Fail (Condition);
                   return;
@@ -3645,8 +3648,14 @@ package body Model_Runner.CLI.Execute is
                      return;
                   end if;
 
-                  Write_File
-                    (T.To_String (Item.Save_Session), Room.all, Condition);
+                  declare
+                     Where : constant String :=
+                       Model_Runner.Platform.Resolve_Session_Path
+                         (T.To_String (Item.Save_Session), For_Saving => True);
+                  begin
+                     Model_Runner.Platform.Ensure_Parent_Directory (Where);
+                     Write_File (Where, Room.all, Condition);
+                  end;
                   Model_Runner.Bytes.Free (Room);
 
                   if E.Is_Error (Condition) then

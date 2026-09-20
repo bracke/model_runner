@@ -197,62 +197,62 @@ package body Model_Runner.Platform is
          return Conventional;
    end Catalog_Path;
 
-   -----------------------
-   -- Models_Directory --
-   -----------------------
+   ---------------------
+   -- Data_Directory --
+   ---------------------
 
-   function Models_Directory return String is
+   --  A directory under model_runner's data home, named by an override
+   --  variable when it is set, else <XDG_DATA_HOME or ~/.local/share>/
+   --  model_runner/<Leaf>. Empty when neither the override nor a home is
+   --  known.
+   function Data_Directory (Override_Var : String; Leaf : String)
+      return String
+   is
       function Under (Base : String; Part : String) return String
         renames Hostkit.Fs.Join;
 
-      Override : constant String := Environment_Value ("MODEL_RUNNER_MODELS");
+      Override : constant String := Environment_Value (Override_Var);
       Data     : constant String := Environment_Value ("XDG_DATA_HOME");
       Home     : constant String := Environment_Value ("HOME");
    begin
       if Override /= "" then
          return Override;
       elsif Data /= "" then
-         return Under (Under (Data, Model_Runner.Program_Name), "models");
+         return Under (Under (Data, Model_Runner.Program_Name), Leaf);
       elsif Home /= "" then
          return Under
                   (Under
                      (Under (Under (Home, ".local"), "share"),
                       Model_Runner.Program_Name),
-                   "models");
+                   Leaf);
       else
          return "";
       end if;
    exception
       when others =>
          return "";
-   end Models_Directory;
+   end Data_Directory;
 
-   -------------------------
-   -- Resolve_Model_Path --
-   -------------------------
+   -----------------
+   -- Resolve_In --
+   -----------------
 
-   function Resolve_Model_Path (Named : String) return String is
+   --  A name to read: itself where it exists as given, else a bare name
+   --  found in Directory, else itself so the failure names it.
+   function Resolve_In (Named : String; Directory : String) return String is
    begin
       if Named = "" or else Ada.Directories.Exists (Named) then
          return Named;
       end if;
 
-      --  Only a bare name is looked for in the models directory: a name
-      --  that carries a directory the caller meant as a path, and it is
-      --  read as one.
-      if Ada.Directories.Simple_Name (Named) = Named then
+      if Directory /= ""
+        and then Ada.Directories.Simple_Name (Named) = Named
+      then
          declare
-            Directory : constant String := Models_Directory;
+            Candidate : constant String := Hostkit.Fs.Join (Directory, Named);
          begin
-            if Directory /= "" then
-               declare
-                  Candidate : constant String :=
-                    Hostkit.Fs.Join (Directory, Named);
-               begin
-                  if Ada.Directories.Exists (Candidate) then
-                     return Candidate;
-                  end if;
-               end;
+            if Ada.Directories.Exists (Candidate) then
+               return Candidate;
             end if;
          end;
       end if;
@@ -261,7 +261,75 @@ package body Model_Runner.Platform is
    exception
       when others =>
          return Named;
-   end Resolve_Model_Path;
+   end Resolve_In;
+
+   -----------------------
+   -- Models_Directory --
+   -----------------------
+
+   function Models_Directory return String
+   is (Data_Directory ("MODEL_RUNNER_MODELS", "models"));
+
+   -------------------------
+   -- Sessions_Directory --
+   -------------------------
+
+   function Sessions_Directory return String
+   is (Data_Directory ("MODEL_RUNNER_SESSIONS", "sessions"));
+
+   -------------------------
+   -- Resolve_Model_Path --
+   -------------------------
+
+   function Resolve_Model_Path (Named : String) return String
+   is (Resolve_In (Named, Models_Directory));
+
+   ---------------------------
+   -- Resolve_Session_Path --
+   ---------------------------
+
+   function Resolve_Session_Path
+     (Named : String; For_Saving : Boolean) return String is
+   begin
+      if not For_Saving then
+         return Resolve_In (Named, Sessions_Directory);
+      end if;
+
+      --  Saving: a bare name is written into the sessions directory, so
+      --  what is saved by name is loaded by the same name. A name that
+      --  carries a path is written where it says.
+      if Named /= ""
+        and then Ada.Directories.Simple_Name (Named) = Named
+      then
+         declare
+            Directory : constant String := Sessions_Directory;
+         begin
+            if Directory /= "" then
+               return Hostkit.Fs.Join (Directory, Named);
+            end if;
+         end;
+      end if;
+
+      return Named;
+   exception
+      when others =>
+         return Named;
+   end Resolve_Session_Path;
+
+   -------------------------------
+   -- Ensure_Parent_Directory --
+   -------------------------------
+
+   procedure Ensure_Parent_Directory (Path : String) is
+      Parent : constant String := Ada.Directories.Containing_Directory (Path);
+   begin
+      if Parent /= "" and then not Ada.Directories.Exists (Parent) then
+         Ada.Directories.Create_Path (Parent);
+      end if;
+   exception
+      when others =>
+         null;
+   end Ensure_Parent_Directory;
 
    ---------------------
    -- Processor_Count --
