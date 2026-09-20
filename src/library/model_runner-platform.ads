@@ -57,6 +57,30 @@ package Model_Runner.Platform is
    --  @return Catalog path; the conventional relative path when none exists.
    function Catalog_Path return String;
 
+   --  Directory searched for a model named without a path.
+   --
+   --  MODEL_RUNNER_MODELS overrides it. Otherwise it is
+   --  <XDG_DATA_HOME>/model_runner/models where that variable is set, and
+   --  <HOME>/.local/share/model_runner/models where only HOME is. Empty
+   --  when neither the override nor a home directory is known, which is
+   --  when nothing is searched.
+   --
+   --  @return The directory, or an empty string when none is known.
+   function Models_Directory return String;
+
+   --  Resolve a model name a caller typed to the file to open.
+   --
+   --  A name that exists as given is returned unchanged, so an absolute
+   --  path, a relative path, and a name in the current directory are read
+   --  exactly as before. A bare name that the current directory does not
+   --  hold is looked for in Models_Directory; found there, that path is
+   --  returned. When neither has it the name is returned unchanged, so the
+   --  failure that follows names what the caller typed.
+   --
+   --  @param Named The model path or name as given.
+   --  @return The path to open.
+   function Resolve_Model_Path (Named : String) return String;
+
    --  Number of processors usable by this process.
    --
    --  @return Processor count, at least 1.

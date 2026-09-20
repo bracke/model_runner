@@ -1234,7 +1234,8 @@ package body Model_Runner.CLI.Execute is
    is
       Bounds : constant Model_Runner.Limits.Model_Limits := Model_Bounds (Item);
       Path   : constant String :=
-        (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
+        Model_Runner.Platform.Resolve_Model_Path
+          (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
    begin
       Model_Runner.Progress.Publish
         (Observer,

@@ -197,6 +197,72 @@ package body Model_Runner.Platform is
          return Conventional;
    end Catalog_Path;
 
+   -----------------------
+   -- Models_Directory --
+   -----------------------
+
+   function Models_Directory return String is
+      function Under (Base : String; Part : String) return String
+        renames Hostkit.Fs.Join;
+
+      Override : constant String := Environment_Value ("MODEL_RUNNER_MODELS");
+      Data     : constant String := Environment_Value ("XDG_DATA_HOME");
+      Home     : constant String := Environment_Value ("HOME");
+   begin
+      if Override /= "" then
+         return Override;
+      elsif Data /= "" then
+         return Under (Under (Data, Model_Runner.Program_Name), "models");
+      elsif Home /= "" then
+         return Under
+                  (Under
+                     (Under (Under (Home, ".local"), "share"),
+                      Model_Runner.Program_Name),
+                   "models");
+      else
+         return "";
+      end if;
+   exception
+      when others =>
+         return "";
+   end Models_Directory;
+
+   -------------------------
+   -- Resolve_Model_Path --
+   -------------------------
+
+   function Resolve_Model_Path (Named : String) return String is
+   begin
+      if Named = "" or else Ada.Directories.Exists (Named) then
+         return Named;
+      end if;
+
+      --  Only a bare name is looked for in the models directory: a name
+      --  that carries a directory the caller meant as a path, and it is
+      --  read as one.
+      if Ada.Directories.Simple_Name (Named) = Named then
+         declare
+            Directory : constant String := Models_Directory;
+         begin
+            if Directory /= "" then
+               declare
+                  Candidate : constant String :=
+                    Hostkit.Fs.Join (Directory, Named);
+               begin
+                  if Ada.Directories.Exists (Candidate) then
+                     return Candidate;
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
+
+      return Named;
+   exception
+      when others =>
+         return Named;
+   end Resolve_Model_Path;
+
    ---------------------
    -- Processor_Count --
    ---------------------
