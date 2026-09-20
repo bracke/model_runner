@@ -246,6 +246,32 @@ fit rather than as many as sixteen whole contexts. Blocks remain for a single
 long session, where a block is one contiguous reserve and nothing is dealt
 between sessions; pages are what a churn of many wants.
 
+**And held to it off the tested path.** A cache dealt two ways from the front
+of the one buffer is a thing to get wrong quietly, so a multi-agent review was
+turned on the whole of it, and what it found is closed. A device holds one kind
+at a time now -- a paged session finds a block held and does without pages, a
+block session finds pages held and does without a block, each on the host until
+the other lets go, where before the two dealt the same elements and wrote over
+each other. A paged session whose layer will not go over whole -- a
+normalize-after model, a whole-norm one -- attends on the host out of its
+mirror-current copy rather than over block offsets a paged cache does not hold.
+The pool serves one page size at a time, so the slot a base divides back to is
+always the size of the pages held. The blocks past the stack are written back
+when a session comes again, not the stack alone. And a settle that cannot
+finish leaves the pages where they are, an empty range reads nothing rather
+than counting below zero, and a table written where the sequence reads it turns
+the layer to the host where the write could not land. None of these was on the
+path the tiny fixture takes -- it fits, it is one model, it never mixes -- and
+each is now held where it would have gone wrong.
+
+**And made to cost what it should.** A single session's page tables are written
+once a token where the pages grow, all the layers at their own places past the
+pages, not a table a layer every token; `Take_Pages` returns at once for the
+asks past the position its pages already reach, rather than walking every layer
+to find nothing to grow; and one release path frees a session's slots for both
+the close and the turn-out, where two copies could drift. The head step, which
+carried a paging path nothing reached, carries it no longer.
+
 ## Staging
 
 **One — done.** `Evaluate_Round` on the processor, the four substitutions
