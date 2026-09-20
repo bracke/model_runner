@@ -23,10 +23,9 @@ const uint LANES = 256u;
 
 layout(local_size_x = LANES) in;
 
-//  The cache again, read-only, which is where a round's per-row table is:
-//  two words a row, where the row has got to and where its block begins. It
-//  is bound here because a step's descriptor set carries four and this
-//  kernel wanted two, so binding zero was the cache and unread. Read
+//  The cache again, read-only. It is bound here because a step's descriptor
+//  set carries four and this kernel wanted two, so binding zero was the
+//  cache and unread. Read
 //  through this one rather than through the writable view below, because a
 //  buffer that one declaration writes and another reads is a buffer two
 //  declarations disagree about.
@@ -71,10 +70,7 @@ layout(push_constant) uniform Shape {
     //  Bound but unread here: the products put a folded join in this word.
     uint unused_joins;
 
-    //  Where a round's per-row table begins, in elements, or zero for a
-    //  batch. A batch's rows are one sequence at consecutive positions, so
-    //  the first one's place and the stride say where all of them go; a
-    //  round's rows are different sessions and say so a row at a time.
+    //  Reserved, always zero: the products keep the word for layout.
     uint table_at;
 
     //  A cache in pages rather than in blocks, as attention.comp reads
@@ -82,8 +78,7 @@ layout(push_constant) uniform Shape {
     //  and a row goes into its position's page at the layer's offset --
     //  at_first is that offset inside a page, and pages_at is where a
     //  batch's page table for this layer begins, a word a page. A
-    //  round's rows carry their own tables in the per-row table, where
-    //  a block's base was. Zero for page_shift is a cache in blocks.
+    //  Zero for page_shift is a cache in blocks.
     uint pages_at;
     uint page_shift;
 
@@ -102,26 +97,15 @@ void main() {
 
     uint from = slot * shape.width;
 
-    //  A batch: the first row's place and one stride a row after it. A
-    //  round: this row's own block, the layer's offset inside one session's
-    //  worth, and this row's own position. In pages, the row's position
-    //  names a word of its table and the page that word names holds it.
+    //  The first row's place and one stride a row after it. In pages, the
+    //  row's position names a word of the page table and that page holds it.
     uint into;
 
     if (shape.page_shift == 0u) {
-        into =
-            shape.table_at != 0u
-          ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
-            + shape.at_first
-            + floatBitsToUint (kept[shape.table_at + slot * 2u]) * shape.stride
-          : shape.at_first + slot * shape.stride;
+        into = shape.at_first + slot * shape.stride;
     } else {
-        uint table = shape.table_at != 0u
-                   ? floatBitsToUint (kept[shape.table_at + slot * 2u + 1u])
-                   : shape.pages_at;
-        uint pos = shape.table_at != 0u
-                 ? floatBitsToUint (kept[shape.table_at + slot * 2u])
-                 : shape.first_position + slot;
+        uint table = shape.pages_at;
+        uint pos = shape.first_position + slot;
 
         into = floatBitsToUint (kept[table + (pos >> shape.page_shift)])
                + shape.at_first

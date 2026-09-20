@@ -229,27 +229,12 @@ layout(push_constant, std430) uniform Shape {
     //  of them.
     float max_bias;
 
-    //  A round rather than a batch: rows that are different sequences.
-    //
-    //  A batch is one session's own positions, so every row reads the same
-    //  cache and derives its last from where it sits. A round's rows are
-    //  different sessions, each with its own cache and its own position,
-    //  and neither follows from anything the batch knows. Both are read out
-    //  of a table at the end of the cache -- two words a row, this being
-    //  where it begins, counted in elements. Zero for a batch, which is
-    //  everything this kernel did before.
-    //
-    //  In the cache rather than in this block because a push block is a
-    //  hundred and twenty-eight bytes on every device and a table of two
-    //  words a row would cap a round at eight members. The cache is a
-    //  buffer this kernel has bound already, so the table costs a read
-    //  where it was going to cost a limit.
+    //  Reserved, always zero: the products keep the word for layout.
     uint table_at;
 
     //  A head's sink, for an architecture that learned one: a score that
     //  joins the softmax's denominator and takes no value. Where the
     //  heads' sinks begin in the cache, in elements, or zero for none.
-    //  They are in the cache for the reason the table is.
     uint sinks_at;
 
     //  A cache dealt out in pages rather than in blocks: a page is
@@ -258,10 +243,9 @@ layout(push_constant, std430) uniform Shape {
     //  it was given. What a row reads in place of where its block begins
     //  is where its page table for this layer begins -- a word a page,
     //  each the element that page starts at -- and k_base and v_base are
-    //  then offsets inside a page rather than inside a block. For a
-    //  batch, whose rows are one session's, pages_at is that table; a
-    //  round's rows each carry their own in the per-row table. Zero for
-    //  page_shift is a cache in blocks, which is everything above.
+    //  then offsets inside a page rather than inside a block. pages_at is
+    //  that table. Zero for page_shift is a cache in blocks, which is
+    //  everything above.
     uint pages_at;
     uint page_shift;
 } shape;
@@ -568,13 +552,9 @@ void main() {
     uint q_of[QUERIES];
 
     //  Where each row's own cache begins: nothing for a batch in blocks,
-    //  the batch's page table for one in pages, and that row's own block
-    //  or table for each row of a round. A block of more than one query
-    //  reads a cached key once and dots it into every query of the
-    //  block, which is the whole reason a block exists -- and rows of a
-    //  round do not share a cache, so the caller gives a round the kernel
-    //  whose block is one. That is why the reads below may take held_of[0]
-    //  and be right for both.
+    //  the batch's page table for one in pages. A block of more than one
+    //  query reads a cached key once and dots it into every query of the
+    //  block, which is the whole reason a block exists.
     uint held_of[QUERIES];
 
     uint last_max  = 0u;
@@ -589,9 +569,7 @@ void main() {
         //  pushed. Attending both ways, every position shares the one that
         //  was pushed: the end of the text is the end of the text for all
         //  of them.
-        uint last = shape.table_at != 0u
-                  ? word_at (shape.table_at + slot * 2u)
-                  : shape.last + (shape.causal != 0u ? slot : 0u);
+        uint last = shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
             first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
@@ -601,11 +579,8 @@ void main() {
         first_of[i] = first;
 
         //  Where this row's own cache begins, which is nothing at all for a
-        //  batch in blocks, its page table for one in pages, and a
-        //  member's own for each row of a round.
-        held_of[i] = shape.table_at != 0u
-                   ? word_at (shape.table_at + slot * 2u + 1u)
-                   : shape.pages_at;
+        //  batch in blocks and its page table for one in pages.
+        held_of[i] = shape.pages_at;
         //  Without the head's own offset, which the bundle adds where it
         //  reads: every head of the bundle wants the same query position.
         q_of[i] = slot * shape.heads * shape.head_size;

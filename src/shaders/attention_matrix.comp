@@ -128,9 +128,8 @@ layout(push_constant) uniform Shape {
     //  of them.
     float max_bias;
 
-    //  A round's table, which this kernel does not read: a round is never
-    //  this kernel. Here so that the word after it is where attention.comp
-    //  keeps it.
+    //  Reserved, always zero, and never read here. Here so that the word
+    //  after it is where attention.comp keeps it.
     uint table_at;
 
     //  A head's sink, for an architecture that learned one: a score that

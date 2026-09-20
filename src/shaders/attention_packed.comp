@@ -141,8 +141,7 @@ layout(push_constant, std430) uniform Shape {
     uint bundle;
     uint queries;
 
-    //  A round: where its per-row table begins, in words of the buffer,
-    //  or zero for a batch.
+    //  Reserved, always zero: the products keep the word for layout.
     uint table_at;
 
     //  A head's sink, for an architecture that learned one: a score that
@@ -153,9 +152,8 @@ layout(push_constant, std430) uniform Shape {
     //  A cache in pages: where this batch's page table for the layer
     //  begins, a word a page of page_shift's power of two positions, so a
     //  cached position's page is read out of it and k_bytes, v_bytes,
-    //  ks_at and vs_at are a region's offset inside a page. A round's rows
-    //  read their own page table, where a block's base was in the per-row
-    //  table. Zero for page_shift is a cache in blocks. first_position is
+    //  ks_at and vs_at are a region's offset inside a page. Zero for
+    //  page_shift is a cache in blocks. first_position is
     //  unread here: the positions this attends are the session's own,
     //  numbered from nought, and a position is its own page's index.
     uint pages_at;
@@ -369,16 +367,14 @@ void main () {
     uint first_min = 0xFFFFFFFFu;
     uint last_max = 0u;
 
-    uint block = shape.table_at != 0u ? kvw[shape.table_at + slot0 * 2u + 1u] : 0u;
+    uint block = 0u;
 
     for (uint r = 0u; r < ROWS; r++) {
         uint head = head0 + r / shape.queries;
         uint slot = slot0 + r % shape.queries;
         row_live[r] = r < rows && head < shape.heads && slot < shape.positions;
 
-        uint last = shape.table_at != 0u
-                    ? kvw[shape.table_at + slot * 2u]
-                    : shape.last + (shape.causal != 0u ? slot : 0u);
+        uint last = shape.last + (shape.causal != 0u ? slot : 0u);
         uint first = shape.first;
         if (shape.window > 0u) {
             first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
@@ -430,11 +426,8 @@ void main () {
     //  follow from the one before: page_base gives a position's page in
     //  words -- the workgroup's one block where the cache is in blocks --
     //  and the region offsets k_bytes, v_bytes, ks_at and vs_at are past
-    //  it. A batch reads its page table where pages_at says, a round its
-    //  own where a block's base was.
-    uint page_table = shape.table_at != 0u
-                    ? kvw[shape.table_at + slot0 * 2u + 1u]
-                    : shape.pages_at;
+    //  it. A batch reads its page table where pages_at says.
+    uint page_table = shape.pages_at;
 
     //  The value components this lane owns: one, two or four in a run,
     //  which is one word's worth of bytes at most and never straddles a
