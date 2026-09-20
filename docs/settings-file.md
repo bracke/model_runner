@@ -60,6 +60,19 @@ Three keys are **not** options — they are places and a secret:
 | `sessions-dir` | where a bare session name is kept | `MODEL_RUNNER_SESSIONS` |
 | `hf-token`     | the Hugging Face token for a gated repository | `HF_TOKEN` |
 
+## Aliases
+
+A key beginning `alias.` gives a short name for a model — a path or a
+Hugging Face reference — so you need not type the whole thing:
+
+```
+alias.tiny = bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M
+alias.work = /srv/models/my-finetune.gguf
+```
+
+Then `model_runner run tiny` runs whatever `alias.tiny` stands for. A name
+with no matching alias is taken as itself.
+
 ## Precedence
 
 A command-line flag beats the file, and the file beats a built-in default:
