@@ -6526,6 +6526,167 @@ package body Model_Runner.Llama is
       end loop;
    end Read_Pages_Layer;
 
+   --  Write a packed layer's committed rows into the pages it holds, the
+   --  packed analog of Write_Pages_Layer: a page holds Page_Positions rows
+   --  of packed keys and values and their scales, region by region, and the
+   --  host keeps the same bytes and scales -- the block's read back, or
+   --  packed on the host -- laid contiguously a layer at a time. A page's
+   --  rows are a contiguous run of the host's, since the page begins on a
+   --  page boundary; the byte and scale offsets are Byte_Of and Scale_Of,
+   --  as Read_Back_Packed has them for a block.
+   procedure Write_Packed_Pages_Layer
+     (Item     : Session;
+      Layer    : Natural;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count;
+      Upto     : Element_Count;
+      Written  : out Boolean)
+   is
+      Cells  : constant Element_Count := Cell_Of (Item, Layer, Upto);
+      First  : constant Element_Count := Item.Page_First.all (Layer);
+      Held   : constant Cache_Precision := Item.Held;
+      V_Held : constant Cache_Precision := Item.Held_Values;
+      PL     : constant Packed_Block := Packed_Page_Layout (Item);
+      K_El   : constant Element_Count := Keys_At (Item, Layer);
+      V_El   : constant Element_Count := Values_At (Item, Layer);
+      K_Row  : constant B.Byte_Count := Row_Bytes (Held, KV_Width);
+      V_Row  : constant B.Byte_Count := Row_Bytes (V_Held, V_Width);
+      K_Blk  : constant Element_Count := Blocks_Of (Held, KV_Width);
+      V_Blk  : constant Element_Count := Blocks_Of (V_Held, V_Width);
+   begin
+      Written := True;
+      if Cells = 0 then
+         return;
+      end if;
+
+      for Page in 0 .. Natural (Cells - 1) / Page_Positions loop
+         declare
+            Low  : constant Element_Count :=
+              Element_Count (Page) * Element_Count (Page_Positions);
+            Span : constant Element_Count :=
+              Element_Count'Min (Element_Count (Page_Positions), Cells - Low);
+            Base : constant Element_Count :=
+              Item.Pages.all (Natural (First) + Page);
+            K_By : constant B.Byte_Count :=
+              Byte_Of (Held, K_El + Low * KV_Width, KV_Width);
+            V_By : constant B.Byte_Count :=
+              Byte_Of (V_Held, V_El + Low * V_Width, V_Width);
+            K_Sc : constant Element_Count :=
+              Scale_Of (Held, K_El + Low * KV_Width, KV_Width);
+            V_Sc : constant Element_Count :=
+              Scale_Of (V_Held, V_El + Low * V_Width, V_Width);
+         begin
+            Model_Runner.Backend.Device.Put_Cache_Bytes
+              (Interfaces.Unsigned_64 (Base) * 4,
+               Item.Byte_Keys.all
+                 (K_By .. K_By + B.Byte_Count (Span) * K_Row - 1),
+               Written);
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache_Bytes
+                 (Interfaces.Unsigned_64 (Base + PL.Values_At) * 4,
+                  Item.Byte_Values.all
+                    (V_By .. V_By + B.Byte_Count (Span) * V_Row - 1),
+                  Written);
+            end if;
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Base + PL.Key_Scales_At,
+                  Item.Key_Scales.all (K_Sc .. K_Sc + Span * K_Blk - 1),
+                  Written);
+            end if;
+            if Written then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Base + PL.Value_Scales_At,
+                  Item.Value_Scales.all (V_Sc .. V_Sc + Span * V_Blk - 1),
+                  Written);
+            end if;
+
+            exit when not Written;
+         end;
+      end loop;
+   end Write_Packed_Pages_Layer;
+
+   --  Read a packed layer's cells [From, From + Span) back out of their
+   --  pages into the host's packed copy, the packed analog of
+   --  Read_Pages_Layer: a run that crosses a page boundary is read as the
+   --  pages it lies in, and a page's own run at the offset inside it.
+   procedure Read_Packed_Pages_Layer
+     (Item     : in out Session;
+      Layer    : Natural;
+      KV_Width : Element_Count;
+      V_Width  : Element_Count;
+      From     : Element_Count;
+      Span     : Element_Count;
+      Read     : out Boolean)
+   is
+      First  : constant Element_Count := Item.Page_First.all (Layer);
+      Held   : constant Cache_Precision := Item.Held;
+      V_Held : constant Cache_Precision := Item.Held_Values;
+      PL     : constant Packed_Block := Packed_Page_Layout (Item);
+      K_El   : constant Element_Count := Keys_At (Item, Layer);
+      V_El   : constant Element_Count := Values_At (Item, Layer);
+      K_Row  : constant B.Byte_Count := Row_Bytes (Held, KV_Width);
+      V_Row  : constant B.Byte_Count := Row_Bytes (V_Held, V_Width);
+      K_Blk  : constant Element_Count := Blocks_Of (Held, KV_Width);
+      V_Blk  : constant Element_Count := Blocks_Of (V_Held, V_Width);
+      P      : constant Element_Count := Element_Count (Page_Positions);
+   begin
+      Read := True;
+      if Span = 0 then
+         return;
+      end if;
+
+      for Page in Natural (From / P) .. Natural ((From + Span - 1) / P) loop
+         declare
+            Low   : constant Element_Count := Element_Count (Page) * P;
+            Lo    : constant Element_Count := Element_Count'Max (Low, From);
+            Hi    : constant Element_Count :=
+              Element_Count'Min (Low + P, From + Span);
+            Count : constant Element_Count := Hi - Lo;
+            Base  : constant Element_Count :=
+              Item.Pages.all (Natural (First) + Page);
+            In_K  : constant B.Byte_Count := B.Byte_Count (Lo - Low) * K_Row;
+            In_V  : constant B.Byte_Count := B.Byte_Count (Lo - Low) * V_Row;
+            K_By  : constant B.Byte_Count :=
+              Byte_Of (Held, K_El + Lo * KV_Width, KV_Width);
+            V_By  : constant B.Byte_Count :=
+              Byte_Of (V_Held, V_El + Lo * V_Width, V_Width);
+            K_Sc  : constant Element_Count :=
+              Scale_Of (Held, K_El + Lo * KV_Width, KV_Width);
+            V_Sc  : constant Element_Count :=
+              Scale_Of (V_Held, V_El + Lo * V_Width, V_Width);
+         begin
+            Model_Runner.Backend.Device.Get_Cache_Bytes
+              (Interfaces.Unsigned_64 (Base) * 4 + Interfaces.Unsigned_64 (In_K),
+               Item.Byte_Keys.all
+                 (K_By .. K_By + B.Byte_Count (Count) * K_Row - 1),
+               Read);
+            if Read then
+               Model_Runner.Backend.Device.Get_Cache_Bytes
+                 (Interfaces.Unsigned_64 (Base + PL.Values_At) * 4
+                  + Interfaces.Unsigned_64 (In_V),
+                  Item.Byte_Values.all
+                    (V_By .. V_By + B.Byte_Count (Count) * V_Row - 1),
+                  Read);
+            end if;
+            if Read then
+               Model_Runner.Backend.Device.Get_Cache
+                 (Base + PL.Key_Scales_At + (Lo - Low) * K_Blk,
+                  Item.Key_Scales.all (K_Sc .. K_Sc + Count * K_Blk - 1),
+                  Read);
+            end if;
+            if Read then
+               Model_Runner.Backend.Device.Get_Cache
+                 (Base + PL.Value_Scales_At + (Lo - Low) * V_Blk,
+                  Item.Value_Scales.all (V_Sc .. V_Sc + Count * V_Blk - 1),
+                  Read);
+            end if;
+
+            exit when not Read;
+         end;
+      end loop;
+   end Read_Packed_Pages_Layer;
+
    --  A page of one layer, in elements: the positions it holds times a
    --  row of keys and a row of values.
    function Page_Row (Item : Session) return Element_Count
@@ -6702,16 +6863,6 @@ package body Model_Runner.Llama is
         --  are given back; nothing already this session's is disturbed,
         --  since Paged_In means its pages are already dealt.
         or else (not Item.Paged_In and then Block_Taken > 0)
-
-        --  A packed session whose pages were turned out reads them back a
-        --  page at a time when it comes again -- Write_Pages_Layer, which
-        --  writes the host's exact rows, not a packed session's bytes and
-        --  scales. Until that read-back is packed, a packed session evicted
-        --  of its pages is refused their return and attends on the host; a
-        --  packed session only growing, whose new pages the pack step
-        --  fills, is not touched.
-        or else (Item.Held /= Exact
-                 and then not Item.Paged_In and then Item.Committed > 0)
       then
          return;
       end if;
@@ -6942,9 +7093,15 @@ package body Model_Runner.Llama is
             --  them, so all of them are written back, not the stack alone.
             for Layer in Item.Page_Count.all'Range loop
                if not Linear (Item.Owner.Settings, Layer) then
-                  Write_Pages_Layer
-                    (Item.all, Layer, KV_Width, V_Width,
-                     Element_Count (Item.Committed), Written);
+                  if Item.Held = Exact then
+                     Write_Pages_Layer
+                       (Item.all, Layer, KV_Width, V_Width,
+                        Element_Count (Item.Committed), Written);
+                  else
+                     Write_Packed_Pages_Layer
+                       (Item.all, Layer, KV_Width, V_Width,
+                        Element_Count (Item.Committed), Written);
+                  end if;
                   exit when not Written;
                end if;
             end loop;
@@ -7250,12 +7407,18 @@ package body Model_Runner.Llama is
                Base : constant Element_Count := Layer_Keys + Cell * KV_Width;
                V_At : constant Element_Count := Layer_Vals + Cell * V_Width;
             begin
-               if Item.Paged then
+               if Item.Paged and then Item.Held = Exact then
                   --  Out of the pages the layer's positions are scattered
                   --  through, a page at a time, into the host's contiguous
                   --  copy: the same positions the block reads back, found
                   --  through the page table rather than at a block's base.
                   Read_Pages_Layer
+                    (Item, Natural (Index), KV_Width, V_Width,
+                     Cell, Span, Read);
+               elsif Item.Paged then
+                  --  The packed pages read back into the host's bytes and
+                  --  scales, the packed analog.
+                  Read_Packed_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell, Span, Read);
                elsif Item.Held in Eighth | Fourth then
