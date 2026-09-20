@@ -6627,8 +6627,30 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Page_Elements :=
-        Element_Count (Page_Positions) * Page_Row (Item.all);
+      --  Every page of the pool is one size, because the slots the owner
+      --  array counts are that size: a base is turned back into a slot by
+      --  dividing by it, in Close and where a session is turned out. Two
+      --  models of different key and value widths would size their pages
+      --  differently, so a session whose page is not the size the held
+      --  pages are is refused while any are held and attends on the host --
+      --  the pool serves one geometry at a time, as it serves one kind.
+      --  Where none are held the size is the new session's.
+      declare
+         Want : constant Element_Count :=
+           Element_Count (Page_Positions) * Page_Row (Item.all);
+      begin
+         if not Item.Paged_In
+           and then Pages_In_Use > 0
+           and then Want /= Page_Elements
+         then
+            return;
+         end if;
+
+         if Pages_In_Use = 0 then
+            Page_Elements := Want;
+         end if;
+      end;
+
       V_Width := Element_Count (Item.Owner.Settings.KV_Heads
                                 * Item.Owner.Settings.Value_Size);
       KV_Width := Page_Row (Item.all) - V_Width;
@@ -6735,7 +6757,11 @@ package body Model_Runner.Llama is
          declare
             Written : Boolean := True;
          begin
-            for Layer in 0 .. Item.Owner.Layers.all'Length - 1 loop
+            --  Every layer that holds pages, which is every non-linear one
+            --  including the blocks past the stack -- Page_Count runs to
+            --  Layers + Next_Layers - 1, and pages are dealt for all of
+            --  them, so all of them are written back, not the stack alone.
+            for Layer in Item.Page_Count.all'Range loop
                if not Linear (Item.Owner.Settings, Layer) then
                   Write_Pages_Layer
                     (Item.all, Layer, KV_Width, V_Width,
