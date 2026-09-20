@@ -4951,7 +4951,6 @@ package body Model_Runner.Llama is
    --  held takes the one stamped longest ago. The clock counts asks and
    --  nothing else: it is compared and never read as a time.
    Block_Clock : Natural := 0;
-   Block_Used  : array (Block_Holder'Range) of Natural := [others => 0];
 
    --  The cache dealt in pages rather than blocks. A page holds this many
    --  positions of one layer, its keys and then its values -- a power of
@@ -6155,9 +6154,6 @@ package body Model_Runner.Llama is
       use type Model_Runner.Backend.Backend_Kind;
 
       Seat : Natural := 0;
-
-      --  When this session last asked for a block before this call.
-      Asked_Last : Natural := 0;
    begin
       Ok := False;
 
@@ -6210,7 +6206,6 @@ package body Model_Runner.Llama is
          Item.State_Asked_Before := Item.State_Asked_At;
          Last_Asker := Item;
       end if;
-      Asked_Last := Item.Asked_Before;
       Item.Asked_At := Block_Clock;
 
       --  Already this session's, which is every call after the first:
@@ -6218,7 +6213,6 @@ package body Model_Runner.Llama is
       --  as it goes, so that the block another session takes where every
       --  one is held is the one nobody has read for longest.
       if Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item then
-         Block_Used (Item.Seat) := Item.Asked_At;
          Ok := True;
          return;
       end if;
@@ -6245,68 +6239,14 @@ package body Model_Runner.Llama is
          Seat := Seat + 1;
       end loop;
 
-      --  None free: the block stamped longest ago is taken from the
-      --  session holding it. What the device wrote into that block and the
-      --  host has not read yet is read first -- the host's copy is what
-      --  the session carries back into the block it is given next, and a
-      --  read that fails leaves the block where it is rather than losing
-      --  the positions in it.
+      --  None free: the device's blocks are all held, so this session
+      --  attends on the host until one comes back. A block is given up
+      --  when its session closes, so what is dealt out is the sessions
+      --  open at once, not the sessions ever opened -- and a personal
+      --  tool holds one or two.
       if Seat >= Block_Holder'Length then
-         declare
-            Oldest : Natural := 0;
-            Found  : Integer := -1;
-         begin
-            for Which in Block_Holder'Range loop
-               if Block_Holder (Which) /= null
-                 and then Block_Holder (Which) /= Item
-                 and then (Found < 0 or else Block_Used (Which) < Oldest)
-               then
-                  Found  := Which;
-                  Oldest := Block_Used (Which);
-               end if;
-            end loop;
-
-            if Found < 0 then
-               Blocks_Were_Held := True;
-               return;
-            end if;
-
-            --  And only from a session that has gone unasked since before
-            --  this one's last ask. Seventeen sessions reading a token
-            --  apiece in turn are all as warm as each other: taking the
-            --  coldest block would have each of them turn the next out
-            --  every token and write its cache across the bus again,
-            --  where the seventeenth doing without costs that one session
-            --  its speed and leaves the sixteen alone. A session new to
-            --  the device is warmer than anything asked before it was
-            --  opened, which is what lets it in where a block has gone
-            --  cold.
-            if Block_Used (Found) >= Asked_Last then
-               Blocks_Were_Held := True;
-               return;
-            end if;
-
-            declare
-               Turned : constant Session_Access := Block_Holder (Found);
-
-               Settled : Boolean;
-            begin
-               Settle_Cache (Turned.all, Settled);
-
-               --  A read that could not finish leaves the block where it
-               --  is: the device still holds what the host did not get, so
-               --  taking it would lose those positions.
-               if not Settled then
-                  return;
-               end if;
-
-               Block_Holder (Found) := null;
-               Turned.Seat := -1;
-               Seat := Found;
-
-               Model_Runner.Backend.Device.Note_Turned;
-            end;
-         end;
+         Blocks_Were_Held := True;
+         return;
       end if;
 
       declare
@@ -6399,7 +6339,6 @@ package body Model_Runner.Llama is
 
          Item.Seat := Seat;
          Block_Holder (Seat) := Item;
-         Block_Used (Seat) := Item.Asked_At;
          Ok := True;
       end;
    end Take_Block;
