@@ -4588,12 +4588,17 @@ package body Model_Runner.CLI.Execute is
                       "bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M", 270_000_000);
       Add_Suggestion ("Qwen2.5-0.5B-Instruct", "0.5 GB",
                       "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", 500_000_000);
+      Add_Suggestion ("Llama-3.2-1B-Instruct", "0.8 GB",
+                      "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", 807_694_464);
       Add_Suggestion ("Qwen2.5-1.5B-Instruct", "1.1 GB",
                       "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M", 1_100_000_000);
       Add_Suggestion ("gemma-2-2b-it", "1.7 GB",
                       "bartowski/gemma-2-2b-it-GGUF:Q4_K_M", 1_708_582_752);
       Add_Suggestion ("Qwen2.5-3B-Instruct", "2.0 GB",
                       "bartowski/Qwen2.5-3B-Instruct-GGUF:Q4_K_M", 1_930_000_000);
+      Add_Suggestion ("Phi-3.5-mini-instruct", "2.4 GB",
+                      "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",
+                      2_393_232_672);
 
       if Count = 0 then
          return;
