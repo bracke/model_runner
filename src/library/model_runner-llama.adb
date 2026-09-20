@@ -5577,7 +5577,7 @@ package body Model_Runner.Llama is
    --  Read back whatever the device wrote that the host's copy has not
    --  got. Declared here because a session turned out of its block must
    --  settle before the block goes; said where it is written, below.
-   procedure Settle_Cache (Item : in out Session);
+   procedure Settle_Cache (Item : in out Session; Settled : out Boolean);
 
    --  The packed caches' layout, for the two precisions that pack: a row
    --  of Width elements takes Row_Bytes of the bytes and Blocks_Of scales,
@@ -6243,10 +6243,15 @@ package body Model_Runner.Llama is
 
             declare
                Turned : constant Session_Access := Block_Holder (Found);
-            begin
-               Settle_Cache (Turned.all);
 
-               if Turned.Owed_Count > 0 then
+               Settled : Boolean;
+            begin
+               Settle_Cache (Turned.all, Settled);
+
+               --  A read that could not finish leaves the block where it
+               --  is: the device still holds what the host did not get, so
+               --  taking it would lose those positions.
+               if not Settled then
                   return;
                end if;
 
@@ -6380,6 +6385,13 @@ package body Model_Runner.Llama is
    begin
       Written := True;
 
+      --  A layer that holds no cell of the committed range -- a window
+      --  layer whose origin has caught up with the position it is asked
+      --  about -- writes nothing rather than counting from cell minus one.
+      if Cells = 0 then
+         return;
+      end if;
+
       for Page in 0 .. Natural (Cells - 1) / Page_Positions loop
          declare
             Low  : constant Element_Count :=
@@ -6435,6 +6447,12 @@ package body Model_Runner.Llama is
    begin
       Read := True;
 
+      --  Nothing owed is nothing to read, and counting to From plus span
+      --  less one would go below zero.
+      if Span = 0 then
+         return;
+      end if;
+
       for Page in Natural (From / P) .. Natural ((From + Span - 1) / P) loop
          declare
             Low   : constant Element_Count := Element_Count (Page) * P;
@@ -6483,11 +6501,12 @@ package body Model_Runner.Llama is
    --  into them, a layer at a time, as it did the first time. A settle that
    --  cannot finish leaves the pages where they are, so nothing is lost.
    procedure Free_Session_Pages (Victim : Session_Access; Ok : out Boolean) is
+      Settled : Boolean;
    begin
       Ok := False;
 
-      Settle_Cache (Victim.all);
-      if Victim.Owed_Count > 0 then
+      Settle_Cache (Victim.all, Settled);
+      if not Settled then
          return;
       end if;
 
@@ -6815,17 +6834,6 @@ package body Model_Runner.Llama is
       return Pages_Taken;
    end Paged_Layer_Table;
 
-   --  The same, for a call site that cannot take the outcome: the reserve
-   --  that gave the pages made the room this writes into, so a write here
-   --  fails only where that did, and the sequence that reads the table
-   --  fails after it in the same way.
-   function Paged_Table_Base
-     (Item : Session; Layer : Natural) return Element_Count
-   is
-      Ok : Boolean;
-   begin
-      return Paged_Layer_Table (Item, Layer, Ok);
-   end Paged_Table_Base;
 
    --  Where a page's values begin inside it: after its positions' keys.
    function Page_Value_Base (Item : Session) return Element_Count
@@ -7029,8 +7037,15 @@ package body Model_Runner.Llama is
    --  each, for bytes nothing was going to look at.
    --
    --  @param Item Session whose copy may be behind.
-   procedure Settle_Cache (Item : in out Session) is
+   --  @param Settled True where the copy is up to date after this, whether
+   --    because nothing was owed or because every owed position was read
+   --    back; false where a read failed and the copy is still behind, which
+   --    is what tells a caller about to give the block or the pages up not
+   --    to -- the device still holds what the host did not get.
+   procedure Settle_Cache (Item : in out Session; Settled : out Boolean) is
    begin
+      Settled := True;
+
       if Item.Owed_Count = 0 then
          return;
       end if;
@@ -7108,6 +7123,8 @@ package body Model_Runner.Llama is
 
             <<Next_Layer>>
          end loop;
+
+         Settled := Read;
       end;
    end Settle_Cache;
 
@@ -7537,9 +7554,13 @@ package body Model_Runner.Llama is
       Blend_Span : constant Element_Count := Heads * Value_Size;
 
       Took : Boolean;
+
+      --  A settle that could not finish leaves the copy behind, which the
+      --  read below then surfaces; nothing here can do better than that.
+      Settled : Boolean;
    begin
       --  What the device wrote and the host was owed, before this reads it.
-      Settle_Cache (Item);
+      Settle_Cache (Item, Settled);
 
       --  The device's attention has no sinks, so a layer with them is
       --  attended below, on the host, out of the same cache. It was asked
@@ -10609,7 +10630,11 @@ package body Model_Runner.Llama is
             end loop;
 
             if Sliding then
-               Settle_Cache (Item);
+               declare
+                  Settled : Boolean;
+               begin
+                  Settle_Cache (Item, Settled);
+               end;
             end if;
          end;
       end if;
@@ -10851,7 +10876,11 @@ package body Model_Runner.Llama is
       --  What the device wrote and the host was owed, which this
       --  reads: the copy is brought up to date where it is used
       --  rather than at the end of every call.
-      Settle_Cache (Item);
+      declare
+         Settled : Boolean;
+      begin
+         Settle_Cache (Item, Settled);
+      end;
 
       Into := null;
       Status := E.Success;
@@ -12418,7 +12447,11 @@ package body Model_Runner.Llama is
       --  What the device wrote and the host was owed, which this
       --  reads: the copy is brought up to date where it is used
       --  rather than at the end of every call.
-      Settle_Cache (Item);
+      declare
+         Settled : Boolean;
+      begin
+         Settle_Cache (Item, Settled);
+      end;
 
       Status := E.Success;
 
@@ -14171,6 +14204,12 @@ package body Model_Runner.Llama is
               Cell_Of (Item, Natural (Index), Reserved);
             Slot    : constant Element_Count := Base + Cell * KV_Width;
 
+            --  Where this layer's page table was written, for a paged
+            --  session: set with the pages, so that a write that could not
+            --  finish turns the whole layer to the host rather than reading
+            --  a table that is not there.
+            Paged_Table_At : Element_Count := 0;
+
             --  Where this layer's row scales begin, which is one a position
             --  rather than one an element.
             Rows_Base : constant Element_Count :=
@@ -14389,8 +14428,19 @@ package body Model_Runner.Llama is
                then
                   if Item.Paged then
                      --  Up to the one position this token writes: it needs
-                     --  the pages its own cell reaches and no more.
+                     --  the pages its own cell reaches and no more, and its
+                     --  page table for the layer written where the sequence
+                     --  reads it.
                      Take_Pages (Item'Unchecked_Access, Reserved, Resident);
+                     if Resident then
+                        declare
+                           Wrote : Boolean;
+                        begin
+                           Paged_Table_At :=
+                             Paged_Layer_Table (Item, Natural (Index), Wrote);
+                           Resident := Wrote;
+                        end;
+                     end if;
                   else
                      Take_Block (Item'Unchecked_Access, Resident);
                   end if;
@@ -14482,11 +14532,7 @@ package body Model_Runner.Llama is
                         --  as a shift. The bases above are then offsets
                         --  inside a page, and this position's cell says
                         --  which page it lands in.
-                        Pages_At   =>
-                          (if Item.Paged
-                           then Natural
-                                  (Paged_Table_Base (Item, Natural (Index)))
-                           else 0),
+                        Pages_At   => Natural (Paged_Table_At),
                         Page_Shift =>
                           (if Item.Paged then Page_Shift_Bits else 0),
                         First_Position => Natural (Cell),
@@ -16232,6 +16278,11 @@ package body Model_Runner.Llama is
             V_Base  : constant Element_Count :=
               Values_At (Item, Natural (Index));
 
+            --  Where a paged batch's page table for the layer was written,
+            --  and whether it reached the device: a round reads its per-row
+            --  table instead, so this is for a single session's batch.
+            Paged_Table_At : Element_Count := 0;
+
             --  Whether this batch's positions reached the device's cache.
             --  Set as they are written and read where they are attended to,
             --  which is a loop later. A round starts from whether its rows
@@ -16752,6 +16803,21 @@ package body Model_Runner.Llama is
                      --  furthest cell any row of it reaches.
                      Take_Pages
                        (Item'Unchecked_Access, Reserved + Count - 1, Resident);
+
+                     --  A single session's batch reads its own page table;
+                     --  a round reads the per-row table it was given. Where
+                     --  the write could not finish the layer goes to the
+                     --  host rather than read a table that is not there.
+                     if Resident and then not Rounding then
+                        declare
+                           Wrote : Boolean;
+                        begin
+                           Paged_Table_At :=
+                             Paged_Layer_Table (Item, Natural (Index), Wrote);
+                           Resident := Wrote;
+                        end;
+                     end if;
+
                      No_Block := not Resident;
                   elsif Item.Held in Exact | Eighth | Fourth
                     and then Model_Runner.Backend."="
@@ -16875,10 +16941,7 @@ package body Model_Runner.Llama is
                         --  table above instead, a member's table a row, so
                         --  it needs neither -- only the shift that tells the
                         --  kernel the base words there are page tables.
-                        Pages_At   =>
-                          (if Item.Paged and then not Rounding
-                           then Natural (Paged_Table_Base (Item, Natural (Index)))
-                           else 0),
+                        Pages_At   => Natural (Paged_Table_At),
                         Page_Shift =>
                           (if Item.Paged then Page_Shift_Bits else 0),
                         First_Position =>
