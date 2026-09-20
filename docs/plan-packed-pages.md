@@ -23,19 +23,21 @@ packed block, at each granularity the exact paging was checked at -- past a
 page boundary, turned out under a bound, and as a round -- kept or refused by
 the reading, and priced.
 
-**Where this stands.** Stages one and two are done: the three packed kernels
-address a cache by pages, and the engine deals, places and attends a packed
-page. A session kept packed and dealt in pages says its packed block's mark
-to the bit, in bytes and in nibbles, past two pages -- the compounding is
-exact. Measured on the device, eight sessions filling twenty-three of a 2,048
-context: the q8 paged cache is 8.4 MB against the packed block's 259 and the
-exact block's 1,056; the q4 paged cache is 5.2 MB, two hundred times under the
-exact block. What is left is stage three -- a packed session's pages read back
-when it is turned out, and a packed round -- and, an optimization rather than
-a stage, the matrix instruction over a gathered copy for a long packed prompt,
-which the row kernel does correctly meanwhile. A packed session turned out of
-its pages is refused their return until that read-back is built, and attends
-on the host.
+**Where this stands.** Stages one, two and three are done: the three packed
+kernels address a cache by pages, the engine deals, places and attends a
+packed page, a packed session turned out of its pages reads them back, and a
+packed round gives each member what it gets alone. A session kept packed and
+dealt in pages says its packed block's mark to the bit -- in bytes and in
+nibbles, past two pages, turned out under a bound, and as a round. Measured on
+the device, eight sessions filling twenty-three of a 2,048 context: the q8
+paged cache is 8.4 MB against the packed block's 259 and the exact block's
+1,056; the q4 paged cache is 5.2 MB, two hundred times under the exact block;
+and held to a pool of forty-four pages, six turned out, it is 2.1 MB and still
+the block's mark to the bit. What is left is an optimization rather than a
+stage: the matrix instruction over a gathered copy for a long packed prompt,
+which the row kernel does correctly meanwhile -- Unpacked is withheld for a
+paged session, so a packed prompt reads at the row kernel's rate until the
+unpack gather in pages is wired.
 
 ## Where the two stand, and why they do not meet
 
