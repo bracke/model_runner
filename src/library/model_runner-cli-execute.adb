@@ -4373,7 +4373,17 @@ package body Model_Runner.CLI.Execute is
       Max : constant := 500;
       Shown : array (1 .. Max) of Model_Runner.Text.Bounded;
       Full  : array (1 .. Max) of Model_Runner.Text.Bounded;
+      Sizes : array (1 .. Max) of Long_Long_Integer := [others => 0];
       Count : Natural := 0;
+
+      --  What the machine has to hold a model in, or zero where it will not
+      --  say. A model much past two thirds of it will not leave room for
+      --  the cache and the rest, and is marked too big to run here.
+      Budget : constant Long_Long_Integer :=
+        Long_Long_Integer (Model_Runner.Platform.Physical_Memory);
+
+      function Too_Big (Bytes : Long_Long_Integer) return Boolean
+      is (Budget > 0 and then Bytes > Budget * 2 / 3);
 
       procedure Add (Full_Path : String; Label : String) is
       begin
@@ -4387,6 +4397,13 @@ package body Model_Runner.CLI.Execute is
             Count := Count + 1;
             Shown (Count) := Model_Runner.Text.To_Bounded (Label);
             Full  (Count) := Model_Runner.Text.To_Bounded (Full_Path);
+            begin
+               Sizes (Count) := Long_Long_Integer (Ada.Directories.Size
+                                                      (Full_Path));
+            exception
+               when others =>
+                  Sizes (Count) := 0;
+            end;
          end if;
       end Add;
 
@@ -4419,7 +4436,8 @@ package body Model_Runner.CLI.Execute is
       --  carries the size, and the reference stands in for a model file so
       --  that choosing it hands the run a name not on disk, whose download
       --  offer fetches it into the models directory.
-      procedure Add_Suggestion (Name, Size, Reference : String) is
+      procedure Add_Suggestion
+        (Name, Size, Reference : String; Bytes : Long_Long_Integer) is
       begin
          if Count < Max then
             Count := Count + 1;
@@ -4427,6 +4445,7 @@ package body Model_Runner.CLI.Execute is
               Model_Runner.Text.To_Bounded
                 ("download " & Name & " (" & Size & ")");
             Full (Count) := Model_Runner.Text.To_Bounded (Reference);
+            Sizes (Count) := Bytes;
          end if;
       end Add_Suggestion;
    begin
@@ -4470,19 +4489,15 @@ package body Model_Runner.CLI.Execute is
       --  And a few models this engine runs well, smallest first, so a
       --  first run with nothing on hand still has somewhere to start.
       Add_Suggestion ("SmolLM2-360M-Instruct", "0.3 GB",
-                      "bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M");
+                      "bartowski/SmolLM2-360M-Instruct-GGUF:Q4_K_M", 270_000_000);
       Add_Suggestion ("Qwen2.5-0.5B-Instruct", "0.5 GB",
-                      "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M");
-      Add_Suggestion ("Llama-3.2-1B-Instruct", "0.8 GB",
-                      "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M");
+                      "bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", 500_000_000);
       Add_Suggestion ("Qwen2.5-1.5B-Instruct", "1.1 GB",
-                      "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M");
+                      "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M", 1_100_000_000);
       Add_Suggestion ("gemma-2-2b-it", "1.7 GB",
-                      "bartowski/gemma-2-2b-it-GGUF:Q4_K_M");
-      Add_Suggestion ("Llama-3.2-3B-Instruct", "2.0 GB",
-                      "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M");
-      Add_Suggestion ("Phi-3.5-mini-instruct", "2.4 GB",
-                      "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M");
+                      "bartowski/gemma-2-2b-it-GGUF:Q4_K_M", 1_708_582_752);
+      Add_Suggestion ("Qwen2.5-3B-Instruct", "2.0 GB",
+                      "bartowski/Qwen2.5-3B-Instruct-GGUF:Q4_K_M", 1_930_000_000);
 
       if Count = 0 then
          return;
@@ -4490,10 +4505,18 @@ package body Model_Runner.CLI.Execute is
 
       Pres.Put_Note (Screen, "cli.choose.header");
       for I in 1 .. Count loop
-         Pres.Put_Note
-           (Screen, "cli.choose.item",
-            [Loc.Named ("index", T.Image (Long_Long_Integer (I))),
-             Loc.Named ("name", Model_Runner.Text.To_String (Shown (I)))]);
+         declare
+            Name : constant String := Model_Runner.Text.To_String (Shown (I));
+            Note : constant String :=
+              (if Too_Big (Sizes (I))
+               then " -- " & Pres.Message_Value (Screen, "cli.choose.too_big")
+               else "");
+         begin
+            Pres.Put_Note
+              (Screen, "cli.choose.item",
+               [Loc.Named ("index", T.Image (Long_Long_Integer (I))),
+                Loc.Named ("name", Name & Note)]);
+         end;
       end loop;
       Pres.Put_Note
         (Screen, "cli.choose.prompt",
