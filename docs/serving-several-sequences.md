@@ -188,14 +188,14 @@ and `Attend_And_Project`. The engine asks for a shift of zero everywhere
 today, which is the same arithmetic and the whole device suite unchanged, so
 what is added is the room to page and not a page.
 
-**Stage two -- the engine, in part.** A session opened paged is given pages
-of the device's cache instead of a block: `Page_Owner` deals the slots,
-`Pages` records each page's base and `Page_First` where a layer's pages begin,
-the per-layer table is written into the cache a layer at a time as the round's
-is, settling reads the scattered pages back into the host's contiguous copy,
-and close gives the pages back. The gate is met: a paged session gives, bit
-for bit, the logits it gives in a block, past a hundred and thirty positions
-and two pages, on the device.
+**Stage two -- the engine.** A session opened paged is given pages of the
+device's cache instead of a block: `Page_Owner` deals the slots, `Pages`
+records each page's base and `Page_First` where a layer's pages begin, the
+per-layer table is written into the cache a layer at a time as the round's is,
+settling reads the scattered pages back into the host's contiguous copy, and
+close gives the pages back. The gate is met: a paged session gives, bit for
+bit, the logits it gives in a block, past a hundred and thirty positions and
+two pages, on the device.
 
 Two things the building settled. A layer's page table carries a couple of
 entries past its own pages, each a valid page, because a kernel reads a chunk
@@ -205,11 +205,21 @@ step, not the chained head step: the head step read the page table from the
 same binding it wrote the cache through, and a driver dropped the writes, so
 until that is bound apart and proven the same way a paged session mirrors.
 
-What is left is the capacity win itself. A paged session still takes every
-page at open, so it holds a block's worth; taking a page only as a position
-needs it -- growth, and with it eviction and the round of paged members -- is
-the stage after, and it is a change to when pages are taken and not to how
-they are read.
+**Stage three -- the capacity, taken lazily.** A page is dealt only when a
+position reaches it, so a session holds `Page_Count` pages a layer -- as many
+as its filled cells reach -- and not its whole context. `Take_Pages` is given
+the highest position a pass will write and grows each layer to the page that
+reaches, at the first free slot, and the reserve grows with it; a session that
+fills a hundred of two thousand positions holds two pages a layer where a
+block held the room for thirty-two. `Pages_Held` reads the count, and the gate
+is a second one: a paged session past the first page holds one more page a
+layer than before it and no more, far below the block's worth.
+
+What is left is turning that capacity into more sessions at once: eviction of
+a paged session's pages, and a round whose members are paged, so that sixteen
+short sessions cost sixteen short sessions' pages rather than sixteen whole
+contexts. Both are how pages are dealt between sessions, not how one session's
+are read.
 
 ## Staging
 

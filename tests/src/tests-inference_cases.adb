@@ -4884,6 +4884,107 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Says_What_A_Block_Session_Says;
 
+   ------------------------------------------------------
+   -- A_Paged_Session_Holds_Only_What_It_Fills --
+   ------------------------------------------------------
+
+   --  The capacity a paging buys: a session takes a page of the device's
+   --  cache only when a position reaches it, so a session that has filled a
+   --  fraction of its context holds a fraction of the pages -- not the
+   --  whole context a block holds whether or not the session fills it.
+   --
+   --  The context is large and the session fills little of it. After ten
+   --  positions each layer holds one page; stepped past the sixty-fourth,
+   --  where a page ends, each holds two. The count doubling is the layers
+   --  each taking their second page as the boundary is crossed, and its
+   --  being far below the context's worth -- two pages of thirty-two -- is
+   --  the room a block would have held for nothing.
+   procedure A_Paged_Session_Holds_Only_What_It_Fills
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room : constant := 2048;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Paged : L.Session;
+            Logits : Logit_Vector;
+
+            After_Ten, After_Seventy : Natural := 0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               L.Open (Paged, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the paged session did not open");
+
+               for Step in 1 .. 10 loop
+                  L.Evaluate (Paged, Under.Ready, Token_Of (Step), Logits,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status), "the paged session failed early");
+               end loop;
+
+               After_Ten := L.Pages_Held;
+
+               for Step in 11 .. 70 loop
+                  L.Evaluate (Paged, Under.Ready, Token_Of (Step), Logits,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the paged session failed past a page");
+               end loop;
+
+               After_Seventy := L.Pages_Held;
+
+               Assert (After_Ten > 0,
+                       "a paged session that has read ten positions holds no"
+                       & " page of the device's cache");
+
+               --  A page is sixty-four positions: ten fill one a layer,
+               --  seventy fill two, so the second reading is the first
+               --  doubled -- every layer having taken its second page.
+               Assert (After_Seventy = 2 * After_Ten,
+                       "a paged session past the first page holds"
+                       & Integer'Image (After_Seventy) & " pages, not the"
+                       & Integer'Image (2 * After_Ten) & " that is one more a"
+                       & " layer");
+
+               --  And far below the context's worth: a block would have
+               --  held thirty-two pages a layer for a session that filled
+               --  two. After_Ten is the layers, so the whole context is
+               --  thirty-two of it.
+               Assert (After_Seventy < 32 * After_Ten,
+                       "a paged session holds as much as a block would, so"
+                       & " paging bought nothing");
+
+               L.Close (Paged);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Session_Holds_Only_What_It_Fills;
+
    --------------------------------------------------------------
    -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
    --------------------------------------------------------------
@@ -13858,6 +13959,11 @@ package body Tests.Inference_Cases is
          "a session whose device cache is dealt in pages rather than one "
          & "block gives, bit for bit, the logits it gives in a block, past "
          & "two pages");
+      Register_Routine
+        (T, A_Paged_Session_Holds_Only_What_It_Fills'Access,
+         "a paged session takes a page of the device's cache only as a "
+         & "position reaches it, so it holds a fraction of the pages a "
+         & "block would for a context it fills little of");
       Register_Routine
         (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
          "a hybrid round whose members sit at different positions gives "

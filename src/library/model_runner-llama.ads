@@ -1780,6 +1780,17 @@ package Model_Runner.Llama is
    --  @return Blocks of the device's cache held by any session.
    function Blocks_Held return Natural;
 
+   --  How many pages of the device's cache are held, by any paged session.
+   --
+   --  What tells the capacity a paging buys: a session that has filled a
+   --  fraction of its context holds a fraction of the pages a block would,
+   --  so this is small where a block-dealt session of the same context
+   --  would hold its whole worth. Zero where no device is open and where
+   --  no session is paged.
+   --
+   --  @return Pages of the device's cache held by any session.
+   function Pages_Held return Natural;
+
    --  And seats of its room of rings.
    --
    --  @return Seats held by any session.
@@ -2259,10 +2270,16 @@ private
       --  sentinel last entry so a layer's count is the next entry less its
       --  own. Null, and Paged false, for a session dealt a block, which is
       --  everything until the engine lays one out in pages.
+      --  A page is taken only as a position needs it, so a session holds
+      --  as many pages as it has filled rather than as many as its context
+      --  could hold: Page_Count is how many of each layer's pages have been
+      --  dealt so far, and Page_First plus that says which entries of Pages
+      --  hold a base. Paged_In is true once any page is held.
       Paged      : Boolean := False;
       Paged_In   : Boolean := False;
       Pages      : Cell_Counts_Access := null;
       Page_First : Cell_Counts_Access := null;
+      Page_Count : Cell_Counts_Access := null;
 
       --  When this session last asked for a block of that cache, and when
       --  it last asked for a seat in the room of rings, on the clock that
