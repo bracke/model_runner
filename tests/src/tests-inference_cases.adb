@@ -5475,6 +5475,136 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Turned_Out_Says_What_It_Said;
 
+   ------------------------------------------------------------------
+   -- A_Packed_Paged_Session_Turned_Out_Says_What_It_Said --
+   ------------------------------------------------------------------
+
+   --  The turn-out and read-back, packed: a packed paged session turned out
+   --  of its pages when the pool fills reads its bytes and scales back and,
+   --  brought back, writes them anew and says what a packed session that
+   --  kept its pages says. In both packed storages, so the byte and nibble
+   --  read-backs are each exercised.
+   procedure A_Packed_Paged_Session_Turned_Out_Says_What_It_Said
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room : constant := 200;
+      Fill : constant := 100;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      Probe : constant Vocab.Token_Id := 5;
+
+      Storages : constant array (1 .. 2) of L.Cache_Precision :=
+        [L.Eighth, L.Fourth];
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+
+      procedure Say_Fill (Under : in out Harness; Live : in out L.Session) is
+         Status  : E.Error_Info;
+         Ignored : Logit_Vector;
+      begin
+         for Step in 1 .. Fill loop
+            L.Evaluate (Live, Under.Ready, Token_Of (Step), Ignored,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "a packed paged session did not fill");
+         end loop;
+      end Say_Fill;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+            Status : E.Error_Info;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               for Storage of Storages loop
+                  declare
+                     Reference, Subject, Filler : L.Session;
+                     Wanted, After : Logit_Vector;
+                     Subject_Pages : Natural := 0;
+                     Turned_Before : Natural := 0;
+                     Worst : N.Real := 0.0;
+                  begin
+                     L.Open (Reference, Under.Ready, Context => Room,
+                             Cache => Storage, Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status), "the reference did not open");
+                     Say_Fill (Under, Reference);
+                     L.Evaluate (Reference, Under.Ready, Probe, Wanted,
+                                 Status => Status);
+                     Assert (E.Is_Ok (Status), "the reference did not answer");
+                     L.Close (Reference);
+
+                     L.Open (Subject, Under.Ready, Context => Room,
+                             Cache => Storage, Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status), "the subject did not open");
+                     Say_Fill (Under, Subject);
+                     Subject_Pages := L.Pages_Held;
+                     Assert (Subject_Pages > 0, "the subject holds no page");
+
+                     L.Limit_Page_Pool (Subject_Pages);
+                     Turned_Before := L.Pages_Turned;
+
+                     L.Open (Filler, Under.Ready, Context => Room,
+                             Cache => Storage, Paged => True, Status => Status);
+                     Assert (E.Is_Ok (Status), "the filler did not open");
+                     Say_Fill (Under, Filler);
+
+                     Assert (L.Pages_Turned > Turned_Before,
+                             "no packed session was turned out when the pool"
+                             & " filled");
+                     Assert (not L.Holds_Pages (Subject),
+                             "the packed subject kept its pages though the"
+                             & " pool filled");
+
+                     L.Close (Filler);
+                     L.Limit_Page_Pool (Natural'Last);
+
+                     L.Evaluate (Subject, Under.Ready, Probe, After,
+                                 Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "the packed subject did not answer after being"
+                             & " turned out: "
+                             & E.Error_Code'Image (Status.Code));
+                     Assert (L.Holds_Pages (Subject),
+                             "the packed subject did not take pages again");
+
+                     for Index in Logit_Vector'Range loop
+                        Worst :=
+                          N.Real'Max
+                            (Worst, abs (After (Index) - Wanted (Index)));
+                     end loop;
+
+                     Assert (Worst <= 1.0E-4,
+                             "a packed paged session in "
+                             & L.Cache_Name (Storage)
+                             & " turned out and back says"
+                             & N.Real'Image (Worst) & " away from one that"
+                             & " kept its pages");
+
+                     L.Close (Subject);
+                  end;
+               end loop;
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Packed_Paged_Session_Turned_Out_Says_What_It_Said;
+
    --------------------------------------------------------
    -- A_Round_Of_Paged_Members_Says_What_Each_Says --
    --------------------------------------------------------
@@ -14752,6 +14882,11 @@ package body Tests.Inference_Cases is
          "a paged session turned out of its pages when the pool fills reads "
          & "them back and, brought back, writes them anew and says what it "
          & "said before");
+      Register_Routine
+        (T, A_Packed_Paged_Session_Turned_Out_Says_What_It_Said'Access,
+         "a packed paged session turned out of its pages reads its bytes and "
+         & "scales back and, brought back, says what a packed session that "
+         & "kept its pages says, in bytes and in nibbles");
       Register_Routine
         (T, A_Round_Of_Paged_Members_Says_What_Each_Says'Access,
          "a round whose members are paged gives each member, past a page "
