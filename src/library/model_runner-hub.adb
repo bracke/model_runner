@@ -851,7 +851,28 @@ package body Model_Runner.Hub is
          end;
       end if;
 
-      if Status = HE.Integrity_Check_Failed then
+      if Outcome.HTTP_Status_Code in 401 | 403 then
+         --  A gated repository, which the hub answers the same way whether
+         --  the token is missing or without access. Say which so the fix
+         --  is the right one: accept the terms and set a token, or check
+         --  the token that is set.
+         if Model_Runner.Platform.Environment_Value ("HF_TOKEN") /= ""
+           or else Model_Runner.Config.Value ("hf-token") /= ""
+         then
+            Reason := T.To_Bounded
+              ("the hub refused this repository (HTTP"
+               & Natural'Image (Outcome.HTTP_Status_Code)
+               & "); a token is set but may be invalid or without access -- "
+               & "accept the model's terms on its hub page, or check the "
+               & "token");
+         else
+            Reason := T.To_Bounded
+              ("this repository is gated and no token is set (HTTP"
+               & Natural'Image (Outcome.HTTP_Status_Code)
+               & "); accept the model's terms on its hub page, then set "
+               & "HF_TOKEN or hf-token in the settings file");
+         end if;
+      elsif Status = HE.Integrity_Check_Failed then
          Reason := T.To_Bounded
            ("the download did not match the hub's checksum and was "
             & "discarded; run it again to fetch it anew");
