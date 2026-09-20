@@ -298,19 +298,22 @@ many times more of these in the cache it has. `tests speed --turns N --paged`
 and `--round N --paged` serve them, and `docs/measured-figures.txt` keeps the
 run.
 
-**And sized to the fill.** A page holds sixty-four positions of a layer by
-default, so a session filling twenty-three of its context wastes forty-one of
-the page's positions -- the page is taken whole as the first position reaches
-it. `Set_Page_Size` moves it: a server whose callers fill little may hold the
-page to thirty-two, where the same twenty-three round up wasting nine, and the
-cache halves -- 16.5 MB, sixty-four times under the block cache -- for the same
-answer to the bit. Smaller pays back less and costs more: sixteen rounds the
-same twenty-three up to thirty-two again, saving no cache and doubling the
-pages and the table each layer carries. The size is a power of two of at least
-sixteen -- a page and a place inside it are a shift and a mask, and a tile of
-the matrix instruction must not straddle a page -- and it is one geometry with
-the pages, so it is set before a session holds any. `--page-size N` measures
-it.
+**And sized to the fill.** A page is taken whole as its first position
+reaches it, so it holds up to its own size short of a whole one wasted: a
+session filling twenty-three of its context holds a sixty-four-page's whole
+sixty-four, forty-one of them empty, but a sixteen-page's thirty-two. A
+measurement across page sizes and fills settled the size (`docs/measured-
+figures.txt`): the cache a page holds is the fill rounded up to it, and the
+throughput is the same at every size, so the smallest page the tile allows --
+sixteen -- wastes least at no cost in time, and is the default. A larger page
+only ties, where the fill already rounds to its boundary, and then costs the
+same cache in fewer pages, which buys nothing; a fill of seventy-two, just
+past sixty-four, holds 41 MB in sixteen-pages against 66 in sixty-four-pages.
+`Set_Page_Size` moves it -- a power of two of at least sixteen, since a page
+and a place inside it are a shift and a mask and the matrix tile must not
+straddle a page -- for a server holding very many long fills, which may spend
+a larger page to hold fewer pages against the pool's cap. It is one geometry
+with the pages, set before a session holds any; `--page-size N` measures it.
 
 ## Staging
 

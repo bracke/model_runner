@@ -4956,16 +4956,21 @@ package body Model_Runner.Llama is
    --  The cache dealt in pages rather than blocks. A page holds this many
    --  positions of one layer, its keys and then its values -- a power of
    --  two so a position's page and its place inside it are a shift and a
-   --  mask, which is what the kernels read the cache by. Sixty-four is a
-   --  multiple of the matrix instruction's sixteen, so a tile of keys
-   --  never straddles a page.
+   --  mask, which is what the kernels read the cache by, and a multiple of
+   --  the matrix instruction's sixteen so a tile of keys never straddles a
+   --  page.
    --
-   --  Set_Page_Size moves it, kept in step with the shift; a server whose
-   --  sessions fill little of a context holds fewer wasted positions in a
-   --  smaller page, at more pages and so a wider table. The two are one
-   --  geometry, changed only while no page is held.
-   Page_Positions  : Natural := 64;
-   Page_Shift_Bits : Natural := 6;
+   --  Sixteen, the smallest the tile allows, because that is what a
+   --  measurement found optimal: the cache a page holds is a session's fill
+   --  rounded up to the page, so a smaller page wastes less, and the
+   --  throughput is the same at every size -- the wider table more pages
+   --  carry costs nothing in time. A larger page only ever ties, where the
+   --  fill rounds to its boundary. Set_Page_Size moves it, kept in step
+   --  with the shift; a server holding very many long fills may take a
+   --  larger page to spend fewer pages against the pool's cap. The two are
+   --  one geometry, changed only while no page is held.
+   Page_Positions  : Natural := 16;
+   Page_Shift_Bits : Natural := 4;
 
    --  Extra entries a layer's page table carries past its own pages, each
    --  the base of a valid page. A kernel reads its keys and values in
