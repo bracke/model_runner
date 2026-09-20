@@ -1339,8 +1339,7 @@ package body Model_Runner.CLI.Execute is
               (Screen, "cli.download.fetching",
                [Loc.Named ("name", T.To_String (Files (I).Name))]);
             Model_Runner.Hub.Fetch
-              (T.To_String (Repo), T.To_String (Files (I).Name),
-               Files (I).Size, Local (I), Ok, Reason);
+              (T.To_String (Repo), Files (I), Local (I), Ok, Reason);
             if not Ok then
                Pres.Put_Note
                  (Screen, "cli.download.failed",

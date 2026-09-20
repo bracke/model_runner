@@ -16,11 +16,16 @@ with Model_Runner.Text;
 --  Task safety: each call is self-contained; run from one task.
 package Model_Runner.Hub is
 
-   --  A file to fetch: its name within the repository and its size, so a
-   --  download can tell a whole file from a part left by an interruption.
+   --  A file to fetch: its name within the repository, its size so a
+   --  download can tell a whole file from a part left by an interruption,
+   --  and the SHA-256 the hub records for it so a whole file can be told
+   --  from a corrupt one. Has_Hash is false where the hub gave no digest,
+   --  and then the size is all there is to check the file against.
    type Download_File is record
-      Name : Model_Runner.Text.Bounded;
-      Size : Interfaces.Unsigned_64 := 0;
+      Name     : Model_Runner.Text.Bounded;
+      Size     : Interfaces.Unsigned_64 := 0;
+      SHA256   : String (1 .. 64) := [others => '0'];
+      Has_Hash : Boolean := False;
    end record;
 
    --  The files a reference resolves to. A single-file model is one; a
@@ -72,16 +77,19 @@ package Model_Runner.Hub is
    --  known, and then the download is not resumed. HF_TOKEN, where the
    --  environment carries it, authorizes a gated repository.
    --
+   --  The file arrived whole only when its bytes match the hub's SHA-256,
+   --  where the hub gave one: a truncated or corrupt download is a failure,
+   --  not a model, and the file it left is removed so a run does not open
+   --  it or take it for done.
+   --
    --  @param Repo The owner/repo the file belongs to.
-   --  @param File_Name The file within it.
-   --  @param Size The file's whole size in bytes, or zero when unknown.
+   --  @param File The file to fetch: its name, size and digest.
    --  @param Dest_Path Where to write it.
-   --  @param Ok True when the file arrived whole.
+   --  @param Ok True when the file arrived whole and matched its digest.
    --  @param Reason A short account when Ok is false.
    procedure Fetch
      (Repo      : String;
-      File_Name : String;
-      Size      : Interfaces.Unsigned_64;
+      File      : Download_File;
       Dest_Path : String;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded);

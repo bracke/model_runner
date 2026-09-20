@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Directories;
 
 with Http_Client.Clients;
 with Http_Client.Errors;
@@ -10,6 +11,7 @@ with Model_Runner.Platform;
 package body Model_Runner.Hub is
 
    use type Interfaces.Unsigned_64;
+   use type Http_Client.Errors.Result_Status;
 
    package T renames Model_Runner.Text;
    package HC renames Http_Client.Clients;
@@ -101,6 +103,55 @@ package body Model_Runner.Hub is
       return 0;
    end Size_After;
 
+   --  The 64-character SHA-256 the hub's blobs listing puts in each file's
+   --  lfs record, soon after its rfilename. Found is false where none is
+   --  close, and then the file is checked by its size alone.
+   procedure Hash_After
+     (Body_Text : String;
+      From      : Natural;
+      Hash      : out String;
+      Found     : out Boolean)
+   is
+      Marker : constant String := """sha256""";
+      Window : constant Natural :=
+        Natural'Min (Body_Text'Last, From + 400);
+      Cursor : Natural := From;
+   begin
+      Hash  := [others => '0'];
+      Found := False;
+      while Cursor <= Window - Marker'Length + 1 loop
+         if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
+            declare
+               Scan : Natural := Cursor + Marker'Length;
+            begin
+               while Scan <= Body_Text'Last
+                 and then Body_Text (Scan) /= '"'
+               loop
+                  Scan := Scan + 1;
+               end loop;
+               Scan := Scan + 1;
+               declare
+                  Start : constant Natural := Scan;
+               begin
+                  while Scan <= Body_Text'Last
+                    and then Body_Text (Scan) /= '"'
+                  loop
+                     Scan := Scan + 1;
+                  end loop;
+                  if Scan <= Body_Text'Last
+                    and then Scan - Start = Hash'Length
+                  then
+                     Hash  := Body_Text (Start .. Scan - 1);
+                     Found := True;
+                  end if;
+               end;
+               return;
+            end;
+         end if;
+         Cursor := Cursor + 1;
+      end loop;
+   end Hash_After;
+
    -------------------
    -- Is_Reference --
    -------------------
@@ -187,11 +238,18 @@ package body Model_Runner.Hub is
       Matches : Natural := 0;
 
       procedure Note_Candidate
-        (Name : String; Size : Interfaces.Unsigned_64) is
+        (Name     : String;
+         Size     : Interfaces.Unsigned_64;
+         Hash     : String;
+         Has_Hash : Boolean) is
       begin
          if Matches < Max_Files then
             Matches := Matches + 1;
-            Files (Matches) := (Name => T.To_Bounded (Name), Size => Size);
+            Files (Matches) :=
+              (Name     => T.To_Bounded (Name),
+               Size     => Size,
+               SHA256   => Hash,
+               Has_Hash => Has_Hash);
          end if;
       end Note_Candidate;
 
@@ -287,7 +345,15 @@ package body Model_Runner.Hub is
                            if Ends_With (Name, ".gguf")
                              and then Contains (Name, T.To_String (Quant))
                            then
-                              Note_Candidate (Name, Size_After (Body_Text, Scan));
+                              declare
+                                 Digest : String (1 .. 64);
+                                 Have   : Boolean;
+                              begin
+                                 Hash_After (Body_Text, Scan, Digest, Have);
+                                 Note_Candidate
+                                   (Name, Size_After (Body_Text, Scan),
+                                    Digest, Have);
+                              end;
                            end if;
                         end;
                      end if;
@@ -367,8 +433,7 @@ package body Model_Runner.Hub is
 
    procedure Fetch
      (Repo      : String;
-      File_Name : String;
-      Size      : Interfaces.Unsigned_64;
+      File      : Download_File;
       Dest_Path : String;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded)
@@ -396,14 +461,22 @@ package body Model_Runner.Hub is
       --  stops at it and a run that fills the file exactly is done. A size
       --  past what the field holds is left zero: the resume still works
       --  from the stream's own range, only the size check is skipped.
-      if Size > 0
-        and then Size <= Interfaces.Unsigned_64 (Natural'Last)
+      if File.Size > 0
+        and then File.Size <= Interfaces.Unsigned_64 (Natural'Last)
       then
-         Options.Expected_Size := Natural (Size);
+         Options.Expected_Size := Natural (File.Size);
+      end if;
+
+      --  And the digest the hub records, where it gave one, so the bytes on
+      --  disk are the model's and not a mangling the size alone would pass.
+      if File.Has_Hash then
+         Options.Verify_SHA256 := True;
+         Options.Expected_SHA256_Hex := File.SHA256;
       end if;
 
       Status := HC.Download_To_File
-        (URL           => Host & "/" & Repo & "/resolve/main/" & File_Name,
+        (URL           => Host & "/" & Repo & "/resolve/main/"
+                          & T.To_String (File.Name),
          Path          => Dest_Path,
          Result        => Outcome,
          Options       => Options,
@@ -411,6 +484,30 @@ package body Model_Runner.Hub is
 
       if HE.Is_Success (Status) then
          Ok := True;
+         return;
+      end if;
+
+      --  A file left at or past its whole size on a failure is not a part
+      --  to resume but a whole one the digest or the size check turned
+      --  down; it is removed, so a run does not open it or a later fetch
+      --  take it for done. A shorter part is left where it is to resume.
+      if File.Size > 0
+        and then Ada.Directories.Exists (Dest_Path)
+        and then Interfaces.Unsigned_64 (Ada.Directories.Size (Dest_Path))
+                 >= File.Size
+      then
+         begin
+            Ada.Directories.Delete_File (Dest_Path);
+         exception
+            when others =>
+               null;
+         end;
+      end if;
+
+      if Status = HE.Integrity_Check_Failed then
+         Reason := T.To_Bounded
+           ("the download did not match the hub's checksum and was "
+            & "discarded; run it again to fetch it anew");
       else
          Reason := T.To_Bounded
            ("the download stopped (" & HE.Result_Status'Image (Status)
