@@ -472,6 +472,17 @@ to 16.5 MB. `tests speed --turns N --paged`, with `--page-pool P` and
 `--page-size S`, measures the three; `Pages_Held`, `Pages_Turned`,
 `Limit_Page_Pool` and `Set_Page_Size` are what a server reads and turns.
 
+**Five — under way.** The pages kept packed as well: a session's cache in
+bytes or nibbles, dealt in pages, so paging's fraction of the positions and
+packing's quarter or eighth of each compound. The three packed kernels and the
+whole layer place and attend a packed page, and a packed paged session says
+its packed block's mark to the bit, in both storages, past two pages. The same
+eight sessions hold 8.4 MB of q8 pages against the packed block's 259, or 5.2
+MB of q4 against 160 -- two hundred times under the exact block. `--kv-cache`
+on `tests speed --turns` serves them; `docs/plan-packed-pages.md` has the plan
+and what is left, which is a packed session's read-back when it is turned out,
+and a packed round.
+
 ## How it will be checked
 
 The correctness gate is the existing two-session test generalised, and it is a

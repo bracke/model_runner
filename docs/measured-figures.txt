@@ -22126,3 +22126,32 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 # least sixteen, no larger than the sessions fill.
 #
 # model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
+
+# ---------------------------------------------------------------------------
+# Paging and packing at once. A session's cache kept in bytes (q8) or nibbles
+# (q4) as well as dealt in pages, so the two savings compound -- a fraction of
+# the positions filled, and a quarter to an eighth of each. The same eight
+# sessions, filling twenty-three of a 2,048 context:
+#
+#   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
+#                --kv-cache q8|q4 [--paged]
+#
+#   storage        block      paged     digest
+#   exact (f32)   1056.0 MB   33.0 MB   45557FE1... (earlier run)
+#   q8             259.0 MB    8.4 MB   8CAE87811D8D465E
+#   q4             160.1 MB    5.2 MB   6F8652401BDA3A59
+#
+# Each paged run says its block's mark to the bit, past a page boundary. The
+# paged packed cache is about thirty times under the packed block -- paging's
+# win, undiminished by the packing -- and the q4 paged cache is 5.2 MB against
+# the exact block's 1,056: two hundred times less, paging and packing
+# multiplied. A memory-bound server holds that many times more of these
+# sessions in the cache it has. The compounding is exact because a packed page
+# is the packed block's own layout at one page of positions, and the packed
+# kernels read and write it a position's page at a time.
+#
+# The paged packed batch takes the row kernel, not the matrix instruction over
+# a gathered copy, so a long prompt pays the row kernel's rate until the unpack
+# gather in pages is built; a turn-taking decode is at the block's rate.
+#
+# model: TinyLlama-1.1B-Chat iq4_xs on the device; load ~0.3 of 16.
