@@ -16893,7 +16893,6 @@ package body Model_Runner.Llama is
                            else 0),
                         Causal    => Settings.Causal,
                         Max_Bias  => Settings.Max_Bias,
-                        Table_At  => 0,
 
                         --  A paged batch reads its own page table for the
                         --  layer, and where each new position lands follows
@@ -17433,13 +17432,6 @@ package body Model_Runner.Llama is
                                  then Reserved
                                  else Reserved + Count - 1));
 
-                     --  A round reads its per-row table out of the cache: a
-                     --  row's last position and the block it reads, neither of
-                     --  which follows from the batch's first position, because
-                     --  a round's rows do not sit one after another in one
-                     --  sequence.
-                     Table : constant Natural := 0;
-
                      --  Where this session's own block begins, for a batch. A
                      --  round says nothing here: the kernel adds each row's
                      --  own block out of the table, and a base added twice
@@ -17489,7 +17481,6 @@ package body Model_Runner.Llama is
                            Window    => Window_Here,
                            Causal    => Settings.Causal,
                            Max_Bias  => Settings.Max_Bias,
-                           Table_At  => Table,
                            Packed    => Packed_Shape (Item, Base, V_Base,
                                                       KV_Width, V_Width,
                                                       Seated => False),

@@ -935,8 +935,6 @@ package Model_Runner.Backend.Device is
    --  @param Causal True where a position may see only what precedes it.
    --  @param Max_Bias How steeply a head's attention falls off with
    --    distance, or zero for a model told where a token is otherwise.
-   --  @param Table_At A round: where in the cache its per-row table
-   --    begins, counted in elements. Zero for a batch, which needs none.
    --  @param Packed The session's packed block, where it has one, which
    --    the attention step then reads with the packed kernel; K_Base and
    --    V_Base go unread.
@@ -979,7 +977,6 @@ package Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Table_At    : Natural := 0;
       Packed      : Packed_Cache := Not_Packed;
       Sinks_At    : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
@@ -1159,12 +1156,6 @@ package Model_Runner.Backend.Device is
    --    where the caller will read them out of the device's own cache
    --    afterwards instead, which is the same bytes without a step of
    --    this layer's waiting for them.
-   --  @param Table_At A round: where in the cache its per-row table begins,
-   --    counted in elements. The step that writes the cache and the step
-   --    that attends both read a row's block and a row's position out of it
-   --    rather than counting from the first row's, so the bases above are
-   --    the layer's offset alone. Zero for a batch, whose rows are one
-   --    session's own run of positions.
    --  @param Query_Norm A normalization of every query head after it is
    --    projected and before it is turned, each head over its own mean
    --    square and by this weight, one head wide -- what Qwen3 states.
@@ -1339,7 +1330,6 @@ package Model_Runner.Backend.Device is
       Carry_In       : Boolean := False;
       Carry_Out      : Boolean := False;
       Mirror         : Boolean := True;
-      Table_At       : Natural := 0;
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       Router         : Model_Runner.Tensors.View :=

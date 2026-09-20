@@ -1483,7 +1483,6 @@ package body Model_Runner.Backend.Device is
       Window      : Natural := 0;
       Causal      : Boolean := True;
       Max_Bias    : Model_Runner.Numerics.Real := 0.0;
-      Table_At    : Natural := 0;
       Packed      : Packed_Cache := Not_Packed;
       Sinks_At    : Natural := 0;
       Alpha : Model_Runner.Numerics.Real := 0.0;
@@ -1575,7 +1574,7 @@ package body Model_Runner.Backend.Device is
         (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
          K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
          Window => Window, Causal => Causal, Max_Bias => Max_Bias,
-         Kept => False, Table_At => Table_At, Packed => Packed,
+         Kept => False, Packed => Packed,
          Sinks_At => Sinks_At,
          Pages_At => Pages_At, Page_Shift => Page_Shift);
       if not Added then
@@ -2131,7 +2130,6 @@ package body Model_Runner.Backend.Device is
       Carry_In       : Boolean := False;
       Carry_Out      : Boolean := False;
       Mirror         : Boolean := True;
-      Table_At       : Natural := 0;
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       Router         : Model_Runner.Tensors.View :=
@@ -2837,7 +2835,6 @@ package body Model_Runner.Backend.Device is
          if Products.Readies_Heads (Engine)
            and then Rotary > 0
            and then not Mirror
-           and then Table_At = 0
            and then Head_Size <= 256
            and then Natural (Key.Rows) = Natural (Value.Rows)
            and then Natural (Key.Rows) mod Head_Size = 0
@@ -3020,7 +3017,7 @@ package body Model_Runner.Backend.Device is
          --  packed session's block.
          Products.Add_Place
            (Steps, Natural (Key.Rows), KV_Width, At_Key, Added,
-            From_Step => Step_K_Turned, Table_At => Table_At,
+            From_Step => Step_K_Turned,
             Packed => Pack_Keys,
             Pages_At => Pages_At, Page_Shift => Page_Shift,
             First_Position => First_Position);
@@ -3031,7 +3028,7 @@ package body Model_Runner.Backend.Device is
 
          Products.Add_Place
            (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
-            From_Step => Step_V, Table_At => Table_At,
+            From_Step => Step_V,
             Packed => Pack_Values,
             Pages_At => Pages_At, Page_Shift => Page_Shift,
             First_Position => First_Position);
@@ -3080,7 +3077,7 @@ package body Model_Runner.Backend.Device is
             K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
             Window => Window, Causal => Causal, Max_Bias => Max_Bias,
             Chained => True, From_Step => Step_Q_Turned, Kept => False,
-            Table_At => Table_At, Packed => Packed, Sinks_At => Sinks_At,
+            Packed => Packed, Sinks_At => Sinks_At,
             Pages_At => Pages_At, Page_Shift => Page_Shift);
          if not Added then
             return;
