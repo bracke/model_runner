@@ -4,6 +4,7 @@ with Http_Client.Clients;
 with Http_Client.Errors;
 with Http_Client.Headers;
 
+with Model_Runner.GGUF.Shards;
 with Model_Runner.Platform;
 
 package body Model_Runner.Hub is
@@ -11,8 +12,23 @@ package body Model_Runner.Hub is
    package T renames Model_Runner.Text;
    package HC renames Http_Client.Clients;
    package HE renames Http_Client.Errors;
+   package GS renames Model_Runner.GGUF.Shards;
 
    Host : constant String := "https://huggingface.co";
+
+   --  How many shards a shard-named file says its model is: the count in
+   --  its -of-000NN suffix, the five digits before ".gguf". Zero for a
+   --  name that is not a shard's or whose count will not read.
+   function Shard_Total (Name : String) return Natural is
+   begin
+      if not GS.Is_Shard_Name (Name) then
+         return 0;
+      end if;
+      return Natural'Value (Name (Name'Last - 9 .. Name'Last - 5));
+   exception
+      when others =>
+         return 0;
+   end Shard_Total;
 
    function Upper (Item : String) return String
      renames Ada.Characters.Handling.To_Upper;
@@ -119,6 +135,7 @@ package body Model_Runner.Hub is
      (Reference : String;
       Repo      : out Model_Runner.Text.Bounded;
       File_Name : out Model_Runner.Text.Bounded;
+      Shards    : out Natural;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded)
    is
@@ -126,32 +143,44 @@ package body Model_Runner.Hub is
       Result : HC.Client_Result;
       Status : HE.Result_Status;
 
+      Max_Candidates : constant := 64;
+      Candidate : array (1 .. Max_Candidates) of T.Bounded;
       Matches   : Natural := 0;
-      First_Hit : T.Bounded := T.Empty;
-      Listed    : String (1 .. 400) := [others => ' '];
-      Listed_Up : Natural := 0;
 
       procedure Note_Candidate (Name : String) is
       begin
-         Matches := Matches + 1;
-         if Matches = 1 then
-            First_Hit := T.To_Bounded (Name);
-         end if;
-         --  The first few, for a message that says what did match when
-         --  several did and the caller has to choose.
-         if Listed_Up + Name'Length + 2 <= Listed'Last then
-            if Listed_Up > 0 then
-               Listed (Listed_Up + 1 .. Listed_Up + 2) := ", ";
-               Listed_Up := Listed_Up + 2;
-            end if;
-            Listed (Listed_Up + 1 .. Listed_Up + Name'Length) := Name;
-            Listed_Up := Listed_Up + Name'Length;
+         if Matches < Max_Candidates then
+            Matches := Matches + 1;
+            Candidate (Matches) := T.To_Bounded (Name);
          end if;
       end Note_Candidate;
+
+      --  The candidates, comma-joined, for a message that names what
+      --  matched when the caller has to choose.
+      function Listed return String is
+         Room : String (1 .. 400) := [others => ' '];
+         Used : Natural := 0;
+      begin
+         for I in 1 .. Matches loop
+            declare
+               Name : constant String := T.To_String (Candidate (I));
+            begin
+               exit when Used + Name'Length + 2 > Room'Last;
+               if Used > 0 then
+                  Room (Used + 1 .. Used + 2) := ", ";
+                  Used := Used + 2;
+               end if;
+               Room (Used + 1 .. Used + Name'Length) := Name;
+               Used := Used + Name'Length;
+            end;
+         end loop;
+         return Room (1 .. Used);
+      end Listed;
 
    begin
       Ok := False;
       File_Name := T.Empty;
+      Shards := 0;
       Reason := T.Empty;
 
       Split (Reference, Repo, Quant);
@@ -218,18 +247,69 @@ package body Model_Runner.Hub is
          end loop;
       end;
 
-      if Matches = 1 then
-         File_Name := First_Hit;
-         Ok := True;
-      elsif Matches = 0 then
+      if Matches = 0 then
          Reason := T.To_Bounded
            ("no .gguf file for that quant in " & T.To_String (Repo)
             & " -- the repository or the quant may be wrong");
-      else
-         Reason := T.To_Bounded
-           ("more than one file matched; name the quant more exactly: "
-            & Listed (1 .. Listed_Up));
+         return;
       end if;
+
+      declare
+         All_Shards : Boolean := True;
+      begin
+         for I in 1 .. Matches loop
+            if not GS.Is_Shard_Name (T.To_String (Candidate (I))) then
+               All_Shards := False;
+            end if;
+         end loop;
+
+         if Matches = 1 and then not All_Shards then
+            File_Name := Candidate (1);
+            Shards    := 1;
+            Ok        := True;
+
+         elsif All_Shards then
+            --  A shard set: every shard carries the quant, so all matched.
+            --  The -of-000NN count is authoritative; the loader opens the
+            --  first shard and finds the rest beside it, so the first shard
+            --  is what to name and the count is how many to fetch.
+            declare
+               Total : constant Natural :=
+                 Shard_Total (T.To_String (Candidate (1)));
+               First : constant String :=
+                 (if Total >= 1
+                  then GS.Shard_Path (T.To_String (Candidate (1)), 1, Total)
+                  else "");
+               Same  : Boolean := Total >= 1 and then First /= "";
+            begin
+               --  One set only: every candidate the same count and the same
+               --  first shard, or the match is ambiguous.
+               for I in 1 .. Matches loop
+                  if Shard_Total (T.To_String (Candidate (I))) /= Total
+                    or else GS.Shard_Path
+                              (T.To_String (Candidate (I)), 1, Total) /= First
+                  then
+                     Same := False;
+                  end if;
+               end loop;
+
+               if Same then
+                  File_Name := T.To_Bounded (First);
+                  Shards    := Total;
+                  Ok        := True;
+               else
+                  Reason := T.To_Bounded
+                    ("more than one shard set matched; name the quant more "
+                     & "exactly: " & Listed);
+               end if;
+            end;
+
+         else
+            Reason := T.To_Bounded
+              ("more than one file matched; name the quant more exactly: "
+               & Listed);
+         end if;
+      end;
    end Resolve;
 
    -----------

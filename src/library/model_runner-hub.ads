@@ -30,15 +30,25 @@ package Model_Runner.Hub is
    --  latter with the candidates in Reason so the caller can say to name
    --  the quant more exactly.
    --
+   --  A model split into shards -- files named ...-00001-of-000NN.gguf --
+   --  carries the quant in every shard's name, so all of them match. The
+   --  match is then that set: File_Name is its first shard, the one the
+   --  loader opens, and Shards is how many there are, for the caller to
+   --  fetch the rest of by the same naming. A single-file model is a set
+   --  of one. Several files that match but are not one shard set are
+   --  ambiguous, and leave Ok false with them named in Reason.
+   --
    --  @param Reference The owner/repo:quant name.
    --  @param Repo The owner/repo part, for building the download URL.
-   --  @param File_Name The matching file's name within the repository.
-   --  @param Ok True when exactly one file matched.
+   --  @param File_Name The matching file, or the first shard of the set.
+   --  @param Shards How many files the model is, one for a single file.
+   --  @param Ok True when a single file or one shard set matched.
    --  @param Reason A short account when Ok is false, for the caller to show.
    procedure Resolve
      (Reference : String;
       Repo      : out Model_Runner.Text.Bounded;
       File_Name : out Model_Runner.Text.Bounded;
+      Shards    : out Natural;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded);
 
