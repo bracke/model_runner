@@ -751,21 +751,31 @@ package body Model_Runner.CLI.Execute is
    is
       use Ada.Streams;
 
+      --  A saved context runs to many megabytes, so the bytes are written
+      --  a chunk at a time from a fixed buffer rather than copied whole
+      --  onto the stack, which a large snapshot would overflow.
+      Chunk : constant := 64 * 1024;
+
       Handle : Ada.Streams.Stream_IO.File_Type;
-      Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Data'Length));
+      Block  : Stream_Element_Array (1 .. Chunk);
       At_Byte : Stream_Element_Offset := 0;
    begin
       Status := E.Success;
 
-      for Value of Data loop
-         At_Byte := At_Byte + 1;
-         Block (At_Byte) := Stream_Element (Value);
-      end loop;
-
       begin
          Ada.Streams.Stream_IO.Create
            (Handle, Ada.Streams.Stream_IO.Out_File, Path);
-         Ada.Streams.Stream_IO.Write (Handle, Block);
+         for Value of Data loop
+            At_Byte := At_Byte + 1;
+            Block (At_Byte) := Stream_Element (Value);
+            if At_Byte = Block'Last then
+               Ada.Streams.Stream_IO.Write (Handle, Block);
+               At_Byte := 0;
+            end if;
+         end loop;
+         if At_Byte > 0 then
+            Ada.Streams.Stream_IO.Write (Handle, Block (1 .. At_Byte));
+         end if;
          Ada.Streams.Stream_IO.Close (Handle);
       exception
          when others =>
