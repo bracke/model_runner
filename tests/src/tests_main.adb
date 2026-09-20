@@ -2745,38 +2745,6 @@ begin
             return;
          end if;
 
-         if Option ("--round", "") /= "" then
-            Speed_Run.Round
-              (Path        => Option ("--model", ""),
-               Prompt_Path =>
-                 Option ("--prompt-file",
-                         "../tests/fixtures/speed-prompt-short.txt"),
-               Tokens      => Number ("--max-tokens", 12),
-               Threads     => Number ("--threads",
-                                      Model_Runner.Platform.Core_Count - 1),
-               Members     => Number ("--round", 1),
-               Cache       =>
-                 (declare
-                    Named : constant String := Option ("--kv-cache", "f32");
-                  begin
-                    (if Named = Model_Runner.Llama.Cache_Name
-                                 (Model_Runner.Llama.Halved)
-                     then Model_Runner.Llama.Halved
-                     elsif Named = Model_Runner.Llama.Cache_Name
-                                    (Model_Runner.Llama.Eighth)
-                     then Model_Runner.Llama.Eighth
-                     elsif Named = Model_Runner.Llama.Cache_Name
-                                    (Model_Runner.Llama.Fourth)
-                     then Model_Runner.Llama.Fourth
-                     else Model_Runner.Llama.Exact)),
-               Backend     => Backend_Of (Option ("--backend", "cpu")),
-               Budget      => Given ("--budget"),
-               Timeline    => Given ("--device-timeline"),
-               Spread      => Given ("--spread"),
-               Paged       => Given ("--paged"));
-            return;
-         end if;
-
          Speed_Run.Run
            (Path        => Option ("--model", ""),
             Prompt_Path =>
