@@ -37,6 +37,9 @@ package body Model_Runner.Serving is
       Gather  : Positive := Default_Gather;
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
+      Cache   : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Eighth;
+      Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info)
    is
       Settings : constant L.Configuration := L.Config (Source);
@@ -53,6 +56,8 @@ package body Model_Runner.Serving is
       Item.Gather := Positive'Min (Gather, Item.Capacity);
       Item.Budget := Budget;
       Item.Reuse := Reuse;
+      Item.Cache := Cache;
+      Item.Paged := Paged;
       Item.Width := N.Element_Count (Settings.Vocabulary);
 
       --  One round's logits, a row a member, taken once. A server that
@@ -284,6 +289,8 @@ package body Model_Runner.Serving is
                Context => Item.Context,
                Session_Bounds => Model_Runner.Limits.Default_Session_Limits,
                Workers => Item.Workers,
+               Cache => Item.Cache,
+               Paged => Item.Paged,
                Status => Status);
 
             if E.Is_Error (Status) then

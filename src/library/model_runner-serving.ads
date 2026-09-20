@@ -145,6 +145,16 @@ package Model_Runner.Serving is
    --  @param Reuse True to let an arriving caller keep whatever its prompt
    --    has in common with the one the seat last held, instead of reading
    --    its prompt from nothing. See the note below.
+   --  @param Cache What each seat keeps its context in. The default is a
+   --    byte an element (q8): a server holds many callers and the cache is
+   --    what bounds how many, so it is dealt tighter than a lone session's,
+   --    at a precision a served caller does not usually mind. A caller that
+   --    wants the exact cache asks for it.
+   --  @param Paged True to deal each seat's cache in pages rather than one
+   --    block, the default: a caller filling little of its context then
+   --    holds little, so the server fits far more callers in the cache it
+   --    has, for the same answer to the bit. Only the device pages; a seat
+   --    on the processor is dealt a block whatever this says.
    --  @param Status Success or the first refusal.
    procedure Open
      (Item    : in out Server;
@@ -154,6 +164,9 @@ package Model_Runner.Serving is
       Gather  : Positive := Default_Gather;
       Budget  : Boolean := False;
       Reuse   : Boolean := True;
+      Cache   : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Eighth;
+      Paged   : Boolean := True;
       Status  : out Model_Runner.Errors.Error_Info);
 
    --  How many prompt tokens arriving callers have not had to read.
@@ -362,6 +375,9 @@ private
       Gather    : Positive := Default_Gather;
       Budget    : Boolean := False;
       Reuse     : Boolean := True;
+      Cache     : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Eighth;
+      Paged     : Boolean := True;
       Open_Now  : Boolean := False;
 
       --  Room for one round's logits, a row a member, allocated once.
