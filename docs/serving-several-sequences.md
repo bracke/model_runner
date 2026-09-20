@@ -215,11 +215,22 @@ block held the room for thirty-two. `Pages_Held` reads the count, and the gate
 is a second one: a paged session past the first page holds one more page a
 layer than before it and no more, far below the block's worth.
 
-What is left is turning that capacity into more sessions at once: eviction of
-a paged session's pages, and a round whose members are paged, so that sixteen
-short sessions cost sixteen short sessions' pages rather than sixteen whole
-contexts. Both are how pages are dealt between sessions, not how one session's
-are read.
+**Stage four -- eviction.** The pool is bounded by the device's memory, which
+the reserve enforces, and a server may bound it tighter with `Limit_Page_Pool`
+to hold more sessions in less. A session asking for a page the pool cannot grow
+to turns out the coldest other session -- gone unasked since before the asker's
+own last ask, so two sessions reading a token apiece in turn leave each other
+alone and one does without rather than each turning the next out every token.
+The session turned out reads its pages back into its host copy, gives the slots
+up, and writes its cache into the pages it is given again when it next runs.
+`Pages_Turned` counts it, and the gate is the block's, in pages: a paged
+session turned out and brought back says, to a ten-thousandth, what one that
+kept its pages says.
+
+What is left is a round whose members are paged, so that a round of short
+sessions costs its members' pages rather than its members' whole contexts --
+the per-row table pointing each row at its own session's pages. It is how pages
+are dealt to a round, not how one session's are read.
 
 ## Staging
 

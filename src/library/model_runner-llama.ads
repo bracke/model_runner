@@ -1791,6 +1791,27 @@ package Model_Runner.Llama is
    --  @return Pages of the device's cache held by any session.
    function Pages_Held return Natural;
 
+   --  Bound how many pages of the device's cache are dealt at once.
+   --
+   --  The pool is bounded by the device's memory, which the reserve
+   --  enforces; a server that would hold more sessions in less may bound it
+   --  tighter, so that a session asking for a page the pool cannot grow to
+   --  turns out the coldest rather than being refused. A session turned out
+   --  reads its pages back and gives them up, and writes its cache into the
+   --  pages it is given again when it next runs. The default is the pool's
+   --  own size, which is no bound but the memory's.
+   --
+   --  @param Pages The most pages held at once, or a number past the pool's
+   --    size for no bound.
+   procedure Limit_Page_Pool (Pages : Natural);
+
+   --  How many paged sessions have been turned out of their pages since the
+   --  device was opened: what a server reads to know a tighter pool is
+   --  churning the cache. Zero where none has.
+   --
+   --  @return Paged sessions turned out.
+   function Pages_Turned return Natural;
+
    --  And seats of its room of rings.
    --
    --  @return Seats held by any session.

@@ -4985,6 +4985,143 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Paged_Session_Holds_Only_What_It_Fills;
 
+   ----------------------------------------------------------
+   -- A_Paged_Session_Turned_Out_Says_What_It_Said --
+   ----------------------------------------------------------
+
+   --  A paged session turned out of its pages and brought back says what it
+   --  said before. When a page is asked for and the pool is at its bound,
+   --  the coldest session's pages are given up rather than the caller
+   --  refused: that session reads its pages back into its host copy -- the
+   --  copy of record -- and, when it next runs, writes them into the pages
+   --  it is given again, a layer at a time and only the cells each holds.
+   --
+   --  The bound is set to what one session holds, so the second session to
+   --  fill turns the first out; the first is closed to nobody's harm and
+   --  the first, come back, gives the same next token as one that never
+   --  lost its pages. This is the room a tighter pool buys: more sessions
+   --  than fit at once, the cold ones paying a read back and a write again.
+   procedure A_Paged_Session_Turned_Out_Says_What_It_Said
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 200;
+      Fill  : constant := 100;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      Probe : constant Vocab.Token_Id := 5;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+
+      procedure Say_Fill (Under : in out Harness; Live : in out L.Session) is
+         Status  : E.Error_Info;
+         Ignored : Logit_Vector;
+      begin
+         for Step in 1 .. Fill loop
+            L.Evaluate (Live, Under.Ready, Token_Of (Step), Ignored,
+                        Status => Status);
+            Assert (E.Is_Ok (Status), "a paged session did not fill");
+         end loop;
+      end Say_Fill;
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Reference, Subject, Filler : L.Session;
+
+            Wanted, After : Logit_Vector;
+
+            Subject_Pages : Natural := 0;
+            Turned_Before : Natural := 0;
+
+            Worst : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               --  What the subject would say next, from a session that
+               --  never loses its pages, then closed and its pages freed.
+               L.Open (Reference, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the reference did not open");
+               Say_Fill (Under, Reference);
+               L.Evaluate (Reference, Under.Ready, Probe, Wanted,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the reference did not answer");
+               L.Close (Reference);
+
+               --  The subject fills the same, and holds its pages.
+               L.Open (Subject, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the subject did not open");
+               Say_Fill (Under, Subject);
+               Subject_Pages := L.Pages_Held;
+               Assert (Subject_Pages > 0, "the subject holds no page");
+
+               --  Bound the pool to what the subject holds, so the next
+               --  session to fill must turn it out.
+               L.Limit_Page_Pool (Subject_Pages);
+               Turned_Before := L.Pages_Turned;
+
+               L.Open (Filler, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the filler did not open");
+               Say_Fill (Under, Filler);
+
+               Assert (L.Pages_Turned > Turned_Before,
+                       "no session was turned out of its pages when the pool"
+                       & " filled");
+               Assert (not L.Holds_Pages (Subject),
+                       "the subject kept its pages though the pool filled");
+
+               --  Free the pool and lift the bound: the subject comes back
+               --  to pages it is given anew and writes its cache into them.
+               L.Close (Filler);
+               L.Limit_Page_Pool (Natural'Last);
+
+               L.Evaluate (Subject, Under.Ready, Probe, After,
+                           Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the subject did not answer after being turned out: "
+                       & E.Error_Code'Image (Status.Code));
+
+               Assert (L.Holds_Pages (Subject),
+                       "the subject did not take pages again");
+
+               for Index in Logit_Vector'Range loop
+                  Worst :=
+                    N.Real'Max (Worst, abs (After (Index) - Wanted (Index)));
+               end loop;
+
+               Assert (Worst <= 1.0E-4,
+                       "a paged session turned out and back says"
+                       & N.Real'Image (Worst) & " away from one that kept"
+                       & " its pages");
+
+               L.Close (Subject);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Session_Turned_Out_Says_What_It_Said;
+
    --------------------------------------------------------------
    -- A_Hybrid_Round_At_Different_Lengths_Says_The_Same --
    --------------------------------------------------------------
@@ -13964,6 +14101,11 @@ package body Tests.Inference_Cases is
          "a paged session takes a page of the device's cache only as a "
          & "position reaches it, so it holds a fraction of the pages a "
          & "block would for a context it fills little of");
+      Register_Routine
+        (T, A_Paged_Session_Turned_Out_Says_What_It_Said'Access,
+         "a paged session turned out of its pages when the pool fills reads "
+         & "them back and, brought back, writes them anew and says what it "
+         & "said before");
       Register_Routine
         (T, A_Hybrid_Round_At_Different_Lengths_Says_The_Same'Access,
          "a hybrid round whose members sit at different positions gives "

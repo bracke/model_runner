@@ -4989,6 +4989,18 @@ package body Model_Runner.Llama is
      [others => null];
    Pages_Taken : Element_Count := 0;
 
+   --  How many slots are held, and the most that may be. The pool is
+   --  bounded by the device's memory, which the reserve enforces; a server
+   --  may bound it tighter, to hold more sessions in less by turning the
+   --  coldest out rather than growing without end. The default is the
+   --  pool's own size, which is no bound but the memory's.
+   Pages_In_Use : Natural := 0;
+   Page_Pool_Limit : Natural := Page_Cap;
+
+   --  Paged sessions turned out since the device was opened: the count a
+   --  server reads to know a tighter pool is churning the cache.
+   Pages_Turned_Count : Natural := 0;
+
    --  Whether the last session to ask for a block and be refused was
    --  refused because every one of them was another session's, rather
    --  than for anything about its own shape or size. Read where the
@@ -6454,6 +6466,101 @@ package body Model_Runner.Llama is
           * (Item.Owner.Settings.Head_Size
              + Item.Owner.Settings.Value_Size)));
 
+   --  Give every page a session holds back, its host copy settled first.
+   --
+   --  What turning a paged session out costs: its scattered pages read into
+   --  the host's copy -- which, the session mirroring, is already there --
+   --  and then let go, so the slots are free for the session that asked.
+   --  The session come back re-takes pages and writes its committed cache
+   --  into them, a layer at a time, as it did the first time. A settle that
+   --  cannot finish leaves the pages where they are, so nothing is lost.
+   procedure Free_Session_Pages (Victim : Session_Access; Ok : out Boolean) is
+   begin
+      Ok := False;
+
+      Settle_Cache (Victim.all);
+      if Victim.Owed_Count > 0 then
+         return;
+      end if;
+
+      if Victim.Page_Count /= null and then Page_Elements > 0 then
+         for Layer in Victim.Page_Count.all'Range loop
+            for Page in 0 .. Natural (Victim.Page_Count.all (Layer)) - 1 loop
+               declare
+                  Slot : constant Natural :=
+                    Natural
+                      (Victim.Pages.all
+                         (Natural (Victim.Page_First.all (Layer)) + Page)
+                       / Page_Elements);
+               begin
+                  if Slot in Page_Owner'Range
+                    and then Page_Owner (Slot) = Victim
+                  then
+                     Page_Owner (Slot) := null;
+                     if Pages_In_Use > 0 then
+                        Pages_In_Use := Pages_In_Use - 1;
+                     end if;
+                  end if;
+               end;
+            end loop;
+         end loop;
+
+         Victim.Page_Count.all := [others => 0];
+      end if;
+
+      Victim.Paged_In := False;
+
+      --  Where the buffer has been dealt, brought down to the pages left.
+      Pages_Taken := 0;
+      for Slot in Page_Owner'Range loop
+         if Page_Owner (Slot) /= null then
+            Pages_Taken :=
+              Element_Count'Max
+                (Pages_Taken, Element_Count (Slot + 1) * Page_Elements);
+         end if;
+      end loop;
+
+      Pages_Turned_Count := Pages_Turned_Count + 1;
+      Ok := True;
+   end Free_Session_Pages;
+
+   --  Turn out the coldest paged session other than the one asking, so its
+   --  slots are free -- and only one gone unasked since before the asker's
+   --  own last ask, so two sessions reading a token apiece in turn leave
+   --  each other alone and one does without rather than each turning the
+   --  next out every token. Freed is false where no such session is held.
+   procedure Evict_Coldest_Pages
+     (Asker : Session_Access; Freed : out Boolean)
+   is
+      Oldest : Natural := Natural'Last;
+      Victim : Session_Access := null;
+
+      Highest : constant Natural :=
+        (if Page_Elements = 0 then 0
+         else Natural (Pages_Taken / Page_Elements));
+   begin
+      Freed := False;
+
+      for Slot in 0 .. Natural'Min (Highest, Page_Cap - 1) loop
+         declare
+            S : constant Session_Access := Page_Owner (Slot);
+         begin
+            if S /= null
+              and then S /= Asker
+              and then S.Asked_At < Oldest
+              and then S.Asked_At < Asker.Asked_Before
+            then
+               Oldest := S.Asked_At;
+               Victim := S;
+            end if;
+         end;
+      end loop;
+
+      if Victim /= null then
+         Free_Session_Pages (Victim, Freed);
+      end if;
+   end Evict_Coldest_Pages;
+
    --  How many pages a layer holds once its cells reach Upto: the cells a
    --  position at index Upto sits at, rounded up to the page, and never
    --  more than the layer's whole context. A window layer holds fewer
@@ -6511,6 +6618,17 @@ package body Model_Runner.Llama is
                                 * Item.Owner.Settings.Value_Size);
       KV_Width := Page_Row (Item.all) - V_Width;
 
+      --  This ask, and the run of asks before it, on the clock the blocks
+      --  are stamped with -- a paged session holds no block, so the two
+      --  cannot disagree. What the session asked at its previous token is
+      --  what says whether it may turn another out, below.
+      Block_Clock := Block_Clock + 1;
+      if Last_Asker /= Item then
+         Item.Asked_Before := Item.Asked_At;
+         Last_Asker := Item;
+      end if;
+      Item.Asked_At := Block_Clock;
+
       --  Each layer up to the page its highest new position reaches. A
       --  page is a slot at the front the buffer has not dealt, and taking
       --  it may grow how far the buffer is dealt and so the reserve.
@@ -6525,6 +6643,22 @@ package body Model_Runner.Llama is
                   declare
                      Slot : Natural := 0;
                   begin
+                     --  The pool at its bound: the coldest other session's
+                     --  pages are turned out to make room, and where none
+                     --  may be -- every other session as warm as this one --
+                     --  the layer holds fewer pages than it wanted, which
+                     --  the caller reads as the cache being full.
+                     if Pages_In_Use >= Page_Pool_Limit then
+                        declare
+                           Freed : Boolean;
+                        begin
+                           Evict_Coldest_Pages (Item, Freed);
+                           if not Freed then
+                              return;
+                           end if;
+                        end;
+                     end if;
+
                      while Slot < Page_Cap and then Page_Owner (Slot) /= null
                      loop
                         Slot := Slot + 1;
@@ -6538,6 +6672,7 @@ package body Model_Runner.Llama is
                      end if;
 
                      Page_Owner (Slot) := Item;
+                     Pages_In_Use := Pages_In_Use + 1;
                      Item.Pages.all
                        (Natural (First) + Natural (Item.Page_Count.all (Layer)))
                        := Element_Count (Slot) * Page_Elements;
@@ -6700,6 +6835,14 @@ package body Model_Runner.Llama is
 
       return Held;
    end Pages_Held;
+
+   procedure Limit_Page_Pool (Pages : Natural) is
+   begin
+      Page_Pool_Limit := Natural'Max (1, Natural'Min (Pages, Page_Cap));
+   end Limit_Page_Pool;
+
+   function Pages_Turned return Natural
+   is (Pages_Turned_Count);
 
    function Seats_Held return Natural is
       Held : Natural := 0;
@@ -11878,6 +12021,9 @@ package body Model_Runner.Llama is
                     and then Page_Owner (Slot) = Item'Unchecked_Access
                   then
                      Page_Owner (Slot) := null;
+                     if Pages_In_Use > 0 then
+                        Pages_In_Use := Pages_In_Use - 1;
+                     end if;
                   end if;
                end;
             end loop;
