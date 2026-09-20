@@ -102,7 +102,8 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False;
       Timeline    : Boolean := False;
-      Spread      : Boolean := False);
+      Spread      : Boolean := False;
+      Paged       : Boolean := False);
 
    --  Several sessions taking turns, a token each, rather than stepped
    --  together.
@@ -152,7 +153,8 @@ package Speed_Run is
       Churn       : Natural := 0;
       Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU);
+        Model_Runner.Backend.Backend_CPU;
+      Paged       : Boolean := False);
 
    --  Serve several callers from one model, arriving and leaving.
    --

@@ -953,7 +953,8 @@ package body Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Budget      : Boolean := False;
       Timeline    : Boolean := False;
-      Spread      : Boolean := False)
+      Spread      : Boolean := False;
+      Paged       : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1094,7 +1095,7 @@ package body Speed_Run is
          --  level, so neither do these.
          for Index in Live'Range loop
             L.Open (Live (Index), Engine, Workers => Where,
-                    Cache => Cache, Status => Status);
+                    Cache => Cache, Paged => Paged, Status => Status);
             exit when E.Is_Error (Status);
 
             --  The phase clock, on the member the round is made on: a round
@@ -1336,7 +1337,8 @@ package body Speed_Run is
       Churn       : Natural := 0;
       Spread      : Boolean := False;
       Backend     : Model_Runner.Backend.Backend_Kind :=
-        Model_Runner.Backend.Backend_CPU)
+        Model_Runner.Backend.Backend_CPU;
+      Paged       : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
       Source    : aliased Shards.Shard_Set;
@@ -1436,6 +1438,9 @@ package body Speed_Run is
          Rings_Before  : constant Natural :=
            Model_Runner.Backend.Device.Rings_Turned;
 
+         --  And paged sessions turned out of their pages, the same way.
+         Pages_Before  : constant Natural := L.Pages_Turned;
+
          --  And what closing the gaps they leave costs, for the workload
          --  that leaves any: blocks and rings moved to the front.
          Moved_Before : constant Natural :=
@@ -1469,7 +1474,7 @@ package body Speed_Run is
                else Natural'Max (8, Last * Index / Sessions));
          begin
             L.Open (Live (Index), Engine, Context => Room,
-                    Workers => Where, Status => Status);
+                    Workers => Where, Paged => Paged, Status => Status);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -1633,6 +1638,11 @@ package body Speed_Run is
                       (Model_Runner.Backend.Device.Cached_Bytes)
                     / 1_048_576.0, 1)
                & " MB"
+               & (if Paged
+                  then ", pages held" & Integer'Image (L.Pages_Held)
+                       & ", pages turned"
+                       & Integer'Image (L.Pages_Turned - Pages_Before)
+                  else "")
                & ", mark " & Shown (Mark)
                & Device_Clock.Shown (Clock));
          end if;

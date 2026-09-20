@@ -2744,7 +2744,8 @@ begin
                Context     => Whole ("--context-size"),
                Churn       => Whole ("--churn"),
                Spread      => Given ("--spread"),
-               Backend     => Backend_Of (Option ("--backend", "cpu")));
+               Backend     => Backend_Of (Option ("--backend", "cpu")),
+               Paged       => Given ("--paged"));
             return;
          end if;
 
@@ -2775,7 +2776,8 @@ begin
                Backend     => Backend_Of (Option ("--backend", "cpu")),
                Budget      => Given ("--budget"),
                Timeline    => Given ("--device-timeline"),
-               Spread      => Given ("--spread"));
+               Spread      => Given ("--spread"),
+               Paged       => Given ("--paged"));
             return;
          end if;
 

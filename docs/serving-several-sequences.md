@@ -272,6 +272,17 @@ to find nothing to grow; and one release path frees a session's slots for both
 the close and the turn-out, where two copies could drift. The head step, which
 carried a paging path nothing reached, carries it no longer.
 
+**And priced.** Eight sessions taking turns, each of a 2,048-position context
+and filling twenty-three of it, on the device: the blocks hold 1,056 MB of
+cache and read 61.7 tokens a second; the pages hold 33 MB -- one page a layer
+apiece -- and read 58.0, for the same answer to the bit (mark `45557FE1`). The
+cache is thirty-two times smaller at six per cent fewer tokens a second, which
+is the page tables written a token and the walk that grows them; a memory-bound
+server fits that many times more of these in the cache it has. A round of eight
+at the same context reads 0.496 s against the blocks' 0.464, the same mark
+again. `tests speed --turns N --paged` and `--round N --paged` serve them, and
+`docs/measured-figures.txt` keeps the run.
+
 ## Staging
 
 **One — done.** `Evaluate_Round` on the processor, the four substitutions

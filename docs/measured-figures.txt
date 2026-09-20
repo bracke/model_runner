@@ -22055,3 +22055,27 @@ panels 9F326CAA6D4ED499 src/library/model_runner-quantization-interleave.ads src
 #
 # load:  0.4 of 16 for the device runs
 # model: TinyLlama-1.1B-Chat Q8_0 and Qwen3.5-0.8B Q8_0 for the device runs
+
+# ---------------------------------------------------------------------------
+# Pages against blocks, on the device. Eight sessions taking turns, each of a
+# 2,048-position context, filling seven of prompt and sixteen of decode --
+# twenty-three of the two thousand. A block reserves the whole context
+# whether the session fills it or not; a page is taken only as a position
+# reaches it, so the eight hold one page a layer.
+#
+#   tests speed --turns 8 --context-size 2048 --max-tokens 16 --backend device
+#
+#                     tokens/s   cache      digest
+#   blocks            61.7       1056.0 MB  45557FE1E3FDFEFC
+#   pages             58.0         33.0 MB  45557FE1E3FDFEFC   (176 held)
+#
+# The cache is thirty-two times smaller for the same answer to the bit, at
+# six per cent fewer tokens a second -- the price of the page tables written
+# a token and the walk that grows them. A memory-bound server fits that many
+# times more of these sessions in the cache it has.
+#
+# And a round of eight of the same, --round 8 --context-size 2048:
+#   blocks   0.464 s / 128 tokens    45557FE1E3FDFEFC
+#   pages    0.496 s / 128 tokens    45557FE1E3FDFEFC
+#
+# model: TinyLlama-1.1B-Chat q5_1 on the device; load ~0.4 of 16.
