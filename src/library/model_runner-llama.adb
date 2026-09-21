@@ -1221,28 +1221,25 @@ package body Model_Runner.Llama is
       --  one architecture here that is told where a token is by the scores
       --  rather than by a rotation or a learned row.
       --
-      --  Written rather than read. The key exists in the format --
-      --  `<arch>.attention.max_alibi_bias` -- and no published
-      --  jina-bert-v2 states it; the other runtime carries eight for this
-      --  architecture in its own source and reads nothing. A file that does
-      --  state one is refused rather than cut to eight, because a slope
-      --  ladder is what tells the model where a token is and a wrong one
-      --  answers rather than refuses.
+      --  The key exists in the format -- `<arch>.attention.max_alibi_bias`
+      --  -- and no published jina-bert-v2 states it; the other runtime
+      --  carries eight for this architecture in its own source. So eight is
+      --  the default, taken when the file says nothing, and the stated bias
+      --  is read and used where the file carries one -- the slope ladder is
+      --  what tells the model where a token is, and Head_Slope builds it
+      --  from whatever this holds, so a file that states its own is run at
+      --  its own rather than refused.
       if Settings.Kind = Jina_Bert_V2 then
          Settings.Max_Bias := 8.0;
 
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.max_alibi_bias"),
             0.0, 1.0E6, Value, Local);
-         if E.Is_Ok (Local) and then N.Real (Value) /= Settings.Max_Bias then
-            Status := E.Make (E.Arch_Unsupported_Feature);
-            E.Add_Text
-              (Status, "feature", "attention.max_alibi_bias other than 8",
-               E.Param_Identifier);
-            return;
-         elsif Present_And_Wrong (Local) then
+         if Present_And_Wrong (Local) then
             Status := Local;
             return;
+         elsif E.Is_Ok (Local) then
+            Settings.Max_Bias := N.Real (Value);
          end if;
       end if;
 

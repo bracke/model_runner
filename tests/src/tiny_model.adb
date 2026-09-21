@@ -442,6 +442,14 @@ package body Tiny_Model is
              else Interfaces.Unsigned_32 (Head_Size)));
       end if;
 
+      --  A jina-bert-v2 that states its own alibi bias rather than leaving
+      --  the eight the architecture defaults to: six, so the slope ladder
+      --  the engine builds is not the one it would build from the default,
+      --  and a reader that ignored the key would answer differently.
+      if Kind = Jina_Bert_V2 then
+         Fixtures.Add_F32 (Builder, Prefix & ".attention.max_alibi_bias", 6.0);
+      end if;
+
       --  A position in three parts, dealt one pair to time and one to
       --  the row: the two pairs a head of four has.
       if Sections and then Kind = Qwen35 then

@@ -1764,6 +1764,17 @@ package body Reference_Transformer is
             Item.Rope_Base := Long_Float (Value);
          end if;
 
+         --  The alibi bias, where the file states its own rather than
+         --  leaving the eight the architecture defaults to.
+         if Item.Kind = Jina_Bert_V2 then
+            Containers.Get_Float
+              (Source, Prefix (Item) & "attention.max_alibi_bias",
+               0.0, 1.0E6, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Max_Bias := Long_Float (Value);
+            end if;
+         end if;
+
          --  How the rotation is stretched, read from the same keys the
          --  method is described by.
          declare
