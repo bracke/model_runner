@@ -476,7 +476,7 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama | Granite | Granite_MoE | Glm4 | Internlm2
-                       | Baichuan =>
+                       | Baichuan | Chatglm =>
                       K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
@@ -3238,6 +3238,7 @@ package body Model_Runner.Llama is
                end if;
             elsif Item.Settings.Kind
                in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
+                | Chatglm
             then
                Resolve_Part
                  (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
@@ -3302,6 +3303,38 @@ package body Model_Runner.Llama is
             --  only in what it adds -- which reads as a model that has
             --  drifted rather than one that has broken.
             if Item.Settings.Kind in Phi2 | GPT2 | Gptneox then
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, Wide, KV, Current.Key_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm_Part
+                 (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
+                  Wide + KV + KV_Out, Wide + KV, KV_Out,
+                  Current.Value_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            --  ChatGLM fuses the three biases in one vector as Phi2 does,
+            --  but the bias is the model's to carry or leave -- GLM-4-9B and
+            --  ChatGLM3 have one, another might not -- so it is taken where
+            --  the file holds it rather than required, the fused twin of the
+            --  choice GLM4 makes over its three separate biases.
+            if Item.Settings.Kind = Chatglm
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_qkv.bias")) /= 0
+            then
                Resolve_Norm_Part
                  (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
                   Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
@@ -3550,7 +3583,7 @@ package body Model_Runner.Llama is
                end if;
 
             elsif Item.Settings.Experts = 0
-              and then Item.Settings.Kind in Phi3 | Glm4
+              and then Item.Settings.Kind in Phi3 | Glm4 | Chatglm
             then
                --  The gate and the up projection in one tensor, gate
                --  first. Taking them the other way round is a model that
@@ -14450,6 +14483,7 @@ package body Model_Runner.Llama is
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
+                             | Chatglm
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -16129,6 +16163,7 @@ package body Model_Runner.Llama is
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
+                             | Chatglm
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 

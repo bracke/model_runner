@@ -1130,7 +1130,8 @@ package body Reference_Transformer is
          when Gptneox => "gptneox.",
          when Internlm2 => "internlm2.",
          when Baichuan => "baichuan.",
-         when Mpt => "mpt.");
+         when Mpt => "mpt.",
+         when Chatglm => "chatglm.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1580,6 +1581,8 @@ package body Reference_Transformer is
             --  Not read from the file for MPT either: the architecture
             --  carries eight, and the fixture states its own to prove it.
             Item.Max_Bias := 8.0;
+         elsif Named = "chatglm" then
+            Item.Kind := Chatglm;
          else
             return;
          end if;
@@ -2130,7 +2133,9 @@ package body Reference_Transformer is
             --  in the order the rows are written: queries, keys, values.
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
+              | Chatglm
+            then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -2144,7 +2149,9 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
+              | Chatglm
+            then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -2159,7 +2166,9 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
+              | Chatglm
+            then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -2176,7 +2185,7 @@ package body Reference_Transformer is
             --  has them and absent from the one that does not.
             --  Phi2 carries the same three biases in one vector, taken at
             --  the offsets its matrices are taken at.
-            if Item.Kind in Phi2 | GPT2 | Gptneox then
+            if Item.Kind in Phi2 | GPT2 | Gptneox | Chatglm then
                Current.Query_Bias :=
                  Read_Vector_Part
                    (Layer_Name (Index, "attn_qkv.bias"),
@@ -2468,7 +2477,7 @@ package body Reference_Transformer is
                   --  one projection down.
                   Current.Gate := null;
                   Present := True;
-               elsif Item.Kind in Phi3 | Glm4 then
+               elsif Item.Kind in Phi3 | Glm4 | Chatglm then
                   Current.Gate :=
                     Read_Part (Layer_Name (Index, "ffn_up.weight"),
                                0, Item.Feed_Forward, Present);
@@ -2481,7 +2490,7 @@ package body Reference_Transformer is
                   return;
                end if;
 
-               if Item.Kind in Phi3 | Glm4 then
+               if Item.Kind in Phi3 | Glm4 | Chatglm then
                   Current.Up :=
                     Read_Part (Layer_Name (Index, "ffn_up.weight"),
                                Item.Feed_Forward, Item.Feed_Forward, Present);
@@ -3062,12 +3071,12 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2
+                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Baichuan
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2
+                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Baichuan
                      then Even + 1
                      else Even + Item.Rotary / 2);

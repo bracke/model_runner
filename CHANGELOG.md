@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The ChatGLM architecture is read** (ChatGLM3 / GLM-4-9B -- the older
+  `chatglm` architecture, distinct from the newer `glm4` already read). It is
+  a composition of pieces already here: it rotates the leading half of each
+  head and pairs a rotation's two elements as neighbours, glm4's interleaving;
+  it gates its feed-forward with the gate and up projection fused in one
+  tensor, gate first, as glm4 and phi3 do; and it fuses its queries, keys and
+  values in one flat tensor with a bias on the three carried where the file
+  holds it rather than required -- the fused twin of the choice glm4 makes
+  over three separate biases. Where it parts from glm4 is the normalization:
+  a plain root-mean-square before each sublayer, no sandwich around them, and
+  multi-query with two key-and-value heads a layer. Crossed against the
+  independent implementation over every format and path; host fallback under
+  the device backend for the untried fused-queries-with-a-bias and
+  partial-interleaved-rotation combination, as glm4's own runs on the host.
 - **The MPT architecture is read** -- the first that departs from the llama
   family in several ways at once. It does not rotate: it is told where a
   token is by an alibi fall-off in the attention scores, one slope a head

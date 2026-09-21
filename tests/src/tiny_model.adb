@@ -389,7 +389,8 @@ package body Tiny_Model is
            when Gptneox   => "gptneox",
            when Internlm2 => "internlm2",
            when Baichuan  => "baichuan",
-           when Mpt       => "mpt");
+           when Mpt       => "mpt",
+           when Chatglm   => "chatglm");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -457,7 +458,7 @@ package body Tiny_Model is
              --  whole of it. The one fixture that exercises the partial path,
              --  which the split pairing and the tail left alone are crossed
              --  against the independent implementation through.
-             elsif Kind in Stablelm | Gptneox
+             elsif Kind in Stablelm | Gptneox | Chatglm
              then Interfaces.Unsigned_32 (Head_Size / 2)
              else Interfaces.Unsigned_32 (Head_Size)));
       end if;
@@ -899,7 +900,7 @@ package body Tiny_Model is
             --  the one that turns part -- the table has a divisor a rotated
             --  pair, so a partial rotation carries a shorter table.
             Rotated : constant Natural :=
-              (if Kind in Stablelm | Gptneox then Head_Size / 2 else Head_Size);
+              (if Kind in Stablelm | Gptneox | Chatglm then Head_Size / 2 else Head_Size);
             Values : N.Real_Array (0 .. N.Element_Count (Rotated / 2) - 1);
          begin
             for Index in Values'Range loop
@@ -1008,7 +1009,9 @@ package body Tiny_Model is
             --  Twice as wide: each head's queries and then its gate.
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (2 * Heads * Key_Size)]);
-         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
+         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
+                     | Chatglm
+         then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -1040,7 +1043,7 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox
+         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Chatglm
            and then not Linear_Block (Index)
          then
             Weight (Layer_Name (Index, "attn_k.weight"),
@@ -1072,7 +1075,7 @@ package body Tiny_Model is
          --  three in one vector, as it writes the three matrices in one
          --  tensor. Drawn as three in the order the unfused architectures
          --  draw them, for the reason Weight_Of exists.
-         if Kind in Phi2 | GPT2 | Gptneox then
+         if Kind in Phi2 | GPT2 | Gptneox | Chatglm then
             declare
                use type N.Real_Array;
 
@@ -1263,7 +1266,7 @@ package body Tiny_Model is
             --  And the second of Bert's two normalizations, over the
             --  residual the feed-forward has just been added to.
 
-         elsif Kind in Phi3 | Glm4 then
+         elsif Kind in Phi3 | Glm4 | Chatglm then
             --  The gate and the up projection in one tensor, gate first,
             --  and drawn as two for the same reason.
             declare

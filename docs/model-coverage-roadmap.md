@@ -19,8 +19,8 @@ Done, each crossed against the independent reference over every format and path
 - **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
   family remains, on demand).
 - **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4, Starcoder2,
-  GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan-7B and MPT (the rest of
-  the config-mostly batch — Command-R, ChatGLM, Baichuan-13B — remain).
+  GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan-7B, MPT and ChatGLM (the
+  rest of the config-mostly batch — Command-R, Baichuan-13B — remain).
 
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #9, #10 (other
 quants), #11 (other arches), and Phases 4–6.
@@ -142,8 +142,11 @@ fixture, conformance row. Batch the cheap ones.
     decoder with causal alibi in place of rotation, a centred normalization
     without a bias, a non-gated Gaussian feed-forward and an optional
     queries/keys/values clamp; host fallback for that untried device
-    combination); still open:
-    Command-R/Command-R+, ChatGLM, Baichuan-13B. Refusal
+    combination), ✅ ChatGLM (ChatGLM3 / GLM-4-9B — glm4's partial interleaved
+    rotation and fused gate/up, but with fused queries/keys/values and an
+    optional fused bias, and a plain RMS pre-norm in place of glm4's sandwich;
+    host fallback like glm4); still open:
+    Command-R/Command-R+, Baichuan-13B. Refusal
     at `llama.adb:524`. Each new arch is now largely wiring against the existing
     norm/gate/bias/rotary/mixture paths + a device host-fallback guard for any
     untried kernel combination. **Small–Medium each**, but many, so budget as a
