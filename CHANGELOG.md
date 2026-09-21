@@ -5,6 +5,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The device's push-constant range now covers the packed constants, so a
+  paged packed cache reads its own page table.** The pipeline layout reserved
+  `max(Product_Bytes, Attention_Bytes)` -- 108 bytes -- for push constants,
+  but the packed attention constants are 116 bytes: `Page_Shift` and
+  `First_Position` sit past the reserved range, so a paged packed dispatch
+  read them from undefined memory. The layout now reserves the widest of the
+  three blocks, `Packed_Bytes`, which the Vulkan validation layer's
+  `VUID-VkComputePipelineCreateInfo-layout-07987` had been reporting all
+  along.
+
 ### Changed
 
 - **A model with attention sinks is attended on the host, so its sinks are

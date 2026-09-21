@@ -895,9 +895,15 @@ package body Model_Runner.Platform.Device.Products is
    --  round's table and the sinks.
    Packed_Bytes    : constant := 116;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
-   Shape_Bytes     : constant :=
+   Widest_Plain    : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
       else Attention_Bytes);
+   --  The layout's push-constant range must cover every shader's block, and
+   --  the packed constants are the widest: a paged packed dispatch pushes
+   --  Packed_Bytes, whose Page_Shift and First_Position sit past the plain
+   --  range, so a layout sized to the plain paths leaves them undefined.
+   Shape_Bytes     : constant :=
+     (if Widest_Plain > Packed_Bytes then Widest_Plain else Packed_Bytes);
 
    type Push_Range is record
       Stages : C.unsigned := Stage_Compute;
