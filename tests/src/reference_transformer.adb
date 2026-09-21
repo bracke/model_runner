@@ -1126,7 +1126,8 @@ package body Reference_Transformer is
          when Glm4 => "glm4.",
          when Starcoder2 => "starcoder2.",
          when Granite_MoE => "granitemoe.",
-         when Stablelm => "stablelm.");
+         when Stablelm => "stablelm.",
+         when Gptneox => "gptneox.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1564,6 +1565,8 @@ package body Reference_Transformer is
             Item.Kind := Granite_MoE;
          elsif Named = "stablelm" then
             Item.Kind := Stablelm;
+         elsif Named = "gptneox" then
+            Item.Kind := Gptneox;
          else
             return;
          end if;
@@ -1706,6 +1709,22 @@ package body Reference_Transformer is
          end if;
       end;
 
+      --  GPT-NeoX's parallel residual, on by default where the file says
+      --  nothing, as its published files leave it.
+      if Item.Kind = Gptneox then
+         Item.Parallel := True;
+         declare
+            Flag   : Boolean;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Boolean
+              (Source, Prefix (Item) & "use_parallel_residual", Flag, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Parallel := Flag;
+            end if;
+         end;
+      end if;
+
       --  The hybrid's shape, all of it required but the interval, which
       --  the architecture puts at four when the file is silent; and the
       --  blocks past the stack, which the block count includes and the
@@ -1768,7 +1787,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm
+            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1889,7 +1908,7 @@ package body Reference_Transformer is
       --  whatever reads it. Bert's last layer normalized what it produced.
       if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
             Item.Output_Norm_Bias :=
               Read_Vector ("output_norm.bias", Present);
          end if;
@@ -1981,7 +2000,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -2087,7 +2106,7 @@ package body Reference_Transformer is
             --  in the order the rows are written: queries, keys, values.
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -2101,7 +2120,7 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -2116,7 +2135,7 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -2133,7 +2152,7 @@ package body Reference_Transformer is
             --  has them and absent from the one that does not.
             --  Phi2 carries the same three biases in one vector, taken at
             --  the offsets its matrices are taken at.
-            if Item.Kind in Phi2 | GPT2 then
+            if Item.Kind in Phi2 | GPT2 | Gptneox then
                Current.Query_Bias :=
                  Read_Vector_Part
                    (Layer_Name (Index, "attn_qkv.bias"),
@@ -2280,7 +2299,7 @@ package body Reference_Transformer is
             end if;
 
             if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
-                          | Starcoder2
+                          | Starcoder2 | Gptneox
             then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
@@ -2324,7 +2343,7 @@ package body Reference_Transformer is
                --  The shift beside it, for the architectures that centre.
                --  Optional: a file need not carry one, and this reads what
                --  is there rather than what a fixture happens to write.
-               if Item.Kind in GPT2 | Starcoder2 | Stablelm then
+               if Item.Kind in GPT2 | Starcoder2 | Stablelm | Gptneox then
                   Current.Feed_Norm_Bias :=
                     Read_Vector
                       (Layer_Name (Index, "ffn_norm.bias"), Present);
@@ -2420,7 +2439,7 @@ package body Reference_Transformer is
                   end if;
                end if;
             else
-               if Item.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 then
+               if Item.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -2468,7 +2487,7 @@ package body Reference_Transformer is
 
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not.
-               if Item.Kind in Phi2 | GPT2 | Bert | Starcoder2 then
+               if Item.Kind in Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
                   Current.Up_Bias :=
                     Read_Vector (Layer_Name (Index, "ffn_up.bias"), Present);
                   if not Present then
@@ -2721,7 +2740,7 @@ package body Reference_Transformer is
       begin
          if Item.Kind
             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-               | Jina_Bert_V2 | Starcoder2
+               | Jina_Bert_V2 | Starcoder2 | Gptneox
          then
             declare
                Inner : constant Long_Float :=
@@ -3638,7 +3657,7 @@ package body Reference_Transformer is
                   --  way out.
                   if Current.Attention_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
                      Normalize_Centred
                        (State, Current.Attention_Norm.all,
                         Current.Attention_Norm_Bias, Normed);
@@ -4061,11 +4080,26 @@ package body Reference_Transformer is
                   --  normalized it on the way out of attention, and a fresh
                   --  normalization of the residual where they run one after
                   --  the other.
-                  if Item.Kind in Falcon | Phi2 then
+                  if Item.Kind = Gptneox and then Item.Parallel then
+                     --  Parallel residual: the feed-forward reads the layer's
+                     --  input, still held in Whole, normalized by its own
+                     --  centred normalization -- not the residual the
+                     --  attention was added to.
+                     declare
+                        Original : Real_Vector (0 .. Width - 1);
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           Original (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize_Centred
+                          (Original, Current.Feed_Norm.all,
+                           Current.Feed_Norm_Bias, Normed);
+                     end;
+                  elsif Item.Kind in Falcon | Phi2 then
                      Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
                   elsif Current.Feed_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
                      Normalize_Centred
                        (State, Current.Feed_Norm.all,
                         Current.Feed_Norm_Bias, Normed);
@@ -4312,7 +4346,7 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
-         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
          else

@@ -480,7 +480,7 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 | Starcoder2 | Stablelm =>
+                       | Olmo2 | Starcoder2 | Stablelm | Gptneox =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -596,7 +596,7 @@ package body Model_Runner.Llama is
       --  states either is read and a file that states neither takes the
       --  default both would.
       if Normalizes_After (Settings.Kind)
-        or else Settings.Kind in Starcoder2 | Stablelm
+        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox
       then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
@@ -619,6 +619,26 @@ package body Model_Runner.Llama is
       end if;
       Settings.Epsilon :=
         (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
+
+      --  Whether the two halves of the block run side by side. GPT-NeoX
+      --  states it and defaults to on where the key is absent, which is
+      --  what its published files leave to the reader; every other
+      --  architecture runs them one after the other.
+      if Settings.Kind = Gptneox then
+         declare
+            Parallel : Boolean;
+         begin
+            Containers.Get_Boolean
+              (Source, Model_Key (Settings.Kind, "use_parallel_residual"),
+               Parallel, Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+               return;
+            end if;
+            Settings.Parallel_Residual :=
+              (if E.Is_Ok (Local) then Parallel else True);
+         end;
+      end if;
 
       --  What the file says its states should be pooled with. Read for the
       --  architecture that states it and left unstated for the rest, which
@@ -2076,7 +2096,7 @@ package body Model_Runner.Llama is
    is (if Item.Settings.Gate_Alpha > 0.0 then 3
        elsif Item.Settings.Kind
              in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-                | Jina_Bert_V2 | Starcoder2
+                | Jina_Bert_V2 | Starcoder2 | Gptneox
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
@@ -2084,7 +2104,7 @@ package body Model_Runner.Llama is
    begin
       if Item.Settings.Kind
          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-            | Jina_Bert_V2 | Starcoder2
+            | Jina_Bert_V2 | Starcoder2 | Gptneox
       then
          K.GELU (Target);
       else
@@ -2262,7 +2282,7 @@ package body Model_Runner.Llama is
      (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
    is (Item.Settings.Kind
          in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
-            | Starcoder2 | Stablelm
+            | Starcoder2 | Stablelm | Gptneox
        and then Bias /= null);
 
    --  Normalize the way the architecture does, into Target.
@@ -3066,7 +3086,7 @@ package body Model_Runner.Llama is
             --  not. The order inside the fused one is queries, then
             --  keys, then values, which is the order the rows are
             --  written in.
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                   Width, Current.Attention_Norm_Bias, Status);
@@ -3155,7 +3175,7 @@ package body Model_Runner.Llama is
                   return;
                end if;
             elsif Item.Settings.Kind
-               in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
+               in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox
             then
                Resolve_Part
                  (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
@@ -3219,7 +3239,7 @@ package body Model_Runner.Llama is
             --  correctly and the biases some other way would be wrong
             --  only in what it adds -- which reads as a model that has
             --  drifted rather than one that has broken.
-            if Item.Settings.Kind in Phi2 | GPT2 then
+            if Item.Settings.Kind in Phi2 | GPT2 | Gptneox then
                Resolve_Norm_Part
                  (Item, Source, Layer_Key (Index, "attn_qkv.bias"),
                   Wide + KV + KV_Out, 0, Wide, Current.Query_Bias, Status);
@@ -3358,7 +3378,7 @@ package body Model_Runner.Llama is
             --  And the bias on the way out of attention, which Phi2,
             --  GPT2, Bert and jina-bert-v2 have and the rest have not.
             if Item.Settings.Kind in
-                 Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2
+                 Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2 | Gptneox
             then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_output.bias"),
@@ -3415,7 +3435,7 @@ package body Model_Runner.Llama is
                --  trap this architecture's output bias already fell
                --  into: the loader asked for a tensor because the
                --  fixture wrote it, and a published model was refused.
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
                  and then Containers.Find_Tensor
                             (Source, Layer_Key (Index, "ffn_norm.bias"))
                           /= 0
@@ -3429,7 +3449,7 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox
             then
                --  No gate: one projection up, a Gaussian unit, one down.
                --  The gate stays null, and the block below reads that
@@ -3451,7 +3471,7 @@ package body Model_Runner.Llama is
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not, so the arrangement they share is not
                --  what decides this.
-               if Item.Settings.Kind in Phi2 | GPT2 | Bert | Starcoder2 then
+               if Item.Settings.Kind in Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "ffn_up.bias"),
                      Feed, Current.Up_Bias, Status);
@@ -3720,7 +3740,7 @@ package body Model_Runner.Llama is
                Status);
 
             if E.Is_Ok (Status)
-              and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm
+              and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
             then
                Resolve_Norm
                  (Item, Source, "output_norm.bias", Width,
@@ -12402,8 +12422,9 @@ package body Model_Runner.Llama is
             T.Allocate (Width, Item.Post_Room);
          end if;
 
-         if (for some L of Source.Layers.all =>
-               L.Second_Attention_Norm /= null)
+         if Source.Settings.Parallel_Residual
+           or else (for some L of Source.Layers.all =>
+                      L.Second_Attention_Norm /= null)
          then
             T.Allocate (Width, Item.Kept_Input);
          end if;
@@ -14366,7 +14387,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15371,7 +15392,7 @@ package body Model_Runner.Llama is
                     and then Current.Post_Feed_Norm = null
                     and then not (Settings.Kind in Granite | Granite_MoE
                                   and then Settings.Residual_Mul /= 0.0)
-                    and then Settings.Kind not in Starcoder2 | Stablelm
+                    and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -15485,8 +15506,14 @@ package body Model_Runner.Llama is
                   end if;
 
                   --  The code variant reads the layer's input once more
-                  --  after the join, so it is kept across it.
-                  if Current.Second_Attention_Norm /= null then
+                  --  after the join, so it is kept across it -- and so does a
+                  --  parallel-residual block, whose feed-forward reads the
+                  --  layer's input rather than the residual the attention has
+                  --  been added to. Kept here, before the join below writes
+                  --  the residual over it.
+                  if Current.Second_Attention_Norm /= null
+                    or else Settings.Parallel_Residual
+                  then
                      Item.Kept_Input.all := Item.Activation.all;
                   end if;
                   Joined
@@ -15510,8 +15537,15 @@ package body Model_Runner.Llama is
                --  and a fresh normalization of the residual where it runs the
                --  two one after the other.
                if Current.Feed_Norm /= null then
+                  --  A parallel-residual block normalizes the layer's input,
+                  --  kept above, rather than the residual the attention was
+                  --  added to; every sequential block normalizes the residual
+                  --  as it now stands.
                   Normalize
-                    (Source, Item.Activation.all, Current.Feed_Norm.all,
+                    (Source,
+                     (if Settings.Parallel_Residual
+                      then Item.Kept_Input.all else Item.Activation.all),
+                     Current.Feed_Norm.all,
                      Current.Feed_Norm_Bias, Item.Normalized.all);
                elsif Current.Attention_Norm /= null then
                   Item.Normalized.all := Item.Post_Room.all;
@@ -16026,7 +16060,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -16624,7 +16658,9 @@ package body Model_Runner.Llama is
                   end if;
                end if;
 
-               if Current.Second_Attention_Norm /= null then
+               if Current.Second_Attention_Norm /= null
+                 or else Source.Settings.Parallel_Residual
+               then
                   T.Allocate (Width, Kept);
                   if Kept = null then
                      T.Free (Room);
@@ -16647,8 +16683,12 @@ package body Model_Runner.Llama is
                            Room);
                      else
                         --  The code variant reads the layer's input once
-                        --  more after the join, so it is kept across it.
-                        if Current.Second_Attention_Norm /= null then
+                        --  more after the join, and a parallel-residual block
+                        --  feeds its feed-forward from it, so it is kept here
+                        --  before the join writes the residual over it.
+                        if Current.Second_Attention_Norm /= null
+                          or else Source.Settings.Parallel_Residual
+                        then
                            Kept.all := Acts.all (Origin .. Origin + Width - 1);
                         end if;
                         Join_Residual
@@ -16674,9 +16714,14 @@ package body Model_Runner.Llama is
                            Norm.all (Origin .. Origin + Width - 1) :=
                              Acts.all (Origin .. Origin + Width - 1);
                         elsif Current.Feed_Norm /= null then
+                           --  A parallel-residual block feeds from the
+                           --  layer's input, kept above; a sequential one
+                           --  from the residual the attention was added to.
                            Normalize
                              (Source,
-                              Acts.all (Origin .. Origin + Width - 1),
+                              (if Source.Settings.Parallel_Residual
+                               then Kept.all
+                               else Acts.all (Origin .. Origin + Width - 1)),
                               Current.Feed_Norm.all, Current.Feed_Norm_Bias,
                               Norm.all (Origin .. Origin + Width - 1));
                         elsif Current.Attention_Norm /= null then
@@ -17696,7 +17741,7 @@ package body Model_Runner.Llama is
                        and then Current.Post_Feed_Norm = null
                        and then not (Settings.Kind in Granite | Granite_MoE
                                      and then Settings.Residual_Mul /= 0.0)
-                       and then Settings.Kind not in Starcoder2 | Stablelm
+                       and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),

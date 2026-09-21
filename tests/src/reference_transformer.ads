@@ -185,7 +185,7 @@ private
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
-      Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm);
+      Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -376,6 +376,11 @@ private
       --  The scalar GraniteMoE multiplies its renormalized expert weights by;
       --  one for every other mixture.
       Expert_Scale : Long_Float := 1.0;
+
+      --  Whether the two halves of the block run side by side from the
+      --  layer's input, each with its own normalization. GPT-NeoX does;
+      --  every other architecture here runs them one after the other.
+      Parallel : Boolean := False;
 
       --  The hybrid's shape: every Linear_Every-th layer attends in full
       --  and the rest run the rule over a state of State_Size squared a

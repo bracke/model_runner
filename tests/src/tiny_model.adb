@@ -385,7 +385,8 @@ package body Tiny_Model is
            when Olmo2     => "olmo2",
            when Glm4      => "glm4",
            when Starcoder2 => "starcoder2",
-           when Stablelm  => "stablelm");
+           when Stablelm  => "stablelm",
+           when Gptneox   => "gptneox");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -423,12 +424,19 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm then
+      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
+      end if;
+
+      --  GPT-NeoX's parallel residual, stated and built on: the fixture
+      --  exercises the side-by-side path, which is the one that is new code
+      --  and the one Pythia and GPT-NeoX-20B run.
+      if Kind = Gptneox then
+         Fixtures.Add_Bool (Builder, Prefix & ".use_parallel_residual", True);
       end if;
 
       --  Jina_Bert_V2 states no rotation key at all, as its published files
@@ -446,7 +454,7 @@ package body Tiny_Model is
              --  whole of it. The one fixture that exercises the partial path,
              --  which the split pairing and the tail left alone are crossed
              --  against the independent implementation through.
-             elsif Kind = Stablelm
+             elsif Kind in Stablelm | Gptneox
              then Interfaces.Unsigned_32 (Head_Size / 2)
              else Interfaces.Unsigned_32 (Head_Size)));
       end if;
@@ -880,7 +888,7 @@ package body Tiny_Model is
             --  the one that turns part -- the table has a divisor a rotated
             --  pair, so a partial rotation carries a shorter table.
             Rotated : constant Natural :=
-              (if Kind = Stablelm then Head_Size / 2 else Head_Size);
+              (if Kind in Stablelm | Gptneox then Head_Size / 2 else Head_Size);
             Values : N.Real_Array (0 .. N.Element_Count (Rotated / 2) - 1);
          begin
             for Index in Values'Range loop
@@ -989,7 +997,7 @@ package body Tiny_Model is
             --  Twice as wide: each head's queries and then its gate.
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (2 * Heads * Key_Size)]);
-         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert then
+         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -1021,7 +1029,7 @@ package body Tiny_Model is
          --  carried both would say two different things about the same
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
-         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert
+         if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox
            and then not Linear_Block (Index)
          then
             Weight (Layer_Name (Index, "attn_k.weight"),
@@ -1045,7 +1053,7 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
          end if;
 
@@ -1053,7 +1061,7 @@ package body Tiny_Model is
          --  three in one vector, as it writes the three matrices in one
          --  tensor. Drawn as three in the order the unfused architectures
          --  draw them, for the reason Weight_Of exists.
-         if Kind in Phi2 | GPT2 then
+         if Kind in Phi2 | GPT2 | Gptneox then
             declare
                use type N.Real_Array;
 
@@ -1108,7 +1116,7 @@ package body Tiny_Model is
          end if;
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2
+         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2 | Gptneox
          then
             Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
          end if;
@@ -1177,7 +1185,7 @@ package body Tiny_Model is
             --  that because the fixture the engine was checked against had
             --  no such tensor either. Falcon and phi2 never reach this:
             --  they have one normalization a block.
-            if Kind in GPT2 | Starcoder2 | Stablelm then
+            if Kind in GPT2 | Starcoder2 | Stablelm | Gptneox then
                Norm_Of (Layer_Name (Index, "ffn_norm.bias"), Embedding);
             end if;
          end if;
@@ -1227,7 +1235,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding)], G.Type_F32,
                   Fixtures.Encode_F32 (Next (N.Element_Count (Embedding))));
             end if;
-         elsif Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 then
+         elsif Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);
@@ -1236,7 +1244,7 @@ package body Tiny_Model is
 
             --  And a bias on each side of it, which Phi2 has and Falcon
             --  does not: the arrangement they share does not decide this.
-            if Kind in Phi2 | GPT2 | Bert | Starcoder2 then
+            if Kind in Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
                Norm_Of (Layer_Name (Index, "ffn_up.bias"), Feed_Forward);
                Norm_Of (Layer_Name (Index, "ffn_down.bias"), Embedding);
             end if;
@@ -1285,7 +1293,7 @@ package body Tiny_Model is
       --  reads it: its last layer already normalized what it produced.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Norm ("output_norm.weight");
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
             Norm ("output_norm.bias");
          end if;
       end if;

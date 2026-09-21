@@ -130,11 +130,11 @@ Arches that are transformer-shaped and differ mostly in config/norm placement.
 Each: enum entry (`llama.ads:187`), metadata loader, block-shape handling,
 fixture, conformance row. Batch the cheap ones.
 
-11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2, GraniteMoE, StableLM done). Config-mostly arches:**
+11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2, GraniteMoE, StableLM, GPT-NeoX done). Config-mostly arches:**
     ✅ Granite, ✅ OLMo2, ✅ GLM4, ✅ Starcoder2, ✅ GraniteMoE, ✅ StableLM (the
-    1.6B config; the 12B's per-head QK-norm and parallel residual are refused);
-    still open: Command-R/Command-R+, ChatGLM, MPT, GPT-NeoX, InternLM2,
-    Baichuan. Refusal
+    1.6B config; the 12B's per-head QK-norm and parallel residual are refused),
+    ✅ GPT-NeoX (both the parallel-residual and sequential forms); still open:
+    Command-R/Command-R+, ChatGLM, MPT, InternLM2, Baichuan. Refusal
     at `llama.adb:524`. Each new arch is now largely wiring against the existing
     norm/gate/bias/rotary/mixture paths + a device host-fallback guard for any
     untried kernel combination. **Small–Medium each**, but many, so budget as a

@@ -188,7 +188,7 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm);
+      Stablelm, Gptneox);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -245,7 +245,8 @@ package Model_Runner.Llama is
          when Glm4       => "glm4",
          when Starcoder2 => "starcoder2",
          when Granite_MoE => "granitemoe",
-         when Stablelm   => "stablelm");
+         when Stablelm   => "stablelm",
+         when Gptneox    => "gptneox");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -392,6 +393,14 @@ package Model_Runner.Llama is
       Residual_Mul    : Model_Runner.Numerics.Real := 0.0;
       Attention_Mul   : Model_Runner.Numerics.Real := 0.0;
       Logit_Mul       : Model_Runner.Numerics.Real := 0.0;
+
+      --  Whether the attention and the feed-forward run side by side from the
+      --  layer's input rather than one after the other -- each normalizing
+      --  that input with its own normalization and both adding to the
+      --  residual, so a token passes through the layer's two halves at once.
+      --  GPT-NeoX states this in `use_parallel_residual`; false is the
+      --  sequential arrangement every other architecture here uses.
+      Parallel_Residual : Boolean := False;
 
       --  How steeply a head's attention falls off with distance, for a model
       --  that learned no positions at all and is told where a token is by

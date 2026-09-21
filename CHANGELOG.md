@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The GPT-NeoX architecture is read.** GPT2's block -- a centred
+  normalization with a bias on the way into each sublayer, the queries,
+  keys and values in one tensor with a bias, a bias on the way out of
+  attention, and a feed-forward with no gate, one projection up, a Gaussian
+  unit, one down -- but rotating over the leading `rope.dimension_count` of
+  each head where GPT2 learns a row for the position. Its distinctive piece
+  is the parallel residual (`use_parallel_residual`, on by default): the
+  attention and the feed-forward both read the layer's input, each with its
+  own centred normalization, and both add to it -- a two-norm parallel
+  arrangement Pythia and GPT-NeoX-20B use that differs from Falcon's
+  one-norm parallel and that no other architecture here has. It is the first
+  metadata-driven parallel flag; a sequential arrangement is read where the
+  file states one. Both compose from existing paths -- the parallel one by
+  reusing the raw layer input the code variant already keeps and reading it
+  before the attention join. Read on the processor and the independent
+  reference transformer, crossed against it over every format and path,
+  outside tolerance nought, on the host under the device backend. It was
+  refused before.
+
 - **The StableLM architecture is read.** Starcoder2's block -- a centred
   normalization that subtracts the mean and carries a bias on the way into
   each sublayer, and a bias on the queries, keys and values where the file
