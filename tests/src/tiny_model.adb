@@ -382,7 +382,8 @@ package body Tiny_Model is
              (if Experts > 0 then "qwen35moe" else "qwen35"),
            when Granite   => "granite",
            when Olmo2     => "olmo2",
-           when Glm4      => "glm4");
+           when Glm4      => "glm4",
+           when Starcoder2 => "starcoder2");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -420,7 +421,7 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 then
+      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
@@ -998,7 +999,7 @@ package body Tiny_Model is
          end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
          --  Bert carries the same three, written the same way.
-         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4
+         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2
            and then not Omit_Biases
          then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
@@ -1012,7 +1013,7 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind in Falcon | Phi2 | GPT2 then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
          end if;
 
@@ -1075,7 +1076,8 @@ package body Tiny_Model is
          end if;
          --  One normalization a block where the two sublayers run in
          --  parallel; two where they run one after the other.
-         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS then
+         if Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2
+         then
             Norm_Of (Layer_Name (Index, "attn_output.bias"), Embedding);
          end if;
 
@@ -1143,7 +1145,7 @@ package body Tiny_Model is
             --  that because the fixture the engine was checked against had
             --  no such tensor either. Falcon and phi2 never reach this:
             --  they have one normalization a block.
-            if Kind = GPT2 then
+            if Kind in GPT2 | Starcoder2 then
                Norm_Of (Layer_Name (Index, "ffn_norm.bias"), Embedding);
             end if;
          end if;
@@ -1193,7 +1195,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding)], G.Type_F32,
                   Fixtures.Encode_F32 (Next (N.Element_Count (Embedding))));
             end if;
-         elsif Kind in Falcon | Phi2 | GPT2 | Bert then
+         elsif Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);
@@ -1202,7 +1204,7 @@ package body Tiny_Model is
 
             --  And a bias on each side of it, which Phi2 has and Falcon
             --  does not: the arrangement they share does not decide this.
-            if Kind in Phi2 | GPT2 | Bert then
+            if Kind in Phi2 | GPT2 | Bert | Starcoder2 then
                Norm_Of (Layer_Name (Index, "ffn_up.bias"), Feed_Forward);
                Norm_Of (Layer_Name (Index, "ffn_down.bias"), Embedding);
             end if;
@@ -1251,7 +1253,7 @@ package body Tiny_Model is
       --  reads it: its last layer already normalized what it produced.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Norm ("output_norm.weight");
-         if Kind in Falcon | Phi2 | GPT2 then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
             Norm ("output_norm.bias");
          end if;
       end if;

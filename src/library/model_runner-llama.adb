@@ -479,7 +479,7 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 =>
+                       | Olmo2 | Starcoder2 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -594,7 +594,9 @@ package body Model_Runner.Llama is
       --  asked for its own key and falls back to the other, so a file that
       --  states either is read and a file that states neither takes the
       --  default both would.
-      if Normalizes_After (Settings.Kind) then
+      if Normalizes_After (Settings.Kind)
+        or else Settings.Kind = Starcoder2
+      then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
             0.0, 1.0, Value, Local);
@@ -2064,7 +2066,7 @@ package body Model_Runner.Llama is
    is (if Item.Settings.Gate_Alpha > 0.0 then 3
        elsif Item.Settings.Kind
              in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-                | Jina_Bert_V2
+                | Jina_Bert_V2 | Starcoder2
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
@@ -2072,7 +2074,7 @@ package body Model_Runner.Llama is
    begin
       if Item.Settings.Kind
          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-            | Jina_Bert_V2
+            | Jina_Bert_V2 | Starcoder2
       then
          K.GELU (Target);
       else
@@ -2250,6 +2252,7 @@ package body Model_Runner.Llama is
      (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
    is (Item.Settings.Kind
          in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
+            | Starcoder2
        and then Bias /= null);
 
    --  Normalize the way the architecture does, into Target.
@@ -3053,7 +3056,7 @@ package body Model_Runner.Llama is
             --  not. The order inside the fused one is queries, then
             --  keys, then values, which is the order the rows are
             --  written in.
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 then
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                   Width, Current.Attention_Norm_Bias, Status);
@@ -3233,7 +3236,8 @@ package body Model_Runner.Llama is
             --  Bert biases the same three and writes them as Qwen2
             --  does, one vector a projection rather than three in one,
             --  and jina-bert-v2 does the same.
-            if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 then
+            if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 | Starcoder2
+            then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_q.bias"),
                   Wide, Current.Query_Bias, Status);
@@ -3324,7 +3328,7 @@ package body Model_Runner.Llama is
             --  And the bias on the way out of attention, which Phi2,
             --  GPT2, Bert and jina-bert-v2 have and the rest have not.
             if Item.Settings.Kind in
-                 Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
+                 Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS | Starcoder2
             then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_output.bias"),
@@ -3381,7 +3385,7 @@ package body Model_Runner.Llama is
                --  trap this architecture's output bias already fell
                --  into: the loader asked for a tensor because the
                --  fixture wrote it, and a published model was refused.
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2
                  and then Containers.Find_Tensor
                             (Source, Layer_Key (Index, "ffn_norm.bias"))
                           /= 0
@@ -3395,7 +3399,8 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert then
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2
+            then
                --  No gate: one projection up, a Gaussian unit, one down.
                --  The gate stays null, and the block below reads that
                --  rather than the architecture.
@@ -3416,7 +3421,7 @@ package body Model_Runner.Llama is
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not, so the arrangement they share is not
                --  what decides this.
-               if Item.Settings.Kind in Phi2 | GPT2 | Bert then
+               if Item.Settings.Kind in Phi2 | GPT2 | Bert | Starcoder2 then
                   Resolve_Norm
                     (Item, Source, Layer_Key (Index, "ffn_up.bias"),
                      Feed, Current.Up_Bias, Status);
@@ -3685,7 +3690,7 @@ package body Model_Runner.Llama is
                Status);
 
             if E.Is_Ok (Status)
-              and then Item.Settings.Kind in Falcon | Phi2 | GPT2
+              and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2
             then
                Resolve_Norm
                  (Item, Source, "output_norm.bias", Width,
@@ -14310,7 +14315,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind /= Glm4
+          and then Settings.Kind not in Glm4 | Starcoder2
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15315,6 +15320,7 @@ package body Model_Runner.Llama is
                     and then Current.Post_Feed_Norm = null
                     and then not (Settings.Kind = Granite
                                   and then Settings.Residual_Mul /= 0.0)
+                    and then Settings.Kind /= Starcoder2
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -15969,7 +15975,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind /= Glm4
+          and then Settings.Kind not in Glm4 | Starcoder2
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -17639,6 +17645,7 @@ package body Model_Runner.Llama is
                        and then Current.Post_Feed_Norm = null
                        and then not (Settings.Kind = Granite
                                      and then Settings.Residual_Mul /= 0.0)
+                       and then Settings.Kind /= Starcoder2
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),

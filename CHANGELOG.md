@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The Starcoder2 architecture is read.** GPT2's block -- a centred
+  normalization that subtracts the mean and carries a bias on the way into
+  each sublayer, a bias on every projection, and a feed-forward with no
+  gate at all, one projection up, a Gaussian error unit, one projection
+  down -- but rotating where GPT2 learns a row for the position, and
+  writing its queries, keys and values as three tensors where GPT2 fuses
+  them. Split rotary pairing, full rotation, and the layer-norm epsilon
+  read from `attention.layer_norm_epsilon`, the key the model actually
+  states, rather than the root-mean-square one every other pre-norm
+  architecture here falls back to. The output projection ties to the
+  embedding where the file omits it. Pure wiring -- the centred
+  normalization, non-gated GELU, projection biases and split rotation all
+  compose from the existing paths, nomic-bert being the precedent for a
+  centred architecture that rotates. It is the first to want a centred
+  normalization with an active rotation and a bias on every projection
+  together on the device, an untried kernel combination, so a Starcoder2
+  layer runs on the host under the device backend. Read on the processor
+  and the independent reference transformer, crossed against it over every
+  format and path, outside tolerance nought. It was refused before.
+
 - **The GLM4 architecture is read.** A composition of pieces the engine
   already had: Gemma2's sandwich normalization -- one on the way into each
   sublayer and one over what it produced, both root-mean-square and added

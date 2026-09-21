@@ -76,7 +76,7 @@ package Tiny_Model is
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite,
-      Olmo2, Glm4);
+      Olmo2, Glm4, Starcoder2);
 
    Linear_State : constant := 4;
    Linear_Heads : constant := 2;
@@ -207,7 +207,7 @@ package Tiny_Model is
    function Cannot_Hold
      (Kind : Fixture_Architecture; Shape : Fixture_Shape) return Boolean
    is (case Shape is
-         when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert,
+         when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2,
          when Stretched => Kind in GPT2 | Bert | Jina_Bert_V2,
          when Windowed => Kind in Bert | Nomic_Bert | Jina_Bert_V2,
          when Apart => Kind = Qwen35,

@@ -1123,7 +1123,8 @@ package body Reference_Transformer is
          when Qwen35_MoE => "qwen35moe.",
          when Granite => "granite.",
          when Olmo2 => "olmo2.",
-         when Glm4 => "glm4.");
+         when Glm4 => "glm4.",
+         when Starcoder2 => "starcoder2.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1555,6 +1556,8 @@ package body Reference_Transformer is
             Item.Kind := Olmo2;
          elsif Named = "glm4" then
             Item.Kind := Glm4;
+         elsif Named = "starcoder2" then
+            Item.Kind := Starcoder2;
          else
             return;
          end if;
@@ -1747,7 +1750,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2
+            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1857,7 +1860,7 @@ package body Reference_Transformer is
       --  whatever reads it. Bert's last layer normalized what it produced.
       if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-         if Present and then Item.Kind in Falcon | Phi2 | GPT2 then
+         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
             Item.Output_Norm_Bias :=
               Read_Vector ("output_norm.bias", Present);
          end if;
@@ -1949,7 +1952,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind in Falcon | Phi2 | GPT2 then
+            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -2131,7 +2134,8 @@ package body Reference_Transformer is
 
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
-            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 then
+            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2
+            then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
                if not Present then
@@ -2246,7 +2250,9 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS then
+            if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
+                          | Starcoder2
+            then
                Current.Out_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_output.bias"), Present);
                if not Present then
@@ -2289,7 +2295,7 @@ package body Reference_Transformer is
                --  The shift beside it, for the architectures that centre.
                --  Optional: a file need not carry one, and this reads what
                --  is there rather than what a fixture happens to write.
-               if Item.Kind = GPT2 then
+               if Item.Kind in GPT2 | Starcoder2 then
                   Current.Feed_Norm_Bias :=
                     Read_Vector
                       (Layer_Name (Index, "ffn_norm.bias"), Present);
@@ -2385,7 +2391,7 @@ package body Reference_Transformer is
                   end if;
                end if;
             else
-               if Item.Kind in Falcon | Phi2 | GPT2 | Bert then
+               if Item.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -2433,7 +2439,7 @@ package body Reference_Transformer is
 
                --  A bias on each side of the block, which Phi2 has and
                --  Falcon does not.
-               if Item.Kind in Phi2 | GPT2 | Bert then
+               if Item.Kind in Phi2 | GPT2 | Bert | Starcoder2 then
                   Current.Up_Bias :=
                     Read_Vector (Layer_Name (Index, "ffn_up.bias"), Present);
                   if not Present then
@@ -2686,7 +2692,7 @@ package body Reference_Transformer is
       begin
          if Item.Kind
             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-               | Jina_Bert_V2
+               | Jina_Bert_V2 | Starcoder2
          then
             declare
                Inner : constant Long_Float :=
@@ -3602,7 +3608,7 @@ package body Reference_Transformer is
                   --  way out.
                   if Current.Attention_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
                      Normalize_Centred
                        (State, Current.Attention_Norm.all,
                         Current.Attention_Norm_Bias, Normed);
@@ -4029,7 +4035,7 @@ package body Reference_Transformer is
                      Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
                   elsif Current.Feed_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
                      Normalize_Centred
                        (State, Current.Feed_Norm.all,
                         Current.Feed_Norm_Bias, Normed);
@@ -4276,7 +4282,7 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
-         if Item.Kind in Falcon | Phi2 | GPT2 then
+         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
          else
