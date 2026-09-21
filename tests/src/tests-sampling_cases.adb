@@ -1620,6 +1620,182 @@ package body Tests.Sampling_Cases is
       end;
    end Mirostat_Steers_Towards_Its_Target;
 
+   ------------------------------------------------
+   -- Mirostat_One_Steers_Towards_Its_Target --
+   ------------------------------------------------
+
+   --  Version one, which estimates the tail's shape and solves for a count,
+   --  steers the same target the same way version two does: a larger target
+   --  leaves more of the distribution and the text it draws is more
+   --  surprising. Asserted the same way, so that the count-from-shape path
+   --  is held to the same behaviour as the surprise-under-target one.
+   procedure Mirostat_One_Steers_Towards_Its_Target
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 256;
+
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => 0.0];
+
+      Draws : constant := 400;
+
+      Largest : N.Real := 0.0;
+      Total   : N.Wide_Real := 0.0;
+
+      function Surprise_At (Tau : N.Real) return N.Wide_Real is
+         Config  : S.Configuration := S.Greedy_Configuration;
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Sum     : N.Wide_Real := 0.0;
+      begin
+         Config.Temperature := 1.0;
+         Config.Top_K := 0;
+         Config.Top_P := 1.0;
+         Config.Min_P := 0.0;
+         Config.Mirostat := 1;
+         Config.Mirostat_Tau := Tau;
+         Config.Mirostat_Eta := 0.2;
+
+         S.Validate (Config, Status);
+         Assert (E.Is_Ok (Status),
+                 "a mirostat-one configuration was refused: "
+                 & E.Error_Code'Image (Status.Code));
+
+         S.Open (Sampler, Config, Vocabulary, 99, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+
+         for Draw in 1 .. Draws loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status),
+                    "mirostat one refused a draw: "
+                    & E.Error_Code'Image (Status.Code));
+
+            declare
+               P : constant N.Wide_Real :=
+                 N.Exp (N.Wide_Real (Logits (N.Element_Count (Token)))
+                        - N.Wide_Real (Largest)) / Total;
+            begin
+               Sum := Sum + (-N.Log (P) / N.Log (2.0));
+            end;
+         end loop;
+
+         S.Close (Sampler);
+         return Sum / N.Wide_Real (Draws);
+      end Surprise_At;
+   begin
+      --  A power-law tail, which is the shape version one estimates: the
+      --  probability of the i-th candidate falls as (i+1) to a power, so
+      --  the log-ratios it reads are a straight line and the exponent it
+      --  solves for is real. A stepped or flat distribution gives it
+      --  nothing to read, and it keeps the whole of the order -- correct,
+      --  but not a test of the steering.
+      for Index in Logits'Range loop
+         Logits (Index) :=
+           N.Real (-1.5 * N.Log (N.Wide_Real (Index) + 1.0));
+      end loop;
+
+      Largest := Logits (0);
+      for Index in Logits'Range loop
+         if Logits (Index) > Largest then
+            Largest := Logits (Index);
+         end if;
+      end loop;
+      for Index in Logits'Range loop
+         Total := Total
+           + N.Exp (N.Wide_Real (Logits (Index)) - N.Wide_Real (Largest));
+      end loop;
+
+      declare
+         Quiet : constant N.Wide_Real := Surprise_At (2.0);
+         Loud  : constant N.Wide_Real := Surprise_At (8.0);
+      begin
+         Assert (Quiet < Loud - 0.5,
+                 "mirostat one produced" & N.Wide_Real'Image (Quiet)
+                 & " bits at a target of two and"
+                 & N.Wide_Real'Image (Loud) & " at eight, which is not a "
+                 & "target it is steering by");
+      end;
+   end Mirostat_One_Steers_Towards_Its_Target;
+
+   --------------------------------------------------
+   -- Dynamic_Temperature_Reads_The_Uncertainty --
+   --------------------------------------------------
+
+   --  The dynamic band moves the temperature by how uncertain the step is.
+   --  On a peaked distribution -- one token far ahead, little entropy -- it
+   --  draws the bottom of the band, a temperature below the flat one, and so
+   --  sharpens the choice: the top token is taken more often than a fixed
+   --  temperature at the band's centre would take it. The direction is the
+   --  whole of the claim, so it is what is asserted.
+   procedure Dynamic_Temperature_Reads_The_Uncertainty
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Vocabulary : constant := 64;
+
+      --  Peaked: three tokens carry almost all the mass, the leading one
+      --  ahead of the other two, over a floor pushed far down so the step's
+      --  entropy is a fifth of the most it could be and the band is drawn
+      --  towards its bottom.
+      Logits : N.Real_Array (0 .. Vocabulary - 1) := [others => -10.0];
+
+      Draws : constant := 600;
+
+      --  How often the leading token is taken over a run, under a config.
+      function Top_Share (Config : S.Configuration) return N.Real is
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Hits    : Natural := 0;
+      begin
+         S.Validate (Config, Status);
+         Assert (E.Is_Ok (Status),
+                 "a dynamic-temperature configuration was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         S.Open (Sampler, Config, Vocabulary, 7, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open");
+         for Draw in 1 .. Draws loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status),
+                    "a draw was refused: " & E.Error_Code'Image (Status.Code));
+            if Natural (Token) = 0 then
+               Hits := Hits + 1;
+            end if;
+         end loop;
+         S.Close (Sampler);
+         return N.Real (Hits) / N.Real (Draws);
+      end Top_Share;
+
+      Flat_Config : S.Configuration := S.Greedy_Configuration;
+      Dyn_Config  : S.Configuration := S.Greedy_Configuration;
+   begin
+      Logits (0) := 5.0;
+      Logits (1) := 4.0;
+      Logits (2) := 3.0;
+
+      Flat_Config.Temperature := 1.0;
+      Flat_Config.Top_K := 0;
+      Flat_Config.Top_P := 1.0;
+      Flat_Config.Min_P := 0.0;
+
+      Dyn_Config := Flat_Config;
+      Dyn_Config.Dynatemp_Range := 0.9;
+
+      declare
+         Flat : constant N.Real := Top_Share (Flat_Config);
+         Dyn  : constant N.Real := Top_Share (Dyn_Config);
+      begin
+         Assert (Dyn > Flat + 0.05,
+                 "the dynamic temperature took the leading token"
+                 & N.Real'Image (Dyn) & " of the time against"
+                 & N.Real'Image (Flat) & " at a flat temperature, which is "
+                 & "not the sharpening a low-entropy step should draw");
+      end;
+   end Dynamic_Temperature_Reads_The_Uncertainty;
+
    ----------------------------------------
    -- Penalties_Reach_The_Greedy_Path --
    ----------------------------------------
@@ -2908,6 +3084,14 @@ package body Tests.Sampling_Cases is
         (T, Sequence_Penalty_Breaks_A_Loop'Access,
          "the sequence penalty falls on the token that would continue a "
          & "repetition, not on tokens that were merely said");
+      Register_Routine
+        (T, Mirostat_One_Steers_Towards_Its_Target'Access,
+         "mirostat version one steers the surprise of its text towards its "
+         & "target");
+      Register_Routine
+        (T, Dynamic_Temperature_Reads_The_Uncertainty'Access,
+         "the dynamic temperature sharpens a low-entropy step below the flat "
+         & "temperature at the band's centre");
       Register_Routine
         (T, Mirostat_Steers_Towards_Its_Target'Access,
          "mirostat moves its target by how surprising each choice was, and "

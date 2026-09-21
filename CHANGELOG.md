@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Two more samplers: Mirostat version one, and a dynamic temperature.**
+  Mirostat's first version, refused by name until now, is implemented
+  beside the second: it reads the shape of the tail from the top of the
+  order -- how fast the sorted probabilities fall is the exponent of the
+  power law they approximate -- and solves that shape and the running
+  target for how many candidates to keep, steering the same surprise the
+  second version does by a different truncation. Where the estimate has no
+  well-behaved head to read it keeps the whole order rather than a wrong
+  count. And a dynamic temperature (`dynatemp_range`, `dynatemp_exponent`)
+  that moves the temperature within a band by the step's own uncertainty:
+  a near-uniform distribution is drawn near the top of the band and a
+  peaked one near the bottom, so the text stays varied where the model has
+  room and close where it does not. Off by default; the flat-temperature
+  path is unchanged.
+
 - **The Starcoder2 architecture is read.** GPT2's block -- a centred
   normalization that subtracts the mean and carries a bias on the way into
   each sublayer, a bias on every projection, and a feed-forward with no

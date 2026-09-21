@@ -63,6 +63,20 @@ package Model_Runner.Sampling is
       --  Softmax temperature. Zero selects greedy mode.
       Temperature : Real := 0.8;
 
+      --  How far the temperature is allowed to move from Temperature with
+      --  the distribution's own uncertainty: none where this is zero, and a
+      --  band of Temperature plus or minus this otherwise. A step whose
+      --  distribution is close to uniform -- the model unsure -- is drawn
+      --  near the top of the band, and a peaked one near the bottom, so the
+      --  text stays varied where the model has room and stays close where it
+      --  does not. Zero disables it and the temperature is Temperature flat.
+      Dynatemp_Range : Real := 0.0;
+
+      --  How sharply the temperature follows the uncertainty across the
+      --  band: one is proportional, above one holds low until the model is
+      --  quite unsure, below one lifts early. Must be greater than zero.
+      Dynatemp_Exponent : Real := 1.0;
+
       --  Keep only the K highest-scoring candidates. Zero disables the filter.
       Top_K : Natural := 40;
 
@@ -159,16 +173,18 @@ package Model_Runner.Sampling is
       --  Two or three words repeat innocently; ten do not.
       DRY_Allowed_Length : Natural := 2;
 
-      --  Mirostat version: zero for none, two for the algorithm below.
-      --  Version one is not implemented and naming it is refused rather
-      --  than quietly treated as two.
+      --  Mirostat version: zero for none, one or two for the two algorithms.
+      --  A third number is refused rather than quietly treated as either.
       --
       --  Mirostat replaces the truncation filters rather than joining them:
-      --  it keeps the candidates whose surprise is under a running target,
-      --  and moves that target after every token by how surprising the one
-      --  it chose turned out to be. What it holds steady is the surprise of
-      --  the text, which is what the filters above only approximate by
-      --  holding the shape of each step's distribution.
+      --  it keeps a set of candidates and moves a running target after every
+      --  token by how surprising the one it chose turned out to be, holding
+      --  the surprise of the text steady where the filters above only
+      --  approximate that by holding the shape of each step's distribution.
+      --  The two versions choose the set differently -- version one solves
+      --  for a count from the estimated shape of the tail, version two keeps
+      --  every candidate whose surprise is under the target -- and steer the
+      --  same target the same way.
       Mirostat : Natural := 0;
 
       --  The surprise, in bits, that mirostat steers towards.
@@ -181,6 +197,8 @@ package Model_Runner.Sampling is
    --  A configuration that always selects the most probable token.
    Greedy_Configuration : constant Configuration :=
      (Temperature       => 0.0,
+      Dynatemp_Range    => 0.0,
+      Dynatemp_Exponent => 1.0,
       Top_K             => 0,
       Top_P             => 1.0,
       Min_P             => 0.0,

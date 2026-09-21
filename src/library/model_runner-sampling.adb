@@ -141,6 +141,26 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
+      --  The band the dynamic temperature moves in cannot be negative, and
+      --  it is meaningless at temperature zero, where there is no
+      --  distribution to read an uncertainty from -- greedy is greedy. The
+      --  exponent must be positive: a zero or negative one is not a curve
+      --  the band can be walked along.
+      if not N.Is_Finite (Item.Dynatemp_Range)
+        or else Item.Dynatemp_Range < 0.0
+        or else (Item.Dynatemp_Range > 0.0 and then Item.Temperature = 0.0)
+      then
+         Reject ("dynatemp_range", Item.Dynatemp_Range);
+         return;
+      end if;
+
+      if not N.Is_Finite (Item.Dynatemp_Exponent)
+        or else Item.Dynatemp_Exponent <= 0.0
+      then
+         Reject ("dynatemp_exponent", Item.Dynatemp_Exponent);
+         return;
+      end if;
+
       if not N.Is_Finite (Item.Top_P)
         or else Item.Top_P <= 0.0
         or else Item.Top_P > 1.0
@@ -240,11 +260,12 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
-      --  Two versions exist and this implements the second. Refusing the
-      --  first by name beats treating it as the second: they steer
-      --  differently, and a caller who asked for one and silently got the
-      --  other would be measuring the wrong thing.
-      if Item.Mirostat /= 0 and then Item.Mirostat /= 2 then
+      --  Two versions exist and both are implemented. The first estimates
+      --  the tail's shape from the top of the order and truncates to a
+      --  count; the second truncates by surprise directly. They steer the
+      --  same target differently, so a third number is refused by name
+      --  rather than treated as either.
+      if Item.Mirostat not in 0 | 1 | 2 then
          Status := E.Make (E.Sampling_Invalid_Configuration);
          E.Add_Text (Status, "field", "mirostat", E.Param_Identifier);
          E.Add_Integer (Status, "value", Long_Long_Integer (Item.Mirostat));
@@ -1244,38 +1265,129 @@ package body Model_Runner.Sampling is
       --  3  forbidden-token masks, and 4  repetition penalty. Both act on the
       --  logits in token order, before any reordering, so that the history
       --  lookup stays a direct comparison.
-      for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
-         if not Item.Masked.all (Natural (Index))
-           and then not Item.Stepped.all (Natural (Index))
-         then
+      declare
+         --  The temperature the loop below divides by. It is Temperature
+         --  where the dynamic band is off, and the loop is then exactly what
+         --  it was; where the band is on, it is read from how uncertain the
+         --  step is before the loop runs, so the loop still divides by one
+         --  number.
+         Effective_Temp : Real := Item.Settings.Temperature;
+      begin
+         if Item.Settings.Dynatemp_Range > 0.0 then
             declare
-               --  Suppressed for the same reason as the loop above: the
-               --  arithmetic below can leave a value the check would fire on
-               --  before anything can ask whether it did.
                pragma Suppress (Validity_Check);
-
-               Value : Real := Adjusted (Item, Logits, Index);
+               Max_L : Real := Real'First;
+               Total : N.Wide_Real := 0.0;
+               Load  : N.Wide_Real := 0.0;
+               Seen  : Natural := 0;
             begin
-               --  5  temperature
-               Value := Value / Item.Settings.Temperature;
+               --  The most likely of the penalized logits, for a stable
+               --  exponential, and how many there are.
+               for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
+                  if not Item.Masked.all (Natural (Index))
+                    and then not Item.Stepped.all (Natural (Index))
+                  then
+                     declare
+                        L : constant Real := Adjusted (Item, Logits, Index);
+                     begin
+                        if L > Max_L then
+                           Max_L := L;
+                        end if;
+                        Seen := Seen + 1;
+                     end;
+                  end if;
+               end loop;
 
-               --  The inputs were all finite and the result need not be: a
-               --  large logit divided by a small temperature overflows, and a
-               --  penalty below one multiplies. Reported, like a logit that
-               --  arrived non-finite, rather than trapping here.
-               if not N.Is_Finite (Value) then
-                  Status := E.Make (E.Sampling_Non_Finite_Logit);
-                  E.Add_Integer
-                    (Status, "token", Long_Long_Integer (Index));
-                  return;
+               --  The entropy of their softmax, in nats, gathered as the
+               --  sum and the weighted shift so a second pass is enough:
+               --  entropy is log(sum) minus the mean shift under the weights.
+               for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
+                  if not Item.Masked.all (Natural (Index))
+                    and then not Item.Stepped.all (Natural (Index))
+                  then
+                     declare
+                        Shift : constant N.Wide_Real :=
+                          N.Wide_Real (Adjusted (Item, Logits, Index))
+                          - N.Wide_Real (Max_L);
+                        Weight : constant N.Wide_Real := N.Exp (Shift);
+                     begin
+                        Total := Total + Weight;
+                        Load := Load + Weight * Shift;
+                     end;
+                  end if;
+               end loop;
+
+               if Seen > 1 and then Total > 0.0 then
+                  declare
+                     Entropy : constant N.Wide_Real :=
+                       N.Log (Total) - Load / Total;
+                     Ceiling : constant N.Wide_Real :=
+                       N.Log (N.Wide_Real (Seen));
+                     Fraction : N.Wide_Real :=
+                       (if Ceiling > 0.0 then Entropy / Ceiling else 0.0);
+                     Low  : constant Real :=
+                       Real'Max (0.0,
+                                 Item.Settings.Temperature
+                                 - Item.Settings.Dynatemp_Range);
+                     High : constant Real :=
+                       Item.Settings.Temperature
+                       + Item.Settings.Dynatemp_Range;
+                     Shape : N.Wide_Real;
+                  begin
+                     Fraction :=
+                       N.Wide_Real'Max (0.0, N.Wide_Real'Min (1.0, Fraction));
+                     Shape :=
+                       (if Fraction <= 0.0 then 0.0
+                        else N.Exp
+                               (N.Wide_Real (Item.Settings.Dynatemp_Exponent)
+                                * N.Log (Fraction)));
+                     Effective_Temp := Low + (High - Low) * Real (Shape);
+                  end;
                end if;
 
-               Item.Working.all (Count) :=
-                 (Token => Token_Id (Index), Logit => Value, Probability => 0.0);
-               Count := Count + 1;
+               --  A band that reaches zero and a step peaked enough to draw
+               --  the bottom of it would divide by nothing; held just above,
+               --  which is greedy in all but name.
+               if Effective_Temp <= 0.0 then
+                  Effective_Temp := 1.0E-6;
+               end if;
             end;
          end if;
-      end loop;
+
+         for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
+            if not Item.Masked.all (Natural (Index))
+              and then not Item.Stepped.all (Natural (Index))
+            then
+               declare
+                  --  Suppressed for the same reason as the loop above: the
+                  --  arithmetic below can leave a value the check would fire
+                  --  on before anything can ask whether it did.
+                  pragma Suppress (Validity_Check);
+
+                  Value : Real := Adjusted (Item, Logits, Index);
+               begin
+                  --  5  temperature
+                  Value := Value / Effective_Temp;
+
+                  --  The inputs were all finite and the result need not be: a
+                  --  large logit divided by a small temperature overflows,
+                  --  and a penalty below one multiplies. Reported, like a
+                  --  logit that arrived non-finite, rather than trapping here.
+                  if not N.Is_Finite (Value) then
+                     Status := E.Make (E.Sampling_Non_Finite_Logit);
+                     E.Add_Integer
+                       (Status, "token", Long_Long_Integer (Index));
+                     return;
+                  end if;
+
+                  Item.Working.all (Count) :=
+                    (Token => Token_Id (Index), Logit => Value,
+                     Probability => 0.0);
+                  Count := Count + 1;
+               end;
+            end if;
+         end loop;
+      end;
 
       if Count = 0 then
          Status := E.Make (E.Sampling_No_Candidates);
@@ -1367,11 +1479,88 @@ package body Model_Runner.Sampling is
          end loop;
       end;
 
-      --  Mirostat instead of the filters, when it is on. It keeps the
-      --  candidates whose surprise is under a running target and leaves the
-      --  rest; the target moves after the choice, at the end of this
-      --  procedure. The configuration refuses mirostat together with any of
-      --  the filters, so nothing below can also have run.
+      --  Mirostat, version one. It reads the shape of the tail from the top
+      --  of the order -- how fast the sorted probabilities fall is the
+      --  exponent of the power law they approximate -- and from that shape
+      --  and the running target it solves for how many candidates to keep.
+      --  The estimate wants a well-behaved head; where it is not one, the
+      --  count comes out non-finite or out of range and the whole surviving
+      --  set is kept, which is a truncation to nothing rather than a wrong
+      --  one. The target moves after the choice as version two's does.
+      if Item.Settings.Mirostat = 1 then
+         declare
+            Look   : constant Element_Count :=
+              Element_Count'Min (100, Surviving);
+            Sum_TB : N.Wide_Real := 0.0;
+            Sum_TT : N.Wide_Real := 0.0;
+            Vocab  : constant N.Wide_Real := N.Wide_Real (Count);
+         begin
+            for Index in 0 .. Look - 2 loop
+               declare
+                  P0 : constant N.Wide_Real :=
+                    N.Wide_Real (Item.Working.all (Index).Probability);
+                  P1 : constant N.Wide_Real :=
+                    N.Wide_Real (Item.Working.all (Index + 1).Probability);
+               begin
+                  exit when P1 <= 0.0;
+                  declare
+                     T_I : constant N.Wide_Real :=
+                       N.Log (N.Wide_Real (Index) + 2.0)
+                       - N.Log (N.Wide_Real (Index) + 1.0);
+                     B_I : constant N.Wide_Real := N.Log (P0 / P1);
+                  begin
+                     Sum_TB := Sum_TB + T_I * B_I;
+                     Sum_TT := Sum_TT + T_I * T_I;
+                  end;
+               end;
+            end loop;
+
+            declare
+               S_Hat : constant N.Wide_Real :=
+                 (if Sum_TT > 0.0 then Sum_TB / Sum_TT else 1.0);
+               Eps   : constant N.Wide_Real := S_Hat - 1.0;
+               --  Two to the target, and the vocabulary to minus the tail's
+               --  exponent, written through the logarithm because the power
+               --  operator is not defined for a real exponent here.
+               Power : constant N.Wide_Real :=
+                 N.Exp (N.Wide_Real (Item.Mu) * N.Log (2.0));
+               Denom : constant N.Wide_Real :=
+                 1.0 - N.Exp (-Eps * N.Log (Vocab));
+               Kept  : Element_Count;
+            begin
+               if S_Hat <= 0.0 or else Eps <= 0.0 or else Denom <= 0.0 then
+                  Kept := Surviving;
+               else
+                  declare
+                     Estimate : constant N.Wide_Real :=
+                       N.Exp
+                         ((1.0 / S_Hat)
+                          * N.Log (Eps * Power / Denom));
+                  begin
+                     if not N.Is_Finite (Real (Estimate))
+                       or else Estimate < 1.0
+                       or else Estimate >= N.Wide_Real (Surviving)
+                     then
+                        Kept := Surviving;
+                     else
+                        Kept :=
+                          Element_Count (N.Wide_Real'Rounding (Estimate)) + 1;
+                        Kept := Element_Count'Max
+                                  (1, Element_Count'Min (Surviving, Kept));
+                     end if;
+                  end;
+               end if;
+
+               Surviving := Kept;
+            end;
+         end;
+      end if;
+
+      --  Mirostat, version two, instead of the filters, when it is on. It
+      --  keeps the candidates whose surprise is under a running target and
+      --  leaves the rest; the target moves after the choice, at the end of
+      --  this procedure. The configuration refuses mirostat together with
+      --  any of the filters, so nothing below can also have run.
       if Item.Settings.Mirostat = 2 then
          declare
             Kept : Element_Count := 1;
@@ -1643,10 +1832,11 @@ package body Model_Runner.Sampling is
          end;
 
          --  And what that choice was worth, for mirostat's target to steer
-         --  by. The surprise is measured against the distribution it drew
-         --  from, which is the truncated one: measuring against the model's
-         --  own would steer by a number this sampler does not control.
-         if Item.Settings.Mirostat = 2 then
+         --  by -- the same update for both versions. The surprise is
+         --  measured against the distribution it drew from, which is the
+         --  truncated one: measuring against the model's own would steer by
+         --  a number this sampler does not control.
+         if Item.Settings.Mirostat in 1 | 2 then
             declare
                Chosen : N.Wide_Real := 0.0;
             begin
