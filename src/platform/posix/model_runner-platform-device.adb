@@ -246,6 +246,16 @@ package body Model_Runner.Platform.Device is
    Structure_Storage_16       : constant := 1000083000;
    Structure_Subgroup         : constant := 1000094000;
    Structure_Properties_2     : constant := 1000059001;
+   Structure_Features_2       : constant := 1000059000;
+   Structure_Memory_Model     : constant := 1000211000;
+
+   --  Where shaderFloat64 sits in the core feature set: the fortieth flag,
+   --  after shaderCullDistance and before shaderInt64. The shaders reduce in
+   --  double -- norm and rotate and the packing among them -- and a device is
+   --  asked for the feature only where it reports it, so the flag is read out
+   --  of the set the device fills and written back into the set it is opened
+   --  with.
+   Shader_Float64_At          : constant := 40;
 
    --  What the interface calls the component types this asks about, and the
    --  scope a shape is offered at. Half precision is nought and binary32 is
@@ -277,6 +287,41 @@ package body Model_Runner.Platform.Device is
       Uniform : C.unsigned := 0;
       Pushed  : C.unsigned := 0;
       Staged  : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   --  The core feature set, flag for flag as the interface lays it out, and
+   --  the structure that carries it back from a query and forward into a
+   --  device. Read to learn whether the device offers shaderFloat64 and
+   --  written to ask for it; the shader-precision and storage features ride
+   --  their own structures in the same chain.
+   type Feature_Bits is array (1 .. 55) of C.unsigned
+     with Convention => C;
+
+   type Every_Feature is record
+      Kind : C.unsigned := Structure_Features_2;
+      Next : System.Address := System.Null_Address;
+      Bits : Feature_Bits := [others => 0];
+   end record
+     with Convention => C;
+
+   type Features_2_Call is access
+     procedure (Physical : System.Address; Features : System.Address)
+     with Convention => C;
+
+   function To_Features_2 is
+     new Ada.Unchecked_Conversion (System.Address, Features_2_Call);
+
+   --  The Vulkan memory model, which the subgroup matrix shaders declare so
+   --  that a coherent read across a subgroup means what they take it to mean.
+   --  The model and its device scope are asked for -- a shader among them
+   --  reaches device memory under the model -- each only where reported.
+   type Memory_Model_Features is record
+      Kind   : C.unsigned := Structure_Memory_Model;
+      Next   : System.Address := System.Null_Address;
+      Model  : C.unsigned := 0;
+      Device : C.unsigned := 0;
+      Chains : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -1040,6 +1085,26 @@ package body Model_Runner.Platform.Device is
             Matrices : aliased Matrix_Features;
             Halves   : aliased Half_Features;
             Stored   : aliased Storage_Features;
+
+            --  The set the device is asked its features through, and the two
+            --  precision structures chained behind it for the same question.
+            --  A device is asked only for what it reports here, so opening it
+            --  never fails for a feature it has not got, and the base set is
+            --  the one shaderFloat64 is both read from and written into.
+            Every     : aliased Every_Feature;
+            Ask_Half  : aliased Half_Features;
+            Ask_Store : aliased Storage_Features;
+            Ask_Model : aliased Memory_Model_Features;
+            Base      : aliased Feature_Bits := [others => 0];
+            Models    : aliased Memory_Model_Features;
+
+            Has_Float64 : Boolean := False;
+            Has_Half    : Boolean := False;
+            Has_Int8    : Boolean := False;
+            Has_Store16 : Boolean := False;
+            Has_Uni16   : Boolean := False;
+            Has_Model   : Boolean := False;
+            Has_Scope   : Boolean := False;
          begin
             if List /= null
               and then List (Physical, C.Strings.Null_Ptr, Count'Access,
@@ -1144,11 +1209,73 @@ package body Model_Runner.Platform.Device is
                end;
             end if;
 
+            --  What the shaders use and the device offers: half precision and
+            --  a byte in a shader, sixteen-bit reads from a storage buffer and
+            --  from a uniform, and double precision. All are read in the one
+            --  query the 1.1 interface answers; a 1.0 loader answers none and
+            --  the shaders run on its leave, as they did before this asked.
+            if Instance_Api >= Api_1_1 then
+               declare
+                  Features : constant Features_2_Call :=
+                    To_Features_2
+                      (Entry_Point (From.Handle,
+                                    "vkGetPhysicalDeviceFeatures2"));
+               begin
+                  if Features /= null then
+                     Every.Next := Ask_Store'Address;
+                     Ask_Store.Next := Ask_Half'Address;
+                     Ask_Half.Next := Ask_Model'Address;
+                     Ask_Model.Next := System.Null_Address;
+                     Features (Physical, Every'Address);
+
+                     Has_Float64 := Every.Bits (Shader_Float64_At) /= 0;
+                     Has_Half    := Ask_Half.Half /= 0;
+                     Has_Int8    := Ask_Half.Byte /= 0;
+                     Has_Store16 := Ask_Store.Buffer /= 0;
+                     Has_Uni16   := Ask_Store.Uniform /= 0;
+                     Has_Model   := Ask_Model.Model /= 0;
+                     Has_Scope   := Ask_Model.Device /= 0;
+                  end if;
+               end;
+            end if;
+
             if Has_External and then Has_Host then
                Names (1) := C.Strings.New_String (Wanted_External);
                Names (2) := C.Strings.New_String (Wanted_Host);
                Request.Extension_Count := 2;
                Request.Extensions := Names'Address;
+            end if;
+
+            --  Ask for every feature the device reported, chaining each
+            --  structure onto whatever the last already set. A shader
+            --  declares the capability whether or not the matrix instruction
+            --  is used, so the features are asked for on their own account;
+            --  the matrix instruction, when usable, joins the same chain and
+            --  brings its extension name besides.
+            if Has_Half or else Has_Int8 then
+               Halves.Half := (if Has_Half then 1 else 0);
+               Halves.Byte := (if Has_Int8 then 1 else 0);
+               Halves.Next := Request.Next;
+               Request.Next := Halves'Address;
+            end if;
+
+            if Has_Store16 or else Has_Uni16 then
+               Stored.Buffer := (if Has_Store16 then 1 else 0);
+               Stored.Uniform := (if Has_Uni16 then 1 else 0);
+               Stored.Next := Request.Next;
+               Request.Next := Stored'Address;
+            end if;
+
+            if Has_Model then
+               Models.Model := 1;
+               Models.Device := (if Has_Scope then 1 else 0);
+               Models.Next := Request.Next;
+               Request.Next := Models'Address;
+            end if;
+
+            if Has_Float64 then
+               Base (Shader_Float64_At) := 1;
+               Request.Features := Base'Address;
             end if;
 
             if Usable then
@@ -1158,23 +1285,23 @@ package body Model_Runner.Platform.Device is
                Request.Extensions := Names'Address;
 
                Matrices.Matrices := 1;
-               Halves.Half := 1;
-               Halves.Next := Matrices'Address;
-               Stored.Buffer := 1;
-               Stored.Next := Halves'Address;
-               Request.Next := Stored'Address;
+               Matrices.Next := Request.Next;
+               Request.Next := Matrices'Address;
             end if;
 
             if Create (Physical, Request'Address, System.Null_Address,
                        Logical'Access) /= 0
             then
-               --  Again without the matrix instruction, which is the one
-               --  of the three that asks the device for features as well
-               --  as for a name. A device that refused it still has the
-               --  memory extensions and still runs the row product.
+               --  Again without the features or the matrix instruction. Each
+               --  feature was asked for only where the device reported it, so
+               --  a refusal here is a device disagreeing with its own report;
+               --  it still has the memory extensions and still runs the row
+               --  product, on the interface's leave as an unasked device does.
+               Request.Next := System.Null_Address;
+               Request.Features := System.Null_Address;
+
                if Usable then
                   Usable := False;
-                  Request.Next := System.Null_Address;
                   Request.Extension_Count := Request.Extension_Count - 1;
 
                   if Request.Extension_Count = 0 then

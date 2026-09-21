@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The device is opened with the features its shaders declare, so a
+  validated build has nothing to object to.** The shaders read a byte and a
+  half in a shader, sixteen bits from a storage buffer and from a uniform,
+  double precision, and the Vulkan memory model with a device scope -- and
+  the device was opened asking for none of them but half precision and a
+  storage buffer, and those only where the matrix instruction was usable.
+  Every device leaned on the driver's leave to run shaders whose
+  capabilities it had never enabled. The device is now asked, in one query
+  the 1.1 interface answers, for exactly what it reports, and opened with
+  each feature the shaders use that it offers; a 1.0 loader answers none and
+  the shaders run on its leave as before. This clears the validation layer's
+  capability and memory-model errors, which is what let the shaders be
+  instrumented at all.
 - **The device's push-constant range now covers the packed constants, so a
   paged packed cache reads its own page table.** The pipeline layout reserved
   `max(Product_Bytes, Attention_Bytes)` -- 108 bytes -- for push constants,
