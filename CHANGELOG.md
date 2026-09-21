@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The Granite architecture is read.** `llama`'s shape and rotation with
+  four scalar multipliers the file carries: the embedding is lifted by
+  `embedding_scale` before the first layer, each sublayer's output is
+  damped by `residual_scale` before it joins the residual, the attention
+  scores are scaled by `attention.scale` in place of one over the root of
+  the head width, and the final logits are divided by `logit_scale`. Each
+  is optional and defaults to the identity, so a Granite that states none
+  is a plain llama, and each is crossed against the independent
+  implementation because a missed one produces a plausible wrong answer
+  rather than a refusal. The residual damping is the one the device
+  sequence has no step for, so a Granite layer runs on the host under the
+  device backend, the way a hybrid's linear layers do. It was refused
+  before.
+
 - **The IQ3_S three-bit format is read.** A super-block of 256 whose every
   group of four weights is a nine-bit index -- a `qs` byte and a high bit
   out of a `qh` byte -- into a table of 512 grid entries the format

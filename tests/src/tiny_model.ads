@@ -75,7 +75,7 @@ package Tiny_Model is
    --  and a normalization of every query and key head, as Qwen3 does.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
-      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35);
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite);
 
    Linear_State : constant := 4;
    Linear_Heads : constant := 2;

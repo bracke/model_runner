@@ -379,7 +379,8 @@ package body Tiny_Model is
            when Nomic_Bert => "nomic-bert",
            when Jina_Bert_V2 => "jina-bert-v2",
            when Qwen35    =>
-             (if Experts > 0 then "qwen35moe" else "qwen35"));
+             (if Experts > 0 then "qwen35moe" else "qwen35"),
+           when Granite   => "granite");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -578,6 +579,20 @@ package body Tiny_Model is
            (Builder, Prefix & ".attn_logit_softcapping", 4.0);
          Fixtures.Add_F32
            (Builder, Prefix & ".final_logit_softcapping", 2.0);
+      end if;
+
+      --  Granite's four multipliers, each far enough from one that a reader
+      --  which dropped it answers differently rather than nearly the same,
+      --  and none so large it drives the fixture's own arithmetic out of
+      --  range: the embedding is lifted, each sublayer's output is damped
+      --  before it joins the residual, the attention scale is stated in
+      --  place of one over the root of the head width, and the logits are
+      --  divided down.
+      if Kind = Granite then
+         Fixtures.Add_F32 (Builder, Prefix & ".embedding_scale", 1.5);
+         Fixtures.Add_F32 (Builder, Prefix & ".residual_scale", 0.7);
+         Fixtures.Add_F32 (Builder, Prefix & ".attention.scale", 0.2);
+         Fixtures.Add_F32 (Builder, Prefix & ".logit_scale", 2.0);
       end if;
 
       --  Gemma3 turns its windowed layers on a base of their own. Far from

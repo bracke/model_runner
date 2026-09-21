@@ -184,7 +184,8 @@ private
    --  the same for a month.
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
-      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE);
+      Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
+      Granite);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -347,6 +348,15 @@ private
       --  that learned no positions and rotates nothing. Zero for every other.
       Max_Bias      : Long_Float := 0.0;
       Logit_Cap     : Long_Float := 0.0;
+
+      --  Granite's four multipliers: on the embedding, on each sublayer's
+      --  output before the residual add, on the attention scores in place of
+      --  one over the root of the head width, and dividing the final logits.
+      --  Zero is the identity, which is every architecture here but Granite.
+      Embedding_Mul : Long_Float := 0.0;
+      Residual_Mul  : Long_Float := 0.0;
+      Attention_Mul : Long_Float := 0.0;
+      Logit_Mul     : Long_Float := 0.0;
 
       --  How many layers in a row slide a window before one sees
       --  everything, and the base the windowed ones turn on. Gemma3 states

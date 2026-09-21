@@ -90,7 +90,9 @@ package body Model_Runner.Llama is
    use type Model_Runner.Tensors.Half_Array_Access;
 
    function Score_Scale (Settings : Configuration) return Real
-   is (Real
+   is (if Settings.Kind = Granite and then Settings.Attention_Mul /= 0.0
+       then Settings.Attention_Mul
+       else Real
          (1.0
           / Model_Runner.Numerics.Sqrt
               (Model_Runner.Numerics.Wide_Real
@@ -473,7 +475,7 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
-                    when Llama => K.Interleaved,
+                    when Llama | Granite => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE =>
@@ -1163,6 +1165,52 @@ package body Model_Runner.Llama is
             return;
          end if;
          Settings.Logit_Cap :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+      end if;
+
+      if Settings.Kind = Granite then
+         --  The four multipliers the architecture applies. Each is optional
+         --  in the file and defaults to the identity -- a Granite that
+         --  states none is a plain llama -- so a missing key is not an
+         --  error, only a wrong one is.
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "embedding_scale"),
+            1.0E-6, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Embedding_Mul :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "residual_scale"),
+            1.0E-6, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Residual_Mul :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attention.scale"),
+            1.0E-6, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Attention_Mul :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "logit_scale"),
+            1.0E-6, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Logit_Mul :=
            (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
       end if;
 
@@ -2115,6 +2163,15 @@ package body Model_Runner.Llama is
          K.Add (Values, Source.Output_Bias.all);
       end if;
 
+      --  Granite divides its logits by a scalar the file carries, before
+      --  any bound the architecture states. It states none, so the order is
+      --  moot here, but the division is the last thing the model does.
+      if Source.Settings.Kind = Granite
+        and then Source.Settings.Logit_Mul /= 0.0
+      then
+         K.Scale (Values, 1.0 / Source.Settings.Logit_Mul);
+      end if;
+
       Cap_Logits (Source.Settings, Values);
    end Finish_Logits;
 
@@ -2378,6 +2435,11 @@ package body Model_Runner.Llama is
    begin
       if not Normalizes_After (Item.Settings.Kind) then
          Post_Norm (Item, Gain, Produced, Room);
+         if Item.Settings.Kind = Granite
+           and then Item.Settings.Residual_Mul /= 0.0
+         then
+            K.Scale (Produced, Item.Settings.Residual_Mul);
+         end if;
          K.Add (Residual, Produced);
          return;
       end if;
@@ -2447,6 +2509,9 @@ package body Model_Runner.Llama is
    function Embedding_Scale (Item : Model'Class) return Real
    is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3
        then Real (N.Sqrt (N.Wide_Real (Item.Settings.Embedding)))
+       elsif Item.Settings.Kind = Granite
+             and then Item.Settings.Embedding_Mul /= 0.0
+       then Item.Settings.Embedding_Mul
        else 1.0);
 
    -------------
@@ -14177,6 +14242,12 @@ package body Model_Runner.Llama is
           --  The code variant's three normalizations more -- over the
           --  whole of the queries and the keys, and the attention
           --  sublayer's residual joined again -- are not in the sequence.
+          --  The device sequence has no step that scales a sublayer's
+          --  output before it joins the residual, which Granite does; such
+          --  a layer runs on the host under the device backend, the way a
+          --  hybrid's linear layers do.
+          and then not (Settings.Kind = Granite
+                        and then Settings.Residual_Mul /= 0.0)
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -14383,8 +14454,13 @@ package body Model_Runner.Llama is
          --  produces and which a share cut by index could not answer: the
          --  whole of it goes through the procedure that checks its own
          --  shapes, exactly as it did before there were shares.
+         --  Granite damps each sublayer's output before it joins the
+         --  residual, which Join_Residual does; take that arm rather than
+         --  the parallel add that would skip it.
          if Gain /= null
            or else Produced.all'Length /= Item.Activation.all'Length
+           or else (Source.Settings.Kind = Granite
+                    and then Source.Settings.Residual_Mul /= 0.0)
          then
             Join_Residual
               (Source, Produced.all, Item.Activation.all, Gain, Bias,
@@ -15163,6 +15239,8 @@ package body Model_Runner.Llama is
                     and then Current.Feed_Norm_Bias = null
                     and then Current.Post_Attention_Norm = null
                     and then Current.Post_Feed_Norm = null
+                    and then not (Settings.Kind = Granite
+                                  and then Settings.Residual_Mul /= 0.0)
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -15800,6 +15878,12 @@ package body Model_Runner.Llama is
           and then (L.Post_Feed_Norm = null
                     or else Settings.Experts = 0
                     or else Normalizes_After (Settings.Kind))
+          --  The device sequence has no step that scales a sublayer's
+          --  output before it joins the residual, which Granite does; such
+          --  a layer runs on the host under the device backend, the way a
+          --  hybrid's linear layers do.
+          and then not (Settings.Kind = Granite
+                        and then Settings.Residual_Mul /= 0.0)
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -17461,6 +17545,8 @@ package body Model_Runner.Llama is
                        and then Current.Feed_Norm_Bias = null
                        and then Current.Post_Attention_Norm = null
                        and then Current.Post_Feed_Norm = null
+                       and then not (Settings.Kind = Granite
+                                     and then Settings.Residual_Mul /= 0.0)
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),

@@ -187,7 +187,7 @@ package Model_Runner.Llama is
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
-      Qwen35, Qwen35_MoE);
+      Qwen35, Qwen35_MoE, Granite);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -238,7 +238,8 @@ package Model_Runner.Llama is
          when Nomic_Bert => "nomic-bert",
          when Jina_Bert_V2 => "jina-bert-v2",
          when Qwen35     => "qwen35",
-         when Qwen35_MoE => "qwen35moe");
+         when Qwen35_MoE => "qwen35moe",
+         when Granite    => "granite");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -372,6 +373,19 @@ package Model_Runner.Llama is
       --  states none, which is every one here but Gemma2.
       Attention_Cap   : Model_Runner.Numerics.Real := 0.0;
       Logit_Cap       : Model_Runner.Numerics.Real := 0.0;
+
+      --  Granite's four scalar multipliers, which the architecture applies
+      --  where a plain llama applies one. The embedding row is multiplied by
+      --  Embedding_Mul before the first layer; each sublayer's output by
+      --  Residual_Mul before it joins the residual; the attention scores by
+      --  Attention_Mul in place of one over the root of the head width; and
+      --  the final logits are divided by Logit_Mul. Zero for an architecture
+      --  that states none, which is every one here but Granite, and the
+      --  accessors that read them treat zero as the identity.
+      Embedding_Mul   : Model_Runner.Numerics.Real := 0.0;
+      Residual_Mul    : Model_Runner.Numerics.Real := 0.0;
+      Attention_Mul   : Model_Runner.Numerics.Real := 0.0;
+      Logit_Mul       : Model_Runner.Numerics.Real := 0.0;
 
       --  How steeply a head's attention falls off with distance, for a model
       --  that learned no positions at all and is told where a token is by

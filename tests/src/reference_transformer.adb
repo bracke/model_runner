@@ -1120,7 +1120,8 @@ package body Reference_Transformer is
          when Nomic_Bert => "nomic-bert.",
          when Jina_Bert_V2 => "jina-bert-v2.",
          when Qwen35 => "qwen35.",
-         when Qwen35_MoE => "qwen35moe.");
+         when Qwen35_MoE => "qwen35moe.",
+         when Granite => "granite.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1546,6 +1547,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen35;
          elsif Named = "qwen35moe" then
             Item.Kind := Qwen35_MoE;
+         elsif Named = "granite" then
+            Item.Kind := Granite;
          else
             return;
          end if;
@@ -1608,6 +1611,34 @@ package body Reference_Transformer is
             1.0, 1.0E6, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Logit_Cap := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Prefix (Item) & "embedding_scale",
+            1.0E-6, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Embedding_Mul := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Prefix (Item) & "residual_scale",
+            1.0E-6, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Residual_Mul := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Prefix (Item) & "attention.scale",
+            1.0E-6, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Attention_Mul := Long_Float (Value);
+         end if;
+
+         Containers.Get_Float
+           (Source, Prefix (Item) & "logit_scale",
+            1.0E-6, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Logit_Mul := Long_Float (Value);
          end if;
       end;
 
@@ -2930,11 +2961,11 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind = Llama
+                    (if Item.Kind in Llama | Granite
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind = Llama
+                    (if Item.Kind in Llama | Granite
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
@@ -3272,6 +3303,8 @@ package body Reference_Transformer is
             Lift : constant Long_Float :=
               (if Item.Kind in Gemma | Gemma2 | Gemma3
                then Functions.Sqrt (Long_Float (Width))
+               elsif Item.Kind = Granite and then Item.Embedding_Mul /= 0.0
+               then Item.Embedding_Mul
                else 1.0);
          begin
             for Index in 0 .. Width - 1 loop
@@ -3709,7 +3742,10 @@ package body Reference_Transformer is
                   declare
                      Group : constant Natural := Item.Heads / Item.KV_Heads;
                      Scale : constant Long_Float :=
-                       (if Item.Kind = Gemma3 and then Item.Layers = 62
+                       (if Item.Kind = Granite
+                          and then Item.Attention_Mul /= 0.0
+                        then Item.Attention_Mul
+                        elsif Item.Kind = Gemma3 and then Item.Layers = 62
                         then 1.0 / Functions.Sqrt
                                      (Long_Float (Item.Embedding / Item.Heads))
                         else 1.0 / Functions.Sqrt (Long_Float (Item.Head_Size)));
@@ -3906,8 +3942,14 @@ package body Reference_Transformer is
                      end;
                   end if;
 
+                  --  Granite damps each sublayer's output before it joins
+                  --  the residual; every other architecture adds it whole.
                   for Index in 0 .. Width - 1 loop
-                     State (Index) := State (Index) + Normed (Index);
+                     State (Index) := State (Index)
+                       + (if Item.Kind = Granite
+                            and then Item.Residual_Mul /= 0.0
+                          then Item.Residual_Mul * Normed (Index)
+                          else Normed (Index));
                   end loop;
 
                   if Current.Post_Attention_Norm /= null
@@ -3972,8 +4014,14 @@ package body Reference_Transformer is
                      end;
                   end if;
 
+                  --  Granite damps the feed-forward output the same way it
+                  --  damps the attention output before the residual add.
                   for Index in 0 .. Width - 1 loop
-                     State (Index) := State (Index) + Normed (Index);
+                     State (Index) := State (Index)
+                       + (if Item.Kind = Granite
+                            and then Item.Residual_Mul /= 0.0
+                          then Item.Residual_Mul * Normed (Index)
+                          else Normed (Index));
                   end loop;
 
                   if Current.Post_Feed_Norm /= null
@@ -4207,6 +4255,15 @@ package body Reference_Transformer is
               Logits (Index)
               + Item.Output_Bias.all
                   (Item.Output_Bias'First + Index - Logits'First);
+         end loop;
+      end if;
+
+      --  Granite divides its logits by a scalar the file carries, before
+      --  any bound. It states no bound, so the order is moot, but the
+      --  division is the last thing the model does to them.
+      if Item.Kind = Granite and then Item.Logit_Mul /= 0.0 then
+         for Index in Logits'Range loop
+            Logits (Index) := Logits (Index) / Item.Logit_Mul;
          end loop;
       end if;
 
