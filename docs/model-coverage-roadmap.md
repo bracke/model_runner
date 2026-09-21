@@ -1,0 +1,191 @@
+# Model coverage roadmap
+
+A plan to close every model-related gap the survey found — the live refusal
+paths and host fallbacks that block or slow real models. Ordered by dependency
+and cost, not by tier, so the sequence is buildable start-to-finish.
+
+## Guiding constraints
+
+- **The engine refuses rather than defers.** Each gap is an explicit refusal
+  (`Reject_Feature`, `Arch_Unsupported*`, `Type_Unknown`) or a
+  "…on the host" fallback. The work is turning a refusal into a real path,
+  never loosening a check without a path behind it.
+- **The gate must stay green.** Every new architecture, quant, or projector
+  needs (a) a fixture in `tests/src/tiny_model.adb`, (b) a `conformance` entry,
+  and (c) CPU↔device parity — the device shader packs every format the CPU
+  decodes, so adding a quant means adding *both* sides. This is the dominant
+  hidden cost and is folded into each item's estimate.
+- **Solo repo, one workstream at a time**, commit straight to main, gate before
+  each commit, re-stamp `docs/measured-figures.txt` when a fingerprinted source
+  changes.
+
+## Cross-cutting foundations (build once, reuse everywhere)
+
+- **F0 — a fixture+conformance recipe per new kind.** Adding an arch/quant today
+  means hand-writing a tiny model and a conformance row. Factor the shared
+  scaffolding so each later addition is one small entry, not a copy-paste. Do
+  this the first time Phase 2 or Phase 3 needs it. *Small, pays back across all
+  later phases.*
+- **F1 — a refusal audit map.** One place listing every `Reject_Feature` /
+  `Arch_Unsupported*` call site and the metadata key it guards, so a reviewer
+  sees coverage as a table. *Small.*
+
+---
+
+## Phase 0 — Quick wins (independent, small, high ratio)
+
+Each is isolated, needs no new infrastructure, and can ship same-day.
+
+1. **Rope scaling allow-list** (`llama.adb:678`, refusal `:681`). Accept
+   `longrope`/`su`/`dynamic` and route to the LongRoPE factor-table path that
+   already exists (`:686`, `:3610`); add dynamic-NTK where the table doesn't
+   apply. *Verify first whether Phi-3.5 long files set this key.* **Small.**
+2. **Unnormalized expert weights** (`llama.adb:976`). Replace the refusal with a
+   branch that skips the top-k renormalization when
+   `expert_weights_norm = false`. **Small–Medium.**
+3. **Extra samplers** (`sampling.adb:239`). Add Mirostat v1, top-a, and a
+   dynamic/entropy temperature sampler beside the existing v2/min-p/typical/DRY/
+   XTC set. **Small each.**
+4. **Q8_1 / Q8_K decode** (`gguf.adb:32`, `:38`). Flip `Supported` and add the
+   two block decoders (+ device pack for parity). Low demand but named-yet-
+   refused. **Small.**
+5. **jina-bert-v2 alibi `max_bias ≠ 8`** (`llama.adb:1168`). Generalize the
+   slope computation to the stated bias instead of pinning 8. **Small.**
+6. **Tokenizer pre-tokenizer rules** (`tokenizer.adb:490`). Not a one-time task:
+   each new model may need one rule mapping added to the ~40 already present.
+   Treat as ongoing onboarding, not a phase. **Small each.**
+
+**Exit:** long-context Phi/others load (#1); a class of MoE loads (#2);
+sampling is complete.
+
+---
+
+## Phase 1 — MoE completeness
+
+The three MoE refusals share one forward path; do them together.
+
+7. **Shared (always-on) experts** (`llama.adb:988`). Add a shared-expert arm to
+   the mixture forward that runs for every token beside the routed top-k, on
+   both CPU and device. Unblocks Qwen2-MoE, Hunyuan-MoE, and is a prerequisite
+   for DeepSeek (Phase 4). **Large** (new forward path + device dispatch).
+8. **Sigmoid gating** (`llama.adb:963`). Add `expert_gating_func = sigmoid`
+   beside softmax in the router. **Medium.**
+9. **`[device]` raise the MoE round block limit** (`backend-device.ads:53`,
+   `Block_Limit = 16`). Spill wide-MoE rounds instead of dropping the whole
+   round to the host. **Medium.**
+
+**Exit:** modern routed+shared MoE loads and runs on-device within the block
+limit. (#2 from Phase 0 is the third leg.)
+
+---
+
+## Phase 2 — Quantization expansion
+
+Per format: `gguf.ads` enum entry → CPU decoder + interleave → device shader
+pack (`backend-device.adb:706`) → fixture. Keep CPU and device in lockstep.
+Order by what actually gets downloaded.
+
+10. **IQ4-family gaps, then IQ3_S/XXS, IQ2_*, IQ1_*, TQ1_0/TQ2_0**
+    (`gguf.ads:122`, refusal via `Type_Unknown`). Each format is a self-
+    contained decoder+shader+fixture. These are what fits 70B+/big-MoE into
+    consumer memory, so prioritize the specific quant of a model you want.
+    **Large in aggregate; Medium per format.**
+
+**Exit:** sub-4-bit downloads stop bouncing at load. Do formats on demand rather
+than all at once.
+
+---
+
+## Phase 3 — Conventional architecture variants
+
+Arches that are transformer-shaped and differ mostly in config/norm placement.
+Each: enum entry (`llama.ads:187`), metadata loader, block-shape handling,
+fixture, conformance row. Batch the cheap ones.
+
+11. **Config-mostly arches:** Command-R/Command-R+, StableLM, StarCoder2, GLM4/
+    ChatGLM, OLMo/OLMo2, Granite/GraniteMoE (ties Phase 1), MPT, GPT-NeoX,
+    InternLM2, Baichuan. Refusal at `llama.adb:524`. **Small–Medium each**, but
+    many, so budget as a sustained batch.
+12. **Reranker (ranked pooling) head** (`llama.adb:642`). Add a scoring head
+    beside mean/cls/last pooling so GGUF rerankers load. **Small–Medium.**
+
+**Exit:** the long tail of standard-shaped models loads.
+
+---
+
+## Phase 4 — DeepSeek (MLA + MoE)
+
+Depends on Phase 1. DeepSeek needs three things at once:
+
+13. **Multi-head latent attention (MLA)** — a new attention shape (compressed
+    KV latent + decoupled rope). New enum arch (`llama.ads:187`), a distinct
+    attention path on CPU and device, plus shared experts (#7) and sigmoid
+    gating (#8) from Phase 1. **Large** — the single biggest conventional-family
+    unblock, and the reason to finish Phase 1 first.
+
+**Exit:** DeepSeek-V2/V3-class models load and run.
+
+---
+
+## Phase 5 — Non-attention sequence layers
+
+The largest infra investment; also the largest device win for models already
+"supported."
+
+14. **`[device]` delta-rule / linear-attention shader** (`llama.adb:13165`,
+    `:14044`). Today a hybrid's linear layers (delta rule + short conv + gated
+    norm) run entirely on the host — for Qwen3.5/3.6 that's ~75% of the network
+    off-device. Write the device shaders and a device state path. **Large.**
+15. **State-space architectures** (Mamba/Mamba2/RWKV/Jamba). Build on the
+    host-then-device pattern #14 establishes: a new sequence-layer kind with its
+    own recurrence, on host first, then the device shader. **Large per family.**
+
+**Exit:** hybrid models run mostly on-device; pure state-space models load.
+
+---
+
+## Phase 6 — Vision projectors
+
+16. **Beyond gemma3 / qwen3vl_merger** (`vision.adb:416`, `:540`). Per projector:
+    pixtral, llama4/mtmd, MiniCPM-V, InternVL, SmolVLM, LLaVA, Qwen2-VL. Each is
+    a distinct patch-embed + merge shape. **Large in aggregate; Medium each.**
+17. **`[device]` `Sink_Room` depth cap** (`backend-device.ads:72`). A model
+    deeper/wider than GPT-OSS spills its sink layers to the host. Raise the room
+    or make the sink slot region grow with the model. **Small–Medium.** Fold in
+    whenever a deeper sink model becomes relevant.
+
+**Exit:** the common multimodal families load.
+
+---
+
+## Sequencing at a glance
+
+```
+Phase 0  (quick wins)            ── independent, do first
+Phase 1  (MoE completeness)      ── before Phase 4
+Phase 2  (quants)                ── anytime after Phase 0, on demand
+Phase 3  (conventional arches)   ── independent batch
+Phase 4  (DeepSeek MLA)          ── needs Phase 1
+Phase 5a (delta-rule device)     ── before 5b
+Phase 5b (state-space)           ── needs 5a's infra
+Phase 6  (vision)                ── independent
+```
+
+## Effort summary
+
+| Phase | Unblocks | Size |
+|-------|----------|------|
+| 0 | long-context rope, some MoE, samplers, small quants | S (days) |
+| 1 | Qwen2-MoE, Hunyuan, DeepSeek prep | L |
+| 2 | sub-4-bit downloads | L (M per format) |
+| 3 | standard-shaped long tail | M (many small) |
+| 4 | DeepSeek-V2/V3 | L |
+| 5 | on-device hybrids, state-space | XL |
+| 6 | multimodal families | L (M per projector) |
+
+## Recommendation
+
+Do **Phase 0** in full (cheap, unblocks real loads immediately), then pick the
+one Phase-2 quant or Phase-3/4 arch of a model you actually want to run — the
+big phases only pay off against a concrete download, so drive them by need
+rather than completeness.
