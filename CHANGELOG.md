@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The GraniteMoE architecture is read.** Granite -- the same four scalar
+  multipliers (embedding, residual, attention, logit) and interleaved
+  rotation -- with the feed-forward behind a router: a softmax over the
+  experts, the highest few renormalized over that few and then multiplied
+  by `expert_weights_scale`, the one mechanism the mixture family here did
+  not already carry. The shared-expert width, the gating function and the
+  weight normalization are read by the arm every mixture shares; only the
+  scale is new, applied where the host and the device gather rejoin so both
+  backends scale the weights once. The residual damping runs on the host
+  under the device backend as dense Granite's does, while the routing and
+  the experts gather on the device. Read through the Granite fixture built
+  in its mixture shape and crossed against the independent implementation
+  over every format and path, outside tolerance nought. It was refused
+  before.
+
 - **Two more samplers: Mirostat version one, and a dynamic temperature.**
   Mirostat's first version, refused by name until now, is implemented
   beside the second: it reads the shape of the tail from the top of the

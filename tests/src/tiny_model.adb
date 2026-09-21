@@ -380,7 +380,8 @@ package body Tiny_Model is
            when Jina_Bert_V2 => "jina-bert-v2",
            when Qwen35    =>
              (if Experts > 0 then "qwen35moe" else "qwen35"),
-           when Granite   => "granite",
+           when Granite   =>
+             (if Experts > 0 then "granitemoe" else "granite"),
            when Olmo2     => "olmo2",
            when Glm4      => "glm4",
            when Starcoder2 => "starcoder2");
@@ -562,6 +563,15 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_feed_forward_length",
             Interfaces.Unsigned_32 (Expert_Feed));
+
+         --  GraniteMoE scales its renormalized weights by a number it
+         --  carries; written off one so a reader that ignored it answers
+         --  differently. Only granitemoe states it, so every other mixture's
+         --  fixture is left as it was.
+         if Kind = Granite then
+            Fixtures.Add_F32 (Builder, Prefix & ".expert_weights_scale", 1.3);
+         end if;
+
          --  The shared expert every position of a hybrid mixture goes
          --  through beside the chosen ones. Its width is stated apart, as
          --  the file states it; the same width as an expert here, which is

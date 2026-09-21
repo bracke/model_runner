@@ -1124,7 +1124,8 @@ package body Reference_Transformer is
          when Granite => "granite.",
          when Olmo2 => "olmo2.",
          when Glm4 => "glm4.",
-         when Starcoder2 => "starcoder2.");
+         when Starcoder2 => "starcoder2.",
+         when Granite_MoE => "granitemoe.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1558,6 +1559,8 @@ package body Reference_Transformer is
             Item.Kind := Glm4;
          elsif Named = "starcoder2" then
             Item.Kind := Starcoder2;
+         elsif Named = "granitemoe" then
+            Item.Kind := Granite_MoE;
          else
             return;
          end if;
@@ -1687,6 +1690,18 @@ package body Reference_Transformer is
       Item.Shared_Feed :=
         Metadata
           (Source, Prefix (Item) & "expert_shared_feed_forward_length", 0);
+
+      declare
+         Value  : Model_Runner.Numerics.Wide_Real;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         Containers.Get_Float
+           (Source, Prefix (Item) & "expert_weights_scale",
+            1.0E-6, 1.0E6, Value, Status);
+         if Model_Runner.Errors.Is_Ok (Status) then
+            Item.Expert_Scale := Long_Float (Value);
+         end if;
+      end;
 
       --  The hybrid's shape, all of it required but the interval, which
       --  the architecture puts at four when the file is silent; and the
@@ -3001,11 +3016,11 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind in Llama | Granite | Glm4
+                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind in Llama | Granite | Glm4
+                    (if Item.Kind in Llama | Granite | Granite_MoE | Glm4
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
@@ -3105,7 +3120,8 @@ package body Reference_Transformer is
                end loop;
 
                for Slot in Share'Range loop
-                  Share (Slot) := Share (Slot) / Total;
+                  Share (Slot) :=
+                    Share (Slot) / Total * Item.Expert_Scale;
                end loop;
 
                for Slot in Picked'Range loop
@@ -3343,7 +3359,7 @@ package body Reference_Transformer is
             Lift : constant Long_Float :=
               (if Item.Kind in Gemma | Gemma2 | Gemma3
                then Functions.Sqrt (Long_Float (Width))
-               elsif Item.Kind = Granite and then Item.Embedding_Mul /= 0.0
+               elsif Item.Kind in Granite | Granite_MoE and then Item.Embedding_Mul /= 0.0
                then Item.Embedding_Mul
                else 1.0);
          begin
@@ -3795,7 +3811,7 @@ package body Reference_Transformer is
                   declare
                      Group : constant Natural := Item.Heads / Item.KV_Heads;
                      Scale : constant Long_Float :=
-                       (if Item.Kind = Granite
+                       (if Item.Kind in Granite | Granite_MoE
                           and then Item.Attention_Mul /= 0.0
                         then Item.Attention_Mul
                         elsif Item.Kind = Gemma3 and then Item.Layers = 62
@@ -3999,7 +4015,7 @@ package body Reference_Transformer is
                   --  the residual; every other architecture adds it whole.
                   for Index in 0 .. Width - 1 loop
                      State (Index) := State (Index)
-                       + (if Item.Kind = Granite
+                       + (if Item.Kind in Granite | Granite_MoE
                             and then Item.Residual_Mul /= 0.0
                           then Item.Residual_Mul * Normed (Index)
                           else Normed (Index));
@@ -4071,7 +4087,7 @@ package body Reference_Transformer is
                   --  damps the attention output before the residual add.
                   for Index in 0 .. Width - 1 loop
                      State (Index) := State (Index)
-                       + (if Item.Kind = Granite
+                       + (if Item.Kind in Granite | Granite_MoE
                             and then Item.Residual_Mul /= 0.0
                           then Item.Residual_Mul * Normed (Index)
                           else Normed (Index));
@@ -4314,7 +4330,7 @@ package body Reference_Transformer is
       --  Granite divides its logits by a scalar the file carries, before
       --  any bound. It states no bound, so the order is moot, but the
       --  division is the last thing the model does to them.
-      if Item.Kind = Granite and then Item.Logit_Mul /= 0.0 then
+      if Item.Kind in Granite | Granite_MoE and then Item.Logit_Mul /= 0.0 then
          for Index in Logits'Range loop
             Logits (Index) := Logits (Index) / Item.Logit_Mul;
          end loop;

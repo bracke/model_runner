@@ -130,13 +130,14 @@ Arches that are transformer-shaped and differ mostly in config/norm placement.
 Each: enum entry (`llama.ads:187`), metadata loader, block-shape handling,
 fixture, conformance row. Batch the cheap ones.
 
-11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2 done). Config-mostly arches:**
-    ✅ Granite, ✅ OLMo2, ✅ GLM4, ✅ Starcoder2; still open: Command-R/Command-R+,
-    StableLM, GraniteMoE (ties Phase 1), ChatGLM, MPT, GPT-NeoX, InternLM2,
-    Baichuan. Refusal at `llama.adb:524`. Each new arch is now largely wiring
-    against the existing norm/gate/bias/rotary paths + a device host-fallback
-    guard for any untried kernel combination. **Small–Medium each**, but
-    many, so budget as a sustained batch.
+11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2, GraniteMoE done). Config-mostly arches:**
+    ✅ Granite, ✅ OLMo2, ✅ GLM4, ✅ Starcoder2, ✅ GraniteMoE (Granite's scalars +
+    the mixture arm + a new `expert_weights_scale`); still open: Command-R/
+    Command-R+, StableLM, ChatGLM, MPT, GPT-NeoX, InternLM2, Baichuan. Refusal
+    at `llama.adb:524`. Each new arch is now largely wiring against the existing
+    norm/gate/bias/rotary/mixture paths + a device host-fallback guard for any
+    untried kernel combination. **Small–Medium each**, but many, so budget as a
+    sustained batch.
 12. ✅ **Done. Reranker (ranked pooling) head** (`llama.adb:642`). Add a scoring head
     beside mean/cls/last pooling so GGUF rerankers load. **Small–Medium.**
 
