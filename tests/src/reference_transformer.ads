@@ -186,7 +186,7 @@ private
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
-      Internlm2, Baichuan, Mpt, Chatglm);
+      Internlm2, Baichuan, Mpt, Chatglm, Command_R);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -221,6 +221,8 @@ private
       --  itself before the rotation, with one gain per element of a head.
       Query_Norm     : Vector_Access := null;
       Key_Norm       : Vector_Access := null;
+      Query_Head_Norm : Vector_Access := null;
+      Key_Head_Norm   : Vector_Access := null;
 
       --  The code variant of jina-bert-v2 normalizes the whole of its
       --  queries and the whole of its keys, centred and with a shift,
@@ -359,6 +361,7 @@ private
       Residual_Mul  : Long_Float := 0.0;
       Attention_Mul : Long_Float := 0.0;
       Logit_Mul     : Long_Float := 0.0;
+      Logit_Scale   : Long_Float := 0.0;
 
       --  How many layers in a row slide a window before one sees
       --  everything, and the base the windowed ones turn on. Gemma3 states

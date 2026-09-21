@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The Command-R architecture is read** (Cohere Command-R and Command-R+).
+  It is a composition of pieces already here that no single architecture had
+  put together: one normalization a block, centred and carrying no shift --
+  MPT's normalization -- with the attention and the feed-forward both reading
+  it and both adding to the residual, which is Falcon's parallel block. Its
+  final logits are multiplied by a scale the file carries, the same
+  `logit_scale` key Granite divides by read under the opposite meaning. It
+  rotates the whole of each head interleaved, gates its feed-forward with the
+  gate and up apart, carries no biases anywhere, and ties its output to the
+  token table where the file states none. **Command-R+** adds one thing
+  Command-R has not: a normalization of each query head and each key head
+  before the rotation, centred and with a gain a head rather than one shared
+  across them -- read where the file holds it, so both sizes load. Crossed
+  against the independent implementation over every format and path; host
+  fallback under the device backend for the untried centred-parallel
+  combination.
 - **The ChatGLM architecture is read** (ChatGLM3 / GLM-4-9B -- the older
   `chatglm` architecture, distinct from the newer `glm4` already read). It is
   a composition of pieces already here: it rotates the leading half of each

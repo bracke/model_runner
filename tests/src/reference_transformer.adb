@@ -1131,7 +1131,8 @@ package body Reference_Transformer is
          when Internlm2 => "internlm2.",
          when Baichuan => "baichuan.",
          when Mpt => "mpt.",
-         when Chatglm => "chatglm.");
+         when Chatglm => "chatglm.",
+         when Command_R => "command-r.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1583,6 +1584,8 @@ package body Reference_Transformer is
             Item.Max_Bias := 8.0;
          elsif Named = "chatglm" then
             Item.Kind := Chatglm;
+         elsif Named = "command-r" then
+            Item.Kind := Command_R;
          else
             return;
          end if;
@@ -1672,7 +1675,14 @@ package body Reference_Transformer is
            (Source, Prefix (Item) & "logit_scale",
             1.0E-6, 1.0E6, Value, Status);
          if Model_Runner.Errors.Is_Ok (Status) then
-            Item.Logit_Mul := Long_Float (Value);
+            --  The same key, the opposite operation: Command-R multiplies
+            --  by it where Granite divides, so it is kept apart and applied
+            --  apart.
+            if Item.Kind = Command_R then
+               Item.Logit_Scale := Long_Float (Value);
+            else
+               Item.Logit_Mul := Long_Float (Value);
+            end if;
          end if;
       end;
 
@@ -1804,6 +1814,7 @@ package body Reference_Transformer is
            (Source,
             Prefix (Item)
             & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt
+               | Command_R
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -2259,6 +2270,29 @@ package body Reference_Transformer is
                end if;
             end if;
 
+            --  Command-R+ normalizes its heads under the same names, but
+            --  centred and with a gain a head. Read where present so both
+            --  sizes load.
+            if Item.Kind = Command_R
+              and then Containers.Find_Tensor
+                         (Source, Layer_Name (Index, "attn_q_norm.weight"))
+                       /= 0
+            then
+               Current.Query_Head_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+
+               Current.Key_Head_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
             --  The code variant of jina-bert-v2, told from the text one by
             --  its tensors: six of them, and all six once any is there.
             if Item.Kind = Jina_Bert_V2
@@ -2358,7 +2392,7 @@ package body Reference_Transformer is
             --  for what it follows rather than what it precedes: it is the
             --  same normalization in the same place.
             if Item.Kind
-                 not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
+                 not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2 | Command_R
                         | Olmo2
             then
                Current.Feed_Norm :=
@@ -2593,6 +2627,8 @@ package body Reference_Transformer is
             Free_Matrix (Item.Blocks (Index).Value);
             Free_Vector (Item.Blocks (Index).Query_Norm);
             Free_Vector (Item.Blocks (Index).Key_Norm);
+            Free_Vector (Item.Blocks (Index).Query_Head_Norm);
+            Free_Vector (Item.Blocks (Index).Key_Head_Norm);
             Free_Vector (Item.Blocks (Index).Query_Whole_Norm);
             Free_Vector (Item.Blocks (Index).Query_Whole_Norm_Bias);
             Free_Vector (Item.Blocks (Index).Key_Whole_Norm);
@@ -2951,6 +2987,49 @@ package body Reference_Transformer is
          end loop;
       end Normalize_Heads;
 
+      --  Command-R+ normalizes each head centred rather than by the root
+      --  mean square, and with a gain a head rather than one shared across
+      --  them: the mean subtracted, the spread from that mean, and the
+      --  head's own slice of the gain. Written out separately so it is
+      --  arrived at rather than inherited.
+      procedure Normalize_Heads_Centred
+        (Vector : in out Real_Vector;
+         Heads  : Natural;
+         Width  : Natural;
+         Gain   : Real_Vector)
+      is
+      begin
+         for Head in 0 .. Heads - 1 loop
+            declare
+               Origin : constant Natural := Vector'First + Head * Width;
+               Mean   : Long_Float := 0.0;
+               Spread : Long_Float := 0.0;
+               Factor : Long_Float;
+            begin
+               for Index in 0 .. Width - 1 loop
+                  Mean := Mean + Vector (Origin + Index);
+               end loop;
+               Mean := Mean / Long_Float (Width);
+
+               for Index in 0 .. Width - 1 loop
+                  Spread := Spread
+                    + (Vector (Origin + Index) - Mean)
+                      * (Vector (Origin + Index) - Mean);
+               end loop;
+
+               Factor :=
+                 1.0 / Functions.Sqrt
+                         (Spread / Long_Float (Width) + Item.Epsilon);
+
+               for Index in 0 .. Width - 1 loop
+                  Vector (Origin + Index) :=
+                    (Vector (Origin + Index) - Mean) * Factor
+                    * Gain (Gain'First + Head * Width + Index);
+               end loop;
+            end;
+         end loop;
+      end Normalize_Heads_Centred;
+
       --  Where a pair sits in the band Yarn mixes across: one where the
       --  angle is kept as trained, zero where it is fully stretched.
       --
@@ -3072,11 +3151,13 @@ package body Reference_Transformer is
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
+                        | Command_R
                         | Baichuan
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
+                        | Command_R
                         | Baichuan
                      then Even + 1
                      else Even + Item.Rotary / 2);
@@ -3692,7 +3773,9 @@ package body Reference_Transformer is
                   --  way out.
                   if Current.Attention_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt
+                    | Command_R
+                  then
                      Normalize_Centred
                        (State, Current.Attention_Norm.all,
                         Current.Attention_Norm_Bias, Normed);
@@ -3705,7 +3788,7 @@ package body Reference_Transformer is
                   --  not of the feed normalization being absent: Bert has
                   --  none either and does not run its sublayers in
                   --  parallel.
-                  if Item.Kind in Falcon | Phi2 then
+                  if Item.Kind in Falcon | Phi2 | Command_R then
                      Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
                   end if;
                   if Item.Kind in Qwen35 | Qwen35_MoE then
@@ -3782,6 +3865,13 @@ package body Reference_Transformer is
                      Normalize_Heads
                        (Key_Row, Item.KV_Heads, Item.Head_Size,
                         Current.Key_Norm.all);
+                  elsif Current.Query_Head_Norm /= null then
+                     Normalize_Heads_Centred
+                       (Query, Item.Heads, Item.Head_Size,
+                        Current.Query_Head_Norm.all);
+                     Normalize_Heads_Centred
+                       (Key_Row, Item.KV_Heads, Item.Head_Size,
+                        Current.Key_Head_Norm.all);
                   end if;
 
                   --  The code variant of jina-bert-v2 normalizes the whole
@@ -3842,7 +3932,7 @@ package body Reference_Transformer is
                      Queries (Step, Index) := Query (Index);
                   end loop;
 
-                  if Item.Kind in Falcon | Phi2 then
+                  if Item.Kind in Falcon | Phi2 | Command_R then
                      for Index in 0 .. Width - 1 loop
                         Kept (Step, Index) := Held_Norm (Index);
                      end loop;
@@ -3876,7 +3966,7 @@ package body Reference_Transformer is
                   for Index in 0 .. Q_Width - 1 loop
                      Query (Index) := Queries (Step, Index);
                   end loop;
-                  if Item.Kind in Falcon | Phi2 then
+                  if Item.Kind in Falcon | Phi2 | Command_R then
                      for Index in 0 .. Width - 1 loop
                         Held_Norm (Index) := Kept (Step, Index);
                      end loop;
@@ -4155,7 +4245,7 @@ package body Reference_Transformer is
                           (Original, Current.Feed_Norm.all,
                            Current.Feed_Norm_Bias, Normed);
                      end;
-                  elsif Item.Kind in Falcon | Phi2 then
+                  elsif Item.Kind in Falcon | Phi2 | Command_R then
                      Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
                   elsif Current.Feed_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
@@ -4406,7 +4496,9 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
-         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt then
+         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt
+           | Command_R
+         then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
          else
@@ -4430,6 +4522,13 @@ package body Reference_Transformer is
       if Item.Kind in Granite | Granite_MoE and then Item.Logit_Mul /= 0.0 then
          for Index in Logits'Range loop
             Logits (Index) := Logits (Index) / Item.Logit_Mul;
+         end loop;
+      end if;
+
+      --  Command-R multiplies by its scale where Granite divides by its.
+      if Item.Kind = Command_R and then Item.Logit_Scale /= 0.0 then
+         for Index in Logits'Range loop
+            Logits (Index) := Logits (Index) * Item.Logit_Scale;
          end loop;
       end if;
 

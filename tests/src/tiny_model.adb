@@ -390,7 +390,8 @@ package body Tiny_Model is
            when Internlm2 => "internlm2",
            when Baichuan  => "baichuan",
            when Mpt       => "mpt",
-           when Chatglm   => "chatglm");
+           when Chatglm   => "chatglm",
+           when Command_R => "command-r");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -428,7 +429,9 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt then
+      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt
+        | Command_R
+      then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
@@ -642,6 +645,12 @@ package body Tiny_Model is
          Fixtures.Add_F32 (Builder, Prefix & ".residual_scale", 0.7);
          Fixtures.Add_F32 (Builder, Prefix & ".attention.scale", 0.2);
          Fixtures.Add_F32 (Builder, Prefix & ".logit_scale", 2.0);
+      end if;
+
+      --  Command-R carries the same key but multiplies by it. A value below
+      --  one, so a run that applied it and one that did not are two answers.
+      if Kind = Command_R then
+         Fixtures.Add_F32 (Builder, Prefix & ".logit_scale", 0.5);
       end if;
 
       --  Gemma3 turns its windowed layers on a base of their own. Far from
@@ -1113,6 +1122,17 @@ package body Tiny_Model is
             Gain_Of (Layer_Name (Index, "attn_k_norm.weight"), Key_Size);
          end if;
 
+         --  Command-R+ carries a head norm under the same names, but a gain
+         --  a head rather than one shared across them, so each is as wide as
+         --  the whole projection. Written here to cross the centred per-head
+         --  normalization; a Command-R without them is Falcon's plain path.
+         if Kind = Command_R then
+            Gain_Of
+              (Layer_Name (Index, "attn_q_norm.weight"), Heads * Key_Size);
+            Gain_Of
+              (Layer_Name (Index, "attn_k_norm.weight"), KV_Heads * Key_Size);
+         end if;
+
          if not Linear_Block (Index) then
             Weight (Layer_Name (Index, "attn_output.weight"),
                     [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
@@ -1184,7 +1204,7 @@ package body Tiny_Model is
          end if;
 
          if Kind not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
-                       | Olmo2
+                       | Olmo2 | Command_R
          then
             --  Named for what it follows by the hybrid, for what it
             --  precedes by the rest; the same normalization.

@@ -188,7 +188,7 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm);
+      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -250,7 +250,8 @@ package Model_Runner.Llama is
          when Internlm2  => "internlm2",
          when Baichuan   => "baichuan",
          when Mpt        => "mpt",
-         when Chatglm    => "chatglm");
+         when Chatglm    => "chatglm",
+         when Command_R  => "command-r");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -397,6 +398,11 @@ package Model_Runner.Llama is
       Residual_Mul    : Model_Runner.Numerics.Real := 0.0;
       Attention_Mul   : Model_Runner.Numerics.Real := 0.0;
       Logit_Mul       : Model_Runner.Numerics.Real := 0.0;
+
+      --  Command-R multiplies its final logits by Logit_Scale, where Granite
+      --  divides by Logit_Mul; a separate field so neither reads as the
+      --  other. Zero is the identity.
+      Logit_Scale     : Model_Runner.Numerics.Real := 0.0;
 
       --  Whether the attention and the feed-forward run side by side from the
       --  layer's input rather than one after the other -- each normalizing
@@ -1952,6 +1958,13 @@ private
       --  does not normalize its heads, which is what Llama and Qwen2 are.
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Command-R+ normalizes each query head and each key head too, but
+      --  centred rather than by the root mean square and with a gain for
+      --  every head rather than one shared across them. Null for Command-R
+      --  itself, which carries none, and for every other architecture.
+      Query_Head_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Key_Head_Norm   : Model_Runner.Tensors.Real_Array_Access;
 
       --  What the code variant of jina-bert-v2 carries and the text one
       --  does not: a centred normalization over the whole of the queries

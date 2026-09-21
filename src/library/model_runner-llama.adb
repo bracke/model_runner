@@ -476,7 +476,7 @@ package body Model_Runner.Llama is
                Settings.Pairing :=
                  (case Kind is
                     when Llama | Granite | Granite_MoE | Glm4 | Internlm2
-                       | Baichuan | Chatglm =>
+                       | Baichuan | Chatglm | Command_R =>
                       K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
@@ -597,7 +597,7 @@ package body Model_Runner.Llama is
       --  states either is read and a file that states neither takes the
       --  default both would.
       if Normalizes_After (Settings.Kind)
-        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox | Mpt
+        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox | Mpt | Command_R
       then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
@@ -1248,6 +1248,21 @@ package body Model_Runner.Llama is
             return;
          end if;
          Settings.Logit_Mul :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+      end if;
+
+      --  Command-R carries the same key under the opposite meaning: it
+      --  multiplies its logits by the scale where Granite divides by it, so
+      --  it is read into its own field and applied its own way.
+      if Settings.Kind = Command_R then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "logit_scale"),
+            1.0E-6, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Logit_Scale :=
            (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
       end if;
 
@@ -2222,6 +2237,13 @@ package body Model_Runner.Llama is
          K.Scale (Values, 1.0 / Source.Settings.Logit_Mul);
       end if;
 
+      --  Command-R multiplies by its scale where Granite divides by its.
+      if Source.Settings.Kind = Command_R
+        and then Source.Settings.Logit_Scale /= 0.0
+      then
+         K.Scale (Values, Source.Settings.Logit_Scale);
+      end if;
+
       Cap_Logits (Source.Settings, Values);
    end Finish_Logits;
 
@@ -2302,7 +2324,7 @@ package body Model_Runner.Llama is
    --  than by absence.
    function Centres
      (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
-   is (Item.Settings.Kind = Mpt
+   is (Item.Settings.Kind in Mpt | Command_R
        or else (Item.Settings.Kind
                   in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
                      | Starcoder2 | Stablelm | Gptneox
@@ -3461,6 +3483,37 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
+            --  Command-R+ normalizes each query head and each key head under
+            --  the same tensor names as Qwen3, but centred and with a gain
+            --  for every head rather than one shared across them, so the
+            --  tensors are as wide as the whole projection. Read where the
+            --  file holds them and left null where it does not: Command-R
+            --  itself carries none and takes Falcon's plain path, while
+            --  Command-R+ carries them. Read together, so a file with one is
+            --  not taken for one with the other missing.
+            if Item.Settings.Kind = Command_R
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_q_norm.weight"))
+                       /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+                  Element_Count (Item.Settings.Heads * Item.Settings.Head_Size),
+                  Current.Query_Head_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  Element_Count
+                    (Item.Settings.KV_Heads * Item.Settings.Head_Size),
+                  Current.Key_Head_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
             if not Is_Linear then
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_output.weight"),
@@ -3501,7 +3554,7 @@ package body Model_Runner.Llama is
             --  Falcon has one normalization a block, not two: attention
             --  and the feed-forward read the same normalized input. The
             --  feed norm stays null and the block below reads that.
-            if Item.Settings.Kind not in Falcon | Phi2 | Olmo2
+            if Item.Settings.Kind not in Falcon | Phi2 | Olmo2 | Command_R
               and then not Normalizes_After (Item.Settings.Kind)
             then
                --  The hybrids name the normalization before the
@@ -8809,6 +8862,39 @@ package body Model_Runner.Llama is
       end loop;
    end Normalize_Heads;
 
+   --  Normalize each head of a projection in place, centred and with a gain
+   --  of its own for every head.
+   --
+   --  Command-R+ does this where Qwen3 does the plain one above: it centres
+   --  each head -- subtracting the mean -- rather than dividing by the root
+   --  mean square, and carries a gain a head rather than one shared across
+   --  them, so the gain is as wide as the whole projection and a head's is
+   --  the slice at its own offset. No shift, as its layer normalizations
+   --  carry none.
+   procedure Normalize_Heads_Centred
+     (Vector  : in out Real_Array;
+      Heads   : Element_Count;
+      Width   : Element_Count;
+      Gain    : Real_Array;
+      Epsilon : Real;
+      Room    : in out Real_Array)
+   is
+      No_Shift : constant Real_Array (0 .. Width - 1) := [others => 0.0];
+   begin
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Origin  : constant Element_Count := Vector'First + Head * Width;
+            Gain_At : constant Element_Count := Gain'First + Head * Width;
+         begin
+            K.Layer_Norm
+              (Vector (Origin .. Origin + Width - 1),
+               Gain (Gain_At .. Gain_At + Width - 1),
+               No_Shift, Epsilon, Room);
+            Vector (Origin .. Origin + Width - 1) := Room;
+         end;
+      end loop;
+   end Normalize_Heads_Centred;
+
    --  The feed-forward block of one position, through the experts its router
    --  chose for it.
    --
@@ -10618,6 +10704,8 @@ package body Model_Runner.Llama is
             --  that architecture has them, which is why closing a llama
             --  model looked clean.
             T.Free (Which.Query_Norm);
+            T.Free (Which.Query_Head_Norm);
+            T.Free (Which.Key_Head_Norm);
             T.Free (Which.Query_Whole_Norm);
             T.Free (Which.Query_Whole_Norm_Bias);
             T.Free (Which.Key_Whole_Norm);
@@ -12511,7 +12599,7 @@ package body Model_Runner.Llama is
          --  never normalized, and the values grew until layer five could
          --  not hold them.
          if Source.Settings.Kind
-              in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2 | Glm4
+              in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2 | Glm4 | Command_R
            or else Normalizes_After (Source.Settings.Kind)
          then
             T.Allocate (Width, Item.Post_Room);
@@ -12643,10 +12731,13 @@ package body Model_Runner.Llama is
             end;
          end if;
 
-         --  An architecture that normalizes its heads needs room for one.
+         --  An architecture that normalizes its heads needs room for one,
+         --  whether the plain way (Query_Norm) or Command-R+'s centred way
+         --  (Query_Head_Norm).
          if Settings.Head_Size > 0
            and then Source.Layers /= null
-           and then (for some L of Source.Layers.all => L.Query_Norm /= null)
+           and then (for some L of Source.Layers.all =>
+                       L.Query_Norm /= null or else L.Query_Head_Norm /= null)
          then
             T.Allocate (Element_Count (Settings.Head_Size), Item.Head_Row);
             if Item.Head_Row = null then
@@ -14483,7 +14574,7 @@ package body Model_Runner.Llama is
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
-                             | Chatglm
+                             | Chatglm | Command_R
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15364,6 +15455,15 @@ package body Model_Runner.Llama is
                   Normalize_Heads
                     (Item.Key_Row.all, KV_Heads, Head_Size,
                      Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
+               elsif Current.Query_Head_Norm /= null then
+                  Normalize_Heads_Centred
+                    (Item.Query.all, Heads, Head_Size,
+                     Current.Query_Head_Norm.all, Settings.Epsilon,
+                     Item.Head_Row.all);
+                  Normalize_Heads_Centred
+                    (Item.Key_Row.all, KV_Heads, Head_Size,
+                     Current.Key_Head_Norm.all, Settings.Epsilon,
+                     Item.Head_Row.all);
                end if;
 
                --  And the code variant's, over the whole of each
@@ -15495,6 +15595,7 @@ package body Model_Runner.Llama is
                     and then not (Settings.Kind in Granite | Granite_MoE
                                   and then Settings.Residual_Mul /= 0.0)
                     and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
+                          | Command_R
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -16163,7 +16264,7 @@ package body Model_Runner.Llama is
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
-                             | Chatglm
+                             | Chatglm | Command_R
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -16358,7 +16459,7 @@ package body Model_Runner.Llama is
       T.Allocate (Count * Width, Acts);
       T.Allocate (Count * Width, Norm);
 
-      if Source.Settings.Kind in Falcon | Phi2 then
+      if Source.Settings.Kind in Falcon | Phi2 | Command_R then
          T.Allocate (Count * Width, Kept_Norm);
       end if;
       T.Allocate (Count * Wide, Query);
@@ -17072,7 +17173,7 @@ package body Model_Runner.Llama is
                          and then Current.Feed_Norm /= null
                          and then Current.Query_Norm = null
                          and then Current.Query_Bias = null
-                         and then Source.Settings.Kind not in Falcon | Phi2 | Mpt)
+                         and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then Whole_Layer_Fits
                                             (Current, Natural (Index))
@@ -17414,7 +17515,7 @@ package body Model_Runner.Llama is
                     and then Current.Attention_Norm /= null
                     and then Current.Attention_Norm_Bias = null
                     and then Current.Feed_Norm /= null
-                    and then Source.Settings.Kind not in Falcon | Phi2 | Mpt
+                    and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R
                   then
                      --  Not for a layer whose projections carry a bias:
                      --  the host adds it before the turning, and this
@@ -17466,7 +17567,7 @@ package body Model_Runner.Llama is
             --  either, and it does not run its sublayers in parallel, so
             --  reading the absence as the arrangement copied a batch into a
             --  buffer that had never been allocated.
-            if Source.Settings.Kind in Falcon | Phi2 then
+            if Source.Settings.Kind in Falcon | Phi2 | Command_R then
                Kept_Norm.all (0 .. Count * Width - 1) :=
                  Norm.all (0 .. Count * Width - 1);
             end if;
@@ -17645,6 +17746,15 @@ package body Model_Runner.Llama is
                         Normalize_Heads
                           (Keys.all (KV_At .. KV_At + KV_Width - 1),
                            KV_Heads, Head_Size, Current.Key_Norm.all,
+                           Settings.Epsilon, Item.Head_Row.all);
+                     elsif Current.Query_Head_Norm /= null then
+                        Normalize_Heads_Centred
+                          (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
+                           Current.Query_Head_Norm.all, Settings.Epsilon,
+                           Item.Head_Row.all);
+                        Normalize_Heads_Centred
+                          (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           KV_Heads, Head_Size, Current.Key_Head_Norm.all,
                            Settings.Epsilon, Item.Head_Row.all);
                      end if;
 
@@ -17853,6 +17963,7 @@ package body Model_Runner.Llama is
                        and then not (Settings.Kind in Granite | Granite_MoE
                                      and then Settings.Residual_Mul /= 0.0)
                        and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
+                             | Command_R
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),
