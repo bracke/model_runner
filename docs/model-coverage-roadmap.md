@@ -9,8 +9,12 @@ and cost, not by tier, so the sequence is buildable start-to-finish.
 Done, each crossed against the independent reference over every format and path
 (conformance outside tolerance nought) and committed to main:
 
-- **Phase 0:** #1 rope longrope, #2 unnormalized expert weights, #3 (top-a
-  sampler only — Mirostat v1 and a dynamic/entropy temperature still open).
+- **Phase 0:** #1 rope longrope, #2 unnormalized expert weights, #3 samplers
+  (top-a, Mirostat v1, dynamic temperature), #5 jina alibi bias read from the
+  file. **#4 (Q8_1/Q8_K) is closed as a non-goal** — both are ggml activation
+  intermediates, not weight-storage formats; no published GGUF stores weights
+  in them, so there is nothing to decode. Phase 0 is complete but for #6, which
+  is ongoing onboarding rather than a task.
 - **Phase 1:** #7 shared experts, #8 sigmoid gating.
 - **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
   family remains, on demand).
@@ -18,8 +22,8 @@ Done, each crossed against the independent reference over every format and path
   rest of the config-mostly batch — Command-R, StableLM, GraniteMoE, MPT,
   GPT-NeoX, InternLM2, Baichuan — remain).
 
-Still open: the remainder of #3, #4, #5, #6, #9, #10 (other quants), #11 (other
-arches), and Phases 4–6.
+Phase 0 is closed (bar #6, ongoing onboarding). Still open: #9, #10 (other
+quants), #11 (other arches), and Phases 4–6.
 
 ## Guiding constraints
 
@@ -60,14 +64,20 @@ Each is isolated, needs no new infrastructure, and can ship same-day.
 2. ✅ **Done. Unnormalized expert weights** (`llama.adb:976`). Replace the refusal with a
    branch that skips the top-k renormalization when
    `expert_weights_norm = false`. **Small–Medium.**
-3. ⏳ **Partial (top-a done). Extra samplers** (`sampling.adb:239`). Add Mirostat v1, top-a, and a
-   dynamic/entropy temperature sampler beside the existing v2/min-p/typical/DRY/
-   XTC set. **Small each.**
-4. **Q8_1 / Q8_K decode** (`gguf.adb:32`, `:38`). Flip `Supported` and add the
-   two block decoders (+ device pack for parity). Low demand but named-yet-
-   refused. **Small.**
-5. **jina-bert-v2 alibi `max_bias ≠ 8`** (`llama.adb:1168`). Generalize the
-   slope computation to the stated bias instead of pinning 8. **Small.**
+3. ✅ **Done. Extra samplers** (`sampling.adb:239`). Mirostat v1 (count from the
+   estimated tail shape), top-a, and a dynamic/entropy temperature
+   (`dynatemp_range`/`dynatemp_exponent`) now sit beside the existing
+   v2/min-p/typical/DRY/XTC set, each held to its behaviour by a unit test.
+   **Small each.**
+4. 🚫 **Won't do (non-goal). Q8_1 / Q8_K decode** (`gguf.adb:32`, `:38`). Both
+   are ggml *activation intermediates*, not weight-storage formats — no
+   published GGUF stores weights in them, so flipping `Supported` would add a
+   decoder+encoder+fixture+shader for a format nothing downloads. Kept refused,
+   with the reason recorded in the support matrix. **Not a gap.**
+5. ✅ **Done. jina-bert-v2 alibi `max_bias ≠ 8`** (`llama.adb:1168`). The stated
+   bias is read from `attention.max_alibi_bias` and used (eight kept only as
+   the default); `Head_Slope` already built the ladder from whatever it holds.
+   **Small.**
 6. **Tokenizer pre-tokenizer rules** (`tokenizer.adb:490`). Not a one-time task:
    each new model may need one rule mapping added to the ~40 already present.
    Treat as ongoing onboarding, not a phase. **Small each.**
