@@ -478,7 +478,8 @@ package body Model_Runner.Llama is
                     when Llama | Granite => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
-                       | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE =>
+                       | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
+                       | Olmo2 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -2897,7 +2898,9 @@ package body Model_Runner.Llama is
             --  architecture here has one except Bert, which normalizes
             --  on the way out of each sublayer instead and carries no
             --  tensor for this at all.
-            if not Normalizes_After (Item.Settings.Kind) then
+            if not Normalizes_After (Item.Settings.Kind)
+              and then Item.Settings.Kind /= Olmo2
+            then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_norm.weight"),
                   Width, Current.Attention_Norm, Status);
@@ -3001,6 +3004,25 @@ package body Model_Runner.Llama is
                if E.Is_Error (Status) then
                   return;
                end if;
+
+            elsif Item.Settings.Kind = Olmo2 then
+               --  OLMo2 normalizes the whole of the query projection and
+               --  the whole of the key projection, root-mean-square and
+               --  without a shift, in place of the per-head normalization
+               --  qwen3 does under the same two tensor names. Required, not
+               --  taken if present: every OLMo2 layer carries them.
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+                  Wide, Current.Query_Whole_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  KV, Current.Key_Whole_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
 
             --  Gemma2 normalizes what each sublayer produced as well as
@@ -3008,7 +3030,7 @@ package body Model_Runner.Llama is
             --  gemma2 file without them is not one this build can
             --  compute, and taking them if present would read such a
             --  file as a model with two normalizations missing.
-            if Item.Settings.Kind in Gemma2 | Gemma3 then
+            if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 then
                Resolve_Norm
                  (Item, Source,
                   Layer_Key (Index, "post_attention_norm.weight"), Width,
@@ -3298,7 +3320,7 @@ package body Model_Runner.Llama is
             --  Falcon has one normalization a block, not two: attention
             --  and the feed-forward read the same normalized input. The
             --  feed norm stays null and the block below reads that.
-            if Item.Settings.Kind not in Falcon | Phi2
+            if Item.Settings.Kind not in Falcon | Phi2 | Olmo2
               and then not Normalizes_After (Item.Settings.Kind)
             then
                --  The hybrids name the normalization before the
@@ -12285,7 +12307,7 @@ package body Model_Runner.Llama is
          --  in, so a missing buffer is not a refusal but a residual that is
          --  never normalized, and the values grew until layer five could
          --  not hold them.
-         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2
+         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2
            or else Normalizes_After (Source.Settings.Kind)
          then
             T.Allocate (Width, Item.Post_Room);
@@ -15058,15 +15080,26 @@ package body Model_Runner.Llama is
                   goto Layer_Done;
                end if;
 
-               --  Attention block.
-               Normalize
-                 (Source, Item.Activation.all, Current.Attention_Norm.all,
-                  Current.Attention_Norm_Bias, Item.Normalized.all);
+               --  Attention block. OLMo2 has no normalization on the way in
+               --  and hands attention the residual as it stands; every other
+               --  architecture here normalizes it first.
+               if Current.Attention_Norm = null then
+                  Item.Normalized.all := Item.Activation.all;
+               else
+                  Normalize
+                    (Source, Item.Activation.all, Current.Attention_Norm.all,
+                     Current.Attention_Norm_Bias, Item.Normalized.all);
+               end if;
 
                --  Falcon runs the feed-forward from this same normalized input
                --  rather than from what attention produced, so it is kept
-               --  before attention overwrites the buffer it shares.
-               if Current.Feed_Norm = null then
+               --  before attention overwrites the buffer it shares. OLMo2 has
+               --  a null feed norm too but reads the post-attention residual,
+               --  so this is asked of the pre-norm being present -- Falcon --
+               --  and not merely of the feed norm being absent.
+               if Current.Feed_Norm = null
+                 and then Current.Attention_Norm /= null
+               then
                   Item.Post_Room.all := Item.Normalized.all;
                end if;
 
@@ -15372,16 +15405,20 @@ package body Model_Runner.Llama is
                end if;
 
                --  Feed-forward block. It reads what the layer normalized on
-               --  the way in where the architecture runs the two in parallel,
-               --  and what the residual holds now where it runs them one after
-               --  the other -- which is the whole of the difference between
-               --  the two arrangements.
-               if Current.Feed_Norm = null then
-                  Item.Normalized.all := Item.Post_Room.all;
-               else
+               --  the way in where the architecture runs the two in parallel
+               --  (Falcon), the residual as it stands where the architecture
+               --  has no normalization before the feed-forward at all (OLMo2,
+               --  which normalizes what the feed-forward produced instead),
+               --  and a fresh normalization of the residual where it runs the
+               --  two one after the other.
+               if Current.Feed_Norm /= null then
                   Normalize
                     (Source, Item.Activation.all, Current.Feed_Norm.all,
                      Current.Feed_Norm_Bias, Item.Normalized.all);
+               elsif Current.Attention_Norm /= null then
+                  Item.Normalized.all := Item.Post_Room.all;
+               else
+                  Item.Normalized.all := Item.Activation.all;
                end if;
 
                Charge (Item, Normalizing, Mark);
@@ -16530,15 +16567,21 @@ package body Model_Runner.Llama is
                         if Normalizes_After (Source.Settings.Kind) then
                            Norm.all (Origin .. Origin + Width - 1) :=
                              Acts.all (Origin .. Origin + Width - 1);
-                        elsif Current.Feed_Norm = null then
-                           Norm.all (Origin .. Origin + Width - 1) :=
-                             Kept_Norm.all (Origin .. Origin + Width - 1);
-                        else
+                        elsif Current.Feed_Norm /= null then
                            Normalize
                              (Source,
                               Acts.all (Origin .. Origin + Width - 1),
                               Current.Feed_Norm.all, Current.Feed_Norm_Bias,
                               Norm.all (Origin .. Origin + Width - 1));
+                        elsif Current.Attention_Norm /= null then
+                           Norm.all (Origin .. Origin + Width - 1) :=
+                             Kept_Norm.all (Origin .. Origin + Width - 1);
+                        else
+                           --  OLMo2: no normalization before the
+                           --  feed-forward, which reads the post-attention
+                           --  residual as it stands.
+                           Norm.all (Origin .. Origin + Width - 1) :=
+                             Acts.all (Origin .. Origin + Width - 1);
                         end if;
                      end if;
                   end;

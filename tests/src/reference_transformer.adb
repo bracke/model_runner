@@ -1121,7 +1121,8 @@ package body Reference_Transformer is
          when Jina_Bert_V2 => "jina-bert-v2.",
          when Qwen35 => "qwen35.",
          when Qwen35_MoE => "qwen35moe.",
-         when Granite => "granite.");
+         when Granite => "granite.",
+         when Olmo2 => "olmo2.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1549,6 +1550,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen35_MoE;
          elsif Named = "granite" then
             Item.Kind := Granite;
+         elsif Named = "olmo2" then
+            Item.Kind := Olmo2;
          else
             return;
          end if;
@@ -1903,7 +1906,7 @@ package body Reference_Transformer is
             --  Every architecture but Bert normalizes on the way into the
             --  block; Bert's two normalizations are on the way out of its
             --  two sublayers and are read below.
-            if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
+            if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 | Olmo2 then
                Current.Attention_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_norm.weight"), Present);
                if not Present then
@@ -1951,7 +1954,7 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind in Gemma2 | Gemma3 then
+            if Item.Kind in Gemma2 | Gemma3 | Olmo2 then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "post_attention_norm.weight"),
@@ -2211,6 +2214,22 @@ package body Reference_Transformer is
                if not Present then
                   return;
                end if;
+
+            elsif Item.Kind = Olmo2 then
+               --  OLMo2 normalizes the whole of the query and key
+               --  projections, root-mean-square and without a shift.
+               Current.Query_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Key_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
             end if;
 
             if Is_Linear then
@@ -2250,6 +2269,7 @@ package body Reference_Transformer is
             --  same normalization in the same place.
             if Item.Kind
                  not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
+                        | Olmo2
             then
                Current.Feed_Norm :=
                  Read_Vector
@@ -3651,21 +3671,34 @@ package body Reference_Transformer is
                   --  centred, with a shift, over the projection and not a
                   --  head of it -- after the bias and before the heads are
                   --  cut.
+                  --  OLMo2 divides by the root mean square and carries no
+                  --  shift; jina-bert-v2's code variant centres and carries
+                  --  one. The same two tensors, two different normalizations.
                   if Current.Query_Whole_Norm /= null then
                      declare
                         Room : Real_Vector (Query'Range) := [others => 0.0];
                      begin
-                        Normalize_Centred
-                          (Query, Current.Query_Whole_Norm.all,
-                           Current.Query_Whole_Norm_Bias, Room);
+                        if Item.Kind = Olmo2 then
+                           Normalize
+                             (Query, Current.Query_Whole_Norm.all, Room);
+                        else
+                           Normalize_Centred
+                             (Query, Current.Query_Whole_Norm.all,
+                              Current.Query_Whole_Norm_Bias, Room);
+                        end if;
                         Query := Room;
                      end;
                      declare
                         Room : Real_Vector (Key_Row'Range) := [others => 0.0];
                      begin
-                        Normalize_Centred
-                          (Key_Row, Current.Key_Whole_Norm.all,
-                           Current.Key_Whole_Norm_Bias, Room);
+                        if Item.Kind = Olmo2 then
+                           Normalize
+                             (Key_Row, Current.Key_Whole_Norm.all, Room);
+                        else
+                           Normalize_Centred
+                             (Key_Row, Current.Key_Whole_Norm.all,
+                              Current.Key_Whole_Norm_Bias, Room);
+                        end if;
                         Key_Row := Room;
                      end;
                   end if;

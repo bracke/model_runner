@@ -380,7 +380,8 @@ package body Tiny_Model is
            when Jina_Bert_V2 => "jina-bert-v2",
            when Qwen35    =>
              (if Experts > 0 then "qwen35moe" else "qwen35"),
-           when Granite   => "granite");
+           when Granite   => "granite",
+           when Olmo2     => "olmo2");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -874,12 +875,14 @@ package body Tiny_Model is
          --  Every architecture but Bert normalizes on the way into the
          --  block. Bert's two normalizations are on the way out of its two
          --  sublayers and are written below.
-         if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
+         if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 | Olmo2 then
             Norm (Layer_Name (Index, "attn_norm.weight"));
          end if;
 
-         --  Gemma2's two extra normalizations, one after each sublayer.
-         if Kind in Gemma2 | Gemma3 then
+         --  Gemma2's two extra normalizations, one after each sublayer,
+         --  which OLMo2 carries under the same names and is the whole of
+         --  its normalization, having none on the way in.
+         if Kind in Gemma2 | Gemma3 | Olmo2 then
             Norm (Layer_Name (Index, "post_attention_norm.weight"));
             Norm (Layer_Name (Index, "post_ffw_norm.weight"));
          end if;
@@ -1113,7 +1116,18 @@ package body Tiny_Model is
             Norm_Of (Layer_Name (Index, "attn_norm_2.bias"), Embedding);
          end if;
 
+         --  OLMo2 normalizes the whole of the query and key projections,
+         --  root-mean-square and without a shift -- the same tensor names
+         --  qwen3 uses per head, here over the whole projection.
+         if Kind = Olmo2 then
+            Gain_Of (Layer_Name (Index, "attn_q_norm.weight"),
+                     Heads * Key_Size);
+            Gain_Of (Layer_Name (Index, "attn_k_norm.weight"),
+                     KV_Heads * Key_Size);
+         end if;
+
          if Kind not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
+                       | Olmo2
          then
             --  Named for what it follows by the hybrid, for what it
             --  precedes by the rest; the same normalization.

@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The OLMo2 architecture is read.** `llama`'s shape rearranged: no
+  normalization on the way into a sublayer, and a normalization of what
+  the sublayer produced instead -- `post_attention_norm` over the
+  attention output and `post_ffw_norm` over the feed-forward's, each
+  root-mean-square and added to the residual, which is the Gemma2
+  arrangement without its normalization on the way in. Its queries and
+  keys are normalized over the whole of each projection, root-mean-square
+  and without a shift, in place of the per-head normalization qwen3 does
+  under the same two tensor names. Biasless, split rotary. Read on the
+  processor and the independent reference transformer and crossed against
+  it over every format and path. The whole-projection normalization is
+  the one the device sequence has no step for, so an OLMo2 layer runs on
+  the host under the device backend. It was refused before.
+
 - **The Granite architecture is read.** `llama`'s shape and rotation with
   four scalar multipliers the file carries: the embedding is lifted by
   `embedding_scale` before the first layer, each sublayer's output is

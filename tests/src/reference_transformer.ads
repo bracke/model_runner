@@ -185,7 +185,7 @@ private
    type Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
-      Granite);
+      Granite, Olmo2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
