@@ -975,11 +975,12 @@ package body Model_Runner.Llama is
          --  a refusal.
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "expert_gating_func"),
-            1, 1, Number, Local);
+            1, 2, Number, Local);
          if Present_And_Wrong (Local) then
             Reject_Feature ("expert_gating_function");
             return;
          end if;
+         Settings.Sigmoid_Gate := E.Is_Ok (Local) and then Number = 2;
 
          declare
             Normalized : Boolean;
@@ -8610,10 +8611,11 @@ package body Model_Runner.Llama is
                  = (Current.Expert_Up_Bias = null)
         and then Used <= Model_Runner.Backend.Device.Max_Members
 
-        --  The route kernel renormalizes the chosen over their sum, so a
-        --  mixture that does not renormalize is routed on the host instead,
-        --  where the shares are left as they came.
+        --  The route kernel softmaxes the scores and renormalizes the
+        --  chosen, so a mixture that does neither -- sigmoid-gated, or with
+        --  its weights left unnormalized -- is routed on the host instead.
         and then Settings.Renormalize_Experts
+        and then not Settings.Sigmoid_Gate
         and then T.Is_Present (Current.Gate_Stack)
         and then T.Is_Present (Current.Up_Stack)
         and then T.Is_Present (Current.Down_Stack);
@@ -8696,10 +8698,14 @@ package body Model_Runner.Llama is
             Current.Router_Bias.all);
       end if;
 
-      K.Softmax (Item.Routing.all, Usable);
-      if not Usable then
-         Status := E.Make (E.Tensor_Non_Finite_Value);
-         return;
+      if Settings.Sigmoid_Gate then
+         K.Sigmoid (Item.Routing.all);
+      else
+         K.Softmax (Item.Routing.all, Usable);
+         if not Usable then
+            Status := E.Make (E.Tensor_Non_Finite_Value);
+            return;
+         end if;
       end if;
 
       for Slot in Chosen'Range loop
@@ -9242,9 +9248,11 @@ package body Model_Runner.Llama is
                     Model_Runner.Backend.Backend_Device)
         and then Used <= Model_Runner.Backend.Device.Max_Members
 
-        --  The route kernel renormalizes the chosen; a mixture that does
-        --  not is routed on the host, as one position's is.
+        --  The route kernel softmaxes and renormalizes; a mixture that is
+        --  sigmoid-gated or unnormalized is routed on the host, as one
+        --  position's is.
         and then Settings.Renormalize_Experts
+        and then not Settings.Sigmoid_Gate
       then
          declare
             Choice : Model_Runner.Backend.Device.Choice_Array
@@ -9312,10 +9320,14 @@ package body Model_Runner.Llama is
                K.Add (Scores, Current.Router_Bias.all);
             end if;
 
-            K.Softmax (Scores, Usable);
-            if not Usable then
-               Status := E.Make (E.Tensor_Non_Finite_Value);
-               return;
+            if Settings.Sigmoid_Gate then
+               K.Sigmoid (Scores);
+            else
+               K.Softmax (Scores, Usable);
+               if not Usable then
+                  Status := E.Make (E.Tensor_Non_Finite_Value);
+                  return;
+               end if;
             end if;
 
             for Slot in 0 .. Used - 1 loop
@@ -14047,7 +14059,8 @@ package body Model_Runner.Llama is
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members
-          and then Settings.Renormalize_Experts);
+          and then Settings.Renormalize_Experts
+          and then not Settings.Sigmoid_Gate);
 
       --  A hybrid's linear layer goes whole where the device has the
       --  rule and the convolution, the session a ring that is over, and
@@ -15711,7 +15724,8 @@ package body Model_Runner.Llama is
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members
-          and then Settings.Renormalize_Experts);
+          and then Settings.Renormalize_Experts
+          and then not Settings.Sigmoid_Gate);
 
       --  As the token's.
       function Linear_Layer_Fits (L : Layer) return Boolean

@@ -418,6 +418,14 @@ package Model_Runner.Llama is
       --  gate and let the shares sum to what they sum to.
       Renormalize_Experts : Boolean := True;
 
+      --  Whether the router's scores become shares through a sigmoid a score
+      --  rather than a softmax over them. The sigmoid is monotonic, so the
+      --  same few are chosen either way; what differs is the weight each gets,
+      --  its own logistic rather than its portion of the whole. False is the
+      --  softmax every architecture here uses but the ones that state
+      --  expert_gating_func is two.
+      Sigmoid_Gate : Boolean := False;
+
       --  The gate unit's two bounds, for an architecture that clamps it.
       --
       --  GPT_OSS does not use the plain sigmoid-weighted gate every other

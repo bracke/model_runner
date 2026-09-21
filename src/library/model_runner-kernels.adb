@@ -1847,6 +1847,19 @@ package body Model_Runner.Kernels is
       end loop;
    end SiLU;
 
+   -------------
+   -- Sigmoid --
+   -------------
+
+   procedure Sigmoid (Target : in out Real_Array) is
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
+   begin
+      for Index in Target'Range loop
+         Target (Index) := 1.0 / (1.0 + Raised (-Target (Index)));
+      end loop;
+   end Sigmoid;
+
    ----------
    -- GELU --
    ----------

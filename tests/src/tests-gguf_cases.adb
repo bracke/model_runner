@@ -5099,15 +5099,23 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
               "a model with a shared expert was refused rather than read");
 
-      --  A different gate turns the scores into different shares, which this
-      --  does not compute -- refused rather than run as the softmax it is
-      --  not.
+      --  The sigmoid gate is read now: it weights each chosen expert by its
+      --  own logistic rather than its portion of a softmax, and being
+      --  monotonic it chooses the same few, so a file that names it reaches
+      --  the tensors. A gate that is neither one stays refused.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
       Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
       Fixtures.Add_U32 (Builder, "llama.expert_gating_func", 2);
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a sigmoid-gated mixture was refused rather than read");
+
+      Sound (Builder);
+      Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
+      Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
+      Fixtures.Add_U32 (Builder, "llama.expert_gating_func", 3);
       Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
-              "a model with another expert gate was accepted");
+              "an unknown expert gate was accepted");
 
       --  Unnormalized expert weights are read now: the chosen few are left
       --  on the scale their gate gives them rather than put back to a sum of

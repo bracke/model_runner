@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture whose router gates with a sigmoid is read.** Where a file
+  states `expert_gating_func` is two, each expert's score becomes its
+  share through a logistic rather than a softmax over them all -- the
+  weight is how sure the router was of that expert on its own, not its
+  portion of the whole. The sigmoid is monotonic, so the same few are
+  chosen; only the weights differ. Such a layer is attended on the host
+  (the device's route kernel softmaxes in place), and every softmax
+  mixture is unchanged. It was refused before.
+
 - **A mixture that does not renormalize its expert weights is read.**
   Where a file says `expert_weights_norm` is false, the chosen experts
   are left on the scale their gate gives them rather than put back to a

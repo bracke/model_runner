@@ -487,6 +487,13 @@ package Model_Runner.Kernels is
    --  @param Target Values to activate, updated in place.
    procedure SiLU (Target : in out Real_Array);
 
+   --  The logistic of each element in place, 1 / (1 + e**-x): what SiLU is
+   --  without the multiply by the input, for a router that weights its
+   --  experts by a sigmoid a score rather than a softmax over them.
+   --
+   --  @param Target Values to take the logistic of, updated in place.
+   procedure Sigmoid (Target : in out Real_Array);
+
    --  The gate unit one architecture here clamps, in place over the gate.
    --
    --  GPT_OSS does not activate the gate and then multiply by the up
