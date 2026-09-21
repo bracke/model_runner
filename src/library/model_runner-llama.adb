@@ -619,10 +619,10 @@ package body Model_Runner.Llama is
       --  is not the same as none: a model that says nothing about pooling
       --  has not asked for one, and a model that says none has.
       --
-      --  Ranked pooling is a fourth value some files carry. It is not a way
-      --  of reducing a text to a vector at all -- it names a scoring head
-      --  this program does not have -- so it is refused by name rather than
-      --  read as one of the three that are.
+      --  Ranked pooling is a fourth value some files carry. It does not
+      --  reduce a text to a vector -- it scores one, through a head the
+      --  model carries beside its blocks: the first position's state through
+      --  a dense layer and a logistic, then a row down to a single number.
       if Normalizes_After (Settings.Kind) then
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "pooling_type"), 0, 4, Number,
@@ -638,9 +638,7 @@ package body Model_Runner.Llama is
                when 1 => Settings.Pooling := Pool_Mean;
                when 2 => Settings.Pooling := Pool_Cls;
                when 3 => Settings.Pooling := Pool_Last;
-               when others =>
-                  Reject_Feature ("rank pooling");
-                  return;
+               when others => Settings.Pooling := Pool_Rank;
             end case;
          end if;
 
@@ -3520,6 +3518,35 @@ package body Model_Runner.Llama is
                Resolve_Norm
                  (Item, Source, "token_embd_norm.bias", Width,
                   Item.Embedding_Norm_Bias, Status);
+            end if;
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
+
+         --  The scoring head of a reranker, where the pooling type asks for
+         --  one: a dense of the embedding width and its bias, then a single
+         --  row down to the score and its bias. Read once a model, beside the
+         --  embedding tensors, so the ranking pass has them in hand.
+         if E.Is_Ok (Status) and then Item.Settings.Pooling = Pool_Rank then
+            Resolve
+              (Item, Source, "cls.weight", Width, Width,
+               Item.Rank_Dense, Status, Repack);
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, "cls.bias", Width, Item.Rank_Dense_Bias,
+                  Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Resolve
+                 (Item, Source, "cls.output.weight", 1, Width,
+                  Item.Rank_Out, Status, Repack);
+            end if;
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, "cls.output.bias", 1, Item.Rank_Out_Bias,
+                  Status);
             end if;
             if E.Is_Error (Status) then
                Fail (Status);
@@ -18134,5 +18161,63 @@ package body Model_Runner.Llama is
          E.Add_Frame
            (Status, Ada.Exceptions.Exception_Name (Occurrence));
    end Evaluate_Batch;
+
+   ----------
+   -- Rank --
+   ----------
+
+   procedure Rank
+     (Item   : in out Session;
+      Source : Model'Class;
+      Pooled : Real_Array;
+      Score  : out Real;
+      Status : out E.Error_Info)
+   is
+      Width   : constant Element_Count :=
+        Element_Count (Source.Settings.Embedding);
+      In_Row  : T.Real_Array_Access := new Real_Array'(Pooled);
+      Dense   : T.Real_Array_Access := new Real_Array (0 .. Width - 1);
+      Out_Row : T.Real_Array_Access := new Real_Array (0 .. 0);
+   begin
+      Score  := 0.0;
+      Status := E.Success;
+
+      if not T.Is_Present (Source.Rank_Dense)
+        or else not T.Is_Present (Source.Rank_Out)
+      then
+         Status := E.Make (E.Arch_Missing_Tensor);
+      else
+         --  The dense of the pooled state, its bias, and the logistic that
+         --  the classifier a reranker learns puts between its two rows.
+         Product (Item, Source.Rank_Dense, In_Row, Dense, Status);
+
+         if E.Is_Ok (Status) then
+            if Source.Rank_Dense_Bias /= null then
+               K.Add (Dense.all, Source.Rank_Dense_Bias.all);
+            end if;
+
+            for Index in Dense.all'Range loop
+               Dense.all (Index) :=
+                 Real (N.Tanh (N.Wide_Real (Dense.all (Index))));
+            end loop;
+
+            --  And the single row down to the score.
+            Product (Item, Source.Rank_Out, Dense, Out_Row, Status);
+         end if;
+
+         if E.Is_Ok (Status) then
+            Score := Out_Row.all (Out_Row.all'First);
+            if Source.Rank_Out_Bias /= null then
+               Score := Score
+                 + Source.Rank_Out_Bias.all
+                     (Source.Rank_Out_Bias.all'First);
+            end if;
+         end if;
+      end if;
+
+      T.Free (In_Row);
+      T.Free (Dense);
+      T.Free (Out_Row);
+   end Rank;
 
 end Model_Runner.Llama;

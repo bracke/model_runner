@@ -4377,7 +4377,7 @@ package body Model_Runner.CLI.Execute is
             Pooling : constant Opt.Pooling_Kind :=
               (if Item.Pooling_Named then Item.Pooling
                else (case Settings.Pooling is
-                       when L.Pool_Cls  => Opt.Pool_Cls,
+                       when L.Pool_Cls | L.Pool_Rank => Opt.Pool_Cls,
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));
          begin
@@ -4488,41 +4488,58 @@ package body Model_Runner.CLI.Execute is
                end loop;
             end if;
 
-            --  To unit length, unless the caller asked for the vector as it
-            --  is. A vector of length zero stays as it is: there is no
-            --  direction to scale it to, and dividing would produce
-            --  not-a-number where the honest answer is what was computed.
-            if Item.Normalize then
+            if Settings.Pooling = L.Pool_Rank then
+               --  A reranker scores rather than embeds: the pooled state
+               --  through the head the model carries, to one number, which
+               --  is how relevant the text is to what it was joined to.
                declare
-                  Total : N.Wide_Real := 0.0;
+                  Score  : N.Real;
+                  Ranked : E.Error_Info;
                begin
-                  for Element of Pooled loop
-                     Total := Total + N.Wide_Real (Element)
-                       * N.Wide_Real (Element);
-                  end loop;
-
-                  if Total > 0.0 then
-                     declare
-                        Scale : constant N.Real :=
-                          N.Real (1.0 / N.Sqrt (Total));
-                     begin
-                        for Element of Pooled loop
-                           Element := Element * Scale;
-                        end loop;
-                     end;
+                  L.Rank (Session, Prepared, Pooled, Score, Ranked);
+                  if E.Is_Error (Ranked) then
+                     Fail (Ranked);
+                     return;
                   end if;
+                  Pres.Put_Line (Screen, T.Image (Long_Float (Score), 6));
                end;
-            end if;
+            else
+               --  To unit length, unless the caller asked for the vector as
+               --  it is. A vector of length zero stays as it is: there is no
+               --  direction to scale it to, and dividing would produce
+               --  not-a-number where the honest answer is what was computed.
+               if Item.Normalize then
+                  declare
+                     Total : N.Wide_Real := 0.0;
+                  begin
+                     for Element of Pooled loop
+                        Total := Total + N.Wide_Real (Element)
+                          * N.Wide_Real (Element);
+                     end loop;
 
-            --  One component a line, so that the usual tools can read it.
-            --  Through the plain line writer rather than the generated-text
-            --  path, and that is safe here for the reason that path exists:
-            --  what it guards against is a model's own bytes reaching a
-            --  terminal, and these are digits, a sign and a point produced
-            --  by this program from a number.
-            for Element of Pooled loop
-               Pres.Put_Line (Screen, T.Image (Long_Float (Element), 6));
-            end loop;
+                     if Total > 0.0 then
+                        declare
+                           Scale : constant N.Real :=
+                             N.Real (1.0 / N.Sqrt (Total));
+                        begin
+                           for Element of Pooled loop
+                              Element := Element * Scale;
+                           end loop;
+                        end;
+                     end if;
+                  end;
+               end if;
+
+               --  One component a line, so that the usual tools can read it.
+               --  Through the plain line writer rather than the generated-
+               --  text path, and that is safe here for the reason that path
+               --  exists: what it guards against is a model's own bytes
+               --  reaching a terminal, and these are digits, a sign and a
+               --  point this program produced from a number.
+               for Element of Pooled loop
+                  Pres.Put_Line (Screen, T.Image (Long_Float (Element), 6));
+               end loop;
+            end if;
          end;
 
          Cleanup;

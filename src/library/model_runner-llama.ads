@@ -247,7 +247,7 @@ package Model_Runner.Llama is
    --  the same answer, and a model that says none is a model whose states
    --  the caller is expected to pool for themselves.
    type Pooling_Choice is
-     (Pool_Unstated, Pool_None, Pool_Mean, Pool_Cls, Pool_Last);
+     (Pool_Unstated, Pool_None, Pool_Mean, Pool_Cls, Pool_Last, Pool_Rank);
 
    --  Validated architecture configuration.
    --
@@ -1459,6 +1459,24 @@ package Model_Runner.Llama is
       Given  : Given_Rows := No_Given_Rows;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Score a text a reranker has embedded: the pooled state through the
+   --  head the model carries -- a dense and a logistic, then a row down to a
+   --  single number, how relevant the text is to what it was joined to.
+   --  Meaningful only where Config's pooling is Pool_Rank; the products run
+   --  on the session's backend.
+   --
+   --  @param Item   A session of the model.
+   --  @param Source The model, which carries the scoring head.
+   --  @param Pooled The pooled state of the text, the embedding's width.
+   --  @param Score  The relevance, out.
+   --  @param Status Success, or why not.
+   procedure Rank
+     (Item   : in out Session;
+      Source : Model'Class;
+      Pooled : Real_Array;
+      Score  : out Real;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  What a session has committed, as bytes.
    --
    --  A prompt costs what it costs to read: on this machine a thousand
@@ -2095,6 +2113,16 @@ private
       --  model does, so leaving it out shifts every logit by a fixed amount
       --  and changes which token is chosen wherever two were close.
       Output_Bias : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The scoring head of a reranker, where the pooling type names one:
+      --  the first position's state through a dense layer and a logistic,
+      --  then a row down to a single number, which is how relevant the text
+      --  is to what it was joined to. Null for every model that embeds a
+      --  text or generates from it rather than scores it.
+      Rank_Dense      : aliased Model_Runner.Tensors.View;
+      Rank_Dense_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Rank_Out        : aliased Model_Runner.Tensors.View;
+      Rank_Out_Bias   : Model_Runner.Tensors.Real_Array_Access;
 
       --  One divisor per rotated pair, when the model carries the table.
       --  Null otherwise, which is every element one. Decoded once here

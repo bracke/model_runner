@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A reranker scores a text rather than only embedding it.** Where a
+  file's pooling type is ranked, the model carries a scoring head beside
+  its blocks -- a dense of the embedding width and a logistic, then a row
+  down to one number -- and `embed` writes that number, how relevant the
+  text is to what it was joined to, in place of a vector. The head
+  (`cls.weight`/`cls.bias`, `cls.output.weight`/`cls.output.bias`) is read
+  where the pooling asks for it and run on the session's backend; the
+  ranked pooling type was refused before.
+
 - **A mixture whose router gates with a sigmoid is read.** Where a file
   states `expert_gating_func` is two, each expert's score becomes its
   share through a logistic rather than a softmax over them all -- the
