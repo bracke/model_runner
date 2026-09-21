@@ -157,6 +157,14 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
+      if not N.Is_Finite (Item.Top_A)
+        or else Item.Top_A < 0.0
+        or else Item.Top_A > 1.0
+      then
+         Reject ("top_a", Item.Top_A);
+         return;
+      end if;
+
       if not N.Is_Finite (Item.Repeat_Penalty)
         or else Item.Repeat_Penalty <= 0.0
       then
@@ -268,6 +276,7 @@ package body Model_Runner.Sampling is
         and then (Item.Top_K /= 0
                   or else Item.Top_P < 1.0
                   or else Item.Min_P > 0.0
+                  or else Item.Top_A > 0.0
                   or else Item.Typical_P < 1.0
                   or else Item.Tail_Free < 1.0
                   or else Item.XTC_Probability > 0.0)
@@ -1540,6 +1549,23 @@ package body Model_Runner.Sampling is
          declare
             Threshold : constant Real :=
               Item.Settings.Min_P * Item.Working.all (0).Probability;
+            Kept      : Element_Count := 1;
+         begin
+            for Index in 1 .. Surviving - 1 loop
+               exit when Item.Working.all (Index).Probability < Threshold;
+               Kept := Index + 1;
+            end loop;
+            Surviving := Kept;
+         end;
+      end if;
+
+      --  8b  top-a, relative to the square of the most probable surviving
+      --  candidate: a cut that tightens where min-p's holds, so a confident
+      --  step keeps fewer and a hesitant one keeps more.
+      if Item.Settings.Top_A > 0.0 then
+         declare
+            Peak      : constant Real := Item.Working.all (0).Probability;
+            Threshold : constant Real := Item.Settings.Top_A * Peak * Peak;
             Kept      : Element_Count := 1;
          begin
             for Index in 1 .. Surviving - 1 loop

@@ -74,6 +74,12 @@ package Model_Runner.Sampling is
       --  probable candidate's. Must be in 0 .. 1.
       Min_P : Real := 0.05;
 
+      --  Drop candidates whose probability is below this fraction of the
+      --  square of the most probable candidate's, so the cut tightens as the
+      --  model grows confident and loosens as it hesitates. Zero disables it.
+      --  Must be in 0 .. 1.
+      Top_A : Real := 0.0;
+
       --  Divide the logits of recently produced tokens by this value when they
       --  are positive and multiply when they are negative. One disables it.
       Repeat_Penalty : Real := 1.1;
@@ -178,6 +184,7 @@ package Model_Runner.Sampling is
       Top_K             => 0,
       Top_P             => 1.0,
       Min_P             => 0.0,
+      Top_A             => 0.0,
       Repeat_Penalty    => 1.0,
       Repeat_Window     => 0,
       Frequency_Penalty => 0.0,

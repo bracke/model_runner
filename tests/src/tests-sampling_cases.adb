@@ -430,6 +430,34 @@ package body Tests.Sampling_Cases is
       S.Close (Sampler);
    end Min_P_Restricts;
 
+   --  Top-a drops candidates below the square of the most probable, so where
+   --  the model is confident the cut is tight enough to keep only the peak.
+   procedure Top_A_Restricts (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Config : constant S.Configuration :=
+        (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Top_A => 0.5,
+         Repeat_Penalty => 1.0, Repeat_Window => 0,
+         others => <>);
+      Logits : constant Logit_Vector :=
+        [0 => 8.0, 1 => 4.0, others => -20.0];
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+   begin
+      S.Open (Sampler, Config, Vocabulary, 3, Status);
+      Assert (E.Is_Ok (Status), "sampler did not open");
+
+      for Step in 1 .. 64 loop
+         S.Sample (Sampler, Logits, Token, Status);
+         Assert (E.Is_Ok (Status), "sample failed");
+         Assert (Token = 0,
+                 "top-a admitted an improbable candidate:"
+                 & Vocab.Token_Id'Image (Token));
+      end loop;
+
+      S.Close (Sampler);
+   end Top_A_Restricts;
+
    --  A repetition penalty pushes a recently produced token down.
    procedure Repetition_Penalty_Applies
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2828,6 +2856,9 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Min_P_Restricts'Access,
          "minimum-p drops candidates far below the most probable one");
+      Register_Routine
+        (T, Top_A_Restricts'Access,
+         "top-a drops candidates below the square of the most probable one");
       Register_Routine
         (T, Repetition_Penalty_Applies'Access,
          "the repetition penalty demotes a recently produced token");

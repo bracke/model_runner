@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 109) of Registry_Row :=
+   Registry : constant array (1 .. 110) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -156,6 +156,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--top-k"), [Command_Run => True, others => False], Text ("top_k")),
       (Text ("--top-p"), [Command_Run => True, others => False], Text ("top_p")),
       (Text ("--min-p"), [Command_Run => True, others => False], Text ("min_p")),
+      (Text ("--top-a"), [Command_Run => True, others => False], Text ("top_a")),
       (Text ("--typical"), [Command_Run => True, others => False], Text ("typical")),
       (Text ("--tail-free"), [Command_Run => True, others => False], Text ("tail_free")),
       (Text ("--xtc-probability"), [Command_Run => True, others => False], Text ("xtc_probability")),
@@ -870,7 +871,7 @@ package body Model_Runner.CLI.Options is
          Flag_Rope_Scaling, Flag_Rope_Scale, Flag_Rope_Base,
          Flag_Yarn_Original, Flag_Yarn_Attention,
          Flag_Yarn_Beta_Fast, Flag_Yarn_Beta_Slow,
-         Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Repeat_Penalty,
+         Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Top_A, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template,
          Flag_Typical, Flag_Tail_Free,
@@ -1891,6 +1892,12 @@ package body Model_Runner.CLI.Options is
 
                   elsif Name = "--min-p" then
                      Real_Value (Flag_Min_P, Result.Sampling.Min_P, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--top-a" then
+                     Real_Value (Flag_Top_A, Result.Sampling.Top_A, Good);
                      if not Good then
                         return;
                      end if;

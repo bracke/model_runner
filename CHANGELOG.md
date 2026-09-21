@@ -5,6 +5,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A top-a truncation sampler.** `--top-a X` drops candidates whose
+  probability is below `X` times the square of the most probable one, so
+  the cut tightens where the model is confident and loosens where it
+  hesitates -- the quadratic counterpart to min-p. Zero disables it, and
+  it refuses to run beside mirostat, as the other truncation filters do.
+
 ### Fixed
 
 - **A file naming its rotary scaling `longrope` is read, not refused.** The
