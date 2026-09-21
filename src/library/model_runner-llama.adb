@@ -7139,36 +7139,51 @@ package body Model_Runner.Llama is
        then Block_Taken + Element_Count (Model_Runner.Backend.Device.Table_Room)
        else 0);
 
-   --  Whether a layer's sinks can go to the device: the layer has them,
-   --  the cache has room for them, and there are no more heads than the
-   --  room holds.
+   --  Whether a layer's sinks can go to the device: the layer has them and
+   --  the cache holds a slot for them at this layer's place, which is the
+   --  room past the table divided into one span of heads a layer.
    --
    --  @param Sinks The layer's sinks, or null.
+   --  @param Layer Which layer, so its slot falls after the earlier ones'.
    --  @return True where Sinks_Ready would put them.
    function Sinks_Fit
-     (Sinks : Model_Runner.Tensors.Real_Array_Access) return Boolean
+     (Sinks : Model_Runner.Tensors.Real_Array_Access;
+      Layer : Natural := 0) return Boolean
    is (Sinks = null
-       or else Sinks.all'Length
+       or else (Element_Count (Layer) + 1) * Sinks.all'Length
                <= Element_Count (Model_Runner.Backend.Device.Sink_Room));
 
    --  A layer's sinks put where the device's attention reads them, a head
-   --  each after the round's table, and where they went: what the
-   --  attention step is told as Sinks_At. Zero for a layer without them,
-   --  which is every layer of every architecture but one; and zero where
-   --  they could not be put, which sends the layer to the host. Put every
-   --  time rather than once, because every session of the model puts the
-   --  same numbers and a copy of a few hundred bytes into a standing
-   --  mapping is nothing beside the layer.
+   --  each after the round's table and a slot on from the layer before, and
+   --  where they went: what the attention step is told as Sinks_At. Zero for
+   --  a layer without them, which is every layer of every architecture but
+   --  one; and zero where they could not be put, which sends the layer to
+   --  the host. Put every time rather than once, because every session of
+   --  the model puts the same numbers and a copy of a few hundred bytes into
+   --  a standing mapping is nothing beside the layer.
    --
    --  @param Sinks The layer's sinks, or null.
+   --  @param Layer Which layer, so its slot falls after the earlier ones'.
    --  @return Where they begin, in elements, or zero.
    function Sinks_Ready
-     (Sinks : Model_Runner.Tensors.Real_Array_Access) return Natural
+     (Sinks : Model_Runner.Tensors.Real_Array_Access;
+      Layer : Natural := 0) return Natural
    is
-      Where : constant Element_Count := Sinks_Room_At;
+      --  A slot a layer, so a token that chains its layers into one
+      --  submission does not have every layer's sinks land on the last
+      --  layer's: Put_Cache writes the mapping as the command buffer is
+      --  built, before the device runs any of it, so a shared slot would
+      --  hold whichever layer was written last by the time any attention
+      --  read it. The layers past what the room holds go to the host.
+      Span  : constant Element_Count :=
+        (if Sinks = null then 0 else Sinks.all'Length);
+      Where : constant Element_Count :=
+        Sinks_Room_At + Element_Count (Layer) * Span;
       Ok    : Boolean;
    begin
-      if Sinks = null or else Where = 0 or else not Sinks_Fit (Sinks) then
+      if Sinks = null or else Sinks_Room_At = 0
+        or else not Sinks_Fit (Sinks, Layer)
+      then
          return 0;
       end if;
 
@@ -14038,18 +14053,17 @@ package body Model_Runner.Llama is
                     or else (Settings.Value_Size = Settings.Head_Size
                              and then L.Query_Bias = null))
 
-          --  A layer's sinks keep it off the device: the device's
-          --  attention does not apply one. A mixture with them went whole
-          --  for a day with none, and where it was let go whole with them
-          --  the fixture check said its sinks answered to nothing -- the
-          --  sink reaches the cache the shader reads, at the offset the
-          --  shader is told, and the shader still reads it as the position
-          --  it never wrote, which no upload, barrier or flush moved. So a
-          --  layer with a sink is attended on the host, where the sink
-          --  joins the softmax's denominator as the architecture wants;
-          --  Sinks_Fit stays the gate on the one path the device can take
-          --  a sink through, which is none of these.
-          and then L.Sinks = null
+          --  A layer's sinks go on the device where the cache holds a slot
+          --  for them at this layer's place: the sink joins the softmax's
+          --  denominator in the shader as the architecture wants. It read
+          --  as answering to nothing for a day because every chained layer
+          --  put its sinks in the one slot -- Put_Cache writes the mapping
+          --  as the buffer is built, before the device runs any of it, so
+          --  by the time a layer's attention read the slot it held the last
+          --  layer's sink. Sinks_Ready gives a slot a layer now, and the
+          --  layers past what the room holds are the ones this sends to the
+          --  host.
+          and then Sinks_Fit (L.Sinks, Index)
 
           --  The normalization on the way in, which every architecture
           --  has but the one that normalizes on the way out and has the
@@ -14807,7 +14821,7 @@ package body Model_Runner.Llama is
 
                         --  The layer's sinks, put where the attention
                         --  reads them.
-                        Sinks_At    => Sinks_Ready (Current.Sinks),
+                        Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index)),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit,
 
@@ -15051,7 +15065,7 @@ package body Model_Runner.Llama is
                   --  A layer with sinks the device has no room for attends
                   --  on the host; the pair below is given the others'.
                   if Item.Held = Halved or else not Resident
-                    or else not Sinks_Fit (Current.Sinks)
+                    or else not Sinks_Fit (Current.Sinks, Natural (Index))
                     or else Hybrid (Settings.Kind)
                   then
                      --  How much arithmetic the heads are between them: every
@@ -15099,7 +15113,7 @@ package body Model_Runner.Llama is
                         Max_Bias => Settings.Max_Bias,
                         Packed => Packed_Shape (Item, Base, V_Base,
                                                 KV_Width, V_Width),
-                        Sinks_At => Sinks_Ready (Current.Sinks),
+                        Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index)),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit);
 
@@ -15133,7 +15147,7 @@ package body Model_Runner.Llama is
                         Max_Bias => Settings.Max_Bias,
                         Packed => Packed_Shape (Item, Base, V_Base,
                                                 KV_Width, V_Width),
-                        Sinks_At => Sinks_Ready (Current.Sinks));
+                        Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index)));
 
                      if Projected then
                         Usable := True;
@@ -15692,9 +15706,11 @@ package body Model_Runner.Llama is
           and then (not Hybrid (Settings.Kind)
                     or else (Settings.Value_Size = Settings.Head_Size
                              and then L.Query_Bias = null))
-          --  A layer with sinks is attended on the host, as the single
-          --  token's is: the device does not apply a sink.
-          and then L.Sinks = null
+          --  A layer with sinks goes on the device where the cache holds a
+          --  slot for it at this layer's place, a slot a layer so a batch
+          --  that chains does not land every layer's sinks on the last's;
+          --  the ones past the room go to the host, as a single token's do.
+          and then Sinks_Fit (L.Sinks, Index)
           and then (L.Attention_Norm /= null)
                    = not Normalizes_After (Settings.Kind)
           and then (not Normalizes_After (Settings.Kind)
@@ -16884,7 +16900,7 @@ package body Model_Runner.Llama is
                                    Cell_Of (Item, Natural (Index), Reserved)
                                    + Count,
                                    Paged => Item.Paged)),
-                        Sinks_At    => Sinks_Ready (Current.Sinks),
+                        Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index)),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit,
 
@@ -17388,7 +17404,7 @@ package body Model_Runner.Llama is
                            Packed    => Packed_Shape (Item, Base, V_Base,
                                                       KV_Width, V_Width,
                                                       Seated => False),
-                           Sinks_At  => Sinks_Ready (Current.Sinks),
+                           Sinks_At  => Sinks_Ready (Current.Sinks, Natural (Index)),
                         Alpha => Settings.Gate_Alpha,
                         Limit => Settings.Gate_Limit);
                      end if;

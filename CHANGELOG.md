@@ -32,16 +32,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
-- **A model with attention sinks is attended on the host, so its sinks are
-  applied.** GPT-OSS learns a per-head sink -- a score that joins the
-  softmax's denominator and takes no value -- and the device's attention
-  never applied it: a mutation of the sink weights moved no logit on the
-  device where it moved them on the processor, which the fixture check
-  caught. The sink reaches the cache the shader reads, at the offset the
-  shader is told, and the shader reads it as a position it never wrote,
-  which no upload, barrier or flush moved. A layer with a sink now attends
-  on the host, where the sink joins the denominator as the architecture
-  wants; the device takes every other layer as before.
+- **A model with attention sinks applies every layer's, on the device.**
+  GPT-OSS learns a per-head sink -- a score that joins the softmax's
+  denominator and takes no value -- and a mutation of one layer's sink
+  weights moved no logit on the device where it moved them on the processor,
+  which the fixture check caught. Every layer wrote its sinks to the one slot
+  after the table, and the device chains a token's layers into a single
+  submission whose sink writes all land before any of it runs: by the time a
+  layer's attention read the slot it held the last layer's sink, so a layer
+  read a sink it had not written and its own moved nothing. Each layer is
+  given a slot of its own now, a head apiece, and the sink joins the
+  denominator in the shader as the architecture wants; a model deeper or
+  wider than the room holds attends its overflowing layers on the host.
 - **llama3 and LongRoPE rotary scaling are read now, not refused.** A file
   naming `llama3` scaling, and one carrying LongRoPE's `rope_factors_long`
   and `rope_factors_short` tables, were both turned away at load. Llama 3's
