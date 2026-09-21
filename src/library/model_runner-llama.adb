@@ -995,14 +995,17 @@ package body Model_Runner.Llama is
             end if;
          end;
 
-         --  A shared expert runs for every position beside the chosen ones.
-         --  Nothing here computes it, and a model that has one produces a
-         --  different answer without it.
+         --  A shared expert runs for every position beside the chosen ones,
+         --  which Shared_Expert does where the layer carries its gate. The
+         --  count a file states is folded into that one block's width -- the
+         --  shared experts are merged into a single gate-up-down of the
+         --  stated feed length -- so the number is read and let pass, and the
+         --  tensors it comes with are what the shared block runs.
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "expert_shared_count"),
-            0, 0, Number, Local);
+            0, Long_Long_Integer (Bounds.Max_Experts), Number, Local);
          if Present_And_Wrong (Local) then
-            Reject_Feature ("shared_expert");
+            Status := Local;
             return;
          end if;
 

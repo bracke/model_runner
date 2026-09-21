@@ -5087,17 +5087,22 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.GGUF_Metadata_Out_Of_Range,
               "a model running more experts than it has was accepted");
 
-      --  Parts of a mixture this does not compute. Each would produce a
-      --  plausible wrong answer rather than a refusal if it were ignored:
-      --  a shared expert runs for every position beside the chosen ones, a
-      --  different gate turns the scores into different shares, and
-      --  unnormalized weights shrink the block's whole output.
+      --  A shared expert is computed now: it runs for every position beside
+      --  the chosen ones, out of the gate-up-down its tensors carry, so a
+      --  file naming a count reaches the tensors rather than a refusal. The
+      --  count is folded into that one block's width and read only to let it
+      --  pass.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
       Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
       Fixtures.Add_U32 (Builder, "llama.expert_shared_count", 1);
-      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
-              "a model with a shared expert was accepted");
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a model with a shared expert was refused rather than read");
+
+      --  Parts of a mixture this does not compute. Each would produce a
+      --  plausible wrong answer rather than a refusal if it were ignored:
+      --  a different gate turns the scores into different shares, and
+      --  unnormalized weights shrink the block's whole output.
 
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);

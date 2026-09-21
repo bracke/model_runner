@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture with a shared expert is read, not refused.** The engine
+  already runs a shared expert -- the block every position goes through
+  beside its chosen few, out of the gate-up-down its tensors carry -- but
+  a file that named its `expert_shared_count` was turned away at the key,
+  a refusal left from before the block was computed. The count is read
+  and let pass now, folded as it is into the one shared block's width, so
+  Qwen2-MoE, Hunyuan-MoE and the other routed-plus-shared mixtures reach
+  their tensors.
+
 - **A top-a truncation sampler.** `--top-a X` drops candidates whose
   probability is below `X` times the square of the most probable one, so
   the cut tightens where the model is confident and loosens where it
