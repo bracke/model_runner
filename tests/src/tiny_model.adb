@@ -70,7 +70,8 @@ package body Tiny_Model is
       Head_Factor : Positive := 1;
       Sections     : Boolean := False;
       Depth        : Natural := 0;
-      Code_Norms   : Boolean := True)
+      Code_Norms   : Boolean := True;
+      Ranking      : Boolean := False)
    is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -474,7 +475,7 @@ package body Tiny_Model is
          --  about all of them.
          Fixtures.Add_U32
            (Builder, Prefix & ".pooling_type",
-            (if Kind = Jina_Bert_V2 then 1 else 2));
+            (if Ranking then 4 elsif Kind = Jina_Bert_V2 then 1 else 2));
 
          --  Stated rather than left to the architecture's name, because a
          --  published file states it and a fixture that did not would let a
@@ -1234,6 +1235,16 @@ package body Tiny_Model is
       --  refuses.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
+      end if;
+
+      --  A reranker's scoring head, where this fixture builds one: a dense
+      --  of the embedding width and its bias, then a single row down to the
+      --  score and its bias.
+      if Ranking then
+         Weight ("cls.weight", [G.U64 (Embedding), G.U64 (Embedding)]);
+         Norm ("cls.bias");
+         Weight ("cls.output.weight", [G.U64 (Embedding), G.U64 (1)]);
+         Norm_Of ("cls.output.bias", 1);
       end if;
 
       --  Phi2's output projection carries a bias, so the last thing this

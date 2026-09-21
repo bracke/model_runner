@@ -348,6 +348,9 @@ package Tiny_Model is
    --    and the whole conformance sweep went through SentencePiece, so
    --    nothing said whether a byte-pair vocabulary survives being driven
    --    rather than called.
+   --  @param Ranking Build a reranker: a scoring head beside the blocks and
+   --    a ranked pooling type, so the model scores a text rather than
+   --    embedding it. For the bert kinds; nothing for the rest.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -367,6 +370,7 @@ package Tiny_Model is
       Head_Factor   : Positive := 1;
       Sections       : Boolean := False;
       Depth          : Natural := 0;
-      Code_Norms     : Boolean := True);
+      Code_Norms     : Boolean := True;
+      Ranking        : Boolean := False);
 
 end Tiny_Model;

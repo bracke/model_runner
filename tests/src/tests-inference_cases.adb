@@ -564,6 +564,66 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Position_Sees_What_Follows_It;
 
+   --------------------------------
+   -- A_Reranker_Scores_A_Text --
+   --------------------------------
+
+   --  A reranker carries a scoring head and a ranked pooling type: the
+   --  ranking pass takes the first position's state through the head to a
+   --  single number rather than reducing the text to a vector. Run to a
+   --  finite score, which is what the head's two products and its logistic
+   --  produce from a state the layers gave.
+   procedure A_Reranker_Scores_A_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Ranking => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         None   : N.Real_Array (1 .. 0);
+         Width  : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Embedding);
+         Room   : Model_Runner.Tensors.Real_Array_Access :=
+           new N.Real_Array (0 .. 2 * Width - 1);
+         Score  : N.Real;
+      begin
+         Start (Under);
+         Assert (L."=" (L.Config (Under.Ready).Pooling, L.Pool_Rank),
+                 "the reranker's pooling was not read as ranked");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "reranker session did not open");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, [1, 5], None, States => Room,
+            Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "reranker batch failed: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  The first position's state -- what a ranked pooling reads --
+         --  through the scoring head.
+         L.Rank
+           (Live, Under.Ready, Room.all (0 .. Width - 1), Score, Status);
+         Assert (E.Is_Ok (Status),
+                 "the reranker's head was not read: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (N.Is_Finite (Score),
+                 "the reranker scored with a value that is not a number");
+
+         L.Close (Live);
+         Model_Runner.Tensors.Free (Room);
+      end;
+
+      B.Free (Image);
+   end A_Reranker_Scores_A_Text;
+
    ------------------------------------------------
    -- A_Headless_Model_Refuses_What_It_Cannot_Say --
    ------------------------------------------------
@@ -12118,6 +12178,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Position_Sees_What_Follows_It'Access,
          "a bidirectional model lets a position see what follows it");
+      Register_Routine
+        (T, A_Reranker_Scores_A_Text'Access,
+         "a reranker takes a text through its head to a single score");
       Register_Routine
         (T, A_Headless_Model_Refuses_What_It_Cannot_Say'Access,
          "a model with no head refuses a distribution, and half a text is "
