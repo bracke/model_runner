@@ -4,6 +4,23 @@ A plan to close every model-related gap the survey found — the live refusal
 paths and host fallbacks that block or slow real models. Ordered by dependency
 and cost, not by tier, so the sequence is buildable start-to-finish.
 
+## Progress (as of 2026-09-21)
+
+Done, each crossed against the independent reference over every format and path
+(conformance outside tolerance nought) and committed to main:
+
+- **Phase 0:** #1 rope longrope, #2 unnormalized expert weights, #3 (top-a
+  sampler only — Mirostat v1 and a dynamic/entropy temperature still open).
+- **Phase 1:** #7 shared experts, #8 sigmoid gating.
+- **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
+  family remains, on demand).
+- **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4 and Starcoder2 (the
+  rest of the config-mostly batch — Command-R, StableLM, GraniteMoE, MPT,
+  GPT-NeoX, InternLM2, Baichuan — remain).
+
+Still open: the remainder of #3, #4, #5, #6, #9, #10 (other quants), #11 (other
+arches), and Phases 4–6.
+
 ## Guiding constraints
 
 - **The engine refuses rather than defers.** Each gap is an explicit refusal
@@ -36,14 +53,14 @@ and cost, not by tier, so the sequence is buildable start-to-finish.
 
 Each is isolated, needs no new infrastructure, and can ship same-day.
 
-1. **Rope scaling allow-list** (`llama.adb:678`, refusal `:681`). Accept
+1. ✅ **Done. Rope scaling allow-list** (`llama.adb:678`, refusal `:681`). Accept
    `longrope`/`su`/`dynamic` and route to the LongRoPE factor-table path that
    already exists (`:686`, `:3610`); add dynamic-NTK where the table doesn't
    apply. *Verify first whether Phi-3.5 long files set this key.* **Small.**
-2. **Unnormalized expert weights** (`llama.adb:976`). Replace the refusal with a
+2. ✅ **Done. Unnormalized expert weights** (`llama.adb:976`). Replace the refusal with a
    branch that skips the top-k renormalization when
    `expert_weights_norm = false`. **Small–Medium.**
-3. **Extra samplers** (`sampling.adb:239`). Add Mirostat v1, top-a, and a
+3. ⏳ **Partial (top-a done). Extra samplers** (`sampling.adb:239`). Add Mirostat v1, top-a, and a
    dynamic/entropy temperature sampler beside the existing v2/min-p/typical/DRY/
    XTC set. **Small each.**
 4. **Q8_1 / Q8_K decode** (`gguf.adb:32`, `:38`). Flip `Supported` and add the
@@ -64,11 +81,11 @@ sampling is complete.
 
 The three MoE refusals share one forward path; do them together.
 
-7. **Shared (always-on) experts** (`llama.adb:988`). Add a shared-expert arm to
+7. ✅ **Done. Shared (always-on) experts** (`llama.adb:988`). Add a shared-expert arm to
    the mixture forward that runs for every token beside the routed top-k, on
    both CPU and device. Unblocks Qwen2-MoE, Hunyuan-MoE, and is a prerequisite
    for DeepSeek (Phase 4). **Large** (new forward path + device dispatch).
-8. **Sigmoid gating** (`llama.adb:963`). Add `expert_gating_func = sigmoid`
+8. ✅ **Done. Sigmoid gating** (`llama.adb:963`). Add `expert_gating_func = sigmoid`
    beside softmax in the router. **Medium.**
 9. **`[device]` raise the MoE round block limit** (`backend-device.ads:53`,
    `Block_Limit = 16`). Spill wide-MoE rounds instead of dropping the whole
@@ -85,11 +102,12 @@ Per format: `gguf.ads` enum entry → CPU decoder + interleave → device shader
 pack (`backend-device.adb:706`) → fixture. Keep CPU and device in lockstep.
 Order by what actually gets downloaded.
 
-10. **IQ4-family gaps, then IQ3_S/XXS, IQ2_*, IQ1_*, TQ1_0/TQ2_0**
+10. ⏳ **Partial (IQ3_S done). IQ4-family gaps, then IQ3_S/XXS, IQ2_*, IQ1_*, TQ1_0/TQ2_0**
     (`gguf.ads:122`, refusal via `Type_Unknown`). Each format is a self-
     contained decoder+shader+fixture. These are what fits 70B+/big-MoE into
     consumer memory, so prioritize the specific quant of a model you want.
-    **Large in aggregate; Medium per format.**
+    IQ3_S landed (grid decoder + encoder + reference + fixture; host-only, the
+    device falls back). **Large in aggregate; Medium per format.**
 
 **Exit:** sub-4-bit downloads stop bouncing at load. Do formats on demand rather
 than all at once.
@@ -102,11 +120,14 @@ Arches that are transformer-shaped and differ mostly in config/norm placement.
 Each: enum entry (`llama.ads:187`), metadata loader, block-shape handling,
 fixture, conformance row. Batch the cheap ones.
 
-11. **Config-mostly arches:** Command-R/Command-R+, StableLM, StarCoder2, GLM4/
-    ChatGLM, OLMo/OLMo2, Granite/GraniteMoE (ties Phase 1), MPT, GPT-NeoX,
-    InternLM2, Baichuan. Refusal at `llama.adb:524`. **Small–Medium each**, but
+11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2 done). Config-mostly arches:**
+    ✅ Granite, ✅ OLMo2, ✅ GLM4, ✅ Starcoder2; still open: Command-R/Command-R+,
+    StableLM, GraniteMoE (ties Phase 1), ChatGLM, MPT, GPT-NeoX, InternLM2,
+    Baichuan. Refusal at `llama.adb:524`. Each new arch is now largely wiring
+    against the existing norm/gate/bias/rotary paths + a device host-fallback
+    guard for any untried kernel combination. **Small–Medium each**, but
     many, so budget as a sustained batch.
-12. **Reranker (ranked pooling) head** (`llama.adb:642`). Add a scoring head
+12. ✅ **Done. Reranker (ranked pooling) head** (`llama.adb:642`). Add a scoring head
     beside mean/cls/last pooling so GGUF rerankers load. **Small–Medium.**
 
 **Exit:** the long tail of standard-shaped models loads.
