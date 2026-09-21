@@ -188,7 +188,7 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm, Gptneox);
+      Stablelm, Gptneox, Internlm2);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -246,7 +246,8 @@ package Model_Runner.Llama is
          when Starcoder2 => "starcoder2",
          when Granite_MoE => "granitemoe",
          when Stablelm   => "stablelm",
-         when Gptneox    => "gptneox");
+         when Gptneox    => "gptneox",
+         when Internlm2  => "internlm2");
 
    --  How a file says the states of a text should be reduced to one vector.
    --

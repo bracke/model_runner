@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The InternLM2 architecture is read.** Llama's block exactly --
+  interleaved rotation over the whole of each head, a root-mean-square
+  normalization on the way into each sublayer read from the model's own
+  rms-epsilon key, queries, keys and values apart and without a bias, and a
+  sigmoid-weighted feed-forward. Its checkpoint is distinctive only in where
+  it keeps the attention projections: fused in one `wqkv` laid out by
+  grouped-query group -- so many query heads, then a key head, then a value
+  head, per group -- but the converter splits that into three permuted
+  tensors as it writes the file, so what this reads already carries them
+  apart and in the interleaved-rotation layout, and there is nothing new to
+  do at load. Crossed against the independent implementation over every
+  format and path; the same kernel combination as llama and granite, so it
+  runs on the device backend with no host fallback.
 - **The GPT-NeoX architecture is read.** GPT2's block -- a centred
   normalization with a bias on the way into each sublayer, the queries,
   keys and values in one tensor with a bias, a bias on the way out of

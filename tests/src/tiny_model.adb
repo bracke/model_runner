@@ -386,7 +386,8 @@ package body Tiny_Model is
            when Glm4      => "glm4",
            when Starcoder2 => "starcoder2",
            when Stablelm  => "stablelm",
-           when Gptneox   => "gptneox");
+           when Gptneox   => "gptneox",
+           when Internlm2 => "internlm2");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.

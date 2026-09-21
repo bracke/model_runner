@@ -475,7 +475,7 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
-                    when Llama | Granite | Granite_MoE | Glm4 =>
+                    when Llama | Granite | Granite_MoE | Glm4 | Internlm2 =>
                       K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
