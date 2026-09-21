@@ -5029,13 +5029,20 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Invalid_Rope,
               "an odd rotary width was accepted");
 
-      --  A rotary scaling that changes the position mapping. Yarn is read
-      --  rather than refused now that it is computed, so the refusal is
-      --  asserted about one that is not.
+      --  A rotary scaling that changes the position mapping in a way this
+      --  does not compute. Yarn, llama3 and LongRoPE are read now, so the
+      --  refusal is asserted about "dynamic", which is not.
+      Sound (Builder);
+      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "dynamic");
+      Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
+              "an unsupported rotary scaling was accepted");
+
+      --  LongRoPE is its two factor tables: named without them, there is no
+      --  stretch to apply, so it is refused rather than run as unscaled.
       Sound (Builder);
       Fixtures.Add_String (Builder, "llama.rope.scaling.type", "longrope");
       Assert (Outcome (Builder) = E.Arch_Unsupported_Rope_Scaling,
-              "an unsupported rotary scaling was accepted");
+              "longrope named without its tables was accepted");
 
       --  Yarn reaches the tensors, as a sound configuration does.
       Sound (Builder);
@@ -5044,15 +5051,17 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
               "a yarn-scaled model was refused rather than read");
 
-      --  And LongRoPE's two tables are read now rather than refused: a
-      --  file carrying them reaches the tensors, as a yarn-scaled one does,
+      --  And LongRoPE named with its two tables is read rather than refused:
+      --  a file carrying them reaches the tensors, as a yarn-scaled one does,
       --  since the tables are applied as any per-dimension factor table is.
       Sound (Builder);
+      Fixtures.Add_String (Builder, "llama.rope.scaling.type", "longrope");
       Fixtures.Add_Tensor
         (Builder, "rope_factors_long.weight", [1 => 2], G.Type_F32,
          [1 .. 8 => 0]);
       Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
-              "a model carrying rotary tables was refused rather than read");
+              "a longrope model carrying its tables was refused rather "
+              & "than read");
 
       --  A mixture of experts is read rather than refused: the
       --  configuration is sound and preparation goes on to want the router

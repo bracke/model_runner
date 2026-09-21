@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A file naming its rotary scaling `longrope` is read, not refused.** The
+  LongRoPE factor tables were read already, but a file that also set
+  `rope.scaling.type` to `longrope` (or Phi-3's older `su`) was turned away
+  at the name before the tables were reached. The two names are accepted now
+  where the file carries the factor tables that define them, and refused
+  where it names the scaling without them, since there would be no stretch to
+  apply. `dynamic` and every other uncomputed name stays refused.
 - **A device buffer says it may be a transfer's source and destination.**
   The engine fills a buffer to zero it and copies one into another to grow
   a session's cache, but every buffer was created asking only to be a

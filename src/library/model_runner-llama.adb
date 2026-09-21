@@ -665,11 +665,14 @@ package body Model_Runner.Llama is
 
       --  Rotary scaling. A model that says nothing rotates as it was
       --  trained; "linear" divides every position by the factor; "yarn"
-      --  divides the low frequencies and leaves the high ones alone. Any
-      --  other name changes the position mapping in a way this does not
-      --  compute, and running it as though it did would produce a model that
-      --  reads its own context wrongly at long range and says nothing about
-      --  it.
+      --  divides the low frequencies and leaves the high ones alone;
+      --  "llama3" eases across three bands. "longrope" (Phi-3's, sometimes
+      --  named "su") carries the stretch in two per-dimension factor tables,
+      --  read below and applied as any factor table is, so the name only has
+      --  to be let through here. Any other name -- "dynamic" among them --
+      --  changes the position mapping in a way this does not compute, and
+      --  running it as though it did would produce a model that reads its own
+      --  context wrongly at long range and says nothing about it.
       declare
          Named : constant String :=
            Containers.String_Value
@@ -677,6 +680,20 @@ package body Model_Runner.Llama is
       begin
          if Named /= "" and then Named /= "none" and then Named /= "linear"
            and then Named /= "yarn" and then Named /= "llama3"
+           and then Named /= "longrope" and then Named /= "su"
+         then
+            Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
+            E.Add_Text (Status, "scaling", Named, E.Param_Identifier);
+            return;
+
+         --  LongRoPE is its two factor tables and nothing else, so a file
+         --  that names it without carrying them has no stretch to apply and
+         --  would read as unscaled: refused rather than run wrongly at range.
+         elsif (Named = "longrope" or else Named = "su")
+           and then Containers.Find_Tensor
+                      (Source, "rope_factors_long.weight") = 0
+           and then Containers.Find_Tensor
+                      (Source, "rope_factors_short.weight") = 0
          then
             Status := E.Make (E.Arch_Unsupported_Rope_Scaling);
             E.Add_Text (Status, "scaling", Named, E.Param_Identifier);
