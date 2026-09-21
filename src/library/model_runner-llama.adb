@@ -14038,11 +14038,18 @@ package body Model_Runner.Llama is
                     or else (Settings.Value_Size = Settings.Head_Size
                              and then L.Query_Bias = null))
 
-          --  The device's attention takes a layer's sinks where the
-          --  cache has room for them. A mixture with them went whole for
-          --  a day with none, and the fixture check said its sinks
-          --  answered to nothing, which is what the check is for.
-          and then Sinks_Fit (L.Sinks)
+          --  A layer's sinks keep it off the device: the device's
+          --  attention does not apply one. A mixture with them went whole
+          --  for a day with none, and where it was let go whole with them
+          --  the fixture check said its sinks answered to nothing -- the
+          --  sink reaches the cache the shader reads, at the offset the
+          --  shader is told, and the shader still reads it as the position
+          --  it never wrote, which no upload, barrier or flush moved. So a
+          --  layer with a sink is attended on the host, where the sink
+          --  joins the softmax's denominator as the architecture wants;
+          --  Sinks_Fit stays the gate on the one path the device can take
+          --  a sink through, which is none of these.
+          and then L.Sinks = null
 
           --  The normalization on the way in, which every architecture
           --  has but the one that normalizes on the way out and has the
@@ -15685,7 +15692,9 @@ package body Model_Runner.Llama is
           and then (not Hybrid (Settings.Kind)
                     or else (Settings.Value_Size = Settings.Head_Size
                              and then L.Query_Bias = null))
-          and then Sinks_Fit (L.Sinks)
+          --  A layer with sinks is attended on the host, as the single
+          --  token's is: the device does not apply a sink.
+          and then L.Sinks = null
           and then (L.Attention_Norm /= null)
                    = not Normalizes_After (Settings.Kind)
           and then (not Normalizes_After (Settings.Kind)
