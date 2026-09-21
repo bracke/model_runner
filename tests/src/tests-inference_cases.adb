@@ -9030,6 +9030,136 @@ package body Tests.Inference_Cases is
               & Long_Float'Image (Worst));
    end Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding;
 
+   procedure Baichuan_At_Forty_Layers_Turns_To_Alibi
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      --  Run the engine and the reference over one Baichuan fixture of a
+      --  given depth; how the engine read its rotation and its alibi bias,
+      --  and how far the two implementations are apart. Baichuan announces
+      --  the one architecture name for both its sizes, and the runtime tells
+      --  the 13B from the 7B by its forty layers alone -- no key in the file
+      --  says which -- so the depth is what turns the rotation off and the
+      --  alibi fall-off on.
+      procedure Cross
+        (Depth    : Natural;
+         Rotary   : out Natural;
+         Max_Bias : out L.Real;
+         Worst    : out Long_Float)
+      is
+         Image  : B.Byte_Array_Access;
+         Result : Logit_Vector;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Baichuan, Depth => Depth);
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            declare
+               Read : constant L.Configuration := L.Config (Under.Ready);
+            begin
+               Assert (L."=" (Read.Kind, L.Baichuan),
+                       "the architecture was not read from the file");
+               Assert (Read.Layers = Depth,
+                       "the depth was not read from the file:"
+                       & Natural'Image (Read.Layers));
+               Rotary := Read.Rotary;
+               Max_Bias := Read.Max_Bias;
+            end;
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Result, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+
+            Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+            Expected : Reference_Transformer.Real_Vector
+              (0 .. Tiny_Model.Vocabulary - 1);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run (Second, Tokens, Expected, Made);
+            Assert (Made, "the reference produced no logits");
+
+            Worst := 0.0;
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Result
+                         (Model_Runner.Numerics.Element_Count (Index)))
+                       - Expected (Index)));
+            end loop;
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         B.Free (Image);
+      end Cross;
+
+      Rotary   : Natural;
+      Max_Bias : L.Real;
+      Worst    : Long_Float;
+   begin
+      --  The ordinary size rotates and carries no alibi.
+      Cross (2, Rotary, Max_Bias, Worst);
+      Assert (Rotary /= 0,
+              "a Baichuan of two layers should rotate:" & Natural'Image (Rotary));
+      Assert (Max_Bias = 0.0,
+              "a Baichuan of two layers should carry no alibi bias:"
+              & L.Real'Image (Max_Bias));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about a rotating Baichuan by" & Long_Float'Image (Worst));
+
+      --  At forty layers it is the 13B: no rotation, an alibi fall-off of
+      --  eight, and the two implementations still agree.
+      Cross (40, Rotary, Max_Bias, Worst);
+      Assert (Rotary = 0,
+              "a Baichuan of forty layers should not rotate:"
+              & Natural'Image (Rotary));
+      Assert (Max_Bias = 8.0,
+              "a Baichuan of forty layers should carry the alibi bias of "
+              & "eight:" & L.Real'Image (Max_Bias));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about an alibi Baichuan by" & Long_Float'Image (Worst));
+   end Baichuan_At_Forty_Layers_Turns_To_Alibi;
+
    --  The code variant of jina-bert-v2 agrees with the independent
    --  implementation, and is told from the text one by its tensors.
    --
@@ -12139,6 +12269,12 @@ package body Tests.Inference_Cases is
          "a gemma3 of sixty-two layers scales its scores by the width the "
          & "embedding implies, as the 27B does, and one of six by the "
          & "head's, each agreeing with the independent implementation");
+      Register_Routine
+        (T, Baichuan_At_Forty_Layers_Turns_To_Alibi'Access,
+         "a Baichuan of forty layers is the 13B -- the depth alone tells it "
+         & "from the 7B, no key in the file -- so it drops its rotation for "
+         & "an alibi fall-off of eight, where one of two layers rotates and "
+         & "carries none, each agreeing with the independent implementation");
       Register_Routine
         (T, Jina_Code_Variant_Agrees_With_The_Reference'Access,
          "the code variant of jina-bert-v2 -- the whole of its queries and "

@@ -19,12 +19,11 @@ Done, each crossed against the independent reference over every format and path
 - **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
   family remains, on demand).
 - **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4, Starcoder2,
-  GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan-7B, MPT, ChatGLM and
-  Command-R/Command-R+ — the config-mostly batch is done but for Baichuan-13B,
-  which needs a fixture that can reach its forty-layer alibi selection.
+  GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
+  ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.
 
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #9, #10 (other
-quants), #11 (other arches), and Phases 4–6.
+quants), and Phases 4–6 (#11, the config-mostly arch batch, is complete).
 
 ## Guiding constraints
 
@@ -131,7 +130,7 @@ Arches that are transformer-shaped and differ mostly in config/norm placement.
 Each: enum entry (`llama.ads:187`), metadata loader, block-shape handling,
 fixture, conformance row. Batch the cheap ones.
 
-11. ⏳ **Partial (Granite, OLMo2, GLM4, Starcoder2, GraniteMoE, StableLM, GPT-NeoX done). Config-mostly arches:**
+11. ✅ **Done. Config-mostly arches:**
     ✅ Granite, ✅ OLMo2, ✅ GLM4, ✅ Starcoder2, ✅ GraniteMoE, ✅ StableLM (the
     1.6B config; the 12B's per-head QK-norm and parallel residual are refused),
     ✅ GPT-NeoX (both the parallel-residual and sequential forms), ✅ InternLM2
@@ -150,11 +149,14 @@ fixture, conformance row. Batch the cheap ones.
     normalization worn as Falcon's one-norm parallel block, a logit scale that
     multiplies where Granite's divides, and — for Command-R+ — a centred
     per-head query/key normalization read where present; host fallback for the
-    combination); still open: Baichuan-13B. Refusal
-    at `llama.adb:524`. Each new arch is now largely wiring against the existing
-    norm/gate/bias/rotary/mixture paths + a device host-fallback guard for any
-    untried kernel combination. **Small–Medium each**, but many, so budget as a
-    sustained batch.
+    combination), ✅ Baichuan-13B (the ALiBi size — forty layers alone tells it
+    from the 7B, no key in the file, so the depth turns rotation off and sets
+    the bias of eight; MPT's causal ALiBi, host fallback gated by the bias it
+    carries so the 7B stays on device; crossed by a forty-layer fixture like
+    the deep gemma3, not the sweep). **The config-mostly batch (#11) is
+    complete.** Refusal was at `llama.adb:524`; each arch was largely wiring
+    against the existing norm/gate/bias/rotary/mixture paths + a device
+    host-fallback guard for any untried kernel combination.
 12. ✅ **Done. Reranker (ranked pooling) head** (`llama.adb:642`). Add a scoring head
     beside mean/cls/last pooling so GGUF rerankers load. **Small–Medium.**
 

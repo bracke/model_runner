@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Baichuan-13B is read** (the ALiBi size). Baichuan announces the one
+  architecture name for both its sizes, and the runtime tells the 13B from
+  the 7B by its forty layers alone -- no key in the file says which -- so
+  forty layers is what turns the rotation off and sets the alibi fall-off
+  the architecture carries, a bias of eight. Its causal ALiBi is MPT's,
+  already here; everything else is the 7B unchanged (RMSNorm, gated SiLU,
+  biasless separate queries/keys/values). It runs on the host under the
+  device backend as an alibi decoder -- gated by the bias it carries rather
+  than by name, so the rotating 7B beside it stays on the device -- and is
+  crossed against the independent implementation by a forty-layer fixture,
+  the way the deep gemma3 is, both the rotating and the alibi depth agreeing
+  to a thousandth. This closes the config-mostly batch of architectures.
 - **The Command-R architecture is read** (Cohere Command-R and Command-R+).
   It is a composition of pieces already here that no single architecture had
   put together: one normalization a block, centred and carrying no shift --

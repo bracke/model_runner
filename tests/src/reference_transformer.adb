@@ -1594,6 +1594,15 @@ package body Reference_Transformer is
       Item.Embedding := Metadata (Source, Prefix (Item) & "embedding_length", 0);
       Item.Feed_Forward := Metadata (Source, Prefix (Item) & "feed_forward_length", 0);
       Item.Layers := Metadata (Source, Prefix (Item) & "block_count", 0);
+
+      --  Baichuan-13B drops rotation for an alibi fall-off, and the size is
+      --  told from the 7B only by its depth -- forty layers -- as the other
+      --  runtime tells it, no key in the file saying so. The bias is eight,
+      --  carried by the architecture rather than stated.
+      if Item.Kind = Baichuan and then Item.Layers = 40 then
+         Item.Max_Bias := 8.0;
+      end if;
+
       Item.Heads := Metadata (Source, Prefix (Item) & "attention.head_count", 0);
       Item.KV_Heads :=
         Metadata (Source, Prefix (Item) & "attention.head_count_kv", Item.Heads);
@@ -1795,7 +1804,9 @@ package body Reference_Transformer is
       --  trap bert's absent key was and is why the fixture states nothing
       --  here either.
       Item.Rotary :=
-        (if Item.Kind in Jina_Bert_V2 | Mpt then 0
+        (if Item.Kind in Jina_Bert_V2 | Mpt
+            or else (Item.Kind = Baichuan and then Item.Layers = 40)
+          then 0
          else Metadata
                 (Source, Prefix (Item) & "rope.dimension_count",
                  Item.Head_Size));

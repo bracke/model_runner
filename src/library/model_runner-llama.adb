@@ -1278,7 +1278,9 @@ package body Model_Runner.Llama is
       --  what tells the model where a token is, and Head_Slope builds it
       --  from whatever this holds, so a file that states its own is run at
       --  its own rather than refused.
-      if Settings.Kind in Jina_Bert_V2 | Mpt then
+      if Settings.Kind in Jina_Bert_V2 | Mpt
+        or else (Settings.Kind = Baichuan and then Settings.Layers = 40)
+      then
          Settings.Max_Bias := 8.0;
 
          Containers.Get_Float
@@ -1399,7 +1401,9 @@ package body Model_Runner.Llama is
       --  ships. That is the same trap gpt2's output bias fell into, found
       --  the same way: by reading a file somebody else published.
       Settings.Rotary :=
-        (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt then 0
+        (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt
+            or else (Settings.Kind = Baichuan and then Settings.Layers = 40)
+          then 0
          elsif E.Is_Ok (Local) then Natural (Number)
          else Settings.Head_Size);
 
@@ -14575,6 +14579,7 @@ package body Model_Runner.Llama is
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
                              | Chatglm | Command_R
+          and then Settings.Max_Bias = 0.0
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15596,6 +15601,7 @@ package body Model_Runner.Llama is
                                   and then Settings.Residual_Mul /= 0.0)
                     and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
                           | Command_R
+                    and then Settings.Max_Bias = 0.0
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -16265,6 +16271,7 @@ package body Model_Runner.Llama is
           --  they are, as Granite is for a different reason.
           and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
                              | Chatglm | Command_R
+          and then Settings.Max_Bias = 0.0
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -17173,7 +17180,8 @@ package body Model_Runner.Llama is
                          and then Current.Feed_Norm /= null
                          and then Current.Query_Norm = null
                          and then Current.Query_Bias = null
-                         and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R)
+                         and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R
+                         and then Source.Settings.Max_Bias = 0.0)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then Whole_Layer_Fits
                                             (Current, Natural (Index))
@@ -17516,6 +17524,7 @@ package body Model_Runner.Llama is
                     and then Current.Attention_Norm_Bias = null
                     and then Current.Feed_Norm /= null
                     and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R
+                    and then Source.Settings.Max_Bias = 0.0
                   then
                      --  Not for a layer whose projections carry a bias:
                      --  the host adds it before the turning, and this
@@ -17964,6 +17973,7 @@ package body Model_Runner.Llama is
                                      and then Settings.Residual_Mul /= 0.0)
                        and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
                              | Command_R
+                       and then Settings.Max_Bias = 0.0
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),
