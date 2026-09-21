@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture that does not renormalize its expert weights is read.**
+  Where a file says `expert_weights_norm` is false, the chosen experts
+  are left on the scale their gate gives them rather than put back to a
+  sum of one -- so the block's output is weighted by how sure the router
+  was, not only by the split among the few. It was refused before. The
+  host attends such a layer (the device's route kernel renormalizes in
+  place, so the layer is routed off it) and every renormalizing mixture
+  is unchanged.
+
 - **A mixture with a shared expert is read, not refused.** The engine
   already runs a shared expert -- the block every position goes through
   beside its chosen few, out of the gate-up-down its tensors carry -- but

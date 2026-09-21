@@ -987,12 +987,12 @@ package body Model_Runner.Llama is
             Containers.Get_Boolean
               (Source, Model_Key (Settings.Kind, "expert_weights_norm"),
                Normalized, Local);
-            if Present_And_Wrong (Local)
-              or else (E.Is_Ok (Local) and then not Normalized)
-            then
-               Reject_Feature ("unnormalized_expert_weights");
+            if Present_And_Wrong (Local) then
+               Status := Local;
                return;
             end if;
+            Settings.Renormalize_Experts :=
+              (if E.Is_Ok (Local) then Normalized else True);
          end;
 
          --  A shared expert runs for every position beside the chosen ones,
@@ -8609,6 +8609,11 @@ package body Model_Runner.Llama is
         and then (Current.Expert_Gate_Bias = null)
                  = (Current.Expert_Up_Bias = null)
         and then Used <= Model_Runner.Backend.Device.Max_Members
+
+        --  The route kernel renormalizes the chosen over their sum, so a
+        --  mixture that does not renormalize is routed on the host instead,
+        --  where the shares are left as they came.
+        and then Settings.Renormalize_Experts
         and then T.Is_Present (Current.Gate_Stack)
         and then T.Is_Present (Current.Up_Stack)
         and then T.Is_Present (Current.Down_Stack);
@@ -8721,16 +8726,20 @@ package body Model_Runner.Llama is
 
       --  The shares came out of a softmax, so they are positive and sum to
       --  one over every expert; over the chosen few they sum to less, and
-      --  this is what puts them back on a scale where the sum below is a
-      --  weighted average rather than an arbitrarily shrunken one.
-      if not (Total > 0.0) then
-         Status := E.Make (E.Tensor_Non_Finite_Value);
-         return;
-      end if;
+      --  this puts them back on a scale where the sum below is a weighted
+      --  average rather than an arbitrarily shrunken one -- unless the file
+      --  says its weights are not renormalized, when the chosen few weight
+      --  the sum by their own gate and the shares are left as they came.
+      if Settings.Renormalize_Experts then
+         if not (Total > 0.0) then
+            Status := E.Make (E.Tensor_Non_Finite_Value);
+            return;
+         end if;
 
-      for Slot in Share'Range loop
-         Share (Slot) := Share (Slot) / Total;
-      end loop;
+         for Slot in Share'Range loop
+            Share (Slot) := Share (Slot) / Total;
+         end loop;
+      end if;
 
       <<Routed>>
 
@@ -9232,6 +9241,10 @@ package body Model_Runner.Llama is
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
         and then Used <= Model_Runner.Backend.Device.Max_Members
+
+        --  The route kernel renormalizes the chosen; a mixture that does
+        --  not is routed on the host, as one position's is.
+        and then Settings.Renormalize_Experts
       then
          declare
             Choice : Model_Runner.Backend.Device.Choice_Array
@@ -9332,21 +9345,23 @@ package body Model_Runner.Llama is
                end;
             end loop;
 
-            if not (Total > 0.0) then
-               Status := E.Make (E.Tensor_Non_Finite_Value);
-               return;
-            end if;
+            if Settings.Renormalize_Experts then
+               if not (Total > 0.0) then
+                  Status := E.Make (E.Tensor_Non_Finite_Value);
+                  return;
+               end if;
 
-            for Slot in 0 .. Used - 1 loop
-               declare
-                  At_Share : constant Element_Count :=
-                    Item.Pick_Share.all'First
-                    + Where * Element_Count (Used) + Element_Count (Slot);
-               begin
-                  Item.Pick_Share.all (At_Share) :=
-                    Item.Pick_Share.all (At_Share) / Total;
-               end;
-            end loop;
+               for Slot in 0 .. Used - 1 loop
+                  declare
+                     At_Share : constant Element_Count :=
+                       Item.Pick_Share.all'First
+                       + Where * Element_Count (Used) + Element_Count (Slot);
+                  begin
+                     Item.Pick_Share.all (At_Share) :=
+                       Item.Pick_Share.all (At_Share) / Total;
+                  end;
+               end loop;
+            end if;
          end;
       end loop;
 
@@ -14031,7 +14046,8 @@ package body Model_Runner.Llama is
           --  shape no file has and the sequence does not take.
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
-                   <= Model_Runner.Backend.Device.Max_Members);
+                   <= Model_Runner.Backend.Device.Max_Members
+          and then Settings.Renormalize_Experts);
 
       --  A hybrid's linear layer goes whole where the device has the
       --  rule and the convolution, the session a ring that is over, and
@@ -15694,7 +15710,8 @@ package body Model_Runner.Llama is
           --  shape no file has and the sequence does not take.
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
-                   <= Model_Runner.Backend.Device.Max_Members);
+                   <= Model_Runner.Backend.Device.Max_Members
+          and then Settings.Renormalize_Experts);
 
       --  As the token's.
       function Linear_Layer_Fits (L : Layer) return Boolean

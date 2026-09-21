@@ -412,6 +412,12 @@ package Model_Runner.Llama is
       Experts         : Natural := 0;
       Experts_Used    : Natural := 0;
 
+      --  Whether the chosen experts' gate weights are renormalized over the
+      --  few that ran. Every mixture here does but the ones whose file says
+      --  expert_weights_norm is false: those weight each expert by its own
+      --  gate and let the shares sum to what they sum to.
+      Renormalize_Experts : Boolean := True;
+
       --  The gate unit's two bounds, for an architecture that clamps it.
       --
       --  GPT_OSS does not use the plain sigmoid-weighted gate every other

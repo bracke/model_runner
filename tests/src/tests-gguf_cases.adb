@@ -5099,11 +5099,9 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
               "a model with a shared expert was refused rather than read");
 
-      --  Parts of a mixture this does not compute. Each would produce a
-      --  plausible wrong answer rather than a refusal if it were ignored:
-      --  a different gate turns the scores into different shares, and
-      --  unnormalized weights shrink the block's whole output.
-
+      --  A different gate turns the scores into different shares, which this
+      --  does not compute -- refused rather than run as the softmax it is
+      --  not.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
       Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
@@ -5111,12 +5109,17 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
               "a model with another expert gate was accepted");
 
+      --  Unnormalized expert weights are read now: the chosen few are left
+      --  on the scale their gate gives them rather than put back to a sum of
+      --  one, so a file that says so reaches the tensors rather than a
+      --  refusal.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.expert_count", 8);
       Fixtures.Add_U32 (Builder, "llama.expert_used_count", 2);
       Fixtures.Add_Bool (Builder, "llama.expert_weights_norm", False);
-      Assert (Outcome (Builder) = E.Arch_Unsupported_Feature,
-              "a model with unnormalized expert weights was accepted");
+      Assert (Outcome (Builder) = E.Arch_Missing_Tensor,
+              "a model with unnormalized expert weights was refused rather "
+              & "than read");
 
       --  A sliding window is read rather than refused: the configuration is
       --  sound and preparation goes on to want the tensors, exactly as it
