@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A device buffer says it may be a transfer's source and destination.**
+  The engine fills a buffer to zero it and copies one into another to grow
+  a session's cache, but every buffer was created asking only to be a
+  shader's storage. RADV allowed the fills and copies regardless; the
+  validation layer reported each fill against
+  `VUID-vkCmdFillBuffer-dstBuffer-00029`, and a stricter driver would refuse
+  it. A buffer now declares the transfer usages it is put to.
 - **The device is opened with the features its shaders declare, so a
   validated build has nothing to object to.** The shaders read a byte and a
   half in a shader, sixteen bits from a storage buffer and from a uniform,

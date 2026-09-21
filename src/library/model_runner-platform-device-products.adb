@@ -60,7 +60,16 @@ package body Model_Runner.Platform.Device.Products is
    Structure_Command_Buffer    : constant := 40;
    Structure_Command_Begin     : constant := 42;
 
+   --  A buffer is a storage buffer the shaders read and write, and a
+   --  transfer's source and destination besides: the engine fills one to
+   --  zero it and copies one into another to grow a session's cache, and
+   --  the interface asks a buffer to say so before either. The bits are
+   --  disjoint, so the sum is their union.
+   Usage_Transfer_Src   : constant := 16#01#;
+   Usage_Transfer_Dst   : constant := 16#02#;
    Usage_Storage_Buffer : constant := 16#20#;
+   Usage_Buffer         : constant :=
+     Usage_Storage_Buffer + Usage_Transfer_Src + Usage_Transfer_Dst;
    Sharing_Exclusive    : constant := 0;
    Descriptor_Storage   : constant := 7;
    Stage_Compute        : constant := 16#20#;
@@ -202,7 +211,7 @@ package body Model_Runner.Platform.Device.Products is
       Next         : Address := Null_Handle;
       Flags        : C.unsigned := 0;
       Size         : Interfaces.Unsigned_64 := 0;
-      Usage        : C.unsigned := Usage_Storage_Buffer;
+      Usage        : C.unsigned := Usage_Buffer;
       Sharing      : C.unsigned := Sharing_Exclusive;
       Family_Count : C.unsigned := 0;
       Families     : Address := Null_Handle;
