@@ -1122,7 +1122,8 @@ package body Reference_Transformer is
          when Qwen35 => "qwen35.",
          when Qwen35_MoE => "qwen35moe.",
          when Granite => "granite.",
-         when Olmo2 => "olmo2.");
+         when Olmo2 => "olmo2.",
+         when Glm4 => "glm4.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1552,6 +1553,8 @@ package body Reference_Transformer is
             Item.Kind := Granite;
          elsif Named = "olmo2" then
             Item.Kind := Olmo2;
+         elsif Named = "glm4" then
+            Item.Kind := Glm4;
          else
             return;
          end if;
@@ -1954,7 +1957,7 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind in Gemma2 | Gemma3 | Olmo2 then
+            if Item.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "post_attention_norm.weight"),
@@ -2128,7 +2131,7 @@ package body Reference_Transformer is
 
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
-            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 then
+            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
                if not Present then
@@ -2387,7 +2390,7 @@ package body Reference_Transformer is
                   --  one projection down.
                   Current.Gate := null;
                   Present := True;
-               elsif Item.Kind = Phi3 then
+               elsif Item.Kind in Phi3 | Glm4 then
                   Current.Gate :=
                     Read_Part (Layer_Name (Index, "ffn_up.weight"),
                                0, Item.Feed_Forward, Present);
@@ -2400,7 +2403,7 @@ package body Reference_Transformer is
                   return;
                end if;
 
-               if Item.Kind = Phi3 then
+               if Item.Kind in Phi3 | Glm4 then
                   Current.Up :=
                     Read_Part (Layer_Name (Index, "ffn_up.weight"),
                                Item.Feed_Forward, Item.Feed_Forward, Present);
@@ -2981,11 +2984,11 @@ package body Reference_Transformer is
                   --  of this implementation is to be arrived at separately,
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
-                    (if Item.Kind in Llama | Granite
+                    (if Item.Kind in Llama | Granite | Glm4
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
-                    (if Item.Kind in Llama | Granite
+                    (if Item.Kind in Llama | Granite | Glm4
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);

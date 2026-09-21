@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The GLM4 architecture is read.** A composition of pieces the engine
+  already had: Gemma2's sandwich normalization -- one on the way into each
+  sublayer and one over what it produced, both root-mean-square and added
+  to the residual -- with phi3's gate and up projection fused in one tensor
+  gate-first, qwen2's bias on each of the three attention projections but
+  taken where the file holds it rather than required, a rotation over part
+  of each head as `rope.dimension_count` names, and llama's interleaved
+  pairing. No softcap, no window, the sigmoid-weighted feed-forward unit.
+  No new forward code -- the sandwich norm, fused gate/up, optional bias
+  and partial interleaved rotation all composed from existing paths. It is
+  the first architecture to want a post-normalization with an interleaved
+  partial rotation and a projection bias together on the device, a
+  combination no device layer has run, so a GLM4 layer runs on the host
+  under the device backend until those kernels are tried together. Read on
+  the processor and the independent reference transformer and crossed
+  against it over every format and path, outside tolerance nought. It was
+  refused before.
+
 - **The OLMo2 architecture is read.** `llama`'s shape rearranged: no
   normalization on the way into a sublayer, and a normalization of what
   the sublayer produced instead -- `post_attention_norm` over the

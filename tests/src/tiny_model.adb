@@ -381,7 +381,8 @@ package body Tiny_Model is
            when Qwen35    =>
              (if Experts > 0 then "qwen35moe" else "qwen35"),
            when Granite   => "granite",
-           when Olmo2     => "olmo2");
+           when Olmo2     => "olmo2",
+           when Glm4      => "glm4");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -882,7 +883,7 @@ package body Tiny_Model is
          --  Gemma2's two extra normalizations, one after each sublayer,
          --  which OLMo2 carries under the same names and is the whole of
          --  its normalization, having none on the way in.
-         if Kind in Gemma2 | Gemma3 | Olmo2 then
+         if Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
             Norm (Layer_Name (Index, "post_attention_norm.weight"));
             Norm (Layer_Name (Index, "post_ffw_norm.weight"));
          end if;
@@ -997,7 +998,7 @@ package body Tiny_Model is
          end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
          --  Bert carries the same three, written the same way.
-         if Kind in Qwen2 | Bert | Jina_Bert_V2
+         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4
            and then not Omit_Biases
          then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
@@ -1209,7 +1210,7 @@ package body Tiny_Model is
             --  And the second of Bert's two normalizations, over the
             --  residual the feed-forward has just been added to.
 
-         elsif Kind = Phi3 then
+         elsif Kind in Phi3 | Glm4 then
             --  The gate and the up projection in one tensor, gate first,
             --  and drawn as two for the same reason.
             declare

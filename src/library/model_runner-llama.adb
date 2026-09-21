@@ -475,7 +475,7 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
-                    when Llama | Granite => K.Interleaved,
+                    when Llama | Granite | Glm4 => K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
@@ -3030,7 +3030,7 @@ package body Model_Runner.Llama is
             --  gemma2 file without them is not one this build can
             --  compute, and taking them if present would read such a
             --  file as a model with two normalizations missing.
-            if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 then
+            if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
                Resolve_Norm
                  (Item, Source,
                   Layer_Key (Index, "post_attention_norm.weight"), Width,
@@ -3256,6 +3256,38 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
+            --  GLM4 biases the same three where qwen2 does, but the bias
+            --  is the model's to carry or leave: GLM-4-9B has one, a
+            --  smaller GLM4 may not, so it is taken where the file holds
+            --  it rather than required. Read all three where the first is
+            --  present, so a file with some is not read as one with a bias
+            --  or two missing.
+            if Item.Settings.Kind = Glm4
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_q.bias")) /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q.bias"),
+                  Wide, Current.Query_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k.bias"),
+                  KV, Current.Key_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_v.bias"),
+                  KV_Out, Current.Value_Bias, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
             --  Qwen3 normalizes each query head and each key head before
             --  the rotation, with one gain per element of a head shared
             --  across the heads. Required for the architectures that have
@@ -3401,7 +3433,7 @@ package body Model_Runner.Llama is
                end if;
 
             elsif Item.Settings.Experts = 0
-              and then Item.Settings.Kind = Phi3
+              and then Item.Settings.Kind in Phi3 | Glm4
             then
                --  The gate and the up projection in one tensor, gate
                --  first. Taking them the other way round is a model that
@@ -12307,7 +12339,8 @@ package body Model_Runner.Llama is
          --  in, so a missing buffer is not a refusal but a residual that is
          --  never normalized, and the values grew until layer five could
          --  not hold them.
-         if Source.Settings.Kind in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2
+         if Source.Settings.Kind
+              in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2 | Glm4
            or else Normalizes_After (Source.Settings.Kind)
          then
             T.Allocate (Width, Item.Post_Room);
@@ -14270,6 +14303,14 @@ package body Model_Runner.Llama is
           --  hybrid's linear layers do.
           and then not (Settings.Kind = Granite
                         and then Settings.Residual_Mul /= 0.0)
+
+          --  GLM4 would fit the sequence, but its combination of a
+          --  sandwich post-normalization with an interleaved partial
+          --  rotation and a query-key-value bias is one no device layer
+          --  has run: the kernels are there for each piece and untried
+          --  together. Held to the host under the device backend until
+          --  they are, as Granite is for a different reason.
+          and then Settings.Kind /= Glm4
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15921,6 +15962,14 @@ package body Model_Runner.Llama is
           --  hybrid's linear layers do.
           and then not (Settings.Kind = Granite
                         and then Settings.Residual_Mul /= 0.0)
+
+          --  GLM4 would fit the sequence, but its combination of a
+          --  sandwich post-normalization with an interleaved partial
+          --  rotation and a query-key-value bias is one no device layer
+          --  has run: the kernels are there for each piece and untried
+          --  together. Held to the host under the device backend until
+          --  they are, as Granite is for a different reason.
+          and then Settings.Kind /= Glm4
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
