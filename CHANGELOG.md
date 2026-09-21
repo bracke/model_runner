@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The MPT architecture is read** -- the first that departs from the llama
+  family in several ways at once. It does not rotate: it is told where a
+  token is by an alibi fall-off in the attention scores, one slope a head
+  off the same ladder jina-bert-v2 uses, but applied under a causal mask,
+  which makes it the first decoder here to attend that way. Its
+  normalization centres -- subtracting the mean -- but carries no shift: a
+  centred normalization without a bias, the file stating `no_bias`, which no
+  other architecture here separates. Its feed-forward has no gate (one
+  projection up, a Gaussian unit, one down) and it carries no bias anywhere.
+  And it may clamp its fused queries, keys and values to a magnitude the
+  file states in `attention.clamp_kqv`, on what the projection produced and
+  before it attends. Crossed against the independent implementation over
+  every format and path; host fallback under the device backend for the
+  untried causal-alibi, centred, clamping combination.
 - **The Baichuan architecture is read** (the 7B, rotating size). Llama's
   block exactly -- interleaved rotation over the whole of each head, a
   root-mean-square normalization on the way into each sublayer read from the

@@ -263,7 +263,7 @@ package body Conformance is
       --  them: the rule over a state, the convolution ahead of it and the
       --  gate beside each attention head are all written out in the
       --  reference now, from the architecture's description.
-      Crossed : constant array (1 .. 22) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 23) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
@@ -271,7 +271,7 @@ package body Conformance is
          Tiny_Model.Jina_Bert_V2, Tiny_Model.Qwen35, Tiny_Model.Granite,
          Tiny_Model.Olmo2, Tiny_Model.Glm4, Tiny_Model.Starcoder2,
          Tiny_Model.Stablelm, Tiny_Model.Gptneox, Tiny_Model.Internlm2,
-         Tiny_Model.Baichuan];
+         Tiny_Model.Baichuan, Tiny_Model.Mpt];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.

@@ -1129,7 +1129,8 @@ package body Reference_Transformer is
          when Stablelm => "stablelm.",
          when Gptneox => "gptneox.",
          when Internlm2 => "internlm2.",
-         when Baichuan => "baichuan.");
+         when Baichuan => "baichuan.",
+         when Mpt => "mpt.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1573,6 +1574,12 @@ package body Reference_Transformer is
             Item.Kind := Internlm2;
          elsif Named = "baichuan" then
             Item.Kind := Baichuan;
+         elsif Named = "mpt" then
+            Item.Kind := Mpt;
+
+            --  Not read from the file for MPT either: the architecture
+            --  carries eight, and the fixture states its own to prove it.
+            Item.Max_Bias := 8.0;
          else
             return;
          end if;
@@ -1775,7 +1782,7 @@ package body Reference_Transformer is
       --  trap bert's absent key was and is why the fixture states nothing
       --  here either.
       Item.Rotary :=
-        (if Item.Kind = Jina_Bert_V2 then 0
+        (if Item.Kind in Jina_Bert_V2 | Mpt then 0
          else Metadata
                 (Source, Prefix (Item) & "rope.dimension_count",
                  Item.Head_Size));
@@ -1793,7 +1800,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox
+            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1809,12 +1816,23 @@ package body Reference_Transformer is
 
          --  The alibi bias, where the file states its own rather than
          --  leaving the eight the architecture defaults to.
-         if Item.Kind = Jina_Bert_V2 then
+         if Item.Kind in Jina_Bert_V2 | Mpt then
             Containers.Get_Float
               (Source, Prefix (Item) & "attention.max_alibi_bias",
                0.0, 1.0E6, Value, Status);
             if Model_Runner.Errors.Is_Ok (Status) then
                Item.Max_Bias := Long_Float (Value);
+            end if;
+         end if;
+
+         --  MPT's clamp on the queries, keys and values, where the file
+         --  states one.
+         if Item.Kind = Mpt then
+            Containers.Get_Float
+              (Source, Prefix (Item) & "attention.clamp_kqv",
+               0.0, 1.0E6, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Clip_QKV := Long_Float (Value);
             end if;
          end if;
 
@@ -2112,7 +2130,7 @@ package body Reference_Transformer is
             --  in the order the rows are written: queries, keys, values.
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
                Current.Query :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             0, Item.Heads * Item.Head_Size, Present);
@@ -2126,7 +2144,7 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
                Current.Key :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             Item.Heads * Item.Head_Size,
@@ -2141,7 +2159,7 @@ package body Reference_Transformer is
 
             if Is_Linear then
                Present := True;
-            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
+            elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
                Current.Value :=
                  Read_Part (Layer_Name (Index, "attn_qkv.weight"),
                             (Item.Heads + Item.KV_Heads) * Item.Head_Size,
@@ -2445,7 +2463,7 @@ package body Reference_Transformer is
                   end if;
                end if;
             else
-               if Item.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
+               if Item.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox | Mpt then
                   --  No gate at all: one projection up, a Gaussian unit,
                   --  one projection down.
                   Current.Gate := null;
@@ -2746,7 +2764,7 @@ package body Reference_Transformer is
       begin
          if Item.Kind
             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-               | Jina_Bert_V2 | Starcoder2 | Gptneox
+               | Jina_Bert_V2 | Starcoder2 | Gptneox | Mpt
          then
             declare
                Inner : constant Long_Float :=
@@ -3665,7 +3683,7 @@ package body Reference_Transformer is
                   --  way out.
                   if Current.Attention_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt then
                      Normalize_Centred
                        (State, Current.Attention_Norm.all,
                         Current.Attention_Norm_Bias, Normed);
@@ -3716,6 +3734,31 @@ package body Reference_Transformer is
                      for Index in Val_Row'Range loop
                         Val_Row (Index) :=
                           Val_Row (Index) + Current.Value_Bias.all (Index);
+                     end loop;
+                  end if;
+
+                  --  MPT clamps the queries, keys and values to a magnitude
+                  --  the file states, on what the projection produced and
+                  --  before anything reads them. Written out here as the two
+                  --  bounds rather than shared with the engine's clamp.
+                  if Item.Clip_QKV > 0.0 then
+                     for Index in Query'Range loop
+                        Query (Index) :=
+                          Long_Float'Max
+                            (-Item.Clip_QKV,
+                             Long_Float'Min (Item.Clip_QKV, Query (Index)));
+                     end loop;
+                     for Index in Key_Row'Range loop
+                        Key_Row (Index) :=
+                          Long_Float'Max
+                            (-Item.Clip_QKV,
+                             Long_Float'Min (Item.Clip_QKV, Key_Row (Index)));
+                     end loop;
+                     for Index in Val_Row'Range loop
+                        Val_Row (Index) :=
+                          Long_Float'Max
+                            (-Item.Clip_QKV,
+                             Long_Float'Min (Item.Clip_QKV, Val_Row (Index)));
                      end loop;
                   end if;
 
@@ -4107,7 +4150,7 @@ package body Reference_Transformer is
                      Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
                   elsif Current.Feed_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt then
                      Normalize_Centred
                        (State, Current.Feed_Norm.all,
                         Current.Feed_Norm_Bias, Normed);
@@ -4354,7 +4397,7 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
-         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
          else

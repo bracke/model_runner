@@ -388,7 +388,8 @@ package body Tiny_Model is
            when Stablelm  => "stablelm",
            when Gptneox   => "gptneox",
            when Internlm2 => "internlm2",
-           when Baichuan  => "baichuan");
+           when Baichuan  => "baichuan",
+           when Mpt       => "mpt");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -426,7 +427,7 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox then
+      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
@@ -446,7 +447,7 @@ package body Tiny_Model is
       --  Writing a zero here would be this fixture answering a question the
       --  file leaves open, which is what let bert's absent key be read as a
       --  head-wide rotation.
-      if Kind /= Jina_Bert_V2 then
+      if Kind not in Jina_Bert_V2 | Mpt then
          Fixtures.Add_U32
            (Builder, Prefix & ".rope.dimension_count",
             (if Kind in GPT2 | Bert
@@ -465,8 +466,16 @@ package body Tiny_Model is
       --  the eight the architecture defaults to: six, so the slope ladder
       --  the engine builds is not the one it would build from the default,
       --  and a reader that ignored the key would answer differently.
-      if Kind = Jina_Bert_V2 then
+      if Kind in Jina_Bert_V2 | Mpt then
          Fixtures.Add_F32 (Builder, Prefix & ".attention.max_alibi_bias", 6.0);
+      end if;
+
+      --  MPT clamps its queries, keys and values. Stated here so the clamp
+      --  is exercised end to end -- a bound low enough to catch some of the
+      --  projected values and leave the rest, so a run that skipped it and a
+      --  run that applied it are two different answers, not the same one.
+      if Kind = Mpt then
+         Fixtures.Add_F32 (Builder, Prefix & ".attention.clamp_kqv", 1.5);
       end if;
 
       --  A position in three parts, dealt one pair to time and one to
@@ -999,7 +1008,7 @@ package body Tiny_Model is
             --  Twice as wide: each head's queries and then its gate.
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (2 * Heads * Key_Size)]);
-         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox then
+         elsif Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt then
             --  One tensor holding all three, in the order a reader has to
             --  take them out: queries, then keys, then values -- and drawn
             --  as three, in the order every other architecture draws them,
@@ -1237,7 +1246,7 @@ package body Tiny_Model is
                   [G.U64 (Embedding)], G.Type_F32,
                   Fixtures.Encode_F32 (Next (N.Element_Count (Embedding))));
             end if;
-         elsif Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox then
+         elsif Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox | Mpt then
             --  No gate: one projection up and one down.
             Weight (Layer_Name (Index, "ffn_up.weight"),
                     [G.U64 (Embedding), G.U64 (Feed_Forward)]);

@@ -188,7 +188,7 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm, Gptneox, Internlm2, Baichuan);
+      Stablelm, Gptneox, Internlm2, Baichuan, Mpt);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -248,7 +248,8 @@ package Model_Runner.Llama is
          when Stablelm   => "stablelm",
          when Gptneox    => "gptneox",
          when Internlm2  => "internlm2",
-         when Baichuan   => "baichuan");
+         when Baichuan   => "baichuan",
+         when Mpt        => "mpt");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -421,6 +422,11 @@ package Model_Runner.Llama is
       --  makes it different from the one causal models use, where every
       --  visible position is behind and the sign never comes up.
       Max_Bias        : Model_Runner.Numerics.Real := 0.0;
+
+      --  MPT clamps its fused queries, keys and values to plus or minus
+      --  this before attention where the file states it; zero, the default,
+      --  is no clamp.
+      Clip_QKV        : Model_Runner.Numerics.Real := 0.0;
 
       --  Whether the sliding window applies to every other layer rather
       --  than to all of them. Gemma2 alternates, starting with the window

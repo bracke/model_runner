@@ -481,7 +481,7 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 | Starcoder2 | Stablelm | Gptneox =>
+                       | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -597,7 +597,7 @@ package body Model_Runner.Llama is
       --  states either is read and a file that states neither takes the
       --  default both would.
       if Normalizes_After (Settings.Kind)
-        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox
+        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox | Mpt
       then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
@@ -1263,7 +1263,7 @@ package body Model_Runner.Llama is
       --  what tells the model where a token is, and Head_Slope builds it
       --  from whatever this holds, so a file that states its own is run at
       --  its own rather than refused.
-      if Settings.Kind = Jina_Bert_V2 then
+      if Settings.Kind in Jina_Bert_V2 | Mpt then
          Settings.Max_Bias := 8.0;
 
          Containers.Get_Float
@@ -1274,6 +1274,22 @@ package body Model_Runner.Llama is
             return;
          elsif E.Is_Ok (Local) then
             Settings.Max_Bias := N.Real (Value);
+         end if;
+      end if;
+
+      --  MPT may clamp its fused queries, keys and values to a magnitude
+      --  the file states, before it splits them apart and attends. Taken
+      --  where the file carries it and left at zero -- no clamp -- where it
+      --  does not, which is the ordinary case.
+      if Settings.Kind = Mpt then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attention.clamp_kqv"),
+            0.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         elsif E.Is_Ok (Local) then
+            Settings.Clip_QKV := N.Real (Value);
          end if;
       end if;
 
@@ -1368,7 +1384,7 @@ package body Model_Runner.Llama is
       --  ships. That is the same trap gpt2's output bias fell into, found
       --  the same way: by reading a file somebody else published.
       Settings.Rotary :=
-        (if Settings.Kind in Bert | Jina_Bert_V2 then 0
+        (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt then 0
          elsif E.Is_Ok (Local) then Natural (Number)
          else Settings.Head_Size);
 
@@ -2097,7 +2113,7 @@ package body Model_Runner.Llama is
    is (if Item.Settings.Gate_Alpha > 0.0 then 3
        elsif Item.Settings.Kind
              in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-                | Jina_Bert_V2 | Starcoder2 | Gptneox
+                | Jina_Bert_V2 | Starcoder2 | Gptneox | Mpt
        then 1 else 0);
 
    procedure Gate_Activation (Item : Model'Class; Target : in out Real_Array)
@@ -2105,7 +2121,7 @@ package body Model_Runner.Llama is
    begin
       if Item.Settings.Kind
          in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
-            | Jina_Bert_V2 | Starcoder2 | Gptneox
+            | Jina_Bert_V2 | Starcoder2 | Gptneox | Mpt
       then
          K.GELU (Target);
       else
@@ -2279,16 +2295,23 @@ package body Model_Runner.Llama is
    --  architectures whose normalization centres, and a shift the file
    --  carries. Asked by Normalize and by the pairing for the device, so
    --  that the two cannot disagree.
+   --  MPT centres too, but carries no shift: it is a centred normalization
+   --  without a bias, the one architecture here that separates the two. So
+   --  the test is the kind and the bias together for every other centred
+   --  one, and the kind alone for MPT, whose bias is null by design rather
+   --  than by absence.
    function Centres
      (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
-   is (Item.Settings.Kind
-         in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
-            | Starcoder2 | Stablelm | Gptneox
-       and then Bias /= null);
+   is (Item.Settings.Kind = Mpt
+       or else (Item.Settings.Kind
+                  in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
+                     | Starcoder2 | Stablelm | Gptneox
+                and then Bias /= null));
 
    --  Normalize the way the architecture does, into Target.
    --
-   --  Falcon, Phi2, GPT2 and Bert centre and carry a bias; everything else
+   --  Falcon, Phi2, GPT2 and Bert centre and carry a bias; MPT centres and
+   --  carries none, so where it centres the shift is zero; everything else
    --  divides by the root mean square and does not. One procedure rather
    --  than a test at each of the nine places a normalization happens,
    --  because nine tests are nine chances to write one of them the other
@@ -2301,11 +2324,48 @@ package body Model_Runner.Llama is
       Target : out Real_Array) is
    begin
       if Centres (Item, Bias) then
-         K.Layer_Norm (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
+         if Bias /= null then
+            K.Layer_Norm
+              (Source, Gain, Bias.all, Item.Settings.Epsilon, Target);
+         else
+            declare
+               No_Shift : constant Real_Array (Gain'Range) := [others => 0.0];
+            begin
+               K.Layer_Norm
+                 (Source, Gain, No_Shift, Item.Settings.Epsilon, Target);
+            end;
+         end if;
       else
          K.RMS_Norm (Source, Gain, Item.Settings.Epsilon, Target);
       end if;
    end Normalize;
+
+   --  MPT clamps its queries, keys and values to a magnitude the file
+   --  states, before it attends. Applied to the three rows once the
+   --  projection has produced them, which is the same as clamping the fused
+   --  projection before it is split, because the clamp is elementwise and
+   --  MPT carries no bias between the two. A limit of zero -- every other
+   --  architecture, and an MPT file that states none -- is no clamp.
+   procedure Clip_QKV
+     (Limit : N.Real; Query, Key, Value : in out Real_Array)
+   is
+      procedure Clip (Row : in out Real_Array) is
+      begin
+         for Value of Row loop
+            if Value > Limit then
+               Value := Limit;
+            elsif Value < -Limit then
+               Value := -Limit;
+            end if;
+         end loop;
+      end Clip;
+   begin
+      if Limit > 0.0 then
+         Clip (Query);
+         Clip (Key);
+         Clip (Value);
+      end if;
+   end Clip_QKV;
 
    --  The gain and the shift of each of a layer's centred normalizations
    --  laid end to end, for the device, which takes the two as one
@@ -2318,6 +2378,7 @@ package body Model_Runner.Llama is
          Into       : in out T.Real_Array_Access) is
       begin
          if Gain = null
+           or else Bias = null
            or else not Centres (Item, Bias)
            or else Gain.all'Length /= Bias.all'Length
          then
@@ -3176,7 +3237,7 @@ package body Model_Runner.Llama is
                   return;
                end if;
             elsif Item.Settings.Kind
-               in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox
+               in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
             then
                Resolve_Part
                  (Item, Source, Layer_Key (Index, "attn_qkv.weight"),
@@ -3450,7 +3511,7 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox | Mpt
             then
                --  No gate: one projection up, a Gaussian unit, one down.
                --  The gate stays null, and the block below reads that
@@ -14388,7 +14449,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15252,6 +15313,12 @@ package body Model_Runner.Llama is
                   K.Add (Item.Value_Row.all, Current.Value_Bias.all);
                end if;
 
+               --  MPT's clamp, where it states one, on what the projection
+               --  produced and before anything reads it.
+               Clip_QKV
+                 (Settings.Clip_QKV, Item.Query.all, Item.Key_Row.all,
+                  Item.Value_Row.all);
+
                --  And the per-head normalization, where the architecture has
                --  one. Before the rotation, as the projection's bias is: both
                --  act on what the projection produced.
@@ -15393,7 +15460,7 @@ package body Model_Runner.Llama is
                     and then Current.Post_Feed_Norm = null
                     and then not (Settings.Kind in Granite | Granite_MoE
                                   and then Settings.Residual_Mul /= 0.0)
-                    and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox
+                    and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -16061,7 +16128,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -16970,7 +17037,7 @@ package body Model_Runner.Llama is
                          and then Current.Feed_Norm /= null
                          and then Current.Query_Norm = null
                          and then Current.Query_Bias = null
-                         and then Source.Settings.Kind not in Falcon | Phi2)
+                         and then Source.Settings.Kind not in Falcon | Phi2 | Mpt)
                         or else (Item.Held in Exact | Eighth | Fourth
                                  and then Whole_Layer_Fits
                                             (Current, Natural (Index))
@@ -17312,7 +17379,7 @@ package body Model_Runner.Llama is
                     and then Current.Attention_Norm /= null
                     and then Current.Attention_Norm_Bias = null
                     and then Current.Feed_Norm /= null
-                    and then Source.Settings.Kind not in Falcon | Phi2
+                    and then Source.Settings.Kind not in Falcon | Phi2 | Mpt
                   then
                      --  Not for a layer whose projections carry a bias:
                      --  the host adds it before the turning, and this
@@ -17526,6 +17593,14 @@ package body Model_Runner.Llama is
                         K.Add (Values.all (V_At .. V_At + V_Width - 1),
                                Current.Value_Bias.all);
                      end if;
+
+                     --  MPT's clamp on each token of the batch, the same the
+                     --  single-token path applies, before anything reads them.
+                     Clip_QKV
+                       (Settings.Clip_QKV,
+                        Query.all (Q_At .. Q_At + Wide - 1),
+                        Keys.all (KV_At .. KV_At + KV_Width - 1),
+                        Values.all (V_At .. V_At + V_Width - 1));
 
                      if Current.Query_Norm /= null then
                         Normalize_Heads
@@ -17742,7 +17817,7 @@ package body Model_Runner.Llama is
                        and then Current.Post_Feed_Norm = null
                        and then not (Settings.Kind in Granite | Granite_MoE
                                      and then Settings.Residual_Mul /= 0.0)
-                       and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox
+                       and then Settings.Kind not in Starcoder2 | Stablelm | Gptneox | Mpt
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),
