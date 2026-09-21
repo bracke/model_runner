@@ -384,7 +384,8 @@ package body Tiny_Model is
              (if Experts > 0 then "granitemoe" else "granite"),
            when Olmo2     => "olmo2",
            when Glm4      => "glm4",
-           when Starcoder2 => "starcoder2");
+           when Starcoder2 => "starcoder2",
+           when Stablelm  => "stablelm");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -422,7 +423,7 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
-      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 then
+      if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm then
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
       else
@@ -440,6 +441,13 @@ package body Tiny_Model is
            (Builder, Prefix & ".rope.dimension_count",
             (if Kind in GPT2 | Bert
              then 0
+             --  StableLM rotates only part of each head -- the leading half
+             --  here -- where every other rotating architecture turns the
+             --  whole of it. The one fixture that exercises the partial path,
+             --  which the split pairing and the tail left alone are crossed
+             --  against the independent implementation through.
+             elsif Kind = Stablelm
+             then Interfaces.Unsigned_32 (Head_Size / 2)
              else Interfaces.Unsigned_32 (Head_Size)));
       end if;
 
@@ -867,13 +875,19 @@ package body Tiny_Model is
       --  read and everything about floating point.
       if Rope_Table then
          declare
-            Values : N.Real_Array (0 .. N.Element_Count (Head_Size / 2) - 1);
+            --  Half the rotated width, which is the whole head for every
+            --  architecture that turns all of it and the leading half for
+            --  the one that turns part -- the table has a divisor a rotated
+            --  pair, so a partial rotation carries a shorter table.
+            Rotated : constant Natural :=
+              (if Kind = Stablelm then Head_Size / 2 else Head_Size);
+            Values : N.Real_Array (0 .. N.Element_Count (Rotated / 2) - 1);
          begin
             for Index in Values'Range loop
                Values (Index) := 1.0 + N.Real (Index) * 0.5;
             end loop;
             Fixtures.Add_Tensor
-              (Builder, "rope_freqs.weight", [G.U64 (Head_Size / 2)],
+              (Builder, "rope_freqs.weight", [G.U64 (Rotated / 2)],
                G.Type_F32, Fixtures.Encode_F32 (Values));
          end;
       end if;
@@ -1017,7 +1031,7 @@ package body Tiny_Model is
          end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
          --  Bert carries the same three, written the same way.
-         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2
+         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
            and then not Omit_Biases
          then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
@@ -1031,7 +1045,7 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
          end if;
 
@@ -1163,7 +1177,7 @@ package body Tiny_Model is
             --  that because the fixture the engine was checked against had
             --  no such tensor either. Falcon and phi2 never reach this:
             --  they have one normalization a block.
-            if Kind in GPT2 | Starcoder2 then
+            if Kind in GPT2 | Starcoder2 | Stablelm then
                Norm_Of (Layer_Name (Index, "ffn_norm.bias"), Embedding);
             end if;
          end if;
@@ -1271,7 +1285,7 @@ package body Tiny_Model is
       --  reads it: its last layer already normalized what it produced.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Norm ("output_norm.weight");
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
             Norm ("output_norm.bias");
          end if;
       end if;

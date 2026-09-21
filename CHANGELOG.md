@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The StableLM architecture is read.** Starcoder2's block -- a centred
+  normalization that subtracts the mean and carries a bias on the way into
+  each sublayer, and a bias on the queries, keys and values where the file
+  holds them -- but gated, a sigmoid-weighted feed-forward rather than a
+  Gaussian one, and rotating only part of each head, the leading
+  `rope.dimension_count`, where Starcoder2 turns the whole of it. The
+  layer-norm epsilon is read from the model's own key. It is the first
+  architecture here to turn part of a head, so the split pairing over the
+  leading elements and the tail left untouched are crossed against the
+  independent implementation for the first time, which surfaced that the
+  rope-frequency table is a divisor a rotated pair and so shorter under a
+  partial rotation -- the fixture now sizes it by the rotated width. StableLM
+  2 12B's per-head query and key normalization is a third kind of head norm
+  the engine does not compute, so a file that carries it is refused by name
+  rather than run without it; the 1.6B, which carries none, runs on the
+  processor and the independent reference over every format and path,
+  outside tolerance nought, on the host under the device backend. It was
+  refused before.
+
 - **The GraniteMoE architecture is read.** Granite -- the same four scalar
   multipliers (embedding, residual, attention, logit) and interleaved
   rotation -- with the feed-forward behind a router: a softmax over the

@@ -480,7 +480,7 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 | Starcoder2 =>
+                       | Olmo2 | Starcoder2 | Stablelm =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -596,7 +596,7 @@ package body Model_Runner.Llama is
       --  states either is read and a file that states neither takes the
       --  default both would.
       if Normalizes_After (Settings.Kind)
-        or else Settings.Kind = Starcoder2
+        or else Settings.Kind in Starcoder2 | Stablelm
       then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
@@ -2262,7 +2262,7 @@ package body Model_Runner.Llama is
      (Item : Model'Class; Bias : T.Real_Array_Access) return Boolean
    is (Item.Settings.Kind
          in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
-            | Starcoder2
+            | Starcoder2 | Stablelm
        and then Bias /= null);
 
    --  Normalize the way the architecture does, into Target.
@@ -3066,7 +3066,7 @@ package body Model_Runner.Llama is
             --  not. The order inside the fused one is queries, then
             --  keys, then values, which is the order the rows are
             --  written in.
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                   Width, Current.Attention_Norm_Bias, Status);
@@ -3276,7 +3276,7 @@ package body Model_Runner.Llama is
             --  it rather than required. Read all three where the first is
             --  present, so a file with some is not read as one with a bias
             --  or two missing.
-            if Item.Settings.Kind = Glm4
+            if Item.Settings.Kind in Glm4 | Stablelm
               and then Containers.Find_Tensor
                          (Source, Layer_Key (Index, "attn_q.bias")) /= 0
             then
@@ -3300,6 +3300,26 @@ package body Model_Runner.Llama is
                if E.Is_Error (Status) then
                   return;
                end if;
+            end if;
+
+            --  StableLM's larger sizes normalize each query and key head
+            --  with a centred normalization and a gain of its own a head,
+            --  which is a third kind of head normalization this does not
+            --  compute -- neither the shared-gain root-mean-square one qwen3
+            --  has nor the whole-projection one olmo2 has. A file that
+            --  carries it (the 12B does, the 1.6B does not) is refused by
+            --  name rather than run with the normalization silently dropped.
+            if Item.Settings.Kind = Stablelm
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_q_norm.weight"))
+                       /= 0
+            then
+               Status := E.Make (E.Arch_Unsupported_Feature);
+               E.Add_Text
+                 (Status, "feature",
+                  "stablelm per-head query and key normalization",
+                  E.Param_Identifier);
+               return;
             end if;
 
             --  Qwen3 normalizes each query head and each key head before
@@ -3395,7 +3415,7 @@ package body Model_Runner.Llama is
                --  trap this architecture's output bias already fell
                --  into: the loader asked for a tensor because the
                --  fixture wrote it, and a published model was refused.
-               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2
+               if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm
                  and then Containers.Find_Tensor
                             (Source, Layer_Key (Index, "ffn_norm.bias"))
                           /= 0
@@ -3700,7 +3720,7 @@ package body Model_Runner.Llama is
                Status);
 
             if E.Is_Ok (Status)
-              and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2
+              and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm
             then
                Resolve_Norm
                  (Item, Source, "output_norm.bias", Width,
@@ -14346,7 +14366,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
@@ -15351,7 +15371,7 @@ package body Model_Runner.Llama is
                     and then Current.Post_Feed_Norm = null
                     and then not (Settings.Kind in Granite | Granite_MoE
                                   and then Settings.Residual_Mul /= 0.0)
-                    and then Settings.Kind /= Starcoder2
+                    and then Settings.Kind not in Starcoder2 | Stablelm
                   then
                      --  The whole of the layer's second half as one sequence.
                      --  Everything the host used to do between its two
@@ -16006,7 +16026,7 @@ package body Model_Runner.Llama is
           --  has run: the kernels are there for each piece and untried
           --  together. Held to the host under the device backend until
           --  they are, as Granite is for a different reason.
-          and then Settings.Kind not in Glm4 | Starcoder2
+          and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null
 
@@ -17676,7 +17696,7 @@ package body Model_Runner.Llama is
                        and then Current.Post_Feed_Norm = null
                        and then not (Settings.Kind in Granite | Granite_MoE
                                      and then Settings.Residual_Mul /= 0.0)
-                       and then Settings.Kind /= Starcoder2
+                       and then Settings.Kind not in Starcoder2 | Stablelm
                      then
                         Model_Runner.Backend.Device.Attend_And_Feed
                           (Query.all (0 .. Count * Wide - 1),

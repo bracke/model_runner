@@ -1125,7 +1125,8 @@ package body Reference_Transformer is
          when Olmo2 => "olmo2.",
          when Glm4 => "glm4.",
          when Starcoder2 => "starcoder2.",
-         when Granite_MoE => "granitemoe.");
+         when Granite_MoE => "granitemoe.",
+         when Stablelm => "stablelm.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1561,6 +1562,8 @@ package body Reference_Transformer is
             Item.Kind := Starcoder2;
          elsif Named = "granitemoe" then
             Item.Kind := Granite_MoE;
+         elsif Named = "stablelm" then
+            Item.Kind := Stablelm;
          else
             return;
          end if;
@@ -1765,7 +1768,7 @@ package body Reference_Transformer is
          Containers.Get_Float
            (Source,
             Prefix (Item)
-            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2
+            & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -1886,7 +1889,7 @@ package body Reference_Transformer is
       --  whatever reads it. Bert's last layer normalized what it produced.
       if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
             Item.Output_Norm_Bias :=
               Read_Vector ("output_norm.bias", Present);
          end if;
@@ -1978,7 +1981,7 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -2160,7 +2163,7 @@ package body Reference_Transformer is
 
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
-            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2
+            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
             then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
@@ -2321,7 +2324,7 @@ package body Reference_Transformer is
                --  The shift beside it, for the architectures that centre.
                --  Optional: a file need not carry one, and this reads what
                --  is there rather than what a fixture happens to write.
-               if Item.Kind in GPT2 | Starcoder2 then
+               if Item.Kind in GPT2 | Starcoder2 | Stablelm then
                   Current.Feed_Norm_Bias :=
                     Read_Vector
                       (Layer_Name (Index, "ffn_norm.bias"), Present);
@@ -3635,7 +3638,7 @@ package body Reference_Transformer is
                   --  way out.
                   if Current.Attention_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
                      Normalize_Centred
                        (State, Current.Attention_Norm.all,
                         Current.Attention_Norm_Bias, Normed);
@@ -4062,7 +4065,7 @@ package body Reference_Transformer is
                      Normed (0 .. Width - 1) := Held_Norm (0 .. Width - 1);
                   elsif Current.Feed_Norm = null then
                      Normed (0 .. Width - 1) := State (0 .. Width - 1);
-                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+                  elsif Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
                      Normalize_Centred
                        (State, Current.Feed_Norm.all,
                         Current.Feed_Norm_Bias, Normed);
@@ -4309,7 +4312,7 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
-         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 then
+         if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);
          else
