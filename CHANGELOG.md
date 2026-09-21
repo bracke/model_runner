@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The IQ3_S three-bit format is read.** A super-block of 256 whose every
+  group of four weights is a nine-bit index -- a `qs` byte and a high bit
+  out of a `qh` byte -- into a table of 512 grid entries the format
+  carries, each four small odd magnitudes; a sign byte gives each value
+  its sign and a four-bit scale each sub-block of 32 its size, over one
+  half-precision scale for the block. It decodes on the processor and the
+  reference backend, has a fixture encoder that searches the grid, and is
+  named in the support matrix; the device backend falls back to the host
+  for it. It was refused before.
+
 - **A reranker scores a text rather than only embedding it.** Where a
   file's pooling type is ranked, the model carries a scoring head beside
   its blocks -- a dense of the embedding width and a logistic, then a row

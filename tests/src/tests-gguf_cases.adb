@@ -2290,6 +2290,37 @@ package body Tests.GGUF_Cases is
          Check (Model_Runner.GGUF.Type_IQ4_XS, Block, 32, -208.0);
       end;
 
+      --  IQ3_S: a super-block of two hundred and fifty-six through a grid of
+      --  five hundred and twelve four-value entries. Each sub-block of
+      --  thirty-two carries eight nine-bit grid indices -- a qs byte and a
+      --  high bit out of a qh byte -- four sign bytes and a four-bit scale.
+      --  Grid entry one is 3, 1, 1, 1 and entry four is 15, 1, 1, 1, read
+      --  as the four little-endian bytes of the entry. The scale nibble n
+      --  makes the sub-block scale 1 + 2n, and a set sign bit negates the
+      --  value it stands for. A decoder that read the grid the wrong way, or
+      --  forgot the odd scale, or dropped the sign would miss these.
+      declare
+         Block : B.Byte_Array (0 .. 109) := [others => 0];
+      begin
+         Block (0) := One_Low;
+         Block (1) := One_High;
+
+         --  Sub-block zero, scale nibble zero: the sub-block scale is one.
+         --  qs 1 and 4 name entries whose first bytes are 3 and 15, and the
+         --  low sign bit negates the first value of the first entry.
+         Block (2) := 1;          --  qs[0] -> grid entry one
+         Block (3) := 4;          --  qs[1] -> grid entry four
+         Block (74) := 16#01#;    --  sign bit 0 of sub-block zero
+         Check (Model_Runner.GGUF.Type_IQ3_S, Block, 0, -3.0);
+         Check (Model_Runner.GGUF.Type_IQ3_S, Block, 1, 1.0);
+         Check (Model_Runner.GGUF.Type_IQ3_S, Block, 4, 15.0);
+
+         --  A scale nibble of one triples the sub-block scale: 1 + 2 = 3.
+         Block (106) := 16#01#;   --  sub-block zero low nibble
+         Check (Model_Runner.GGUF.Type_IQ3_S, Block, 1, 3.0);
+         Check (Model_Runner.GGUF.Type_IQ3_S, Block, 4, 45.0);
+      end;
+
       --  Q2_K: two bits an element, sixteen sub-blocks each with a four-bit
       --  scale and a four-bit minimum in one byte. With d one, the first
       --  scale one and the minimum zero, an element is its own two bits.

@@ -38,6 +38,7 @@ package body Model_Runner.GGUF is
       Type_Q8_K    => (15, Super_Block,  292, False),
       Type_IQ4_NL  => (20, Legacy_Block, 18,  True),
       Type_IQ4_XS  => (23, Super_Block,  136, True),
+      Type_IQ3_S   => (21, Super_Block,  110, True),
 
       --  Thirty-two elements in seventeen bytes: one exponent byte and
       --  sixteen of packed nibbles. The scale is a power of two rather than
@@ -145,6 +146,7 @@ package body Model_Runner.GGUF is
          when Type_IQ4_NL  => return "IQ4_NL";
          when Type_MXFP4   => return "MXFP4";
          when Type_IQ4_XS  => return "IQ4_XS";
+         when Type_IQ3_S   => return "IQ3_S";
          when Type_BF16    => return "BF16";
          when Type_Unknown => return "unknown";
       end case;

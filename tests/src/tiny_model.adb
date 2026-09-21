@@ -76,9 +76,9 @@ package body Tiny_Model is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
                 | Q2_K | Q3_K | Q4_K | Q5_K | Q6_K
-                | IQ4_NL | IQ4_XS | MXFP4;
+                | IQ4_NL | IQ4_XS | IQ3_S | MXFP4;
       Deep      : constant Boolean :=
-        Format in Q2_K | Q3_K | Q4_K | Q5_K | Q6_K | IQ4_XS;
+        Format in Q2_K | Q3_K | Q4_K | Q5_K | Q6_K | IQ4_XS | IQ3_S;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
       --  number of thirty-two element blocks. Everything else matches.
@@ -257,6 +257,10 @@ package body Tiny_Model is
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_IQ4_XS,
                   Fixtures.Encode_IQ4_XS (Values));
+            elsif Format = IQ3_S and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ3_S,
+                  Fixtures.Encode_IQ3_S (Values));
             elsif Format = MXFP4 and then Total mod 32 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_MXFP4,
