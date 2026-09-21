@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The Baichuan architecture is read** (the 7B, rotating size). Llama's
+  block exactly -- interleaved rotation over the whole of each head, a
+  root-mean-square normalization on the way into each sublayer read from the
+  model's own rms-epsilon key, queries, keys and values apart and without a
+  bias, and a sigmoid-weighted feed-forward. Like InternLM2 its checkpoint
+  fuses the three attention projections in one `W_pack`, but the converter
+  splits that into three permuted tensors as it writes the file, so what
+  this reads already carries them apart and in the interleaved-rotation
+  layout, and there is nothing new to do at load. The 13B size drops
+  rotation for an alibi fall-off that llama.cpp selects at runtime from its
+  forty-layer depth rather than from any key in the file; that depth cannot
+  be reached by a tiny fixture, so the alibi path would ship untested and is
+  left for its own follow-up. Crossed against the independent implementation
+  over every format and path; the same kernel combination as llama and
+  granite, so it runs on the device backend with no host fallback.
 - **The InternLM2 architecture is read.** Llama's block exactly --
   interleaved rotation over the whole of each head, a root-mean-square
   normalization on the way into each sublayer read from the model's own

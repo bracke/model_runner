@@ -1128,7 +1128,8 @@ package body Reference_Transformer is
          when Granite_MoE => "granitemoe.",
          when Stablelm => "stablelm.",
          when Gptneox => "gptneox.",
-         when Internlm2 => "internlm2.");
+         when Internlm2 => "internlm2.",
+         when Baichuan => "baichuan.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1570,6 +1571,8 @@ package body Reference_Transformer is
             Item.Kind := Gptneox;
          elsif Named = "internlm2" then
             Item.Kind := Internlm2;
+         elsif Named = "baichuan" then
+            Item.Kind := Baichuan;
          else
             return;
          end if;
@@ -3042,10 +3045,12 @@ package body Reference_Transformer is
                   --  and a shared rotation would agree with itself.
                   Even  : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2
+                        | Baichuan
                      then Head * Item.Head_Size + 2 * Pair
                      else Head * Item.Head_Size + Pair);
                   Odd   : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2
+                        | Baichuan
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
