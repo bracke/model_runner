@@ -22,6 +22,13 @@ Keep a Changelog and the project uses semantic versioning.
   crossed against an independent binary64 computation of the same network in the
   suite, a resampler written small, and a projector of another kind is refused
   by name.
+  A real MiniCPM-V-2.6 projector file opens and encodes: its width and query
+  count are read from the resampler's query tensor (the file's projection-dim
+  key is nought), its feed-forward halves are told apart by shape rather than by
+  name as a real file names the widening half "ffn_down", and a picture keeps
+  its aspect -- the ViT grid is the picture's own sides in whole patches, placed
+  from the seventy-a-side bank -- so a 448-a-side, twenty-seven-block,
+  3584-wide, sixty-four-query file reads a photograph to sixty-four finite rows.
 
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the

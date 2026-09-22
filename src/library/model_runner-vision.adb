@@ -463,10 +463,35 @@ package body Model_Runner.Vision is
             Vec (Prefix & "attn_v.bias", Width, Current.Value_Bias);
             Take (Prefix & "attn_out.weight", Width, Width, Current.Output);
             Vec (Prefix & "attn_out.bias", Width, Current.Output_Bias);
-            Take (Prefix & "ffn_up.weight", Feed, Width, Current.Feed_In);
-            Vec (Prefix & "ffn_up.bias", Feed, Current.Feed_In_Bias);
-            Take (Prefix & "ffn_down.weight", Width, Feed, Current.Feed_Out);
-            Vec (Prefix & "ffn_down.bias", Width, Current.Feed_Out_Bias);
+            --  The feed-forward's halves told apart by shape, not name:
+            --  a real MiniCPM-V file names the widening half "ffn_down"
+            --  and the narrowing "ffn_up", the other way round from the
+            --  fixture, exactly as Gemma's converter did. The one whose
+            --  columns are the model width widens.
+            if E.Is_Ok (Status) then
+               declare
+                  Down_Index : constant Natural :=
+                    Containers.Find_Tensor
+                      (Item.Container, Prefix & "ffn_down.weight");
+                  Down_Widens : constant Boolean :=
+                    Down_Index > 0
+                    and then Element_Count
+                      (Containers.Tensor_Dimension
+                         (Item.Container, Down_Index, 1)) = Width;
+                  In_Name  : constant String :=
+                    (if Down_Widens then "ffn_down" else "ffn_up");
+                  Out_Name : constant String :=
+                    (if Down_Widens then "ffn_up" else "ffn_down");
+               begin
+                  Take (Prefix & In_Name & ".weight", Feed, Width,
+                        Current.Feed_In);
+                  Vec (Prefix & In_Name & ".bias", Feed, Current.Feed_In_Bias);
+                  Take (Prefix & Out_Name & ".weight", Width, Feed,
+                        Current.Feed_Out);
+                  Vec (Prefix & Out_Name & ".bias", Width,
+                       Current.Feed_Out_Bias);
+               end;
+            end if;
          end;
          exit when E.Is_Error (Status);
       end loop;
@@ -601,14 +626,19 @@ package body Model_Runner.Vision is
       end if;
       Item.Heads := Positive (Number);
 
-      Containers.Get_Integer
-        (Item.Container, "clip.vision.projection_dim", 1, 65536, Number,
-         Status);
-      if E.Is_Error (Status) then
-         Fail (Status);
-         return;
+      --  The text width. MiniCPM-V's resampler does not state it in a
+      --  key -- its projection_dim is nought -- so it is read below from
+      --  the query tensor's own width instead.
+      if not Is_Minicpm (Item) then
+         Containers.Get_Integer
+           (Item.Container, "clip.vision.projection_dim", 1, 65536, Number,
+            Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+         Item.Text_Width := Positive (Number);
       end if;
-      Item.Text_Width := Positive (Number);
 
       Containers.Get_Float
         (Item.Container, "clip.vision.attention.layer_norm_epsilon",
@@ -676,9 +706,25 @@ package body Model_Runner.Vision is
       --  carries, and which MiniCPM-V it is. The query count also lives
       --  in the query tensor's shape, which Bind checks it against.
       if Is_Minicpm (Item) then
-         Containers.Get_Integer
-           (Item.Container, "clip.minicpmv_query_num", 1, 4096, Number, Local);
-         Item.Num_Query := (if E.Is_Ok (Local) then Natural (Number) else 64);
+         --  The resampler's width and query count are the query tensor's
+         --  two axes, which is where they are stated whole; the version
+         --  key is kept for the record.
+         declare
+            QI : constant Natural :=
+              Containers.Find_Tensor (Item.Container, "resampler.query");
+         begin
+            if QI = 0 then
+               Status := E.Make (E.Arch_Missing_Tensor);
+               E.Add_Text
+                 (Status, "tensor", "resampler.query", E.Param_Identifier);
+               Fail (Status);
+               return;
+            end if;
+            Item.Text_Width :=
+              Positive (Containers.Tensor_Dimension (Item.Container, QI, 1));
+            Item.Num_Query :=
+              Natural (Containers.Tensor_Dimension (Item.Container, QI, 2));
+         end;
          Containers.Get_Integer
            (Item.Container, "clip.minicpmv_version", 1, 1_000_000, Number,
             Local);
@@ -1860,9 +1906,18 @@ package body Model_Runner.Vision is
       Feed     : constant Element_Count := Element_Count (Item.Feed);
       Heads    : constant Element_Count := Element_Count (Item.Heads);
       Head     : constant Element_Count := Width / Heads;
-      Side     : constant Element_Count :=
-        Element_Count (Item.Size / Item.Patch);
-      Patches  : constant Element_Count := Side * Side;
+      Patch_Px : constant Element_Count := Element_Count (Item.Patch);
+      --  MiniCPM-V keeps a picture's aspect: the grid is the picture's
+      --  own sides in whole patches, each at least one, and the picture is
+      --  resampled to exactly that grid rather than to a square. The
+      --  resampler makes Num_Query rows of it however many patches it is.
+      Side_X   : constant Element_Count :=
+        Element_Count'Max (1, Element_Count (Picture.Width) / Patch_Px);
+      Side_Y   : constant Element_Count :=
+        Element_Count'Max (1, Element_Count (Picture.Height) / Patch_Px);
+      Target_W : constant Positive := Positive (Side_X * Patch_Px);
+      Target_H : constant Positive := Positive (Side_Y * Patch_Px);
+      Patches  : constant Element_Count := Side_X * Side_Y;
       Patch_Elements : constant Element_Count :=
         3 * Element_Count (Item.Patch) ** 2;
 
@@ -2002,7 +2057,7 @@ package body Model_Runner.Vision is
       end if;
 
       --  The picture, at the encoder's square, as patch vectors.
-      Model_Runner.Images.Resample (Picture, Item.Size, Item.Size, Resampled);
+      Model_Runner.Images.Resample (Picture, Target_W, Target_H, Resampled);
       if Resampled.Pixels = null then
          Release; T.Free (Rows);
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -2011,13 +2066,13 @@ package body Model_Runner.Vision is
       end if;
       declare
          Patch : constant Element_Count := Element_Count (Item.Patch);
-         Size  : constant B.Byte_Count := B.Byte_Count (Item.Size);
+         Size  : constant B.Byte_Count := B.Byte_Count (Target_W);
       begin
-         for PY in 0 .. Side - 1 loop
-            for PX in 0 .. Side - 1 loop
+         for PY in 0 .. Side_Y - 1 loop
+            for PX in 0 .. Side_X - 1 loop
                declare
                   At_Patch : constant Element_Count :=
-                    (PY * Side + PX) * Patch_Elements;
+                    (PY * Side_X + PX) * Patch_Elements;
                begin
                   for C in Element_Count range 0 .. 2 loop
                      for KY in 0 .. Patch - 1 loop
@@ -2051,12 +2106,12 @@ package body Model_Runner.Vision is
       --  (70 column / side), as the SigLIP position scheme selects.
       Multiply (Hidden, Patches, Item.Patch_Weights, X, Item.Patch_Bias);
       if E.Is_Ok (Status) then
-         for PY in 0 .. Side - 1 loop
-            for PX in 0 .. Side - 1 loop
+         for PY in 0 .. Side_Y - 1 loop
+            for PX in 0 .. Side_X - 1 loop
                declare
-                  P_Index : constant Element_Count := PY * Side + PX;
+                  P_Index : constant Element_Count := PY * Side_X + PX;
                   Bucket  : constant Element_Count :=
-                    (70 * PY / Side) * 70 + (70 * PX / Side);
+                    (70 * PY / Side_Y) * 70 + (70 * PX / Side_X);
                begin
                   T.Dequantize_Row
                     (Item.Positions, Bucket, Normed (0 .. Width - 1), Status);
@@ -2134,8 +2189,8 @@ package body Model_Runner.Vision is
          end loop;
          for Pt in 0 .. Patches - 1 loop
             declare
-               Rowv : constant Element_Count := Pt / Side;
-               Colv : constant Element_Count := Pt mod Side;
+               Rowv : constant Element_Count := Pt / Side_X;
+               Colv : constant Element_Count := Pt mod Side_X;
             begin
                for I in 0 .. Quarter - 1 loop
                   declare

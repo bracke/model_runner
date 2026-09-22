@@ -2755,8 +2755,6 @@ package body Tests.Vision_Cases is
    --  bucket scheme selects, whatever the patch grid.
    Patch_M  : constant := 4;
    Size_M   : constant := 16;
-   Side_M   : constant := Size_M / Patch_M;
-   Patches_M : constant := Side_M * Side_M;
    Width_M  : constant := 8;
    Heads_M  : constant := 2;
    Head_M   : constant := Width_M / Heads_M;
@@ -2974,11 +2972,18 @@ package body Tests.Vision_Cases is
       Rows : out N.Wide_Real_Array)
    is
       subtype WR is N.Wide_Real;
-      type ViT_Mat is array (0 .. Patches_M - 1, 0 .. Width_M - 1) of WR;
-      type State_Mat is array (0 .. Patches_M - 1, 0 .. P_M - 1) of WR;
+      --  MiniCPM-V keeps the picture's aspect: the grid is its own sides
+      --  in whole patches, and it is resampled to exactly that.
+      Cols    : constant Natural := Natural'Max (1, Picture.Width / Patch_M);
+      Rows_P  : constant Natural := Natural'Max (1, Picture.Height / Patch_M);
+      Target_W : constant Natural := Cols * Patch_M;
+      Target_H : constant Natural := Rows_P * Patch_M;
+      Patches : constant Natural := Cols * Rows_P;
+      type ViT_Mat is array (0 .. Patches - 1, 0 .. Width_M - 1) of WR;
+      type State_Mat is array (0 .. Patches - 1, 0 .. P_M - 1) of WR;
       type Query_Mat is array (0 .. Nq_M - 1, 0 .. P_M - 1) of WR;
       X, H, Q, K, V, A : ViT_Mat;
-      F : array (0 .. Patches_M - 1, 0 .. Feed_M - 1) of WR;
+      F : array (0 .. Patches - 1, 0 .. Feed_M - 1) of WR;
       Vkv, Vkvn, Pos, Kk, Kmat, Vmat : State_Mat;
       Qsrc, Qn, Qmat, Att, Rout, Routn : Query_Mat;
       Omega : array (0 .. Quarter_M - 1) of WR;
@@ -2994,7 +2999,7 @@ package body Tests.Vision_Cases is
       procedure Layer_Norm_V
         (Source : ViT_Mat; Gain, Bias : N.Real_Array; Target : out ViT_Mat) is
       begin
-         for P in 0 .. Patches_M - 1 loop
+         for P in 0 .. Patches - 1 loop
             declare
                Mean, Variance : WR := 0.0;
             begin
@@ -3019,7 +3024,7 @@ package body Tests.Vision_Cases is
       procedure Project_V
         (Source : ViT_Mat; Weight, Bias : N.Real_Array; Target : out ViT_Mat) is
       begin
-         for P in 0 .. Patches_M - 1 loop
+         for P in 0 .. Patches - 1 loop
             for R in 0 .. Width_M - 1 loop
                declare
                   Sum : WR := WR (Bias (N.Element_Count (R)));
@@ -3034,16 +3039,16 @@ package body Tests.Vision_Cases is
          end loop;
       end Project_V;
    begin
-      Images.Resample (Picture, Size_M, Size_M, Pixels);
+      Images.Resample (Picture, Target_W, Target_H, Pixels);
 
       --  Patches, embedded and placed by the learned bank the grid
       --  buckets into.
-      for PY in 0 .. Side_M - 1 loop
-         for PX in 0 .. Side_M - 1 loop
+      for PY in 0 .. Rows_P - 1 loop
+         for PX in 0 .. Cols - 1 loop
             declare
-               P : constant Natural := PY * Side_M + PX;
+               P : constant Natural := PY * Cols + PX;
                Bucket : constant Natural :=
-                 (70 * PY / Side_M) * 70 + (70 * PX / Side_M);
+                 (70 * PY / Rows_P) * 70 + (70 * PX / Cols);
             begin
                for R in 0 .. Width_M - 1 loop
                   declare
@@ -3085,12 +3090,12 @@ package body Tests.Vision_Cases is
             Project_V (H, Current.K, Current.K_B, K);
             Project_V (H, Current.V, Current.V_B, V);
             for Hd in 0 .. Heads_M - 1 loop
-               for P in 0 .. Patches_M - 1 loop
+               for P in 0 .. Patches - 1 loop
                   declare
-                     Scores : array (0 .. Patches_M - 1) of WR;
+                     Scores : array (0 .. Patches - 1) of WR;
                      Largest, Total : WR;
                   begin
-                     for O in 0 .. Patches_M - 1 loop
+                     for O in 0 .. Patches - 1 loop
                         Scores (O) := 0.0;
                         for D in 0 .. Head_M - 1 loop
                            Scores (O) := Scores (O)
@@ -3099,11 +3104,11 @@ package body Tests.Vision_Cases is
                         Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (Head_M));
                      end loop;
                      Largest := Scores (0);
-                     for O in 1 .. Patches_M - 1 loop
+                     for O in 1 .. Patches - 1 loop
                         Largest := WR'Max (Largest, Scores (O));
                      end loop;
                      Total := 0.0;
-                     for O in 0 .. Patches_M - 1 loop
+                     for O in 0 .. Patches - 1 loop
                         Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
                         Total := Total + Scores (O);
                      end loop;
@@ -3111,7 +3116,7 @@ package body Tests.Vision_Cases is
                         declare
                            Sum : WR := 0.0;
                         begin
-                           for O in 0 .. Patches_M - 1 loop
+                           for O in 0 .. Patches - 1 loop
                               Sum := Sum
                                 + Scores (O) / Total * V (O, Hd * Head_M + D);
                            end loop;
@@ -3122,14 +3127,14 @@ package body Tests.Vision_Cases is
                end loop;
             end loop;
             Project_V (A, Current.O, Current.O_B, H);
-            for P in 0 .. Patches_M - 1 loop
+            for P in 0 .. Patches - 1 loop
                for D in 0 .. Width_M - 1 loop
                   X (P, D) := X (P, D) + H (P, D);
                end loop;
             end loop;
 
             Layer_Norm_V (X, Current.Ln2_W, Current.Ln2_B, H);
-            for P in 0 .. Patches_M - 1 loop
+            for P in 0 .. Patches - 1 loop
                for R in 0 .. Feed_M - 1 loop
                   declare
                      Sum : WR := WR (Current.Up_B (N.Element_Count (R)));
@@ -3159,7 +3164,7 @@ package body Tests.Vision_Cases is
       Layer_Norm_V (X, W.Post_W, W.Post_B, H);
 
       --  The resampler. The states to the text width and normed.
-      for P in 0 .. Patches_M - 1 loop
+      for P in 0 .. Patches - 1 loop
          for R in 0 .. P_M - 1 loop
             declare
                Sum : WR := 0.0;
@@ -3172,7 +3177,7 @@ package body Tests.Vision_Cases is
             end;
          end loop;
       end loop;
-      for P in 0 .. Patches_M - 1 loop
+      for P in 0 .. Patches - 1 loop
          declare
             Mean, Variance : WR := 0.0;
          begin
@@ -3224,10 +3229,10 @@ package body Tests.Vision_Cases is
       for I in 0 .. Quarter_M - 1 loop
          Omega (I) := 1.0 / Wide_Math."**" (10_000.0, WR (I) / WR (Quarter_M));
       end loop;
-      for P in 0 .. Patches_M - 1 loop
+      for P in 0 .. Patches - 1 loop
          declare
-            Rowv : constant WR := WR (P / Side_M);
-            Colv : constant WR := WR (P mod Side_M);
+            Rowv : constant WR := WR (P / Cols);
+            Colv : constant WR := WR (P mod Cols);
          begin
             for I in 0 .. Quarter_M - 1 loop
                Pos (P, I) := Wide_Math.Sin (Omega (I) * Colv);
@@ -3255,7 +3260,7 @@ package body Tests.Vision_Cases is
             end;
          end loop;
       end loop;
-      for P in 0 .. Patches_M - 1 loop
+      for P in 0 .. Patches - 1 loop
          for R in 0 .. P_M - 1 loop
             declare
                Sk : WR := WR (W.Attn_K_B (N.Element_Count (R)));
@@ -3278,10 +3283,10 @@ package body Tests.Vision_Cases is
       for Hd in 0 .. NHead_M - 1 loop
          for I in 0 .. Nq_M - 1 loop
             declare
-               Scores : array (0 .. Patches_M - 1) of WR;
+               Scores : array (0 .. Patches - 1) of WR;
                Largest, Total : WR;
             begin
-               for O in 0 .. Patches_M - 1 loop
+               for O in 0 .. Patches - 1 loop
                   Scores (O) := 0.0;
                   for D in 0 .. DHead_M - 1 loop
                      Scores (O) := Scores (O)
@@ -3290,11 +3295,11 @@ package body Tests.Vision_Cases is
                   Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (DHead_M));
                end loop;
                Largest := Scores (0);
-               for O in 1 .. Patches_M - 1 loop
+               for O in 1 .. Patches - 1 loop
                   Largest := WR'Max (Largest, Scores (O));
                end loop;
                Total := 0.0;
-               for O in 0 .. Patches_M - 1 loop
+               for O in 0 .. Patches - 1 loop
                   Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
                   Total := Total + Scores (O);
                end loop;
@@ -3302,7 +3307,7 @@ package body Tests.Vision_Cases is
                   declare
                      Sum : WR := 0.0;
                   begin
-                     for O in 0 .. Patches_M - 1 loop
+                     for O in 0 .. Patches - 1 loop
                         Sum := Sum
                           + Scores (O) / Total * Vmat (O, Hd * DHead_M + D);
                      end loop;
