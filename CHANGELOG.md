@@ -57,7 +57,13 @@ Keep a Changelog and the project uses semantic versioning.
   overview between `<image>` and `</image>`, then its grid of slices, each
   between `<slice>` and `</slice>`, a line break after each grid row -- the rows
   of the overview and every slice placed in that order, so a 900-by-600 picture
-  becomes an overview and two slices, 192 rows behind three markers.
+  becomes an overview and two slices, 192 rows behind three markers. That
+  framing is MiniCPM-V's 2.6-and-later shape (versions 3-6, so 2.6 and 4.5);
+  version 2 (2.5) wraps its slices another way, which this build does not write,
+  so a large 2.5 picture is shown as the overview alone -- a valid prompt the
+  model reads as it reads a small picture's -- rather than in a shape it was not
+  trained on. `Vision.Minicpm_Version` reports the version the seer reads to
+  enable slices only from 3 up.
 
 - **A template renders a picture's parts inline.** A model whose own template
   writes `message['content']` -- or adds it to text, as MiniCPM-V's writes
