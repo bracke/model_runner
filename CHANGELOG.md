@@ -29,6 +29,10 @@ Keep a Changelog and the project uses semantic versioning.
   its aspect -- the ViT grid is the picture's own sides in whole patches, placed
   from the seventy-a-side bank -- so a 448-a-side, twenty-seven-block,
   3584-wide, sixty-four-query file reads a photograph to sixty-four finite rows.
+  The same resampler carries the whole MiniCPM-V family, told apart only by the
+  version the file states: 2.5 (version 2), 2.6 (version 3) and 4.5 (version 6)
+  all read here -- the 4.5 projector opens and encodes as "resampler, 448 a side,
+  64 rows of 4096", its width read from the query tensor as the others' are.
   Its llava-uhd slicing is planned too (`Vision.Plan_Slices`): a picture within
   the encoder's side is the overview alone, upscaled to fill it; a larger one is
   a grid of at most nine slices over a refined whole, the grid nearest the
