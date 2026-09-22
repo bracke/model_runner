@@ -7899,6 +7899,23 @@ package body Model_Runner.Templates is
       function List_Of
         (Src : String; Spans : Span_Array; Count : Natural) return Held;
 
+      --  A value as the text it stands as in a prompt. Message content given
+      --  as parts -- a picture and words -- renders inline, the words with a
+      --  marker where each picture stands, so a string method or a text
+      --  filter that a template runs over its content sees the same text a
+      --  bare mention would print and keeps the picture rather than reading
+      --  the parts' JSON. A value that is not such parts, one where no marker
+      --  was given, or a value read only to test a condition, prints as it
+      --  prints. Every place that coerces a value to prompt text reads it
+      --  here, so they agree.
+      function Prompt_Text (Value : Held) return String
+      is (if not Testing and then Value.Kind = Value_Data
+            and then Value.Parts
+            and then Image_Marker'Length + Video_Marker'Length > 0
+          then Conv.Prompt_Of_Parts
+                 (Text_Of (Value), Image_Marker, Video_Marker)
+          else Printed (Value));
+
       function Method_On (Value : Held; Step : Method_Step) return Held is
       begin
          case Step.Kind is
@@ -7940,18 +7957,18 @@ package body Model_Runner.Templates is
                      return List_Of (Src, Kept, Held_Count);
                   end;
                end if;
-               return As_Text (Applied (Step, Printed (Value)));
+               return As_Text (Applied (Step, Prompt_Text (Value)));
 
             when Method_Strip | Method_Left_Strip | Method_Right_Strip
                | Method_Split_First | Method_Split_Last =>
-               return As_Text (Applied (Step, Printed (Value)));
+               return As_Text (Applied (Step, Prompt_Text (Value)));
 
             when Method_Split_Whole =>
                --  The pieces as a list, which is what the language
                --  answers, and which a template then counts, indexes and
                --  walks.
                declare
-                  Text   : constant String := Printed (Value);
+                  Text   : constant String := Prompt_Text (Value);
                   Marker : constant String :=
                     Value_Of (Item.Operands.all (Step.At_Operand));
                   R      : Ada.Strings.Unbounded.Unbounded_String;
@@ -7982,7 +7999,7 @@ package body Model_Runner.Templates is
 
             when Method_Starts_With | Method_Ends_With =>
                declare
-                  Text : constant String := Printed (Value);
+                  Text : constant String := Prompt_Text (Value);
                   Wanted : constant String :=
                     (if Step.At_Operand = 0 then ""
                      else Value_Of (Item.Operands.all (Step.At_Operand)));
@@ -8011,7 +8028,7 @@ package body Model_Runner.Templates is
 
             when Method_Replace =>
                declare
-                  Text     : constant String := Printed (Value);
+                  Text     : constant String := Prompt_Text (Value);
                   Old_Text : constant String :=
                     (if Step.At_Operand = 0 then ""
                      else Value_Of (Item.Operands.all (Step.At_Operand)));
@@ -8056,7 +8073,7 @@ package body Model_Runner.Templates is
                                   when Method_Title => Filter_Title,
                                   when others => Filter_Capitalize),
                       others => <>),
-                     Printed (Value)));
+                     Prompt_Text (Value)));
 
             when Method_Keys | Method_Values =>
                --  The mapping's keys, or its values, as a list.
@@ -9508,21 +9525,12 @@ package body Model_Runner.Templates is
 
             when Filter_Trim | Filter_Lower | Filter_Upper
                | Filter_Capitalize | Filter_Title | Filter_Replace =>
-               --  A message's content parts render inline before a text
-               --  filter too -- the words and a marker where each picture
-               --  stands -- as they do where the value is printed on its
-               --  own. A template that trims or recases its content, which
-               --  MiniCPM-V 2.5's own template does with `content | trim`,
-               --  keeps the picture rather than dropping it with the parts'
-               --  JSON. A value that is not parts, or with no markers to
-               --  write, prints as it printed.
-               return As_Text (Filtered (Step,
-                 (if not Testing and then Value.Kind = Value_Data
-                    and then Value.Parts
-                    and then Image_Marker'Length + Video_Marker'Length > 0
-                  then Conv.Prompt_Of_Parts
-                         (Text_Of (Value), Image_Marker, Video_Marker)
-                  else Printed (Value))));
+               --  A text filter reads its content as prompt text, so a
+               --  picture given as parts keeps its marker rather than being
+               --  trimmed or recased away with the parts' JSON -- which is
+               --  what MiniCPM-V 2.5's `content | trim` needs. See
+               --  Prompt_Text; a string method reads the same way.
+               return As_Text (Filtered (Step, Prompt_Text (Value)));
          end case;
       end Filter_On;
 

@@ -1764,6 +1764,39 @@ package body Tests.Template_Cases is
          Conv.Close (Talk);
       end;
 
+      --  A string method reads its content as prompt text too, the same way
+      --  a filter and a bare mention do, so a template that reaches for
+      --  content.strip() or content.replace(...) keeps the picture rather
+      --  than dropping the marker with the parts' JSON.
+      declare
+         Talk   : Conv.History;
+         Status : E.Error_Info;
+         Own    : Tmpl.Compiled;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+         Body_T : constant String :=
+           "{% for message in messages %}"
+           & "{{ message['content'].strip().replace('hi', 'bye') }}"
+           & "{% endfor %}";
+         Parts  : constant String :=
+           "[{""type"": ""image""}, {""type"": ""text"", ""text"": ""hi""}]";
+      begin
+         Conv.Open (Talk, Status => Status);
+         Conv.Append_Parts (Talk, Conv.User_Role, Parts, Status);
+         Assert (E.Is_Ok (Status), "the parts turn was refused before the method");
+
+         Tmpl.Compile (Own, Body_T, Status => Status);
+         Assert (E.Is_Ok (Status), "the content-method template did not compile");
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status,
+                      Image_Marker => "<IMG>");
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "<IMG>bye",
+                 "content parts through a string method dropped the marker: "
+                 & (if E.Is_Ok (Status) then Room (1 .. Last)
+                    else E.Error_Code'Image (Status.Code)));
+         Tmpl.Close (Own);
+         Conv.Close (Talk);
+      end;
+
       --  A turn given as parts reads as its words wherever text is wanted,
       --  keeps its list for the template, survives a checkpoint, and is
       --  refused when the list is not one.

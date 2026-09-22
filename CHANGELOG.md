@@ -9,16 +9,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
-- **A picture survives a text filter in a chat template.** A message's content
-  given as parts -- a picture and words -- renders inline where the template
-  writes the content, the words with a marker where the picture stands. That
-  held where the content was printed or added to text, but a text filter --
-  `trim`, `lower` and the rest -- read the parts' JSON instead and trimmed the
-  marker away, so the prompt marked no picture and the run was refused
-  (`MR-GEN-0009`). MiniCPM-V 2.5's own template writes `content | trim`, so its
-  pictures were lost this way; the filter now renders the parts inline as the
-  bare mention does. MiniCPM-V 2.5 encodes and answers about a picture end to
-  end, its llava-uhd slices framed in the 2.5 group form.
+- **A picture survives a filter or a string method in a chat template.** A
+  message's content given as parts -- a picture and words -- renders inline
+  where the template writes the content, the words with a marker where the
+  picture stands. That held where the content was printed or added to text, but
+  a text filter (`trim`, `lower` and the rest) and a string method (`.strip()`,
+  `.replace()`, `.split()`, `.startswith()` ...) read the parts' JSON instead
+  and dropped the marker, so the prompt marked no picture and the run was
+  refused (`MR-GEN-0009`). MiniCPM-V 2.5's own template writes `content | trim`,
+  so its pictures were lost this way. Every place that coerces a value to prompt
+  text now reads it the one way -- a shared `Prompt_Text` -- so a filter, a
+  method and a bare mention agree and the picture is kept. MiniCPM-V 2.5 encodes
+  and answers about a picture end to end, its llava-uhd slices framed in the 2.5
+  group form.
 
 ### Changed
 
