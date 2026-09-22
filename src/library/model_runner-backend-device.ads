@@ -64,14 +64,14 @@ package Model_Runner.Backend.Device is
    --  Words that table holds: two a row.
    Table_Room : constant := 2 * Table_Rows;
 
-   --  Elements after the table for the sinks, one a head and a slot a
-   --  layer, where an architecture learned them: a token chains its layers
-   --  into one submission and each layer's sinks are written to the mapping
-   --  as it is built, so they need a slot apiece or the last layer's win.
-   --  Two thousand and forty-eight holds a head's sink for every layer of a
-   --  model as wide as GPT-OSS; a layer whose slot would fall past this --
-   --  a wider model, or a deeper one -- attends on the host instead.
-   Sink_Room : constant := 2048;
+   --  The sinks sit past the table, one a head and a slot a layer where an
+   --  architecture learned them -- a token chains its layers into one
+   --  submission and each layer's sinks are written to the mapping as it is
+   --  built, so they need a slot apiece or the last layer's win. The room
+   --  they take is sized to the model rather than capped here, so a sink
+   --  model of any depth or width keeps every layer on the device: the
+   --  caller adds Sink_Footprint of the model to the cache it reserves and
+   --  writes each layer's slot within it.
 
    --  A round's per-row table: where each row has got to and where its
    --  cache begins, a row at a time in the rows' order.

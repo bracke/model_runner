@@ -6080,6 +6080,32 @@ package body Model_Runner.Llama is
    Block_Holder : array (0 .. Model_Runner.Backend.Device.Block_Limit - 1)
      of Session_Access := [others => null];
 
+   --  The room a model's attention sinks take in the device cache: a slot a
+   --  head a layer, where the architecture learned them, and none where it
+   --  did not. Sized to the model rather than to a fixed cap, so a sink
+   --  model of any depth or width keeps every layer's sinks on the device
+   --  rather than spilling the layers whose slot would fall past a constant
+   --  to the host. The next block is counted with the stack: it attends
+   --  like the rest, so it too reads a sink where the model has one.
+   function Sink_Footprint (Settings : Configuration) return Element_Count
+   is (if Settings.Kind = GPT_OSS
+       then Element_Count
+              ((Settings.Layers + Settings.Next_Layers) * Settings.Heads)
+       else 0);
+
+   --  What the sink region the held blocks were sized for holds: the model
+   --  their session belongs to, since the device carries one model's cache
+   --  at a time, and none where no block is held.
+   function Held_Sink_Room return Element_Count is
+   begin
+      for Which in Block_Holder'Range loop
+         if Block_Holder (Which) /= null then
+            return Sink_Footprint (Block_Holder (Which).Owner.Settings);
+         end if;
+      end loop;
+      return 0;
+   end Held_Sink_Room;
+
    --  And when each block was last asked for. A session stamps its block
    --  every time it asks for it -- which is every layer that goes over
    --  whole, so the stamp is how recently the block was read rather than
@@ -6859,7 +6885,7 @@ package body Model_Runner.Llama is
            Model_Runner.Backend.Device.Cache_Bytes_For
              (Block_Span_Of (Item)
               + Element_Count (Model_Runner.Backend.Device.Table_Room)
-              + Element_Count (Model_Runner.Backend.Device.Sink_Room));
+              + Sink_Footprint (Item.Owner.Settings));
 
          Bound : constant Interfaces.Unsigned_64 :=
            Model_Runner.Backend.Device.Cache_Bound;
@@ -7357,7 +7383,7 @@ package body Model_Runner.Llama is
             Wanted : constant Element_Count :=
               Element_Count'Max (Base + Span, Block_Taken)
               + Element_Count (Model_Runner.Backend.Device.Table_Room)
-              + Element_Count (Model_Runner.Backend.Device.Sink_Room);
+              + Sink_Footprint (Item.Owner.Settings);
 
             --  And how far the halves are read: this block's need and
             --  every held block's, which for a packed one is the room a
@@ -7933,7 +7959,7 @@ package body Model_Runner.Llama is
 
             Model_Runner.Backend.Device.Reserve_Cache
               (Pages_Taken + Element_Count (Words)
-               + Element_Count (Model_Runner.Backend.Device.Sink_Room),
+               + Sink_Footprint (Item.Owner.Settings),
                Copy_Upto => Pages_Taken, Ok => Ok);
             if not Ok then
                return;
@@ -7990,7 +8016,7 @@ package body Model_Runner.Llama is
 
             Model_Runner.Backend.Device.Reserve_Cache
               (Pages_Taken + Widest + Element_Count (Page_Table_Pad)
-               + Element_Count (Model_Runner.Backend.Device.Sink_Room),
+               + Sink_Footprint (Item.Owner.Settings),
                Copy_Upto => Pages_Taken, Ok => Ok);
             if not Ok then
                return;
@@ -8148,7 +8174,7 @@ package body Model_Runner.Llama is
       Layer : Natural := 0) return Boolean
    is (Sinks = null
        or else (Element_Count (Layer) + 1) * Sinks.all'Length
-               <= Element_Count (Model_Runner.Backend.Device.Sink_Room));
+               <= Held_Sink_Room);
 
    --  A layer's sinks put where the device's attention reads them, a head
    --  each after the round's table and a slot on from the layer before, and

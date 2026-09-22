@@ -29,7 +29,8 @@ Done, each crossed against the independent reference over every format and path
   Mamba, Mamba2, RWKV6 (Finch) and Jamba (the Mamba/attention/mixture hybrid).
 
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
-quants), Phase 4 (#13 DeepSeek MLA, now unblocked), and Phase 6 (vision).
+quants), Phase 4 (#13 DeepSeek MLA, now unblocked), and Phase 6's #16 (vision
+projectors); #17, the device sink-room depth cap, is done.
 (#11, the config-mostly arch batch, and #12 the reranker head are complete;
 Phase 5 — #14 the delta-rule device shader and #15 the state-space families —
 is complete.)
@@ -257,10 +258,18 @@ The largest infra investment; also the largest device win for models already
 16. **Beyond gemma3 / qwen3vl_merger** (`vision.adb:416`, `:540`). Per projector:
     pixtral, llama4/mtmd, MiniCPM-V, InternVL, SmolVLM, LLaVA, Qwen2-VL. Each is
     a distinct patch-embed + merge shape. **Large in aggregate; Medium each.**
-17. **`[device]` `Sink_Room` depth cap** (`backend-device.ads:72`). A model
-    deeper/wider than GPT-OSS spills its sink layers to the host. Raise the room
-    or make the sink slot region grow with the model. **Small–Medium.** Fold in
-    whenever a deeper sink model becomes relevant.
+17. ✅ **`[device]` sink-room depth cap** — done. The device cache reserved a
+    fixed 2048-element sink region, so a model whose `layers × heads` sink slots
+    ran past it -- a deeper or wider sink model, GPT-OSS-120B among them at
+    ~2304 -- attended those layers on the host. The region now grows with the
+    model: `Sink_Footprint` sizes it to `(layers + next) × heads` where the
+    architecture learned sinks and to nothing where it did not, so every sink
+    layer stays on the device and a non-sink model reserves no sink room at all.
+    The placement and sizing are exercised by the GPT-OSS device test (sinks a
+    head, a token / a batch / in bytes, against the reference) and by the device
+    conformance leg across the dense, windowed and hybrid shapes, outside
+    tolerance nought; the cap itself is gone rather than raised, so there is no
+    depth or width past which a sink model spills.
 
 **Exit:** the common multimodal families load.
 
