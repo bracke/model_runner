@@ -9272,24 +9272,44 @@ package body Model_Runner.Llama is
       --  path, which was fused for exactly this reason and left the mixture
       --  behind. See the README's `### A mixture, in one submission a
       --  layer`.
+      --  One submission holds two arms for at most Max_Members experts --
+      --  the device's product sequence is that long -- so a route wider
+      --  than that, seventeen experts where the sum reads sixteen and one
+      --  more, is spilled into rounds of Max_Members, each its own group.
+      --  Every round writes its arms to the same per-expert rooms the sum
+      --  below reads, indexed by the true slot, so the spill changes the
+      --  number of submissions and nothing else.
       if T."/=" (Item.Expert_Arms, null) then
          declare
-            Pairs : T.View_Group (1 .. 2 * Used);
-            Rooms : T.Target_Group (1 .. 2 * Used);
+            Done : Natural := 0;
          begin
-            for Slot in Chosen'Range loop
-               Pairs (2 * Slot + 1) :=
-                 Current.Experts.all (Chosen (Slot)).Gate;
-               Pairs (2 * Slot + 2) :=
-                 Current.Experts.all (Chosen (Slot)).Up;
-               Rooms (2 * Slot + 1) := Item.Expert_Arms.all (2 * Slot + 1);
-               Rooms (2 * Slot + 2) := Item.Expert_Arms.all (2 * Slot + 2);
-            end loop;
+            while Done < Used loop
+               declare
+                  Reach : constant Natural :=
+                    Natural'Min
+                      (Model_Runner.Backend.Device.Max_Members, Used - Done);
+                  Pairs : T.View_Group (1 .. 2 * Reach);
+                  Rooms : T.Target_Group (1 .. 2 * Reach);
+               begin
+                  for J in 0 .. Reach - 1 loop
+                     Pairs (2 * J + 1) :=
+                       Current.Experts.all (Chosen (Done + J)).Gate;
+                     Pairs (2 * J + 2) :=
+                       Current.Experts.all (Chosen (Done + J)).Up;
+                     Rooms (2 * J + 1) :=
+                       Item.Expert_Arms.all (2 * (Done + J) + 1);
+                     Rooms (2 * J + 2) :=
+                       Item.Expert_Arms.all (2 * (Done + J) + 2);
+                  end loop;
 
-            Product_Group (Item, Pairs, Input, Rooms, Status);
-            if E.Is_Error (Status) then
-               return;
-            end if;
+                  Product_Group (Item, Pairs, Input, Rooms, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Done := Done + Reach;
+               end;
+            end loop;
          end;
       end if;
 
