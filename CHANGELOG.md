@@ -49,7 +49,11 @@ Keep a Changelog and the project uses semantic versioning.
   "Blue", and a photograph draws a sentence about what is in it -- the sixty-four
   encoded rows are placed and the model attends them, through the model's own
   chat template with the picture given as a part -- no marker written by hand.
-  Placing the slices around the overview in the prompt is still to come.
+  A picture larger than the encoder's side is shown as MiniCPM-V shows it: the
+  overview between `<image>` and `</image>`, then its grid of slices, each
+  between `<slice>` and `</slice>`, a line break after each grid row -- the rows
+  of the overview and every slice placed in that order, so a 900-by-600 picture
+  becomes an overview and two slices, 192 rows behind three markers.
 
 - **A template renders a picture's parts inline.** A model whose own template
   writes `message['content']` -- or adds it to text, as MiniCPM-V's writes

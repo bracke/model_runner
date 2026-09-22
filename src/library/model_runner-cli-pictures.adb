@@ -257,6 +257,15 @@ package body Model_Runner.CLI.Pictures is
          Item.Lead := Model_Runner.Text.Empty;
          Item.Bridge := Model_Runner.Text.Empty;
          Item.Gap := Model_Runner.Text.Empty;
+         --  The slices' frame: <slice> ... </slice> a slice, a line break
+         --  after each grid row. Where the file has no slice tokens the
+         --  seer shows the overview alone.
+         Item.Slice_Marker :=
+           Model_Runner.Tokenizer.Find (Words.all, "<slice>");
+         Item.Slice_Closer :=
+           Model_Runner.Tokenizer.Find (Words.all, "</slice>");
+         Item.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("<slice>");
+         Item.Slice_Row_End := Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
       else
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
          Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
@@ -416,6 +425,10 @@ package body Model_Runner.CLI.Pictures is
       Into.Video_Marker_Text := Item.Video_Text;
       Into.Video_Open := Item.Video_Open;
       Into.Video_Close := Item.Video_Close;
+      Into.Slice_Marker := Item.Slice_Marker;
+      Into.Slice_Closer := Item.Slice_Closer;
+      Into.Slice_Marker_Text := Item.Slice_Marker_Text;
+      Into.Slice_Row_End := Item.Slice_Row_End;
 
       if Total <= Parts_Done then
          return;
@@ -432,11 +445,13 @@ package body Model_Runner.CLI.Pictures is
             Held_Rows : constant N.Element_Count := Held / Width;
             Added   : N.Element_Count := 0;
             Grid_Rows, Grid_Columns : Natural;
+            Slice_Cols_Val : Natural := 0;
 
             --  One more entry -- a still, a crop or a slot -- with its
             --  crops, rows and kind, the ones held copied over.
             procedure Add_Entry
-              (Crops : Natural; Rows : Natural; Kind : Gen.Entry_Kind)
+              (Crops : Natural; Rows : Natural; Kind : Gen.Entry_Kind;
+               Slice_Cols : Natural := 0)
             is
                Grown_Crops : constant Gen.Crop_Counts_Access :=
                  new Gen.Crop_Counts'(1 .. Into.Count + 1 => 0);
@@ -444,8 +459,15 @@ package body Model_Runner.CLI.Pictures is
                  new Gen.Crop_Counts'(1 .. Into.Count + 1 => Per);
                Grown_Kinds : constant Gen.Entry_Kinds_Access :=
                  new Gen.Entry_Kinds'(1 .. Into.Count + 1 => Gen.Still);
+               Grown_Cols : constant Gen.Crop_Counts_Access :=
+                 new Gen.Crop_Counts'(1 .. Into.Count + 1 => 0);
             begin
                for Which in 1 .. Into.Count loop
+                  if Into.Slice_Cols /= null
+                    and then Which in Into.Slice_Cols.all'Range
+                  then
+                     Grown_Cols.all (Which) := Into.Slice_Cols.all (Which);
+                  end if;
                   if Into.Crops /= null and then Which in Into.Crops.all'Range
                   then
                      Grown_Crops.all (Which) := Into.Crops.all (Which);
@@ -462,12 +484,15 @@ package body Model_Runner.CLI.Pictures is
                Grown_Crops.all (Into.Count + 1) := Crops;
                Grown_Counts.all (Into.Count + 1) := Rows;
                Grown_Kinds.all (Into.Count + 1) := Kind;
+               Grown_Cols.all (Into.Count + 1) := Slice_Cols;
                Free (Into.Crops);
                Free (Into.Counts);
                Free (Into.Kinds);
+               Free (Into.Slice_Cols);
                Into.Crops := Grown_Crops;
                Into.Counts := Grown_Counts;
                Into.Kinds := Grown_Kinds;
+               Into.Slice_Cols := Grown_Cols;
                Into.Count := Into.Count + 1;
             end Add_Entry;
 
@@ -646,15 +671,17 @@ package body Model_Runner.CLI.Pictures is
                end if;
 
                if Item.Resampler then
-                  --  MiniCPM-V: show the overview, the whole fit to the
-                  --  encoder's side keeping its aspect, and nothing else.
-                  --  Tiles stays one, so the entry below is the overview's
-                  --  own rows behind its <image> marker.
+                  --  MiniCPM-V: show the overview -- the whole fit to the
+                  --  encoder's side, aspect kept -- and, where the picture
+                  --  is larger than the side, a grid of slices, each a crop
+                  --  of the picture refined to whole cells. Tiles is one
+                  --  plus the slices, so the entry below carries the slice
+                  --  count and its grid width for the prompt to place them.
                   declare
                      OW, OH : Positive;
                      RW, RH, GC, GR, Cnt : Natural;
                      Sl : Model_Runner.Vision.Slice_List;
-                     Fitted : Model_Runner.Images.Raster;
+                     Fitted, Refined : Model_Runner.Images.Raster;
                   begin
                      Model_Runner.Vision.Plan_Slices
                        (Item.Eyes, Picture.Width, Picture.Height,
@@ -667,6 +694,43 @@ package body Model_Runner.CLI.Pictures is
                      else
                         Encode_One (Fitted);
                         Model_Runner.Images.Free (Fitted);
+                     end if;
+
+                     if E.Is_Ok (Status) and then Cnt > 0
+                       and then RW > 0 and then RH > 0
+                     then
+                        Slice_Cols_Val := GC;
+                        Tiles := 1 + Cnt;
+                        Model_Runner.Images.Resample
+                          (Picture, RW, RH, Refined);
+                        if Refined.Pixels = null then
+                           Status := E.Make (E.Memory_Allocation_Failed);
+                           E.Add_Text
+                             (Status, "category", "pictures",
+                              E.Param_Identifier);
+                        else
+                           for I in 1 .. Cnt loop
+                              declare
+                                 Piece : Model_Runner.Images.Raster;
+                              begin
+                                 Model_Runner.Images.Crop
+                                   (Refined, Sl (I).Left, Sl (I).Top,
+                                    Positive'Max (1, Sl (I).Width),
+                                    Positive'Max (1, Sl (I).Height), Piece);
+                                 if Piece.Pixels = null then
+                                    Status := E.Make (E.Memory_Allocation_Failed);
+                                    E.Add_Text
+                                      (Status, "category", "pictures",
+                                       E.Param_Identifier);
+                                 else
+                                    Encode_One (Piece);
+                                    Model_Runner.Images.Free (Piece);
+                                 end if;
+                              end;
+                              exit when E.Is_Error (Status);
+                           end loop;
+                           Model_Runner.Images.Free (Refined);
+                        end if;
                      end if;
                   end;
                else
@@ -718,7 +782,7 @@ package body Model_Runner.CLI.Pictures is
                Add_Entry
                  (Tiles - 1,
                   (if Tiles > 1 then Per else Natural (Added / Width)),
-                  Gen.Still);
+                  Gen.Still, Slice_Cols => Slice_Cols_Val);
             end if;
 
             Into.Parts := Index;
@@ -742,6 +806,7 @@ package body Model_Runner.CLI.Pictures is
       Free (Item.Counts);
       Free (Item.Places);
       Free (Item.Kinds);
+      Free (Item.Slice_Cols);
       Free (Item.Video_Slots);
       Free (Item.Times);
       Item := Gen.No_Pictures;

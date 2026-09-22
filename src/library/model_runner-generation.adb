@@ -283,6 +283,36 @@ package body Model_Runner.Generation is
                begin
                   if Crops = 0 then
                      Ada.Strings.Unbounded.Append (Result, Frame);
+                  elsif Pictures.Slice_Marker /= Vocab.No_Token then
+                     --  MiniCPM-V: the overview, then a grid of slices,
+                     --  each between its own marker and closer, a row-end
+                     --  token after each grid row but the last.
+                     declare
+                        Cols : constant Natural :=
+                          (if Pictures.Slice_Cols /= null
+                             and then Which in Pictures.Slice_Cols.all'Range
+                             and then Pictures.Slice_Cols.all (Which) > 0
+                           then Pictures.Slice_Cols.all (Which) else Crops);
+                        Slice : constant String :=
+                          Model_Runner.Text.To_String
+                            (Pictures.Slice_Marker_Text);
+                        Row_End : constant String :=
+                          Model_Runner.Text.To_String (Pictures.Slice_Row_End);
+                        Done : Natural := 0;
+                     begin
+                        Ada.Strings.Unbounded.Append (Result, Frame);
+                        while Done < Crops loop
+                           for Column in 1 .. Natural'Min (Cols, Crops - Done)
+                           loop
+                              Ada.Strings.Unbounded.Append (Result, Slice);
+                              Done := Done + 1;
+                           end loop;
+                           if Done < Crops then
+                              Ada.Strings.Unbounded.Append (Result, Row_End);
+                           end if;
+                        end loop;
+                        Crops_Written := Crops_Written + Crops;
+                     end;
                   else
                      Ada.Strings.Unbounded.Append
                        (Result,
@@ -312,6 +342,8 @@ package body Model_Runner.Generation is
       --  soft token of either kind.
       function Is_Marker (Token : Vocab.Token_Id) return Boolean
       is (Token = Pictures.Marker
+          or else (Pictures.Slice_Marker /= Vocab.No_Token
+                   and then Token = Pictures.Slice_Marker)
           or else (Pictures.Video_Marker /= Vocab.No_Token
                    and then Token = Pictures.Video_Marker));
       function Is_Soft (Token : Vocab.Token_Id) return Boolean
@@ -834,7 +866,9 @@ package body Model_Runner.Generation is
                begin
                   for Index in 1 .. Marked loop
                      Extra := Extra + Rows_Of (Index)
-                       + (if Pictures.Closer /= Vocab.No_Token then 1 else 0);
+                       + (if Pictures.Closer /= Vocab.No_Token
+                            or else Pictures.Slice_Closer /= Vocab.No_Token
+                          then 1 else 0);
                   end loop;
                   Opened :=
                     new Vocab.Token_Array
@@ -852,17 +886,32 @@ package body Model_Runner.Generation is
                            Opened.all (Filled) := Tokens.all (Index);
                         end if;
                         --  A slot's rows stand behind the video's own
-                        --  marker, a still's behind the soft token.
+                        --  marker, a still's -- an overview's or a slice's
+                        --  -- behind the soft token.
                         for Row in 1 .. Rows_Of (Which) loop
                            Filled := Filled + 1;
                            Opened.all (Filled) :=
-                             (if Tokens.all (Index) = Pictures.Marker
-                              then Pictures.Soft else Pictures.Video_Marker);
+                             (if Pictures.Video_Marker /= Vocab.No_Token
+                                and then Tokens.all (Index) = Pictures.Video_Marker
+                              then Pictures.Video_Marker else Pictures.Soft);
                         end loop;
-                        if Pictures.Closer /= Vocab.No_Token then
-                           Filled := Filled + 1;
-                           Opened.all (Filled) := Pictures.Closer;
-                        end if;
+                        --  A slice closes with its own </slice>, an overview
+                        --  with </image>, a slot with nothing.
+                        declare
+                           Shut : constant Vocab.Token_Id :=
+                             (if Pictures.Slice_Marker /= Vocab.No_Token
+                                and then Tokens.all (Index) = Pictures.Slice_Marker
+                              then Pictures.Slice_Closer
+                              elsif Pictures.Video_Marker /= Vocab.No_Token
+                                and then Tokens.all (Index) = Pictures.Video_Marker
+                              then Vocab.No_Token
+                              else Pictures.Closer);
+                        begin
+                           if Shut /= Vocab.No_Token then
+                              Filled := Filled + 1;
+                              Opened.all (Filled) := Shut;
+                           end if;
+                        end;
                      end if;
                   end loop;
                   Free_Tokens (Tokens);

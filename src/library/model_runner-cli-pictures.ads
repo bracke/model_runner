@@ -149,8 +149,13 @@ private
       Width  : Natural := 0;
       --  Whether the projector is MiniCPM-V's resampler, which frames a
       --  picture with <image> and </image> and shows a large one as an
-      --  overview fit to the encoder's side.
+      --  overview fit to the encoder's side and a grid of slices, each
+      --  between <slice> and </slice>, a line break after each grid row.
       Resampler : Boolean := False;
+      Slice_Marker, Slice_Closer : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Slice_Marker_Text, Slice_Row_End : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;

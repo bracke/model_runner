@@ -395,6 +395,21 @@ package Model_Runner.Generation is
       Crop_Bridge : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crop_Gap    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
+      --  MiniCPM-V's slices, where a picture is shown as an overview and a
+      --  grid of them: the marker and closer a slice stands between --
+      --  <slice> and </slice>, apart from the overview's <image> -- the
+      --  row-end token written after each grid row but the last, and how
+      --  many slices a row each picture has. No_Token and null where a
+      --  projector has no slices, so a still with crops falls to the words
+      --  above instead.
+      Slice_Marker : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Slice_Closer : Model_Runner.Tokenizer.Token_Id :=
+        Model_Runner.Tokenizer.No_Token;
+      Slice_Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Slice_Row_End     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Slice_Cols        : Crop_Counts_Access := null;
+
       --  The videos, as described above: their marker, which is their
       --  soft token too; its text and the opener and closer the rewrite
       --  sets a slot between; which entries are slots, how many slots
