@@ -1569,6 +1569,167 @@ package body Model_Runner.Vision is
       end loop;
    end Attend;
 
+   -----------------
+   -- Plan_Slices --
+   -----------------
+
+   procedure Plan_Slices
+     (Item          : Encoder;
+      Width, Height : Positive;
+      Overview_W, Overview_H : out Positive;
+      Refined_W, Refined_H   : out Natural;
+      Grid_Cols, Grid_Rows   : out Natural;
+      Slices        : out Slice_List;
+      Count         : out Natural)
+   is
+      subtype WR is N.Wide_Real;
+
+      Slice_Side : constant Integer := Item.Size;
+      --  MiniCPM-V's resampler does not merge patches, so the slice sizes
+      --  align to the patch alone.
+      Patch      : constant Integer := Item.Patch;
+
+      function Truncate (X : WR) return Integer
+      is (Integer (WR'Truncation (X)));
+
+      --  Round Length to the nearest whole multiple of By, at least By.
+      function Ensure_Divide (Length, By : Integer) return Integer
+      is (Integer'Max
+            (Integer (WR'Rounding (WR (Length) / WR (By))) * By, By));
+
+      --  Fit a size within Slice_Side a side, aspect kept, to whole
+      --  patches; upscaled to fill it where allowed, else only shrunk.
+      procedure Best_Resize
+        (In_W, In_H : Integer; Allow_Upscale : Boolean;
+         Out_W, Out_H : out Integer)
+      is
+         W : Integer := In_W;
+         H : Integer := In_H;
+      begin
+         if In_W * In_H > Slice_Side * Slice_Side or else Allow_Upscale then
+            declare
+               R : constant WR := WR (In_W) / WR (In_H);
+            begin
+               H := Truncate (WR (Slice_Side) / Elementary.Sqrt (R));
+               W := Truncate (WR (H) * R);
+            end;
+         end if;
+         Out_W := Ensure_Divide (W, Patch);
+         Out_H := Ensure_Divide (H, Patch);
+      end Best_Resize;
+
+      --  The grid, of at most nine cells, whose shape sits closest to the
+      --  picture's aspect: the split counts around the area ratio, each
+      --  factored every way, the factor pair nearest the log aspect.
+      procedure Best_Grid
+        (Multiple : Integer; Log_Ratio : WR;
+         Cols, Rows : out Integer)
+      is
+         Best_Cols : Integer := 1;
+         Best_Rows : Integer := 1;
+         Min_Error : WR := WR'Last;
+         procedure Consider (N : Integer) is
+         begin
+            if N = 1 or else N > Max_Slices then
+               return;
+            end if;
+            for M in 1 .. N loop
+               if N mod M = 0 then
+                  declare
+                     GW : constant Integer := M;
+                     GH : constant Integer := N / M;
+                     Err : constant WR :=
+                       abs (Log_Ratio
+                            - Elementary.Log (WR (GW) / WR (GH)));
+                  begin
+                     if Err < Min_Error then
+                        Min_Error := Err;
+                        Best_Cols := GW;
+                        Best_Rows := GH;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end Consider;
+      begin
+         Consider (Multiple - 1);
+         Consider (Multiple);
+         Consider (Multiple + 1);
+         Cols := Best_Cols;
+         Rows := Best_Rows;
+      end Best_Grid;
+
+      Has_Slices : constant Boolean :=
+        Width > Slice_Side or else Height > Slice_Side;
+      OW, OH : Integer;
+   begin
+      Overview_W := 1;
+      Overview_H := 1;
+      Refined_W := 0;
+      Refined_H := 0;
+      Grid_Cols := 0;
+      Grid_Rows := 0;
+      Slices := [others => (others => 0)];
+      Count := 0;
+
+      Best_Resize (Width, Height, not Has_Slices, OW, OH);
+      Overview_W := Positive (OW);
+      Overview_H := Positive (OH);
+
+      if not Has_Slices then
+         return;
+      end if;
+
+      declare
+         Log_Ratio : constant WR :=
+           Elementary.Log (WR (Width) / WR (Height));
+         Ratio : constant WR :=
+           WR (Width) * WR (Height) / (WR (Slice_Side) * WR (Slice_Side));
+         Multiple : constant Integer :=
+           Integer'Min (Truncate (WR'Ceiling (Ratio)), Max_Slices);
+         Cols, Rows : Integer;
+      begin
+         Best_Grid (Multiple, Log_Ratio, Cols, Rows);
+
+         --  Refine: the whole grown to whole cells, each cell fit to the
+         --  side to whole patches, the refined picture their tiling.
+         declare
+            --  The whole grown to a whole number of grid cells, then each
+            --  cell fit to the side. ensure_divide here divides by the
+            --  grid count, as the reference does, not by the patch.
+            Refine_W : constant Integer := Ensure_Divide (Width, Cols);
+            Refine_H : constant Integer := Ensure_Divide (Height, Rows);
+            Cell_W : constant Integer := Integer'Max (Refine_W / Cols, 1);
+            Cell_H : constant Integer := Integer'Max (Refine_H / Rows, 1);
+            Best_W, Best_H : Integer;
+         begin
+            Best_Resize (Cell_W, Cell_H, True, Best_W, Best_H);
+            Refined_W := Best_W * Cols;
+            Refined_H := Best_H * Rows;
+            Grid_Cols := Cols;
+            Grid_Rows := Rows;
+            Count := Cols * Rows;
+
+            declare
+               GX : constant Integer := Refined_W / Cols;
+               GY : constant Integer := Refined_H / Rows;
+               Index : Natural := 0;
+            begin
+               for IC in 0 .. Rows - 1 loop
+                  for JC in 0 .. Cols - 1 loop
+                     Index := Index + 1;
+                     Slices (Index) :=
+                       (Left   => JC * GX,
+                        Top    => IC * GY,
+                        Width  => GX,
+                        Height => GY);
+                  end loop;
+               end loop;
+            end;
+         end;
+      end;
+   end Plan_Slices;
+
    procedure Encode_Gemma
      (Item    : in out Encoder;
       Picture : Model_Runner.Images.Raster;

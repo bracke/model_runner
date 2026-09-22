@@ -3429,6 +3429,40 @@ package body Tests.Vision_Cases is
                  & N.Wide_Real'Image (Wanted (J)));
       end loop;
       T.Free (Rows);
+
+      --  The llava-uhd slicing: a picture within the side is the overview
+      --  alone, upscaled to fill it; a larger one is a grid of slices over
+      --  a refined whole. Checked against a faithful port of the reference
+      --  geometry (image side sixteen, patch four).
+      declare
+         use type Vision.Slice_Box;
+         OW, OH : Positive;
+         RW, RH, GC, GR, Count : Natural;
+         Sl : Vision.Slice_List;
+      begin
+         Vision.Plan_Slices (Eyes, 12, 10, OW, OH, RW, RH, GC, GR, Sl, Count);
+         Assert (OW = 16 and then OH = 16 and then Count = 0
+                 and then GC = 0 and then GR = 0,
+                 "a small picture was sliced");
+
+         Vision.Plan_Slices (Eyes, 40, 24, OW, OH, RW, RH, GC, GR, Sl, Count);
+         Assert (OW = 20 and then OH = 12
+                 and then GC = 2 and then GR = 2 and then Count = 4
+                 and then RW = 40 and then RH = 24
+                 and then Sl (1) = (0, 0, 20, 12)
+                 and then Sl (2) = (20, 0, 20, 12)
+                 and then Sl (3) = (0, 12, 20, 12)
+                 and then Sl (4) = (20, 12, 20, 12),
+                 "a wide picture was sliced wrong");
+
+         Vision.Plan_Slices (Eyes, 24, 40, OW, OH, RW, RH, GC, GR, Sl, Count);
+         Assert (OW = 12 and then OH = 20
+                 and then GC = 2 and then GR = 2 and then Count = 4
+                 and then RW = 24 and then RH = 40
+                 and then Sl (1) = (0, 0, 12, 20)
+                 and then Sl (4) = (12, 20, 12, 20),
+                 "a tall picture was sliced wrong");
+      end;
       Vision.Close (Eyes);
 
       --  A resampler named as another kind is refused by name.

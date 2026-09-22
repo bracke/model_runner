@@ -29,6 +29,12 @@ Keep a Changelog and the project uses semantic versioning.
   its aspect -- the ViT grid is the picture's own sides in whole patches, placed
   from the seventy-a-side bank -- so a 448-a-side, twenty-seven-block,
   3584-wide, sixty-four-query file reads a photograph to sixty-four finite rows.
+  Its llava-uhd slicing is planned too (`Vision.Plan_Slices`): a picture within
+  the encoder's side is the overview alone, upscaled to fill it; a larger one is
+  a grid of at most nine slices over a refined whole, the grid nearest the
+  picture's aspect, every size a whole number of patches. Checked against a
+  faithful port of the reference geometry; the prompt framing that places the
+  slices is not wired yet.
 
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the

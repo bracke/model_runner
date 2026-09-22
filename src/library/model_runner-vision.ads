@@ -213,6 +213,45 @@ package Model_Runner.Vision is
    --  states: the fewest pixels a video may have over its frames, the
    --  most, and the most rows one frame may become, at which its pixels
    --  are capped when the budget's even share a frame is more.
+   --  MiniCPM-V's llava-uhd slicing. A picture larger than the encoder's
+   --  side is shown as an overview -- the whole fit to the side, aspect
+   --  kept -- and a grid of slices, each a crop of the picture refined to
+   --  a whole number of the encoder's-side cells. A picture within the
+   --  side is the overview alone, upscaled to fill it. The grid is chosen
+   --  to sit closest to the picture's aspect, at most nine cells. Every
+   --  size returned is a whole number of patches, so the encoder resamples
+   --  each to its own grid without distortion.
+   Max_Slices : constant := 9;
+
+   type Slice_Box is record
+      Left, Top, Width, Height : Natural := 0;
+   end record;
+
+   type Slice_List is array (1 .. Max_Slices) of Slice_Box;
+
+   --  Plan a picture's overview and slices.
+   --
+   --  @param Item Open MiniCPM-V encoder.
+   --  @param Width The picture's width in pixels.
+   --  @param Height Its height.
+   --  @param Overview_W Receives the width to resize the whole to.
+   --  @param Overview_H Its height.
+   --  @param Refined_W The width to resize the whole to before cropping
+   --    slices, or 0 where the picture is shown as the overview alone.
+   --  @param Refined_H Its height, or 0.
+   --  @param Grid_Cols How many slices a row, or 0 where there are none.
+   --  @param Grid_Rows How many rows of slices, or 0.
+   --  @param Slices Receives each slice's crop in the refined picture.
+   --  @param Count How many slices, Grid_Cols times Grid_Rows, or 0.
+   procedure Plan_Slices
+     (Item          : Encoder;
+      Width, Height : Positive;
+      Overview_W, Overview_H : out Positive;
+      Refined_W, Refined_H   : out Natural;
+      Grid_Cols, Grid_Rows   : out Natural;
+      Slices        : out Slice_List;
+      Count         : out Natural);
+
    Video_Least_Pixels : constant := 4096;
    Video_Most_Pixels  : constant := 25_165_824;
    Video_Frame_Rows   : constant := 768;

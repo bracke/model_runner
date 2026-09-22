@@ -77,6 +77,12 @@ package body Library_Surface is
       --  encoding any asks first.
       new String'("Fixed_Rows"),
 
+      --  A MiniCPM-V picture's overview and slice grid. The geometry is
+      --  the library's; the command will call it once the prompt framing
+      --  that places the slices is wired, and the suite already checks it
+      --  against the reference plans.
+      new String'("Plan_Slices"),
+
       --  What a session's position turns by, in its three parts. The
       --  engine marks and reads them itself; the suite reads them back
       --  to see a picture's rows placed by row and column, and a program
