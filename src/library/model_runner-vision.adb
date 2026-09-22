@@ -2932,7 +2932,7 @@ package body Model_Runner.Vision is
    -----------------
 
    function Reads_Video (Item : Encoder) return Boolean
-   is (Item.Ready and then Is_Qwen (Item));
+   is (Item.Ready and then (Is_Qwen (Item) or else Is_Minicpm (Item)));
 
    ----------------
    -- Frames_Fit --
@@ -2993,6 +2993,22 @@ package body Model_Runner.Vision is
       if not Reads_Video (Item) then
          Status := E.Make (E.Arch_Unsupported_Feature);
          E.Add_Text (Status, "feature", "video", E.Param_Identifier);
+         return;
+      end if;
+
+      --  MiniCPM-V has no video processor of its own: a frame is a picture,
+      --  fit to the encoder's side as any picture is (the overview), and
+      --  the frames of a video are all one size, so one fit serves them all.
+      if Is_Minicpm (Item) then
+         declare
+            OW, OH : Positive;
+            RW, RH, GC, GR, Cnt : Natural;
+            Sl : Slice_List;
+         begin
+            Plan_Slices (Item, Width, Height, OW, OH, RW, RH, GC, GR, Sl, Cnt);
+            Fit_Width := OW;
+            Fit_Height := OH;
+         end;
          return;
       end if;
 

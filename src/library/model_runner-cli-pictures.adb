@@ -18,6 +18,12 @@ package body Model_Runner.CLI.Pictures is
    package T renames Model_Runner.Tensors;
    package US renames Ada.Strings.Unbounded;
 
+   --  What a MiniCPM-V video part stands as in the rendered prompt before
+   --  the frames are placed: a mark no prompt writes, replaced by one
+   --  picture marker a frame. Not a token -- it is gone before tokenizing.
+   Video_Frames_Mark : constant String :=
+     [Character'Val (2)] & "minicpmv-video" & [Character'Val (2)];
+
    procedure Free is new Ada.Unchecked_Deallocation
      (Gen.Crop_Counts, Gen.Crop_Counts_Access);
    procedure Free is new Ada.Unchecked_Deallocation
@@ -282,6 +288,11 @@ package body Model_Runner.CLI.Pictures is
                Item.Slice_Closer := Model_Runner.Tokenizer.No_Token;
             end if;
          end if;
+
+         --  A video is a run of frames, each a picture; the part stands as
+         --  the mark below, opened out into one picture marker a frame.
+         Item.Video_Frames := True;
+         Item.Video_Text := Model_Runner.Text.To_Bounded (Video_Frames_Mark);
       else
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
          Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
@@ -445,6 +456,7 @@ package body Model_Runner.CLI.Pictures is
       Into.Slice_Closer := Item.Slice_Closer;
       Into.Slice_Marker_Text := Item.Slice_Marker_Text;
       Into.Slice_Row_End := Item.Slice_Row_End;
+      Into.Video_As_Frames := Item.Video_Frames;
 
       if Total <= Parts_Done then
          return;
@@ -617,46 +629,66 @@ package body Model_Runner.CLI.Pictures is
                if E.Is_Error (Status) then
                   return;
                end if;
-               if Slots_Before + (Kept.all'Length + 1) / 2 > Max_Slots then
-                  Status := E.Make (E.CLI_Option_Out_Of_Range);
-                  E.Add_Text
-                    (Status, "option", "--prompt-parts", E.Param_Identifier);
-                  Model_Runner.Video.Release (Kept, Times);
-                  return;
-               end if;
-
-               --  The pairs, the last frame paired with itself where the
-               --  count is odd.
-               declare
-                  Frames   : constant Natural := Kept.all'Length;
-                  At_Frame : Positive := 1;
-               begin
-                  while E.Is_Ok (Status) and then At_Frame <= Frames loop
-                     declare
-                        Next : constant Positive :=
-                          Positive'Min (At_Frame + 1, Frames);
-                     begin
-                        Model_Runner.Vision.Encode_Frames
-                          (Item.Eyes, Kept.all (At_Frame), Kept.all (Next),
-                           Fit_Width, Fit_Height, Team, Rows, Grid_Rows,
-                           Grid_Columns, Cancel, Status);
-                        exit when E.Is_Error (Status);
-
-                        Slots := Slots + 1;
-                        Note_Slot
-                          ((Times.all (At_Frame) + Times.all (Next)) / 2.0);
-                        declare
-                           Count : constant Natural :=
-                             Natural (Rows.all'Length / Width);
-                        begin
-                           Keep_Rows (Rows);
-                           exit when E.Is_Error (Status);
-                           Add_Entry (0, Count, Gen.Slot);
-                        end;
-                        At_Frame := At_Frame + 2;
-                     end;
+               if Item.Resampler then
+                  --  MiniCPM-V has no video reader of its own: a frame is
+                  --  a picture, shown as its overview behind the picture
+                  --  marker, in order. One slot a frame.
+                  if Slots_Before + Kept.all'Length > Max_Slots then
+                     Status := E.Make (E.CLI_Option_Out_Of_Range);
+                     E.Add_Text
+                       (Status, "option", "--prompt-parts", E.Param_Identifier);
+                     Model_Runner.Video.Release (Kept, Times);
+                     return;
+                  end if;
+                  for I in Kept.all'Range loop
+                     exit when E.Is_Error (Status);
+                     Encode_One (Kept.all (I));
+                     exit when E.Is_Error (Status);
+                     Add_Entry (0, Per, Gen.Still);
+                     Slots := Slots + 1;
                   end loop;
-               end;
+               else
+                  if Slots_Before + (Kept.all'Length + 1) / 2 > Max_Slots then
+                     Status := E.Make (E.CLI_Option_Out_Of_Range);
+                     E.Add_Text
+                       (Status, "option", "--prompt-parts", E.Param_Identifier);
+                     Model_Runner.Video.Release (Kept, Times);
+                     return;
+                  end if;
+
+                  --  The pairs, the last frame paired with itself where the
+                  --  count is odd.
+                  declare
+                     Frames   : constant Natural := Kept.all'Length;
+                     At_Frame : Positive := 1;
+                  begin
+                     while E.Is_Ok (Status) and then At_Frame <= Frames loop
+                        declare
+                           Next : constant Positive :=
+                             Positive'Min (At_Frame + 1, Frames);
+                        begin
+                           Model_Runner.Vision.Encode_Frames
+                             (Item.Eyes, Kept.all (At_Frame), Kept.all (Next),
+                              Fit_Width, Fit_Height, Team, Rows, Grid_Rows,
+                              Grid_Columns, Cancel, Status);
+                           exit when E.Is_Error (Status);
+
+                           Slots := Slots + 1;
+                           Note_Slot
+                             ((Times.all (At_Frame) + Times.all (Next)) / 2.0);
+                           declare
+                              Count : constant Natural :=
+                                Natural (Rows.all'Length / Width);
+                           begin
+                              Keep_Rows (Rows);
+                              exit when E.Is_Error (Status);
+                              Add_Entry (0, Count, Gen.Slot);
+                           end;
+                           At_Frame := At_Frame + 2;
+                        end;
+                     end loop;
+                  end;
+               end if;
                Model_Runner.Video.Release (Kept, Times);
 
                if E.Is_Ok (Status) then

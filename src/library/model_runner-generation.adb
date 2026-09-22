@@ -216,17 +216,24 @@ package body Model_Runner.Generation is
                if Which in Pictures.Video_Slots.all'Range then
                   for Count in 1 .. Pictures.Video_Slots.all (Which) loop
                      Slot := Slot + 1;
-                     Ada.Strings.Unbounded.Append
-                       (Result,
-                        "<"
-                        & (if Pictures.Times /= null
-                              and then Slot in Pictures.Times.all'Range
-                           then Seconds_Text (Pictures.Times.all (Slot))
-                           else "0.0")
-                        & " seconds>"
-                        & Model_Runner.Text.To_String (Pictures.Video_Open)
-                        & Marker
-                        & Model_Runner.Text.To_String (Pictures.Video_Close));
+                     if Pictures.Video_As_Frames then
+                        --  A frame is a picture, behind the picture marker.
+                        Ada.Strings.Unbounded.Append
+                          (Result,
+                           Model_Runner.Text.To_String (Pictures.Marker_Text));
+                     else
+                        Ada.Strings.Unbounded.Append
+                          (Result,
+                           "<"
+                           & (if Pictures.Times /= null
+                                 and then Slot in Pictures.Times.all'Range
+                              then Seconds_Text (Pictures.Times.all (Slot))
+                              else "0.0")
+                           & " seconds>"
+                           & Model_Runner.Text.To_String (Pictures.Video_Open)
+                           & Marker
+                           & Model_Runner.Text.To_String (Pictures.Video_Close));
+                     end if;
                   end loop;
                else
                   Ada.Strings.Unbounded.Append (Result, Marker);

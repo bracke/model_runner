@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM-V reads video.** A `{"type": "video", "path": "DIR-OR-FILE", "fps": N}`
+  part to a resampler is now taken, not refused: MiniCPM-V has no video reader of
+  its own, so each sampled frame is a picture -- its overview, fit to the
+  encoder's side -- and the frames stand in order, each behind the picture
+  marker `<image>` and its closer. The video part opens out into one picture
+  marker a frame (a new `Video_As_Frames` on the picture set; `Videos_Written`
+  writes a picture marker a frame where a video reader would write a framed
+  slot), and `Reads_Video` and `Frames_Fit` now answer for the resampler as they
+  do for Qwen. Verified on the real openbmb/MiniCPM-V-2_6: three frames -- red,
+  green, blue -- read back "red for the first ..., green for the second ..." in
+  order, each frame attended. Frames are shown as overviews without slices, so a
+  short clip stays within a sane token count.
+
 - **MiniCPM-V images are read** (`resampler`). The first projector here with a
   resampler rather than a pool or a merge: over a SigLIP encoder read as Gemma
   3's is -- the patches placed from a seventy-a-side learned bank the grid

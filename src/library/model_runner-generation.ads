@@ -418,6 +418,12 @@ package Model_Runner.Generation is
       Video_Marker : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Video_Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      --  Whether a video's frames are shown as plain pictures, each behind
+      --  the picture marker -- MiniCPM-V has no video of its own, so its
+      --  frames are pictures -- rather than as the slots a video reader
+      --  writes. Then a video marker opens out to one picture marker a
+      --  frame instead of a framed slot a frame.
+      Video_As_Frames : Boolean := False;
       Video_Open  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Video_Close : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Kinds       : Entry_Kinds_Access := null;

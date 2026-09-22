@@ -1265,6 +1265,74 @@ package body Tests.Vision_Cases is
             Pictures.Slice_Row_End := Model_Runner.Text.Empty;
          end;
 
+         --  A MiniCPM-V video: its part stands as one mark, opened out
+         --  into one picture marker a frame, each frame's rows behind the
+         --  picture's soft token and closer. Here the mark is "b" and two
+         --  frames, so "b" becomes "cc" and each "c" opens as a picture.
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Read     : Natural;
+
+            procedure Expect_Video (Text : String) is
+               Raw : Vocab.Token_Array (1 .. 128);
+            begin
+               Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the video text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Closer;
+                  end if;
+               end loop;
+            end Expect_Video;
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Video_As_Frames := True;
+            Pictures.Video_Marker_Text := Model_Runner.Text.To_Bounded ("b");
+            Pictures.Video_Slots := new Gen.Crop_Counts'(1 => 2);
+            Pictures.Count := 2;
+            T.Free (Pictures.Rows);
+            T.Allocate (2 * Per * Width, Pictures.Rows);
+            Seed := 313;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            Expect_Video ("cc");
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "b", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the video run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the video prompt is" & Natural'Image (Outcome.Prompt_Tokens)
+                    & " tokens, not" & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the video prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Free (Pictures.Video_Slots);
+            Pictures.Video_As_Frames := False;
+            Pictures.Video_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Count := 1;
+         end;
+
          --  Two pictures given and one marked, or one given and none
          --  marked: refused before anything is evaluated.
          Pictures.Count := 2;

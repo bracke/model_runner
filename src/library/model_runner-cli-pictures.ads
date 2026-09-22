@@ -156,6 +156,9 @@ private
         Model_Runner.Tokenizer.No_Token;
       Slice_Marker_Text, Slice_Row_End : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
+      --  Whether a video's frames are shown as pictures (MiniCPM-V), each
+      --  behind the picture marker, rather than as a video reader's slots.
+      Video_Frames : Boolean := False;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;
