@@ -712,6 +712,9 @@ package Model_Runner.Kernels is
    --    none for a rotation by Position alone.
    --  @param Place The position in three parts, read where Sections deal
    --    the pairs.
+   --  @param Offset Where in a head the rotated slice begins: nought to
+   --    rotate a head from its first element, DeepSeek's nope width to
+   --    rotate the trailing slice.
    procedure Apply_Rotary_Pair
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -726,7 +729,8 @@ package Model_Runner.Kernels is
       Pairing         : Rotary_Pairing := Interleaved;
       Backwards       : Boolean := False;
       Sections        : Rotary_Sections := No_Sections;
-      Place           : Rotary_Place := (others => 0));
+      Place           : Rotary_Place := (others => 0);
+      Offset          : Element_Count := 0);
 
    --  Rotary positional encoding, in place.
    --
@@ -757,6 +761,9 @@ package Model_Runner.Kernels is
    --    none for a rotation by Position alone.
    --  @param Place The position in three parts, read where Sections deal
    --    the pairs.
+   --  @param Offset Where in a head the rotated slice begins: nought to
+   --    rotate a head from its first element, DeepSeek's nope width to
+   --    rotate the trailing slice.
    procedure Apply_Rotary
      (Vector          : in out Real_Array;
       Heads           : Element_Count;
@@ -769,7 +776,8 @@ package Model_Runner.Kernels is
       Pairing         : Rotary_Pairing := Interleaved;
       Backwards       : Boolean := False;
       Sections        : Rotary_Sections := No_Sections;
-      Place           : Rotary_Place := (others => 0));
+      Place           : Rotary_Place := (others => 0);
+      Offset          : Element_Count := 0);
 
    --  Report whether every element is finite.
    --

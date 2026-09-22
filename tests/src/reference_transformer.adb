@@ -1136,7 +1136,8 @@ package body Reference_Transformer is
          when Mamba => "mamba.",
          when Mamba2 => "mamba2.",
          when Rwkv6 => "rwkv6.",
-         when Jamba => "jamba.");
+         when Jamba => "jamba.",
+         when Deepseek2 => "deepseek2.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1598,6 +1599,8 @@ package body Reference_Transformer is
             Item.Kind := Rwkv6;
          elsif Named = "jamba" then
             Item.Kind := Jamba;
+         elsif Named = "deepseek2" then
+            Item.Kind := Deepseek2;
          else
             return;
          end if;
@@ -1881,6 +1884,18 @@ package body Reference_Transformer is
          else Metadata
                 (Source, Prefix (Item) & "rope.dimension_count",
                  Item.Head_Size));
+
+      --  DeepSeek's latent ranks and its leading dense layers. The query
+      --  latent is nought where the file states none -- the lite models --
+      --  and the key-value latent is always stated.
+      if Item.Kind = Deepseek2 then
+         Item.Q_Lora_Rank :=
+           Metadata (Source, Prefix (Item) & "attention.q_lora_rank", 0);
+         Item.KV_Lora_Rank :=
+           Metadata (Source, Prefix (Item) & "attention.kv_lora_rank", 0);
+         Item.Leading_Dense :=
+           Metadata (Source, Prefix (Item) & "leading_dense_block_count", 0);
+      end if;
 
       declare
          Value  : Model_Runner.Numerics.Wide_Real;
@@ -2416,7 +2431,46 @@ package body Reference_Transformer is
 
             --  Phi3's three attention projections come out of one tensor,
             --  in the order the rows are written: queries, keys, values.
-            if Is_Linear then
+            if Item.Kind = Deepseek2 then
+               --  DeepSeek's latent projections, all read here: the query
+               --  through a latent and a norm or straight, then the shared
+               --  key-value latent, its norm, and the up projection.
+               if Item.Q_Lora_Rank > 0 then
+                  Current.Q_A :=
+                    Read_Matrix (Layer_Name (Index, "attn_q_a.weight"),
+                                 Present);
+                  if Present then
+                     Current.Q_A_Norm :=
+                       Read_Vector
+                         (Layer_Name (Index, "attn_q_a_norm.weight"),
+                          Present);
+                  end if;
+                  if Present then
+                     Current.Q_B :=
+                       Read_Matrix (Layer_Name (Index, "attn_q_b.weight"),
+                                    Present);
+                  end if;
+               else
+                  Current.Query :=
+                    Read_Matrix (Layer_Name (Index, "attn_q.weight"),
+                                 Present);
+               end if;
+               if Present then
+                  Current.KV_A_MQA :=
+                    Read_Matrix (Layer_Name (Index, "attn_kv_a_mqa.weight"),
+                                 Present);
+               end if;
+               if Present then
+                  Current.KV_A_Norm :=
+                    Read_Vector (Layer_Name (Index, "attn_kv_a_norm.weight"),
+                                 Present);
+               end if;
+               if Present then
+                  Current.KV_B :=
+                    Read_Matrix (Layer_Name (Index, "attn_kv_b.weight"),
+                                 Present);
+               end if;
+            elsif Is_Linear then
                Present := True;
             elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
               | Chatglm
@@ -2432,7 +2486,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Is_Linear then
+            if Is_Linear or else Item.Kind = Deepseek2 then
                Present := True;
             elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
               | Chatglm
@@ -2449,7 +2503,7 @@ package body Reference_Transformer is
                return;
             end if;
 
-            if Is_Linear then
+            if Is_Linear or else Item.Kind = Deepseek2 then
                Present := True;
             elsif Item.Kind in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Mpt
               | Chatglm
@@ -2692,7 +2746,7 @@ package body Reference_Transformer is
             end if;
 
             if Item.Experts > 0
-              and then (Item.Kind /= Jamba
+              and then (Item.Kind not in Jamba | Deepseek2
                         or else Containers.Find_Tensor
                                   (Source,
                                    Layer_Name (Index, "ffn_gate_inp.weight"))
@@ -3351,7 +3405,13 @@ package body Reference_Transformer is
 
          --  Which layer is turning, because Gemma3's windowed layers turn
          --  on a base of their own.
-         Layer    : Natural)
+         Layer    : Natural;
+
+         --  Where in a head the rotated slice begins. Nought for every
+         --  architecture that rotates the head from its first element;
+         --  DeepSeek rotates the trailing slice a head, past the part that
+         --  is not rotated, so it turns from there.
+         Offset   : Natural := 0)
       is
       begin
          for Head in 0 .. Heads - 1 loop
@@ -3433,8 +3493,8 @@ package body Reference_Transformer is
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
                         | Baichuan
-                     then Head * Item.Head_Size + 2 * Pair
-                     else Head * Item.Head_Size + Pair);
+                     then Head * Item.Head_Size + Offset + 2 * Pair
+                     else Head * Item.Head_Size + Offset + Pair);
                   Odd   : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
@@ -4633,6 +4693,94 @@ package body Reference_Transformer is
                   --  parallel.
                   if Item.Kind in Falcon | Phi2 | Command_R then
                      Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
+                  end if;
+                  if Item.Kind = Deepseek2 then
+                     declare
+                        QK_Nope   : constant Natural :=
+                          Item.Head_Size - Item.Rotary;
+                        KV_Stride : constant Natural :=
+                          QK_Nope + Item.Value_Size;
+                        KV_Lat : Real_Vector
+                          (0 .. Item.KV_Lora_Rank + Item.Rotary - 1) :=
+                            [others => 0.0];
+                        C_KV   : Real_Vector (0 .. Item.KV_Lora_Rank - 1) :=
+                          [others => 0.0];
+                        C_Norm : Real_Vector (0 .. Item.KV_Lora_Rank - 1) :=
+                          [others => 0.0];
+                        KV     : Real_Vector
+                          (0 .. Item.Heads * KV_Stride - 1) :=
+                            [others => 0.0];
+                     begin
+                        --  The query, through its latent and a norm or
+                        --  straight where the file states no query latent.
+                        if Item.Q_Lora_Rank > 0 then
+                           declare
+                              Q_Lat  : Real_Vector
+                                (0 .. Item.Q_Lora_Rank - 1) := [others => 0.0];
+                              Q_Norm : Real_Vector
+                                (0 .. Item.Q_Lora_Rank - 1) := [others => 0.0];
+                           begin
+                              Project (Current.Q_A.all, Normed, Q_Lat);
+                              Normalize (Q_Lat, Current.Q_A_Norm.all, Q_Norm);
+                              Project (Current.Q_B.all, Q_Norm, Query);
+                           end;
+                        else
+                           Project (Current.Query.all, Normed, Query);
+                        end if;
+
+                        --  The key-value latent and the rotated slice it
+                        --  shares across the heads; the latent normalized
+                        --  by itself and projected out a head.
+                        Project (Current.KV_A_MQA.all, Normed, KV_Lat);
+                        for I in 0 .. Item.KV_Lora_Rank - 1 loop
+                           C_KV (I) := KV_Lat (I);
+                        end loop;
+                        Normalize (C_KV, Current.KV_A_Norm.all, C_Norm);
+                        Project (Current.KV_B.all, C_Norm, KV);
+
+                        --  A head's key is the nope part from the up
+                        --  projection and the shared rope part; its value
+                        --  the rest of the up projection.
+                        for Head in 0 .. Item.Heads - 1 loop
+                           for I in 0 .. QK_Nope - 1 loop
+                              Key_Row (Head * Item.Head_Size + I) :=
+                                KV (Head * KV_Stride + I);
+                           end loop;
+                           for I in 0 .. Item.Rotary - 1 loop
+                              Key_Row (Head * Item.Head_Size + QK_Nope + I) :=
+                                KV_Lat (Item.KV_Lora_Rank + I);
+                           end loop;
+                           for I in 0 .. Item.Value_Size - 1 loop
+                              Val_Row (Head * Item.Value_Size + I) :=
+                                KV (Head * KV_Stride + QK_Nope + I);
+                           end loop;
+                        end loop;
+
+                        --  Rotate the trailing slice of each head: the
+                        --  query's own and the shared key slice, one angle
+                        --  for every head at this position.
+                        Rotate (Query, Item.Heads, Step, Block,
+                                Offset => QK_Nope);
+                        Rotate (Key_Row, Item.Heads, Step, Block,
+                                Offset => QK_Nope);
+
+                        --  The keys and values go to the cache as the
+                        --  session rounds them, the same as a plain
+                        --  attention's do.
+                        Round_As (Key_Row, Item.Key_Rounding);
+                        Round_As (Val_Row, Item.Value_Rounding);
+
+                        for Index in 0 .. Q_Width - 1 loop
+                           Queries (Step, Index) := Query (Index);
+                        end loop;
+                        for Index in 0 .. KV_Width - 1 loop
+                           Keys (Slot, Index) := Key_Row (Index);
+                        end loop;
+                        for Index in 0 .. V_Width - 1 loop
+                           Values (Slot, Index) := Val_Row (Index);
+                        end loop;
+                     end;
+                     goto Projected;
                   end if;
                   if Item.Kind in Qwen35 | Qwen35_MoE then
                      Project (Current.Query.all, Normed, Wide_Query);

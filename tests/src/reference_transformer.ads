@@ -187,7 +187,7 @@ private
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
       Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6,
-      Jamba);
+      Jamba, Deepseek2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -215,6 +215,19 @@ private
       Query          : Matrix_Access := null;
       Key            : Matrix_Access := null;
       Value          : Matrix_Access := null;
+
+      --  DeepSeek's latent attention projections: the query through a
+      --  latent and a norm (Q_A, Q_A_Norm, Q_B) or straight through Query
+      --  where the file states no query latent; the keys and values
+      --  through a latent that carries the rotated slice beside it
+      --  (KV_A_MQA), a norm over the latent alone (KV_A_Norm), then out to
+      --  a nope key and a value a head (KV_B).
+      Q_A            : Matrix_Access := null;
+      Q_B            : Matrix_Access := null;
+      KV_A_MQA       : Matrix_Access := null;
+      KV_B           : Matrix_Access := null;
+      Q_A_Norm       : Vector_Access := null;
+      KV_A_Norm      : Vector_Access := null;
       Query_Bias     : Vector_Access := null;
       Key_Bias       : Vector_Access := null;
       Value_Bias     : Vector_Access := null;
@@ -450,6 +463,12 @@ private
       Decay_Extra  : Natural := 0;
       Rescale_Every : Natural := 0;
       Next_Layers  : Natural := 0;
+
+      --  DeepSeek's latent ranks and how many leading layers run a dense
+      --  feed-forward before the mixture ones begin.
+      Q_Lora_Rank  : Natural := 0;
+      KV_Lora_Rank : Natural := 0;
+      Leading_Dense : Natural := 0;
       Next_Proj    : Matrix_Access := null;
       Next_Enorm   : Vector_Access := null;
       Next_Hnorm   : Vector_Access := null;

@@ -2077,7 +2077,8 @@ package body Model_Runner.Kernels is
       Pairing         : Rotary_Pairing := Interleaved;
       Backwards       : Boolean := False;
       Sections        : Rotary_Sections := No_Sections;
-      Place           : Rotary_Place := (others => 0))
+      Place           : Rotary_Place := (others => 0);
+      Offset          : Element_Count := 0)
    is
       --  How many pairs there are, how many of them are tabulated at once,
       --  and where the run being tabulated begins. What goes into the table
@@ -2143,7 +2144,7 @@ package body Model_Runner.Kernels is
             for Head in 0 .. Heads - 1 loop
                declare
                   Origin : constant Element_Count :=
-                    Vector'First + Head * Head_Size;
+                    Vector'First + Head * Head_Size + Offset;
                begin
                   for Index in 0 .. Here - 1 loop
                      declare
@@ -2189,7 +2190,7 @@ package body Model_Runner.Kernels is
             for Head in 0 .. Second_Heads - 1 loop
                declare
                   Origin : constant Element_Count :=
-                    Second'First + Head * Head_Size;
+                    Second'First + Head * Head_Size + Offset;
                begin
                   for Index in 0 .. Here - 1 loop
                      declare
@@ -2239,13 +2240,14 @@ package body Model_Runner.Kernels is
       Pairing         : Rotary_Pairing := Interleaved;
       Backwards       : Boolean := False;
       Sections        : Rotary_Sections := No_Sections;
-      Place           : Rotary_Place := (others => 0))
+      Place           : Rotary_Place := (others => 0);
+      Offset          : Element_Count := 0)
    is
       Nothing : Real_Array (1 .. 0);
    begin
       Apply_Rotary_Pair
         (Vector, Heads, Nothing, 0, Head_Size, Rotary, Position, Base,
-         Scaling, Factors, Pairing, Backwards, Sections, Place);
+         Scaling, Factors, Pairing, Backwards, Sections, Place, Offset);
    end Apply_Rotary;
 
    -----------------

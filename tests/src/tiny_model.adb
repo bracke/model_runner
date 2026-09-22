@@ -108,10 +108,22 @@ package body Tiny_Model is
       --  different number from the other and from the embedding divided by
       --  the head count -- which is three separate assumptions this fixture
       --  breaks at once.
+      --  DeepSeek's key head is its whole key_length -- the part that is
+      --  rotated and the part that is not -- and its value head is the part
+      --  that is not, as the model defines them.
       Key_Size : constant Natural :=
-        (if Apart_Widths then 2 * Head_Size else Head_Factor * Head_Size);
+        (if Kind = Deepseek2 then Head_Size
+         elsif Apart_Widths then 2 * Head_Size else Head_Factor * Head_Size);
       Value_Size : constant Natural :=
-        (if Apart_Widths then 3 * Head_Size else Head_Factor * Head_Size);
+        (if Kind = Deepseek2 then Head_Size - Head_Size / 2
+         elsif Apart_Widths then 3 * Head_Size else Head_Factor * Head_Size);
+
+      --  DeepSeek's latent ranks and its one leading dense layer, small.
+      DS_Q_Lora    : constant Natural := 4;
+      DS_KV_Lora   : constant Natural := 4;
+      DS_Leading   : constant Natural := 1;
+      DS_Rotary    : constant Natural := Head_Size / 2;
+      DS_Nope      : constant Natural := Head_Size - Head_Size / 2;
 
       Builder : Fixtures.Builder;
       Seed    : Interfaces.Unsigned_64 := 12_345;
@@ -158,6 +170,7 @@ package body Tiny_Model is
         (if Depth > 0 then Depth
          elsif Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
          elsif Kind = Jamba then 4
+         elsif Kind = Deepseek2 then 3
          else Layers);
 
       --  Jamba's four layers, one of each of its two mixers crossed with its
@@ -175,9 +188,16 @@ package body Tiny_Model is
       --  Jamba is a mixture on some layers whatever the sweep asked for, so
       --  it carries a count of its own where the caller named none.
       Eff_Experts : constant Natural :=
-        (if Kind = Jamba and then Experts = 0 then 4 else Experts);
+        (if Kind in Jamba | Deepseek2 and then Experts = 0 then 4
+         else Experts);
       Eff_Used    : constant Natural :=
-        (if Kind = Jamba and then Experts_Used = 0 then 2 else Experts_Used);
+        (if Kind in Jamba | Deepseek2 and then Experts_Used = 0 then 2
+         else Experts_Used);
+
+      --  DeepSeek's mixture layers: every layer past the leading dense ones
+      --  carries a router and experts; the leading ones a dense block.
+      function DS_MoE (At_Layer : Natural) return Boolean
+      is (Kind = Deepseek2 and then At_Layer >= DS_Leading);
 
       Score_Amplitude : constant N.Real :=
         0.5 * N.Real
@@ -415,7 +435,8 @@ package body Tiny_Model is
            when Mamba     => "mamba",
            when Mamba2    => "mamba2",
            when Rwkv6     => "rwkv6",
-           when Jamba     => "jamba");
+           when Jamba     => "jamba",
+           when Deepseek2 => "deepseek2");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -467,7 +488,11 @@ package body Tiny_Model is
          Fixtures.End_Array (Builder);
       else
          Fixtures.Add_U32
-           (Builder, Prefix & ".attention.head_count_kv", KV_Heads);
+           (Builder, Prefix & ".attention.head_count_kv",
+            --  DeepSeek's latent attention reconstructs a key and a value
+            --  a head, so it is multi-head rather than grouped-query: every
+            --  head has its own, the count of them the head count.
+            (if Kind = Deepseek2 then Heads else KV_Heads));
       end if;
       --  Bert states the same quantity under the key that names the
       --  normalization it belongs to, which is not the root-mean-square
@@ -506,7 +531,7 @@ package body Tiny_Model is
              --  whole of it. The one fixture that exercises the partial path,
              --  which the split pairing and the tail left alone are crossed
              --  against the independent implementation through.
-             elsif Kind in Stablelm | Gptneox | Chatglm
+             elsif Kind in Stablelm | Gptneox | Chatglm | Deepseek2
              then Interfaces.Unsigned_32 (Head_Size / 2)
              else Interfaces.Unsigned_32 (Head_Size)));
       end if;
@@ -650,14 +675,30 @@ package body Tiny_Model is
            (Builder, Prefix & ".attention.causal", False);
       end if;
 
-      --  The head widths, when the file states them apart.
-      if Apart_Widths or else Head_Factor > 1 then
+      --  The head widths, when the file states them apart. DeepSeek always
+      --  states them: its key head is the whole key_length and its value
+      --  head the part that is not rotated, neither the embedding over the
+      --  head count.
+      if Apart_Widths or else Head_Factor > 1 or else Kind = Deepseek2 then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.key_length",
             Interfaces.Unsigned_32 (Key_Size));
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.value_length",
             Interfaces.Unsigned_32 (Value_Size));
+      end if;
+
+      --  DeepSeek's latent ranks and its leading dense layers.
+      if Kind = Deepseek2 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.q_lora_rank",
+            Interfaces.Unsigned_32 (DS_Q_Lora));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.kv_lora_rank",
+            Interfaces.Unsigned_32 (DS_KV_Lora));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".leading_dense_block_count",
+            Interfaces.Unsigned_32 (DS_Leading));
       end if;
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
 
@@ -1317,6 +1358,23 @@ package body Tiny_Model is
                           + KV_Heads * Value_Size)],
                   Q & K & V);
             end;
+         elsif Kind = Deepseek2 then
+            --  DeepSeek's latent projections: the query through a latent
+            --  and a norm, the keys and values through a latent that
+            --  carries the rotated slice beside it, its norm over the
+            --  latent alone, and the up projection out to a nope key and a
+            --  value a head.
+            Weight (Layer_Name (Index, "attn_q_a.weight"),
+                    [G.U64 (Embedding), G.U64 (DS_Q_Lora)]);
+            Gain_Of (Layer_Name (Index, "attn_q_a_norm.weight"), DS_Q_Lora);
+            Weight (Layer_Name (Index, "attn_q_b.weight"),
+                    [G.U64 (DS_Q_Lora), G.U64 (Heads * Key_Size)]);
+            Weight (Layer_Name (Index, "attn_kv_a_mqa.weight"),
+                    [G.U64 (Embedding), G.U64 (DS_KV_Lora + DS_Rotary)]);
+            Gain_Of (Layer_Name (Index, "attn_kv_a_norm.weight"), DS_KV_Lora);
+            Weight (Layer_Name (Index, "attn_kv_b.weight"),
+                    [G.U64 (DS_KV_Lora),
+                     G.U64 (Heads * (DS_Nope + Value_Size))]);
          else
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
@@ -1327,6 +1385,7 @@ package body Tiny_Model is
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
          if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Chatglm
+                      | Deepseek2
            and then not Linear_Block (Index)
          then
             Weight (Layer_Name (Index, "attn_k.weight"),
@@ -1500,7 +1559,10 @@ package body Tiny_Model is
             end if;
          end if;
 
-         if (if Kind = Jamba then Jamba_MoE (Index) else Experts > 0) then
+         if (if Kind = Jamba then Jamba_MoE (Index)
+             elsif Kind = Deepseek2 then DS_MoE (Index)
+             else Experts > 0)
+         then
             --  The router, then the experts stacked on an outermost axis,
             --  which is how a file writes them: one tensor a matrix rather
             --  than one tensor an expert. Jamba carries this on its mixture

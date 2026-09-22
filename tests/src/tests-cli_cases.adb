@@ -4151,6 +4151,17 @@ package body Tests.CLI_Cases is
             Fixtures.Add_U32 (Builder, Named & ".time_decay_extra_dim", 2);
          end if;
 
+         --  And what DeepSeek states of its latent attention: the key-value
+         --  latent rank it is refused without, the query latent rank, the
+         --  key and value head widths, and the rotated slice of a head.
+         if Named = "deepseek2" then
+            Fixtures.Add_U32 (Builder, Named & ".attention.kv_lora_rank", 4);
+            Fixtures.Add_U32 (Builder, Named & ".attention.q_lora_rank", 4);
+            Fixtures.Add_U32 (Builder, Named & ".attention.key_length", 4);
+            Fixtures.Add_U32 (Builder, Named & ".attention.value_length", 2);
+            Fixtures.Add_U32 (Builder, Named & ".rope.dimension_count", 2);
+         end if;
+
          Fixtures.Build (Builder, Image);
 
          declare

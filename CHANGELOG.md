@@ -7,6 +7,27 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **DeepSeek-V2/V3 (`deepseek2`) is read** -- multi-head latent attention with
+  a mixture of experts. A position's query is projected through a low-rank
+  latent of `attention.q_lora_rank`, or straight where the file states none as
+  the lite models leave it, and its keys and values through one of
+  `attention.kv_lora_rank`, each latent normalized by root mean square with its
+  own gain. The key-value latent carries a rotated slice beside it, one shared
+  across the heads; the up projection reconstructs a head's key -- the part that
+  is not rotated (`key_length` less `rope.dimension_count`) and the shared
+  rotated slice -- and its value (`value_length`), which the naive path writes
+  into the same per-head cache a plain attention keeps and blends the same way,
+  the rotation turning the trailing slice a head rather than the leading one
+  through a within-head offset the rotary kernel now takes. The first
+  `leading_dense_block_count` layers run a dense feed-forward and the rest a
+  mixture of routed experts. Crossed against the independent implementation over
+  every format and path, outside tolerance nought; on the host under the device
+  backend. The compressed latent (absorbed) cache, the yarn score scale, V3's
+  group-limited routing and shared experts, and the lite no-query-latent variant
+  are later steps; the coarsest byte cache is not crossed for it, its one scale
+  over a row of reconstructed keys a head past the tolerance a single-key-head
+  model measured.
+
 - **Jamba is read** -- a hybrid that interleaves Mamba mixer layers with
   attention ones and puts a mixture of experts on some layers and a dense
   feed-forward on others. It reuses Mamba's scan, ordinary attention and the

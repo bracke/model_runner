@@ -189,7 +189,7 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2, Rwkv6, Jamba);
+      Mamba2, Rwkv6, Jamba, Deepseek2);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -253,6 +253,19 @@ package Model_Runner.Llama is
    function Is_Jamba (Item : Architecture) return Boolean
    is (Item = Jamba);
 
+   --  Whether an architecture attends through a compressed latent -- multi-
+   --  head latent attention. DeepSeek-V2/V3: a position's keys and values
+   --  are one low-rank vector each layer holds, up-projected a head at a
+   --  time, and its rotation rides a slice of the head shared across the
+   --  heads rather than a width of every one. It keeps a distinct query and
+   --  key-value projection stage and its own score scale, and its mixture
+   --  runs a shared expert beside the routed ones after a few dense layers.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for DeepSeek-V2/V3.
+   function Is_MLA (Item : Architecture) return Boolean
+   is (Item = Deepseek2);
+
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
    --
@@ -305,7 +318,8 @@ package Model_Runner.Llama is
          when Mamba      => "mamba",
          when Mamba2     => "mamba2",
          when Rwkv6      => "rwkv6",
-         when Jamba      => "jamba");
+         when Jamba      => "jamba",
+         when Deepseek2  => "deepseek2");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -614,6 +628,19 @@ package Model_Runner.Llama is
       Shared_Feed     : Natural := 0;
       Next_Layers     : Natural := 0;
 
+      --  DeepSeek's multi-head latent attention. The query is projected
+      --  through a low-rank latent of Q_Lora_Rank -- or straight where the
+      --  rank is nought, as the lite models leave it -- and the keys and
+      --  values through one of KV_Lora_Rank. A head's width (Head_Size)
+      --  splits into the rotated slice (Rotary, shared across the heads)
+      --  and the rest that is not rotated (Head_Size - Rotary); the value
+      --  width (Value_Size) is its own. Leading_Dense layers run a dense
+      --  feed-forward before the mixture layers begin, as DeepSeek's first
+      --  few do.
+      Q_Lora_Rank     : Natural := 0;
+      KV_Lora_Rank    : Natural := 0;
+      Leading_Dense   : Natural := 0;
+
       --  Jamba's mixers: true where the layer keeps a Mamba state, false
       --  where it attends. Read from the file's per-layer key-value head
       --  count -- nought heads is a Mamba layer -- and all false for every
@@ -679,7 +706,7 @@ package Model_Runner.Llama is
    --  @param Settings Configuration to inspect.
    --  @return Width in elements.
    function Feed_Width (Settings : Configuration) return Natural
-   is (if Is_Jamba (Settings.Kind)
+   is (if Is_Jamba (Settings.Kind) or else Is_MLA (Settings.Kind)
        then Natural'Max (Settings.Expert_Feed, Settings.Feed_Forward)
        elsif Settings.Experts > 0
        then Settings.Expert_Feed
@@ -2056,6 +2083,20 @@ private
       Key : aliased Model_Runner.Tensors.View;
       Value : aliased Model_Runner.Tensors.View;
 
+      --  DeepSeek's latent attention projections. The query goes through
+      --  Q_A to a latent, normalized by Q_A_Norm, then Q_B out to the
+      --  heads -- or straight through Query where the file states no query
+      --  latent, as the lite models do. The keys and values go through
+      --  KV_A_MQA to a latent beside the rotated slice they share, the
+      --  latent normalized by KV_A_Norm, then KV_B out to a nope key and a
+      --  value a head. Null for every architecture but DeepSeek.
+      Q_A       : aliased Model_Runner.Tensors.View;
+      Q_B       : aliased Model_Runner.Tensors.View;
+      KV_A_MQA  : aliased Model_Runner.Tensors.View;
+      KV_B      : aliased Model_Runner.Tensors.View;
+      Q_A_Norm  : Model_Runner.Tensors.Real_Array_Access;
+      KV_A_Norm : Model_Runner.Tensors.Real_Array_Access;
+
       --  Added to the projections after they are computed. Null for an
       --  architecture that has none, which is what Llama has.
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access;
@@ -2581,6 +2622,15 @@ private
       Key_Row    : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Row  : Model_Runner.Tensors.Real_Array_Access := null;
       Attention  : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  DeepSeek's latent scratch: the query latent, the key-value latent
+      --  and its rotated slice, the normalized key-value latent, and the up
+      --  projection out a head that carries a nope key and a value. Null
+      --  for every architecture but DeepSeek.
+      MLA_Q_Lat  : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_KV_Lat : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_C_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_KV     : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Room for one head, for an architecture that normalizes each of them
       --  before the rotation. Null for one that does not.

@@ -29,8 +29,8 @@ Done, each crossed against the independent reference over every format and path
   Mamba, Mamba2, RWKV6 (Finch) and Jamba (the Mamba/attention/mixture hybrid).
 
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
-quants), Phase 4 (#13 DeepSeek MLA, now unblocked), and Phase 6's #16 (vision
-projectors); #17, the device sink-room depth cap, is done.
+quants) and Phase 6's #16 (vision projectors). Phase 4 (#13 DeepSeek MLA) is
+read in its naive form; #17, the device sink-room depth cap, is done.
 (#11, the config-mostly arch batch, and #12 the reranker head are complete;
 Phase 5 — #14 the delta-rule device shader and #15 the state-space families —
 is complete.)
@@ -188,13 +188,23 @@ fixture, conformance row. Batch the cheap ones.
 
 Depends on Phase 1. DeepSeek needs three things at once:
 
-13. **Multi-head latent attention (MLA)** — a new attention shape (compressed
-    KV latent + decoupled rope). New enum arch (`llama.ads:187`), a distinct
-    attention path on CPU and device, plus shared experts (#7) and sigmoid
-    gating (#8) from Phase 1. **Large** — the single biggest conventional-family
-    unblock, and the reason to finish Phase 1 first.
+13. ✅ **Multi-head latent attention (MLA)** — read (`deepseek2`). A position's
+    query goes through a low-rank latent (`attention.q_lora_rank`, or straight
+    where the file states none) and its keys and values through one
+    (`attention.kv_lora_rank`), each latent RMS-normalized; the key-value latent
+    carries a rotated slice shared across the heads, and the up projection
+    reconstructs a head's key -- the nope part plus the shared rotated slice --
+    and its value, which the naive path writes into the same per-head cache a
+    plain attention keeps and blends the same way, the rotation turning the
+    trailing slice a head. The first `leading_dense_block_count` layers run
+    dense, the rest a mixture. Crossed against the independent reference over
+    every format and path, outside tolerance nought, host-side under the device
+    backend. **Follow-ups:** the compressed latent (absorbed) cache, the yarn
+    score scale, V3's group-limited routing and shared experts, the lite
+    (no-query-latent) variant, and a device MLA kernel.
 
-**Exit:** DeepSeek-V2/V3-class models load and run.
+**Exit:** DeepSeek-V2/V3-class models load and run. The naive form reads them;
+the compressed cache is the memory-optimal follow-up.
 
 ---
 

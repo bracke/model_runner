@@ -513,7 +513,7 @@ package body Model_Runner.Llama is
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                        | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                       | Mamba2 | Rwkv6 | Jamba =>
+                       | Mamba2 | Rwkv6 | Jamba | Deepseek2 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -1665,6 +1665,50 @@ package body Model_Runner.Llama is
          elsif E.Is_Ok (Local) then Natural (Number)
          else Settings.Head_Size);
 
+      --  DeepSeek's latent ranks. The keys are projected through a latent
+      --  of KV_Lora_Rank, required; the queries through one of Q_Lora_Rank
+      --  where the file states it and straight otherwise, so nought is a
+      --  fact about the model rather than a missing key. Leading_Dense is
+      --  how many layers run a dense feed-forward before the mixture ones,
+      --  counting from the first; nought where every layer is a mixture.
+      --  The head width (Head_Size, from key_length) is the rotated slice
+      --  (Rotary) and the rest that is not; the value width (Value_Size)
+      --  its own -- both already read above.
+      if Is_MLA (Settings.Kind) then
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "attention.q_lora_rank"),
+            0, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Q_Lora_Rank :=
+           (if E.Is_Ok (Local) then Natural (Number) else 0);
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "attention.kv_lora_rank"),
+            1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+         if E.Is_Error (Local) then
+            Status := E.Make (E.GGUF_Missing_Metadata_Key);
+            E.Add_Text
+              (Status, "key",
+               Model_Key (Settings.Kind, "attention.kv_lora_rank"),
+               E.Param_Identifier);
+            return;
+         end if;
+         Settings.KV_Lora_Rank := Natural (Number);
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "leading_dense_block_count"),
+            0, Long_Long_Integer (Settings.Layers), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Leading_Dense :=
+           (if E.Is_Ok (Local) then Natural (Number) else 0);
+      end if;
+
       --  The three parts a Qwen3.5 position has, and how many pairs each
       --  turns: stated as four counts, the fourth unused, and dealt
       --  interleaved. A text token has the three parts equal, so a model
@@ -1754,7 +1798,13 @@ package body Model_Runner.Llama is
          then 7
          else 4 + 1 + 3 * Item.Settings.Experts)
         + (if Hybrid (Item.Settings.Kind) then 9 else 0)
-        + (if Is_RWKV (Item.Settings.Kind) then 8 else 0);
+        + (if Is_RWKV (Item.Settings.Kind) then 8 else 0)
+        --  DeepSeek's latent attention carries two query and two key-value
+        --  matrices in place of the three a plain attention has, and a
+        --  shared expert's three beside the routed ones. Counted for every
+        --  layer and left empty where a layer has none, since Add skips an
+        --  empty view.
+        + (if Is_MLA (Item.Settings.Kind) then 6 else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -1778,6 +1828,14 @@ package body Model_Runner.Llama is
       procedure Add_Layer (Which : in out Layer) is
       begin
          Add (Which.Query'Unchecked_Access);
+
+         --  DeepSeek's latent projections, read through the product like
+         --  any matrix and so repacked like any; its two latent norms are
+         --  read whole and are not here.
+         Add (Which.Q_A'Unchecked_Access);
+         Add (Which.Q_B'Unchecked_Access);
+         Add (Which.KV_A_MQA'Unchecked_Access);
+         Add (Which.KV_B'Unchecked_Access);
          Add (Which.Key'Unchecked_Access);
          Add (Which.Value'Unchecked_Access);
          Add (Which.Attention_Out'Unchecked_Access);
@@ -3901,6 +3959,77 @@ package body Model_Runner.Llama is
                if E.Is_Error (Status) then
                   return;
                end if;
+            elsif Is_MLA (Item.Settings.Kind) then
+               --  DeepSeek's latent projections. The query goes straight
+               --  where the file states no query latent and through a
+               --  latent and a norm otherwise; the keys and values through
+               --  a latent that carries the rotated slice beside it -- one
+               --  shared across the heads -- and a norm over the latent
+               --  alone, then out to a key that is not rotated and a value
+               --  a head. The rotated slice is the head's Rotary elements;
+               --  the rest of the head width (Head_Size - Rotary) is the
+               --  nope key.
+               if Item.Settings.Q_Lora_Rank > 0 then
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_q_a.weight"),
+                     Element_Count (Item.Settings.Q_Lora_Rank), Width,
+                     Current.Q_A, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_q_a_norm.weight"),
+                     Element_Count (Item.Settings.Q_Lora_Rank),
+                     Current.Q_A_Norm, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_q_b.weight"),
+                     Wide, Element_Count (Item.Settings.Q_Lora_Rank),
+                     Current.Q_B, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               else
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "attn_q.weight"),
+                     Wide, Width, Current.Query, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_kv_a_mqa.weight"),
+                  Element_Count
+                    (Item.Settings.KV_Lora_Rank + Item.Settings.Rotary),
+                  Width, Current.KV_A_MQA, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_kv_a_norm.weight"),
+                  Element_Count (Item.Settings.KV_Lora_Rank),
+                  Current.KV_A_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_kv_b.weight"),
+                  Element_Count
+                    (Item.Settings.Heads
+                     * (Item.Settings.Head_Size - Item.Settings.Rotary
+                        + Item.Settings.Value_Size)),
+                  Element_Count (Item.Settings.KV_Lora_Rank),
+                  Current.KV_B, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             else
                --  Twice as wide where the query projection carries a
                --  gate beside each head, as the hybrids' does.
@@ -4282,15 +4411,17 @@ package body Model_Runner.Llama is
                end if;
 
             elsif Item.Settings.Experts = 0
-              or else (Is_Jamba (Item.Settings.Kind)
+              or else ((Is_Jamba (Item.Settings.Kind)
+                        or else Is_MLA (Item.Settings.Kind))
                        and then Containers.Find_Tensor
                                   (Source,
                                    Layer_Key (Index, "ffn_gate_inp.weight"))
                                 = 0)
             then
-               --  Jamba's dense layers -- the ones without a router -- go
-               --  through the plain gated feed-forward; its mixture layers
-               --  fall to Resolve_Experts below, a layer at a time.
+               --  Jamba's dense layers and DeepSeek's leading ones -- the
+               --  ones without a router -- go through the plain gated
+               --  feed-forward; the mixture layers fall to Resolve_Experts
+               --  below, a layer at a time.
                Resolve
                  (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
                   Feed, Width, Current.Gate, Status, Repack);
@@ -5551,6 +5682,90 @@ package body Model_Runner.Llama is
          exit when E.Is_Error (Status);
       end loop;
    end Product_Group;
+
+   --  DeepSeek's latent attention projection for one position: the query,
+   --  keys and values reconstructed a head at a time from their latents,
+   --  into the same rows a plain attention writes -- a key of the nope part
+   --  and the shared rotated slice, a value of the rest -- so the rotation,
+   --  the cache and the blend that follow run unchanged, the rotation told
+   --  where the rotated slice sits by an offset a head. The rope part is
+   --  written unrotated here; the caller rotates it with everything else.
+   procedure MLA_Project
+     (Item    : Session;
+      Current : Layer;
+      Status  : out E.Error_Info)
+   is
+      Settings  : Configuration renames Item.Owner.Settings;
+      Heads     : constant Element_Count := Element_Count (Settings.Heads);
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Rope      : constant Element_Count := Element_Count (Settings.Rotary);
+      Nope      : constant Element_Count := Head_Size - Rope;
+      V_Size    : constant Element_Count := Element_Count (Settings.Value_Size);
+      KV_Lora   : constant Element_Count :=
+        Element_Count (Settings.KV_Lora_Rank);
+      KV_Stride : constant Element_Count := Nope + V_Size;
+      K_At : constant Element_Count := Item.Key_Row.all'First;
+      V_At : constant Element_Count := Item.Value_Row.all'First;
+      L_At : constant Element_Count := Item.MLA_KV.all'First;
+      R_At : constant Element_Count := Item.MLA_KV_Lat.all'First;
+   begin
+      --  The query, through a latent and a norm or straight where the file
+      --  states no query latent.
+      if Settings.Q_Lora_Rank > 0 then
+         Product (Item, Current.Q_A, Item.Normalized, Item.MLA_Q_Lat, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         declare
+            Normed : T.Real_Array (Item.MLA_Q_Lat.all'Range);
+         begin
+            K.RMS_Norm
+              (Item.MLA_Q_Lat.all, Current.Q_A_Norm.all, Settings.Epsilon,
+               Normed);
+            Item.MLA_Q_Lat.all := Normed;
+         end;
+         Product (Item, Current.Q_B, Item.MLA_Q_Lat, Item.Query, Status);
+      else
+         Product (Item, Current.Query, Item.Normalized, Item.Query, Status);
+      end if;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The key-value latent and the rotated slice it shares across the
+      --  heads; the latent normalized by itself and projected out a head.
+      Product
+        (Item, Current.KV_A_MQA, Item.Normalized, Item.MLA_KV_Lat, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      K.RMS_Norm
+        (Item.MLA_KV_Lat.all (R_At .. R_At + KV_Lora - 1),
+         Current.KV_A_Norm.all, Settings.Epsilon, Item.MLA_C_Norm.all);
+      Product (Item, Current.KV_B, Item.MLA_C_Norm, Item.MLA_KV, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  A head's key -- the nope part from the up projection, the shared
+      --  rope part -- and its value, the rest of the up projection.
+      for Head in 0 .. Heads - 1 loop
+         for I in 0 .. Nope - 1 loop
+            Item.Key_Row.all (K_At + Head * Head_Size + I) :=
+              Item.MLA_KV.all (L_At + Head * KV_Stride + I);
+         end loop;
+         for I in 0 .. Rope - 1 loop
+            Item.Key_Row.all (K_At + Head * Head_Size + Nope + I) :=
+              Item.MLA_KV_Lat.all (R_At + KV_Lora + I);
+         end loop;
+         for I in 0 .. V_Size - 1 loop
+            Item.Value_Row.all (V_At + Head * V_Size + I) :=
+              Item.MLA_KV.all (L_At + Head * KV_Stride + Nope + I);
+         end loop;
+      end loop;
+
+      Status := E.Success;
+   end MLA_Project;
 
    procedure Product_Batch
      (Item    : Session;
@@ -13313,6 +13528,24 @@ package body Model_Runner.Llama is
          T.Allocate (KV, Item.Key_Row);
          T.Allocate (KV_Out, Item.Value_Row);
          T.Allocate (Blend, Item.Attention);
+
+         --  DeepSeek's latent scratch, where the model attends through one.
+         if Is_MLA (Settings.Kind) then
+            T.Allocate
+              (Element_Count (Natural'Max (1, Settings.Q_Lora_Rank)),
+               Item.MLA_Q_Lat);
+            T.Allocate
+              (Element_Count (Settings.KV_Lora_Rank + Settings.Rotary),
+               Item.MLA_KV_Lat);
+            T.Allocate
+              (Element_Count (Settings.KV_Lora_Rank), Item.MLA_C_Norm);
+            T.Allocate
+              (Element_Count
+                 (Settings.Heads
+                  * (Settings.Head_Size - Settings.Rotary
+                     + Settings.Value_Size)),
+               Item.MLA_KV);
+         end if;
          Item.Score_Room := Element_Count (Capacity);
          T.Allocate
            (Element_Count (Natural'Max (1, Settings.Heads))
@@ -13687,6 +13920,10 @@ package body Model_Runner.Llama is
       T.Free (Item.Key_Row);
       T.Free (Item.Value_Row);
       T.Free (Item.Attention);
+      T.Free (Item.MLA_Q_Lat);
+      T.Free (Item.MLA_KV_Lat);
+      T.Free (Item.MLA_C_Norm);
+      T.Free (Item.MLA_KV);
       T.Free (Item.Scores);
       T.Free (Item.Gate);
       T.Free (Item.Up);
@@ -16926,13 +17163,18 @@ package body Model_Runner.Llama is
                --  where it carries a gate beside each head, and the queries
                --  and the gates are taken out of it before anything reads
                --  them.
-               Product_Group
-                 (Item,
-                  [Current.Query, Current.Key, Current.Value],
-                  Item.Normalized,
-                  [(if Hybrid (Settings.Kind) then Item.Query_Full else Item.Query),
-                   Item.Key_Row, Item.Value_Row],
-                  Status);
+               if Is_MLA (Settings.Kind) then
+                  MLA_Project (Item, Current, Status);
+               else
+                  Product_Group
+                    (Item,
+                     [Current.Query, Current.Key, Current.Value],
+                     Item.Normalized,
+                     [(if Hybrid (Settings.Kind)
+                       then Item.Query_Full else Item.Query),
+                      Item.Key_Row, Item.Value_Row],
+                     Status);
+               end if;
                exit when E.Is_Error (Status);
 
 
@@ -16997,7 +17239,11 @@ package body Model_Runner.Llama is
                   Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                   Settings.Pairing,
                   Sections => Settings.Sections,
-                  Place => Place_At (Item, Item.Committed));
+                  Place => Place_At (Item, Item.Committed),
+                  Offset =>
+                    (if Is_MLA (Settings.Kind)
+                     then Head_Size - Element_Count (Settings.Rotary)
+                     else 0));
                K.Apply_Rotary
                  (Item.Key_Row.all, KV_Heads, Head_Size,
                   Element_Count (Settings.Rotary), Item.Committed,
@@ -17005,7 +17251,11 @@ package body Model_Runner.Llama is
                   Turn_Scaling (Settings, Natural (Index)), Turns (Source),
                   Settings.Pairing,
                   Sections => Settings.Sections,
-                  Place => Place_At (Item, Item.Committed));
+                  Place => Place_At (Item, Item.Committed),
+                  Offset =>
+                    (if Is_MLA (Settings.Kind)
+                     then Head_Size - Element_Count (Settings.Rotary)
+                     else 0));
 
                --  Write into the reserved slot. The slot is only readable as
                --  context once Committed is advanced, at the end of this call.
@@ -17547,7 +17797,9 @@ package body Model_Runner.Llama is
       --  its dense layers run the batch through this buffer, so it is cut to
       --  the dense width rather than to nothing.
       Feed      : constant Element_Count :=
-        (if Settings.Experts > 0 and then not Is_Jamba (Settings.Kind)
+        (if Settings.Experts > 0
+            and then not Is_Jamba (Settings.Kind)
+            and then not Is_MLA (Settings.Kind)
          then 0
          else Element_Count (Settings.Feed_Forward));
       Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
@@ -19245,7 +19497,38 @@ package body Model_Runner.Llama is
                   --  The query projection's whole answer goes to its own
                   --  room where it carries a gate beside each head, and
                   --  each row's queries and gates are taken out of it.
-                  if Hybrid (Settings.Kind) then
+                  if Is_MLA (Settings.Kind) then
+                     --  DeepSeek's latent projection is a position at a
+                     --  time: each row's normalized input through the same
+                     --  single-position path the token evaluator takes, its
+                     --  queries, keys and values copied into the batch's
+                     --  rows in their place.
+                     declare
+                        N_At : constant Element_Count :=
+                          Item.Normalized.all'First;
+                        Q_At : constant Element_Count := Item.Query.all'First;
+                        K_At : constant Element_Count :=
+                          Item.Key_Row.all'First;
+                        V_At : constant Element_Count :=
+                          Item.Value_Row.all'First;
+                     begin
+                        for P in 0 .. Count - 1 loop
+                           Item.Normalized.all (N_At .. N_At + Width - 1) :=
+                             Norm.all (P * Width .. P * Width + Width - 1);
+                           MLA_Project (Item, Current, Status);
+                           exit when E.Is_Error (Status);
+                           Query.all (P * Wide .. P * Wide + Wide - 1) :=
+                             Item.Query.all (Q_At .. Q_At + Wide - 1);
+                           Keys.all
+                             (P * KV_Width .. P * KV_Width + KV_Width - 1) :=
+                             Item.Key_Row.all (K_At .. K_At + KV_Width - 1);
+                           Values.all
+                             (P * V_Width .. P * V_Width + V_Width - 1) :=
+                             Item.Value_Row.all (V_At .. V_At + V_Width - 1);
+                        end loop;
+                        exit when E.Is_Error (Status);
+                     end;
+                  elsif Hybrid (Settings.Kind) then
                      Product_Batch
                        (Item, Current.Query, Norm, Count, Query_Full, Status);
                      exit when E.Is_Error (Status);
@@ -19271,12 +19554,17 @@ package body Model_Runner.Llama is
                        (Item, Current.Query, Norm, Count, Query, Status);
                      exit when E.Is_Error (Status);
                   end if;
-                  Product_Batch
-                    (Item, Current.Key, Norm, Count, Keys, Status);
-                  exit when E.Is_Error (Status);
-                  Product_Batch
-                    (Item, Current.Value, Norm, Count, Values, Status);
-                  exit when E.Is_Error (Status);
+                  --  DeepSeek made its keys and values above, a head at a
+                  --  time from the latent, so there is no separate
+                  --  projection for them.
+                  if not Is_MLA (Settings.Kind) then
+                     Product_Batch
+                       (Item, Current.Key, Norm, Count, Keys, Status);
+                     exit when E.Is_Error (Status);
+                     Product_Batch
+                       (Item, Current.Value, Norm, Count, Values, Status);
+                     exit when E.Is_Error (Status);
+                  end if;
                end if;
 
                Charge (Item, Projecting, Mark);
@@ -19378,7 +19666,11 @@ package body Model_Runner.Llama is
                            Sections => Settings.Sections,
                            Place =>
                              Place_At (Item'Unchecked_Access.all,
-                                       Natural (Sits_At (Which))));
+                                       Natural (Sits_At (Which))),
+                           Offset =>
+                             (if Is_MLA (Settings.Kind)
+                              then Head_Size - Element_Count (Settings.Rotary)
+                              else 0));
                      end if;
 
                      if Item.Held in Eighth | Fourth then
