@@ -204,7 +204,6 @@ package body Model_Runner.Quantization.Decoders is
       96, 225, 226, 99, 228, 101, 102, 231, 232, 105, 106, 235, 108, 237, 238, 111,
       240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255];
 
-
    --  MXFP4's own sixteen, which are the E2M1 floating-point values at twice
    --  their size: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and the same again negated.
    --  Doubling them keeps the table whole, and the scale below carries the

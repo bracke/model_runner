@@ -268,9 +268,15 @@ The largest infra investment; also the largest device win for models already
 
 ## Phase 6 — Vision projectors
 
-16. ⏳ **Partial. Done: gemma3, qwen3vl_merger, qwen2vl_merger. Beyond:** (`vision.adb:416`, `:540`). Per projector:
-    pixtral, llama4/mtmd, MiniCPM-V, InternVL, SmolVLM, LLaVA, Qwen2-VL. Each is
-    a distinct patch-embed + merge shape. **Large in aggregate; Medium each.**
+16. ⏳ **Partial. Done: gemma3, qwen3vl_merger, qwen2vl_merger, resampler
+    (MiniCPM-V). Beyond:** (`vision.adb`). Per projector: pixtral, llama4/mtmd,
+    InternVL, SmolVLM, LLaVA. Each is a distinct patch-embed + merge shape.
+    MiniCPM-V is the first with a resampler rather than a pool or merge -- a
+    fixed bank of learned query rows reading the SigLIP patch states by
+    cross-attention, the states keyed by a two-dimensional sinusoidal place and
+    the patches placed from a seventy-a-side learned bank the grid buckets into,
+    crossed against an independent binary64 computation of the same network.
+    **Large in aggregate; Medium each.**
 17. ✅ **`[device]` sink-room depth cap** — done. The device cache reserved a
     fixed 2048-element sink region, so a model whose `layers × heads` sink slots
     ran past it -- a deeper or wider sink model, GPT-OSS-120B among them at

@@ -2743,6 +2743,700 @@ package body Tests.Vision_Cases is
       B.Free (Image);
    end A_Pictures_Rows_See_Each_Other;
 
+   -----------------------------------------------------
+   -- The_Minicpm_Projector_Encodes_As_The_Reference --
+   -----------------------------------------------------
+
+   --  The MiniCPM-V resampler's shape, written small: two-pixel patches
+   --  over an eight-pixel square -- sixteen patches -- through a SigLIP
+   --  encoder of two blocks; then a resampler of four learned query rows
+   --  over a text width of a hundred and twenty-eight, one head of that
+   --  width. The learned position bank has seventy a side, as the SigLIP
+   --  bucket scheme selects, whatever the patch grid.
+   Patch_M  : constant := 4;
+   Size_M   : constant := 16;
+   Side_M   : constant := Size_M / Patch_M;
+   Patches_M : constant := Side_M * Side_M;
+   Width_M  : constant := 8;
+   Heads_M  : constant := 2;
+   Head_M   : constant := Width_M / Heads_M;
+   Feed_M   : constant := 16;
+   Blocks_M : constant := 2;
+   Elements_M : constant := 3 * Patch_M * Patch_M;
+   Bank_M   : constant := 70 * 70;
+
+   P_M      : constant := 128;
+   Nq_M     : constant := 4;
+   DHead_M  : constant := 128;
+   NHead_M  : constant := P_M / DHead_M;
+   Quarter_M : constant := P_M / 4;
+   Half_M   : constant := P_M / 2;
+
+   type Minicpm_Block is record
+      Ln1_W, Ln1_B, Ln2_W, Ln2_B : N.Real_Array (0 .. Width_M - 1);
+      Q, K, V, O : N.Real_Array (0 .. Width_M * Width_M - 1);
+      Q_B, K_B, V_B, O_B : N.Real_Array (0 .. Width_M - 1);
+      Up   : N.Real_Array (0 .. Feed_M * Width_M - 1);
+      Up_B : N.Real_Array (0 .. Feed_M - 1);
+      Down : N.Real_Array (0 .. Width_M * Feed_M - 1);
+      Down_B : N.Real_Array (0 .. Width_M - 1);
+   end record;
+
+   type Minicpm_Block_List is array (0 .. Blocks_M - 1) of Minicpm_Block;
+
+   type Minicpm_Weights is record
+      Patch  : N.Real_Array (0 .. Width_M * Elements_M - 1);
+      Patch_B : N.Real_Array (0 .. Width_M - 1);
+      Pos    : N.Real_Array (0 .. Bank_M * Width_M - 1);
+      Blocks : Minicpm_Block_List;
+      Post_W, Post_B : N.Real_Array (0 .. Width_M - 1);
+      Query  : N.Real_Array (0 .. Nq_M * P_M - 1);
+      Kv_Proj : N.Real_Array (0 .. P_M * Width_M - 1);
+      Attn_Q, Attn_K, Attn_V, Attn_O : N.Real_Array (0 .. P_M * P_M - 1);
+      Attn_Q_B, Attn_K_B, Attn_V_B, Attn_O_B : N.Real_Array (0 .. P_M - 1);
+      Ln_Q_W, Ln_Q_B, Ln_Kv_W, Ln_Kv_B, Ln_Post_W, Ln_Post_B :
+        N.Real_Array (0 .. P_M - 1);
+      Proj   : N.Real_Array (0 .. P_M * P_M - 1);
+   end record;
+
+   type Minicpm_Weights_Access is access Minicpm_Weights;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Minicpm_Weights, Minicpm_Weights_Access);
+
+   --  A vector of ones plus a small jitter, for a norm gain.
+   function Gain_Row (Length : N.Element_Count) return N.Real_Array is
+      Result : N.Real_Array := Random_Row (Length, 0.3);
+   begin
+      for Value of Result loop
+         Value := Value + 1.0;
+      end loop;
+      return Result;
+   end Gain_Row;
+
+   function Fresh_Minicpm_Weights return Minicpm_Weights_Access is
+      W : constant Minicpm_Weights_Access := new Minicpm_Weights;
+   begin
+      Seed := 24680;
+      W.Patch := Random_Row (Width_M * Elements_M, 0.05);
+      W.Patch_B := Random_Row (Width_M, 0.1);
+      W.Pos := Random_Row (Bank_M * Width_M, 0.3);
+      for Index in W.Blocks'Range loop
+         W.Blocks (Index).Ln1_W := Gain_Row (Width_M);
+         W.Blocks (Index).Ln1_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Ln2_W := Gain_Row (Width_M);
+         W.Blocks (Index).Ln2_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Q := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).K := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).V := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).O := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).Q_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).K_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).V_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).O_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Up := Random_Row (Feed_M * Width_M, 0.3);
+         W.Blocks (Index).Up_B := Random_Row (Feed_M, 0.1);
+         W.Blocks (Index).Down := Random_Row (Width_M * Feed_M, 0.2);
+         W.Blocks (Index).Down_B := Random_Row (Width_M, 0.1);
+      end loop;
+      W.Post_W := Gain_Row (Width_M);
+      W.Post_B := Random_Row (Width_M, 0.1);
+      W.Query := Random_Row (Nq_M * P_M, 0.3);
+      W.Kv_Proj := Random_Row (P_M * Width_M, 0.1);
+      W.Attn_Q := Random_Row (P_M * P_M, 0.05);
+      W.Attn_K := Random_Row (P_M * P_M, 0.05);
+      W.Attn_V := Random_Row (P_M * P_M, 0.05);
+      W.Attn_O := Random_Row (P_M * P_M, 0.05);
+      W.Attn_Q_B := Random_Row (P_M, 0.1);
+      W.Attn_K_B := Random_Row (P_M, 0.1);
+      W.Attn_V_B := Random_Row (P_M, 0.1);
+      W.Attn_O_B := Random_Row (P_M, 0.1);
+      W.Ln_Q_W := Gain_Row (P_M);
+      W.Ln_Q_B := Random_Row (P_M, 0.1);
+      W.Ln_Kv_W := Gain_Row (P_M);
+      W.Ln_Kv_B := Random_Row (P_M, 0.1);
+      W.Ln_Post_W := Gain_Row (P_M);
+      W.Ln_Post_B := Random_Row (P_M, 0.1);
+      W.Proj := Random_Row (P_M * P_M, 0.05);
+      return W;
+   end Fresh_Minicpm_Weights;
+
+   procedure Write_Minicpm_Projector
+     (Path : String; W : Minicpm_Weights; Kind : String := "resampler")
+   is
+      Builder : Fixtures.Builder;
+      File    : B.Byte_Array_Access;
+      use Ada.Streams.Stream_IO;
+      Handle  : File_Type;
+
+      procedure Tensor
+        (Name : String; Dims : Fixtures.Dimension_List; Values : N.Real_Array) is
+      begin
+         Fixtures.Add_Tensor
+           (Builder, Name, Dims, G.Type_F32, Fixtures.Encode_F32 (Values));
+      end Tensor;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "clip");
+      Fixtures.Add_String (Builder, "clip.projector_type", Kind);
+      Fixtures.Add_U32 (Builder, "clip.vision.image_size", Size_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.patch_size", Patch_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.embedding_length", Width_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.feed_forward_length", Feed_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.projection_dim", P_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.block_count", Blocks_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.attention.head_count", Heads_M);
+      Fixtures.Add_U32 (Builder, "clip.minicpmv_query_num", Nq_M);
+      Fixtures.Add_U32 (Builder, "clip.minicpmv_version", 3);
+      Fixtures.Add_F32
+        (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_mean", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_std", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+
+      Tensor ("v.patch_embd.weight", [Patch_M, Patch_M, 3, Width_M], W.Patch);
+      Tensor ("v.patch_embd.bias", [Width_M], W.Patch_B);
+      Tensor ("v.position_embd.weight", [Width_M, Bank_M], W.Pos);
+      for Index in W.Blocks'Range loop
+         declare
+            Prefix : constant String :=
+              "v.blk." & Model_Runner.Text.Image (Long_Long_Integer (Index)) & ".";
+            Current : Minicpm_Block renames W.Blocks (Index);
+         begin
+            Tensor (Prefix & "ln1.weight", [Width_M], Current.Ln1_W);
+            Tensor (Prefix & "ln1.bias", [Width_M], Current.Ln1_B);
+            Tensor (Prefix & "ln2.weight", [Width_M], Current.Ln2_W);
+            Tensor (Prefix & "ln2.bias", [Width_M], Current.Ln2_B);
+            Tensor (Prefix & "attn_q.weight", [Width_M, Width_M], Current.Q);
+            Tensor (Prefix & "attn_q.bias", [Width_M], Current.Q_B);
+            Tensor (Prefix & "attn_k.weight", [Width_M, Width_M], Current.K);
+            Tensor (Prefix & "attn_k.bias", [Width_M], Current.K_B);
+            Tensor (Prefix & "attn_v.weight", [Width_M, Width_M], Current.V);
+            Tensor (Prefix & "attn_v.bias", [Width_M], Current.V_B);
+            Tensor (Prefix & "attn_out.weight", [Width_M, Width_M], Current.O);
+            Tensor (Prefix & "attn_out.bias", [Width_M], Current.O_B);
+            Tensor (Prefix & "ffn_up.weight", [Width_M, Feed_M], Current.Up);
+            Tensor (Prefix & "ffn_up.bias", [Feed_M], Current.Up_B);
+            Tensor (Prefix & "ffn_down.weight", [Feed_M, Width_M], Current.Down);
+            Tensor (Prefix & "ffn_down.bias", [Width_M], Current.Down_B);
+         end;
+      end loop;
+      Tensor ("v.post_ln.weight", [Width_M], W.Post_W);
+      Tensor ("v.post_ln.bias", [Width_M], W.Post_B);
+
+      Tensor ("resampler.query", [P_M, Nq_M], W.Query);
+      Tensor ("resampler.kv.weight", [Width_M, P_M], W.Kv_Proj);
+      Tensor ("resampler.attn.q.weight", [P_M, P_M], W.Attn_Q);
+      Tensor ("resampler.attn.q.bias", [P_M], W.Attn_Q_B);
+      Tensor ("resampler.attn.k.weight", [P_M, P_M], W.Attn_K);
+      Tensor ("resampler.attn.k.bias", [P_M], W.Attn_K_B);
+      Tensor ("resampler.attn.v.weight", [P_M, P_M], W.Attn_V);
+      Tensor ("resampler.attn.v.bias", [P_M], W.Attn_V_B);
+      Tensor ("resampler.attn.out.weight", [P_M, P_M], W.Attn_O);
+      Tensor ("resampler.attn.out.bias", [P_M], W.Attn_O_B);
+      Tensor ("resampler.ln_q.weight", [P_M], W.Ln_Q_W);
+      Tensor ("resampler.ln_q.bias", [P_M], W.Ln_Q_B);
+      Tensor ("resampler.ln_kv.weight", [P_M], W.Ln_Kv_W);
+      Tensor ("resampler.ln_kv.bias", [P_M], W.Ln_Kv_B);
+      Tensor ("resampler.ln_post.weight", [P_M], W.Ln_Post_W);
+      Tensor ("resampler.ln_post.bias", [P_M], W.Ln_Post_B);
+      Tensor ("resampler.proj.weight", [P_M, P_M], W.Proj);
+
+      Fixtures.Build (Builder, File);
+      Create (Handle, Out_File, Path);
+      declare
+         Block : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (File.all'Length))
+           with Import, Address => File.all'Address;
+      begin
+         Write (Handle, Block);
+      end;
+      Close (Handle);
+      B.Free (File);
+   end Write_Minicpm_Projector;
+
+   --  The rows the small resampler should make of a picture, in binary64:
+   --  the SigLIP encoder placed by the bucketed bank, then the resampler
+   --  -- the states lifted to the text width and normed, the queries
+   --  normed, the sinusoidal place, the cross-attention, the output norm
+   --  and the projection.
+   procedure Minicpm_Reference_Rows
+     (W : Minicpm_Weights; Picture : Images.Raster;
+      Rows : out N.Wide_Real_Array)
+   is
+      subtype WR is N.Wide_Real;
+      type ViT_Mat is array (0 .. Patches_M - 1, 0 .. Width_M - 1) of WR;
+      type State_Mat is array (0 .. Patches_M - 1, 0 .. P_M - 1) of WR;
+      type Query_Mat is array (0 .. Nq_M - 1, 0 .. P_M - 1) of WR;
+      X, H, Q, K, V, A : ViT_Mat;
+      F : array (0 .. Patches_M - 1, 0 .. Feed_M - 1) of WR;
+      Vkv, Vkvn, Pos, Kk, Kmat, Vmat : State_Mat;
+      Qsrc, Qn, Qmat, Att, Rout, Routn : Query_Mat;
+      Omega : array (0 .. Quarter_M - 1) of WR;
+      Pixels : Images.Raster;
+      Eps : constant WR := 1.0e-6;
+
+      function GELU (Value : WR) return WR
+      is (0.5 * Value
+          * (1.0 + Wide_Math.Tanh
+                     (0.797_884_560_802_865_4
+                      * (Value + 0.044_715 * Value * Value * Value))));
+
+      procedure Layer_Norm_V
+        (Source : ViT_Mat; Gain, Bias : N.Real_Array; Target : out ViT_Mat) is
+      begin
+         for P in 0 .. Patches_M - 1 loop
+            declare
+               Mean, Variance : WR := 0.0;
+            begin
+               for D in 0 .. Width_M - 1 loop
+                  Mean := Mean + Source (P, D);
+               end loop;
+               Mean := Mean / WR (Width_M);
+               for D in 0 .. Width_M - 1 loop
+                  Variance := Variance + (Source (P, D) - Mean) ** 2;
+               end loop;
+               Variance := Variance / WR (Width_M);
+               for D in 0 .. Width_M - 1 loop
+                  Target (P, D) :=
+                    (Source (P, D) - Mean) / Wide_Math.Sqrt (Variance + Eps)
+                    * WR (Gain (N.Element_Count (D)))
+                    + WR (Bias (N.Element_Count (D)));
+               end loop;
+            end;
+         end loop;
+      end Layer_Norm_V;
+
+      procedure Project_V
+        (Source : ViT_Mat; Weight, Bias : N.Real_Array; Target : out ViT_Mat) is
+      begin
+         for P in 0 .. Patches_M - 1 loop
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sum : WR := WR (Bias (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sum := Sum + Source (P, C)
+                       * WR (Weight (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  Target (P, R) := Sum;
+               end;
+            end loop;
+         end loop;
+      end Project_V;
+   begin
+      Images.Resample (Picture, Size_M, Size_M, Pixels);
+
+      --  Patches, embedded and placed by the learned bank the grid
+      --  buckets into.
+      for PY in 0 .. Side_M - 1 loop
+         for PX in 0 .. Side_M - 1 loop
+            declare
+               P : constant Natural := PY * Side_M + PX;
+               Bucket : constant Natural :=
+                 (70 * PY / Side_M) * 70 + (70 * PX / Side_M);
+            begin
+               for R in 0 .. Width_M - 1 loop
+                  declare
+                     Sum : WR := WR (W.Patch_B (N.Element_Count (R)))
+                       + WR (W.Pos (N.Element_Count (Bucket * Width_M + R)));
+                  begin
+                     for C in 0 .. 2 loop
+                        for KY in 0 .. Patch_M - 1 loop
+                           for KX in 0 .. Patch_M - 1 loop
+                              declare
+                                 Value : constant WR :=
+                                   (WR (Pixel (Pixels, PX * Patch_M + KX,
+                                               PY * Patch_M + KY, C)) / 255.0
+                                    - 0.5) / 0.5;
+                                 Index : constant Natural :=
+                                   C * Patch_M * Patch_M + KY * Patch_M + KX;
+                              begin
+                                 Sum := Sum + Value
+                                   * WR (W.Patch (N.Element_Count
+                                                    (R * Elements_M + Index)));
+                              end;
+                           end loop;
+                        end loop;
+                     end loop;
+                     X (P, R) := Sum;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+      Images.Free (Pixels);
+
+      for Index in W.Blocks'Range loop
+         declare
+            Current : Minicpm_Block renames W.Blocks (Index);
+         begin
+            Layer_Norm_V (X, Current.Ln1_W, Current.Ln1_B, H);
+            Project_V (H, Current.Q, Current.Q_B, Q);
+            Project_V (H, Current.K, Current.K_B, K);
+            Project_V (H, Current.V, Current.V_B, V);
+            for Hd in 0 .. Heads_M - 1 loop
+               for P in 0 .. Patches_M - 1 loop
+                  declare
+                     Scores : array (0 .. Patches_M - 1) of WR;
+                     Largest, Total : WR;
+                  begin
+                     for O in 0 .. Patches_M - 1 loop
+                        Scores (O) := 0.0;
+                        for D in 0 .. Head_M - 1 loop
+                           Scores (O) := Scores (O)
+                             + Q (P, Hd * Head_M + D) * K (O, Hd * Head_M + D);
+                        end loop;
+                        Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (Head_M));
+                     end loop;
+                     Largest := Scores (0);
+                     for O in 1 .. Patches_M - 1 loop
+                        Largest := WR'Max (Largest, Scores (O));
+                     end loop;
+                     Total := 0.0;
+                     for O in 0 .. Patches_M - 1 loop
+                        Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
+                        Total := Total + Scores (O);
+                     end loop;
+                     for D in 0 .. Head_M - 1 loop
+                        declare
+                           Sum : WR := 0.0;
+                        begin
+                           for O in 0 .. Patches_M - 1 loop
+                              Sum := Sum
+                                + Scores (O) / Total * V (O, Hd * Head_M + D);
+                           end loop;
+                           A (P, Hd * Head_M + D) := Sum;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+            Project_V (A, Current.O, Current.O_B, H);
+            for P in 0 .. Patches_M - 1 loop
+               for D in 0 .. Width_M - 1 loop
+                  X (P, D) := X (P, D) + H (P, D);
+               end loop;
+            end loop;
+
+            Layer_Norm_V (X, Current.Ln2_W, Current.Ln2_B, H);
+            for P in 0 .. Patches_M - 1 loop
+               for R in 0 .. Feed_M - 1 loop
+                  declare
+                     Sum : WR := WR (Current.Up_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Width_M - 1 loop
+                        Sum := Sum + H (P, C)
+                          * WR (Current.Up (N.Element_Count (R * Width_M + C)));
+                     end loop;
+                     F (P, R) := GELU (Sum);
+                  end;
+               end loop;
+               for R in 0 .. Width_M - 1 loop
+                  declare
+                     Sum : WR := WR (Current.Down_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Feed_M - 1 loop
+                        Sum := Sum + F (P, C)
+                          * WR (Current.Down (N.Element_Count (R * Feed_M + C)));
+                     end loop;
+                     X (P, R) := X (P, R) + Sum;
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      Layer_Norm_V (X, W.Post_W, W.Post_B, H);
+
+      --  The resampler. The states to the text width and normed.
+      for P in 0 .. Patches_M - 1 loop
+         for R in 0 .. P_M - 1 loop
+            declare
+               Sum : WR := 0.0;
+            begin
+               for C in 0 .. Width_M - 1 loop
+                  Sum := Sum + H (P, C)
+                    * WR (W.Kv_Proj (N.Element_Count (R * Width_M + C)));
+               end loop;
+               Vkv (P, R) := Sum;
+            end;
+         end loop;
+      end loop;
+      for P in 0 .. Patches_M - 1 loop
+         declare
+            Mean, Variance : WR := 0.0;
+         begin
+            for D in 0 .. P_M - 1 loop
+               Mean := Mean + Vkv (P, D);
+            end loop;
+            Mean := Mean / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Variance := Variance + (Vkv (P, D) - Mean) ** 2;
+            end loop;
+            Variance := Variance / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Vkvn (P, D) :=
+                 (Vkv (P, D) - Mean) / Wide_Math.Sqrt (Variance + Eps)
+                 * WR (W.Ln_Kv_W (N.Element_Count (D)))
+                 + WR (W.Ln_Kv_B (N.Element_Count (D)));
+            end loop;
+         end;
+      end loop;
+
+      --  The learned queries normed.
+      for I in 0 .. Nq_M - 1 loop
+         for D in 0 .. P_M - 1 loop
+            Qsrc (I, D) := WR (W.Query (N.Element_Count (I * P_M + D)));
+         end loop;
+      end loop;
+      for I in 0 .. Nq_M - 1 loop
+         declare
+            Mean, Variance : WR := 0.0;
+         begin
+            for D in 0 .. P_M - 1 loop
+               Mean := Mean + Qsrc (I, D);
+            end loop;
+            Mean := Mean / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Variance := Variance + (Qsrc (I, D) - Mean) ** 2;
+            end loop;
+            Variance := Variance / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Qn (I, D) :=
+                 (Qsrc (I, D) - Mean) / Wide_Math.Sqrt (Variance + Eps)
+                 * WR (W.Ln_Q_W (N.Element_Count (D)))
+                 + WR (W.Ln_Q_B (N.Element_Count (D)));
+            end loop;
+         end;
+      end loop;
+
+      --  The sinusoidal place, and the keys as the states plus it.
+      for I in 0 .. Quarter_M - 1 loop
+         Omega (I) := 1.0 / Wide_Math."**" (10_000.0, WR (I) / WR (Quarter_M));
+      end loop;
+      for P in 0 .. Patches_M - 1 loop
+         declare
+            Rowv : constant WR := WR (P / Side_M);
+            Colv : constant WR := WR (P mod Side_M);
+         begin
+            for I in 0 .. Quarter_M - 1 loop
+               Pos (P, I) := Wide_Math.Sin (Omega (I) * Colv);
+               Pos (P, Quarter_M + I) := Wide_Math.Cos (Omega (I) * Colv);
+               Pos (P, Half_M + I) := Wide_Math.Sin (Omega (I) * Rowv);
+               Pos (P, Half_M + Quarter_M + I) := Wide_Math.Cos (Omega (I) * Rowv);
+            end loop;
+            for D in 0 .. P_M - 1 loop
+               Kk (P, D) := Vkvn (P, D) + Pos (P, D);
+            end loop;
+         end;
+      end loop;
+
+      --  Query, key and value each through their weights.
+      for I in 0 .. Nq_M - 1 loop
+         for R in 0 .. P_M - 1 loop
+            declare
+               Sum : WR := WR (W.Attn_Q_B (N.Element_Count (R)));
+            begin
+               for C in 0 .. P_M - 1 loop
+                  Sum := Sum + Qn (I, C)
+                    * WR (W.Attn_Q (N.Element_Count (R * P_M + C)));
+               end loop;
+               Qmat (I, R) := Sum;
+            end;
+         end loop;
+      end loop;
+      for P in 0 .. Patches_M - 1 loop
+         for R in 0 .. P_M - 1 loop
+            declare
+               Sk : WR := WR (W.Attn_K_B (N.Element_Count (R)));
+               Sv : WR := WR (W.Attn_V_B (N.Element_Count (R)));
+            begin
+               for C in 0 .. P_M - 1 loop
+                  Sk := Sk + Kk (P, C)
+                    * WR (W.Attn_K (N.Element_Count (R * P_M + C)));
+                  Sv := Sv + Vkvn (P, C)
+                    * WR (W.Attn_V (N.Element_Count (R * P_M + C)));
+               end loop;
+               Kmat (P, R) := Sk;
+               Vmat (P, R) := Sv;
+            end;
+         end loop;
+      end loop;
+
+      --  The cross-attention: each query over every patch, a head of the
+      --  whole width, scaled by the root of a hundred and twenty-eight.
+      for Hd in 0 .. NHead_M - 1 loop
+         for I in 0 .. Nq_M - 1 loop
+            declare
+               Scores : array (0 .. Patches_M - 1) of WR;
+               Largest, Total : WR;
+            begin
+               for O in 0 .. Patches_M - 1 loop
+                  Scores (O) := 0.0;
+                  for D in 0 .. DHead_M - 1 loop
+                     Scores (O) := Scores (O)
+                       + Qmat (I, Hd * DHead_M + D) * Kmat (O, Hd * DHead_M + D);
+                  end loop;
+                  Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (DHead_M));
+               end loop;
+               Largest := Scores (0);
+               for O in 1 .. Patches_M - 1 loop
+                  Largest := WR'Max (Largest, Scores (O));
+               end loop;
+               Total := 0.0;
+               for O in 0 .. Patches_M - 1 loop
+                  Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
+                  Total := Total + Scores (O);
+               end loop;
+               for D in 0 .. DHead_M - 1 loop
+                  declare
+                     Sum : WR := 0.0;
+                  begin
+                     for O in 0 .. Patches_M - 1 loop
+                        Sum := Sum
+                          + Scores (O) / Total * Vmat (O, Hd * DHead_M + D);
+                     end loop;
+                     Att (I, Hd * DHead_M + D) := Sum;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      --  The blend through the output weights, normed, and projected.
+      for I in 0 .. Nq_M - 1 loop
+         for R in 0 .. P_M - 1 loop
+            declare
+               Sum : WR := WR (W.Attn_O_B (N.Element_Count (R)));
+            begin
+               for C in 0 .. P_M - 1 loop
+                  Sum := Sum + Att (I, C)
+                    * WR (W.Attn_O (N.Element_Count (R * P_M + C)));
+               end loop;
+               Rout (I, R) := Sum;
+            end;
+         end loop;
+      end loop;
+      for I in 0 .. Nq_M - 1 loop
+         declare
+            Mean, Variance : WR := 0.0;
+         begin
+            for D in 0 .. P_M - 1 loop
+               Mean := Mean + Rout (I, D);
+            end loop;
+            Mean := Mean / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Variance := Variance + (Rout (I, D) - Mean) ** 2;
+            end loop;
+            Variance := Variance / WR (P_M);
+            for D in 0 .. P_M - 1 loop
+               Routn (I, D) :=
+                 (Rout (I, D) - Mean) / Wide_Math.Sqrt (Variance + Eps)
+                 * WR (W.Ln_Post_W (N.Element_Count (D)))
+                 + WR (W.Ln_Post_B (N.Element_Count (D)));
+            end loop;
+         end;
+      end loop;
+      for I in 0 .. Nq_M - 1 loop
+         for J in 0 .. P_M - 1 loop
+            declare
+               Sum : WR := 0.0;
+            begin
+               for D in 0 .. P_M - 1 loop
+                  Sum := Sum + Routn (I, D)
+                    * WR (W.Proj (N.Element_Count (J * P_M + D)));
+               end loop;
+               Rows (N.Element_Count (I * P_M + J)) := Sum;
+            end;
+         end loop;
+      end loop;
+   end Minicpm_Reference_Rows;
+
+   procedure The_Minicpm_Projector_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : Minicpm_Weights_Access := Fresh_Minicpm_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Nq_M * P_M - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * 20 * 30);
+      begin
+         for Y in 0 .. 29 loop
+            for X in 0 .. 19 loop
+               declare
+                  At_Pixel : constant B.Byte_Count :=
+                    B.Byte_Count (3 * (Y * 20 + X)) + 1;
+               begin
+                  Data (At_Pixel) := B.Byte (X * 12);
+                  Data (At_Pixel + 1) := B.Byte (Y * 8);
+                  Data (At_Pixel + 2) :=
+                    (if X in 5 .. 12 and then Y in 8 .. 20 then 240 else 30);
+               end;
+            end loop;
+         end loop;
+         Images.Decode (Bytes_Of ("P6 20 30 255 ") & Data, "test", Picture,
+                        Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+
+      Minicpm_Reference_Rows (W.all, Picture, Wanted);
+
+      Write_Minicpm_Projector ("obj/vision-minicpm.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small resampler did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Is_Ready (Eyes)
+              and then Vision.Image_Size (Eyes) = Size_M
+              and then Vision.Fixed_Rows (Eyes)
+              and then not Vision.Placed_Rows (Eyes)
+              and then Vision.Rows_Per_Picture (Eyes) = Nq_M
+              and then Vision.Row_Width (Eyes) = P_M
+              and then Vision.Projector (Eyes) = "resampler",
+              "the small resampler's shape was misread");
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the small resampler did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Rows /= null and then Rows.all'Length = Nq_M * P_M,
+              "the resampler made the wrong number of rows");
+      for J in 0 .. N.Element_Count (Nq_M * P_M - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+      Vision.Close (Eyes);
+
+      --  A resampler named as another kind is refused by name.
+      Write_Minicpm_Projector ("obj/vision-minicpm.gguf", W.all, Kind => "llava");
+      Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
+      Assert (Status.Code = E.Arch_Unsupported_Projector,
+              "a resampler of another kind was not refused by name");
+      Assert (not Vision.Is_Ready (Eyes), "a refused resampler reads as ready");
+
+      Images.Free (Picture);
+      Free (W);
+   end The_Minicpm_Projector_Encodes_As_The_Reference;
+
    ----------
    -- Name --
    ----------
@@ -2785,6 +3479,12 @@ package body Tests.Vision_Cases is
         (T, A_Pictures_Rows_See_Each_Other'Access,
          "a picture's rows attend to each other both ways, and a text "
          & "position after them is causal still");
+      Register_Routine
+        (T, The_Minicpm_Projector_Encodes_As_The_Reference'Access,
+         "a MiniCPM-V resampler written small encodes a picture to the "
+         & "rows a plain computation of the same network gives -- the "
+         & "SigLIP encoder placed by the bucketed bank and the resampler "
+         & "cross-attention -- and a resampler of another kind is refused");
       Register_Routine
         (T, Pictures_Stand_Behind_Their_Markers'Access,
          "a picture's rows take the positions its marker opens in the "

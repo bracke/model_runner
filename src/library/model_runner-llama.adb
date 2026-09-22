@@ -6028,7 +6028,6 @@ package body Model_Runner.Llama is
    begin
       Ok := True;
 
-
       --  Nothing to do is not a refusal.
       if To_Head < From_Head or else Last < First then
          return;
@@ -17177,7 +17176,6 @@ package body Model_Runner.Llama is
                end if;
                exit when E.Is_Error (Status);
 
-
                Charge (Item, Projecting, Mark);
 
                if Hybrid (Settings.Kind) then
@@ -17498,7 +17496,6 @@ package body Model_Runner.Llama is
                   Charge (Item, Joining, Mark);
                end if;
 
-
                --  Feed-forward block. It reads what the layer normalized on
                --  the way in where the architecture runs the two in parallel
                --  (Falcon), the residual as it stands where the architecture
@@ -17636,7 +17633,6 @@ package body Model_Runner.Llama is
             Charge (Item, Joining, Mark);
 
             <<Layer_Done>>
-
 
             --  What became of this layer, for the run's report: the whole
             --  of it over as one sequence, or not -- and, where the device

@@ -56,6 +56,13 @@ package body Model_Runner.Vision is
    is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3
        or else Item.Kind (1 .. Item.Kind_Last) = Qwen_2);
 
+   --  MiniCPM-V's projector, a resampler over a SigLIP encoder, which the
+   --  file names for the resampler rather than the model.
+   Resampler : constant String := "resampler";
+
+   function Is_Minicpm (Item : Encoder) return Boolean
+   is (Item.Kind (1 .. Item.Kind_Last) = Resampler);
+
    ------------------
    -- Bind helpers --
    ------------------
@@ -383,6 +390,108 @@ package body Model_Runner.Vision is
       end if;
    end Bind_Qwen;
 
+   --  The MiniCPM-V resampler's tensors, over a SigLIP encoder read as
+   --  Gemma's is: the patch weights and bias, a bank of learned position
+   --  rows the encoder selects from by bucket, the pre-normalized blocks,
+   --  and the post norm; then the resampler proper -- the learned query
+   --  rows, the projection that lifts the patch states to the text width,
+   --  the three attention weights and their biases, the output weights,
+   --  three layer norms and the final projection.
+   procedure Bind_Minicpm (Item : in out Encoder; Status : out E.Error_Info) is
+      Width   : constant Element_Count := Element_Count (Item.Width);
+      Feed    : constant Element_Count := Element_Count (Item.Feed);
+      Text    : constant Element_Count := Element_Count (Item.Text_Width);
+      Rows_Pos : Element_Count := 0;
+      Pos_Index : constant Natural :=
+        Containers.Find_Tensor (Item.Container, "v.position_embd.weight");
+
+      procedure Take
+        (Name : String; Rows, Columns : Element_Count; Into : out T.View) is
+      begin
+         if E.Is_Ok (Status) then
+            Bind (Item, Name, Rows, Columns, Into, Status);
+         end if;
+      end Take;
+
+      procedure Vec
+        (Name : String; Length : Element_Count;
+         Into : out T.Real_Array_Access) is
+      begin
+         if E.Is_Ok (Status) then
+            Bind_Vector (Item, Name, Length, Into, Status);
+         end if;
+      end Vec;
+   begin
+      Status := E.Success;
+
+      Bind (Item, "v.patch_embd.weight", Width,
+            3 * Element_Count (Item.Patch) ** 2, Item.Patch_Weights, Status);
+      Vec ("v.patch_embd.bias", Width, Item.Patch_Bias);
+
+      --  The learned positions are a bank the encoder buckets into, of a
+      --  height the file states rather than the patch count; bind it whole.
+      if E.Is_Ok (Status) and then Pos_Index = 0 then
+         Status := E.Make (E.Arch_Missing_Tensor);
+         E.Add_Text (Status, "tensor", "v.position_embd.weight",
+                     E.Param_Identifier);
+      end if;
+      if E.Is_Ok (Status) then
+         Rows_Pos := Element_Count
+           (Containers.Tensor_Dimension (Item.Container, Pos_Index, 2));
+      end if;
+      Take ("v.position_embd.weight", Rows_Pos, Width, Item.Positions);
+      Vec ("v.post_ln.weight", Width, Item.Post_Weight);
+      Vec ("v.post_ln.bias", Width, Item.Post_Bias);
+
+      Item.Layers := new Block_Array (0 .. Item.Blocks - 1);
+      for Index in Item.Layers'Range loop
+         declare
+            Prefix : constant String :=
+              "v.blk." & Model_Runner.Text.Image (Long_Long_Integer (Index))
+              & ".";
+            Current : Block renames Item.Layers (Index);
+         begin
+            Vec (Prefix & "ln1.weight", Width, Current.Norm_1_Weight);
+            Vec (Prefix & "ln1.bias", Width, Current.Norm_1_Bias);
+            Vec (Prefix & "ln2.weight", Width, Current.Norm_2_Weight);
+            Vec (Prefix & "ln2.bias", Width, Current.Norm_2_Bias);
+            Take (Prefix & "attn_q.weight", Width, Width, Current.Query);
+            Vec (Prefix & "attn_q.bias", Width, Current.Query_Bias);
+            Take (Prefix & "attn_k.weight", Width, Width, Current.Key);
+            Vec (Prefix & "attn_k.bias", Width, Current.Key_Bias);
+            Take (Prefix & "attn_v.weight", Width, Width, Current.Value);
+            Vec (Prefix & "attn_v.bias", Width, Current.Value_Bias);
+            Take (Prefix & "attn_out.weight", Width, Width, Current.Output);
+            Vec (Prefix & "attn_out.bias", Width, Current.Output_Bias);
+            Take (Prefix & "ffn_up.weight", Feed, Width, Current.Feed_In);
+            Vec (Prefix & "ffn_up.bias", Feed, Current.Feed_In_Bias);
+            Take (Prefix & "ffn_down.weight", Width, Feed, Current.Feed_Out);
+            Vec (Prefix & "ffn_down.bias", Width, Current.Feed_Out_Bias);
+         end;
+         exit when E.Is_Error (Status);
+      end loop;
+
+      --  The resampler head.
+      Take ("resampler.query", Element_Count (Item.Num_Query), Text,
+            Item.Query_Rows);
+      Take ("resampler.kv.weight", Text, Width, Item.Kv_Proj);
+      Take ("resampler.attn.q.weight", Text, Text, Item.R_Attn_Q);
+      Vec ("resampler.attn.q.bias", Text, Item.R_Attn_Q_B);
+      Take ("resampler.attn.k.weight", Text, Text, Item.R_Attn_K);
+      Vec ("resampler.attn.k.bias", Text, Item.R_Attn_K_B);
+      Take ("resampler.attn.v.weight", Text, Text, Item.R_Attn_V);
+      Vec ("resampler.attn.v.bias", Text, Item.R_Attn_V_B);
+      Take ("resampler.attn.out.weight", Text, Text, Item.R_Attn_O);
+      Vec ("resampler.attn.out.bias", Text, Item.R_Attn_O_B);
+      Vec ("resampler.ln_q.weight", Text, Item.R_Ln_Q_W);
+      Vec ("resampler.ln_q.bias", Text, Item.R_Ln_Q_B);
+      Vec ("resampler.ln_kv.weight", Text, Item.R_Ln_Kv_W);
+      Vec ("resampler.ln_kv.bias", Text, Item.R_Ln_Kv_B);
+      Vec ("resampler.ln_post.weight", Text, Item.R_Ln_Post_W);
+      Vec ("resampler.ln_post.bias", Text, Item.R_Ln_Post_B);
+      Take ("resampler.proj.weight", Text, Text, Item.R_Proj);
+   end Bind_Minicpm;
+
    ----------
    -- Open --
    ----------
@@ -422,7 +531,7 @@ package body Model_Runner.Vision is
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
          if Kind /= Gemma_3 and then Kind /= Qwen_3
-           and then Kind /= Qwen_2
+           and then Kind /= Qwen_2 and then Kind /= Resampler
          then
             Status := E.Make (E.Arch_Unsupported_Projector);
             E.Add_Text
@@ -430,7 +539,8 @@ package body Model_Runner.Vision is
                E.Param_Identifier);
             E.Add_Text
               (Status, "supported",
-               Gemma_3 & " " & Qwen_2 & " " & Qwen_3, E.Param_Identifier);
+               Gemma_3 & " " & Qwen_2 & " " & Qwen_3 & " " & Resampler,
+               E.Param_Identifier);
             Fail (Status);
             return;
          end if;
@@ -554,18 +664,34 @@ package body Model_Runner.Vision is
                  (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
                E.Add_Text
                  (Status, "supported",
-               Gemma_3 & " " & Qwen_2 & " " & Qwen_3, E.Param_Identifier);
+               Gemma_3 & " " & Qwen_2 & " " & Qwen_3 & " " & Resampler,
+               E.Param_Identifier);
                Fail (Status);
                return;
             end if;
          end;
       end if;
 
+      --  What the resampler states of its own: how many query rows it
+      --  carries, and which MiniCPM-V it is. The query count also lives
+      --  in the query tensor's shape, which Bind checks it against.
+      if Is_Minicpm (Item) then
+         Containers.Get_Integer
+           (Item.Container, "clip.minicpmv_query_num", 1, 4096, Number, Local);
+         Item.Num_Query := (if E.Is_Ok (Local) then Natural (Number) else 64);
+         Containers.Get_Integer
+           (Item.Container, "clip.minicpmv_version", 1, 1_000_000, Number,
+            Local);
+         Item.Minicpm_Version :=
+           (if E.Is_Ok (Local) then Natural (Number) else 2);
+      end if;
+
       if Item.Size mod Item.Patch /= 0
         or else Item.Width mod Item.Heads /= 0
-        or else (not Is_Qwen (Item)
+        or else (not Is_Qwen (Item) and then not Is_Minicpm (Item)
                  and then (Item.Size / Item.Patch) mod Item.Pool_Side /= 0)
         or else (Is_Qwen (Item) and then (Item.Width / Item.Heads) mod 4 /= 0)
+        or else (Is_Minicpm (Item) and then Item.Text_Width mod 128 /= 0)
       then
          Status := E.Make (E.Arch_Invalid_Dimensions);
          E.Add_Integer (Status, "embedding", Long_Long_Integer (Item.Width));
@@ -610,6 +736,16 @@ package body Model_Runner.Vision is
       --  And the tensors.
       if Is_Qwen (Item) then
          Bind_Qwen (Item, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+         Item.Ready := True;
+         return;
+      end if;
+
+      if Is_Minicpm (Item) then
+         Bind_Minicpm (Item, Status);
          if E.Is_Error (Status) then
             Fail (Status);
             return;
@@ -846,6 +982,7 @@ package body Model_Runner.Vision is
 
    function Rows_Per_Picture (Item : Encoder) return Positive
    is (if Is_Qwen (Item) then Item.Most_Rows
+       elsif Is_Minicpm (Item) then Item.Num_Query
        else ((Item.Size / Item.Patch) / Item.Pool_Side) ** 2);
 
    function Row_Width (Item : Encoder) return Positive is (Item.Text_Width);
@@ -1696,6 +1833,392 @@ package body Model_Runner.Vision is
       end if;
    end Encode_Gemma;
 
+   --------------------
+   -- Encode_Minicpm --
+   --------------------
+
+   --  MiniCPM-V over one picture: the SigLIP encoder read as Gemma's is
+   --  -- the picture at the encoder's square, patch-embedded and placed
+   --  by a bank of learned rows the patch grid buckets into, through the
+   --  pre-normalized blocks and a post norm -- then the resampler: the
+   --  patch states projected to the text width and normed; a fixed bank
+   --  of learned query rows, normed; keys the states plus a sinusoidal
+   --  place of the patch's row and column; query, key and value each
+   --  turned into heads of a hundred and twenty-eight, the queries
+   --  attending over every patch; the blend turned back, normed once
+   --  more, and projected. A picture becomes Num_Query rows however many
+   --  patches it has.
+   procedure Encode_Minicpm
+     (Item    : in out Encoder;
+      Picture : Model_Runner.Images.Raster;
+      Team    : CPU.Pool_Reference;
+      Rows    : out T.Real_Array_Access;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Status  : out E.Error_Info)
+   is
+      Width    : constant Element_Count := Element_Count (Item.Width);
+      Feed     : constant Element_Count := Element_Count (Item.Feed);
+      Heads    : constant Element_Count := Element_Count (Item.Heads);
+      Head     : constant Element_Count := Width / Heads;
+      Side     : constant Element_Count :=
+        Element_Count (Item.Size / Item.Patch);
+      Patches  : constant Element_Count := Side * Side;
+      Patch_Elements : constant Element_Count :=
+        3 * Element_Count (Item.Patch) ** 2;
+
+      P        : constant Element_Count := Element_Count (Item.Text_Width);
+      Nq       : constant Element_Count := Element_Count (Item.Num_Query);
+      D_Head   : constant Element_Count := 128;
+      N_Head   : constant Element_Count := P / D_Head;
+      Quarter  : constant Element_Count := P / 4;
+      Half     : constant Element_Count := P / 2;
+      Base_Freq : constant N.Wide_Real := 10_000.0;
+      Scale    : constant Real :=
+        Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (D_Head)));
+
+      --  The ViT activations, Patches rows of Width, and the head scratch.
+      X, Normed, Q, Kv, V, Attended, Hidden : T.Real_Array_Access := null;
+      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access := null;
+
+      --  The resampler activations: the query bank and its norm, the
+      --  projected states and their norm, the sinusoidal place, the keys,
+      --  the three heads, the blend, its projection and norm.
+      Qsrc, Qn, Kv1, Kvn, Pos, Kk, Qh, Kh, Vh, Att, Rout, Routn :
+        T.Real_Array_Access := null;
+      Row_Scores : T.Real_Array_Access := null;
+
+      Resampled : Model_Runner.Images.Raster;
+      Work : Workspace;
+      Omega : array (0 .. Quarter - 1) of Real;
+
+      procedure Release is
+      begin
+         T.Free (X); T.Free (Normed); T.Free (Q); T.Free (Kv); T.Free (V);
+         T.Free (Attended); T.Free (Hidden);
+         T.Free (K_Head); T.Free (Q_Head); T.Free (V_Head_T);
+         T.Free (Scores); T.Free (Blended);
+         T.Free (Qsrc); T.Free (Qn); T.Free (Kv1); T.Free (Kvn);
+         T.Free (Pos); T.Free (Kk); T.Free (Qh); T.Free (Kh); T.Free (Vh);
+         T.Free (Att); T.Free (Rout); T.Free (Routn); T.Free (Row_Scores);
+         Clear (Work);
+         Model_Runner.Images.Free (Resampled);
+      end Release;
+
+      procedure Rows_Through
+        (What : Row_Task; Target : T.Real_Array_Access; Total : Element_Count;
+         Row_Width : Element_Count; Source : T.Real_Array_Access := null;
+         Bias : T.Real_Array_Access := null;
+         Weight : T.Real_Array_Access := null) is
+      begin
+         Work.Status := Status;
+         Rows_Through (Work, What, Target, Total, Row_Width, Source, Bias, Weight);
+         Status := Work.Status;
+      end Rows_Through;
+
+      procedure Multiply
+        (Source : T.Real_Array_Access; Total : Element_Count; Weight : T.View;
+         Target : T.Real_Array_Access; Bias : T.Real_Array_Access := null) is
+      begin
+         Work.Status := Status;
+         Multiply (Work, Source, Total, Weight, Target, Bias);
+         Status := Work.Status;
+      end Multiply;
+
+      procedure Attend is
+      begin
+         Work.Status := Status;
+         Attend (Work, Q, Kv, V, 0, 0, 0, Width, Attended, Width, Patches,
+                 Heads, Head, K_Head, Q_Head, V_Head_T, Scores, Blended);
+         Status := Work.Status;
+      end Attend;
+   begin
+      Rows := null;
+      Status := E.Success;
+
+      if not Item.Ready then
+         Status := E.Make (E.Lifecycle_Model_Not_Ready);
+         return;
+      end if;
+      if Picture.Pixels = null then
+         Status := E.Make (E.Generation_Empty_Prompt);
+         return;
+      end if;
+
+      T.Allocate (Patches * Width, X);
+      T.Allocate (Patches * Width, Normed);
+      T.Allocate (Patches * Width, Q);
+      T.Allocate (Patches * Width, Kv);
+      T.Allocate (Patches * Width, V);
+      T.Allocate (Patches * Width, Attended);
+      T.Allocate (Patches * Element_Count'Max (Feed, Patch_Elements), Hidden);
+      Work.Team := Team;
+      Work.Cancel := Cancel;
+      Work.Epsilon := Item.Epsilon;
+      Furnish
+        (Work,
+         Element_Count'Max
+           (Element_Count'Max (Feed * Width, Width * Patch_Elements),
+            Element_Count'Max (P * P, P * Width)),
+         Element_Count'Max (Width, Element_Count'Max (Patch_Elements, P)),
+         Element_Count'Max (Width, Element_Count'Max (Feed, P)));
+      if E.Is_Error (Work.Status) then
+         Status := Work.Status; Release; return;
+      end if;
+      T.Allocate (Patches * Head, K_Head);
+      T.Allocate (Patches * Head, Q_Head);
+      T.Allocate (Patches * Head, V_Head_T);
+      T.Allocate (Patches * Patches, Scores);
+      T.Allocate (Patches * Head, Blended);
+
+      T.Allocate (Nq * P, Qsrc);
+      T.Allocate (Nq * P, Qn);
+      T.Allocate (Patches * P, Kv1);
+      T.Allocate (Patches * P, Kvn);
+      T.Allocate (Patches * P, Pos);
+      T.Allocate (Patches * P, Kk);
+      T.Allocate (Nq * P, Qh);
+      T.Allocate (Patches * P, Kh);
+      T.Allocate (Patches * P, Vh);
+      T.Allocate (Nq * P, Att);
+      T.Allocate (Nq * P, Rout);
+      T.Allocate (Nq * P, Routn);
+      T.Allocate (Patches, Row_Scores);
+      T.Allocate (Nq * P, Rows);
+
+      if X = null or else Normed = null or else Q = null or else Kv = null
+        or else V = null or else Attended = null or else Hidden = null
+        or else K_Head = null or else Q_Head = null or else V_Head_T = null
+        or else Scores = null or else Blended = null
+        or else Qsrc = null or else Qn = null or else Kv1 = null
+        or else Kvn = null or else Pos = null or else Kk = null
+        or else Qh = null or else Kh = null or else Vh = null
+        or else Att = null or else Rout = null or else Routn = null
+        or else Row_Scores = null or else Rows = null
+      then
+         Release; T.Free (Rows);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+         return;
+      end if;
+
+      --  The picture, at the encoder's square, as patch vectors.
+      Model_Runner.Images.Resample (Picture, Item.Size, Item.Size, Resampled);
+      if Resampled.Pixels = null then
+         Release; T.Free (Rows);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         E.Add_Text (Status, "category", "vision", E.Param_Identifier);
+         return;
+      end if;
+      declare
+         Patch : constant Element_Count := Element_Count (Item.Patch);
+         Size  : constant B.Byte_Count := B.Byte_Count (Item.Size);
+      begin
+         for PY in 0 .. Side - 1 loop
+            for PX in 0 .. Side - 1 loop
+               declare
+                  At_Patch : constant Element_Count :=
+                    (PY * Side + PX) * Patch_Elements;
+               begin
+                  for C in Element_Count range 0 .. 2 loop
+                     for KY in 0 .. Patch - 1 loop
+                        for KX in 0 .. Patch - 1 loop
+                           declare
+                              Y : constant B.Byte_Count :=
+                                B.Byte_Count (PY * Patch + KY);
+                              Xp : constant B.Byte_Count :=
+                                B.Byte_Count (PX * Patch + KX);
+                              Value : constant Real :=
+                                Real (Resampled.Pixels
+                                        (3 * (Y * Size + Xp) + B.Byte_Count (C)))
+                                / 255.0;
+                           begin
+                              Hidden (At_Patch + C * Patch * Patch
+                                      + KY * Patch + KX) :=
+                                (Value - Item.Mean (Positive (C + 1)))
+                                / Item.Deviation (Positive (C + 1));
+                           end;
+                        end loop;
+                     end loop;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+      end;
+      Model_Runner.Images.Free (Resampled);
+
+      --  Patch embedding, then each patch placed by the learned bank the
+      --  grid buckets into -- floor(70 row / side) by seventy and floor
+      --  (70 column / side), as the SigLIP position scheme selects.
+      Multiply (Hidden, Patches, Item.Patch_Weights, X, Item.Patch_Bias);
+      if E.Is_Ok (Status) then
+         for PY in 0 .. Side - 1 loop
+            for PX in 0 .. Side - 1 loop
+               declare
+                  P_Index : constant Element_Count := PY * Side + PX;
+                  Bucket  : constant Element_Count :=
+                    (70 * PY / Side) * 70 + (70 * PX / Side);
+               begin
+                  T.Dequantize_Row
+                    (Item.Positions, Bucket, Normed (0 .. Width - 1), Status);
+                  exit when E.Is_Error (Status);
+                  K.Add (X (P_Index * Width .. (P_Index + 1) * Width - 1),
+                         Normed (0 .. Width - 1));
+               end;
+            end loop;
+            exit when E.Is_Error (Status);
+         end loop;
+      end if;
+
+      --  The blocks, each pre-normalized.
+      for Index in 0 .. Item.Blocks - 1 loop
+         exit when E.Is_Error (Status);
+         if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+            Status := E.Make (E.Generation_Cancelled);
+            exit;
+         end if;
+         declare
+            Current : Block renames Item.Layers (Index);
+         begin
+            Rows_Through (Normalize, Normed, Patches, Width, Source => X,
+                          Bias => Current.Norm_1_Bias,
+                          Weight => Current.Norm_1_Weight);
+            Multiply (Normed, Patches, Current.Query, Q, Current.Query_Bias);
+            Multiply (Normed, Patches, Current.Key, Kv, Current.Key_Bias);
+            Multiply (Normed, Patches, Current.Value, V, Current.Value_Bias);
+            Attend;
+            Multiply (Attended, Patches, Current.Output, Normed,
+                      Current.Output_Bias);
+            exit when E.Is_Error (Status);
+            K.Add (X.all, Normed.all);
+
+            Rows_Through (Normalize, Normed, Patches, Width, Source => X,
+                          Bias => Current.Norm_2_Bias,
+                          Weight => Current.Norm_2_Weight);
+            Multiply (Normed, Patches, Current.Feed_In, Hidden,
+                      Current.Feed_In_Bias);
+            Rows_Through (Gaussian, Hidden, Patches, Feed);
+            Multiply (Hidden, Patches, Current.Feed_Out, Normed,
+                      Current.Feed_Out_Bias);
+            exit when E.Is_Error (Status);
+            K.Add (X.all, Normed.all);
+         end;
+      end loop;
+
+      --  The post norm leaves the patch states in Normed.
+      if E.Is_Ok (Status) then
+         Rows_Through (Normalize, Normed, Patches, Width, Source => X,
+                       Bias => Item.Post_Bias, Weight => Item.Post_Weight);
+      end if;
+
+      --  The resampler. The states to the text width and normed; the
+      --  learned queries normed; the sinusoidal place; the keys.
+      if E.Is_Ok (Status) then
+         Multiply (Normed, Patches, Item.Kv_Proj, Kv1);
+         Rows_Through (Normalize, Kvn, Patches, P, Source => Kv1,
+                       Bias => Item.R_Ln_Kv_B, Weight => Item.R_Ln_Kv_W);
+         for R in 0 .. Nq - 1 loop
+            T.Dequantize_Row
+              (Item.Query_Rows, R, Qsrc (R * P .. (R + 1) * P - 1), Status);
+            exit when E.Is_Error (Status);
+         end loop;
+      end if;
+      if E.Is_Ok (Status) then
+         Rows_Through (Normalize, Qn, Nq, P, Source => Qsrc,
+                       Bias => Item.R_Ln_Q_B, Weight => Item.R_Ln_Q_W);
+
+         for I in 0 .. Quarter - 1 loop
+            Omega (I) :=
+              Real (N.Wide_Real'(1.0)
+                / Elementary."**" (Base_Freq,
+                    N.Wide_Real (I) / N.Wide_Real (Quarter)));
+         end loop;
+         for Pt in 0 .. Patches - 1 loop
+            declare
+               Rowv : constant Element_Count := Pt / Side;
+               Colv : constant Element_Count := Pt mod Side;
+            begin
+               for I in 0 .. Quarter - 1 loop
+                  declare
+                     W_Omega : constant Real := Omega (I);
+                     TX : constant N.Wide_Real :=
+                       N.Wide_Real (W_Omega) * N.Wide_Real (Colv);
+                     TY : constant N.Wide_Real :=
+                       N.Wide_Real (W_Omega) * N.Wide_Real (Rowv);
+                  begin
+                     Pos (Pt * P + I) := Real (Elementary.Sin (TX));
+                     Pos (Pt * P + Quarter + I) := Real (Elementary.Cos (TX));
+                     Pos (Pt * P + Half + I) := Real (Elementary.Sin (TY));
+                     Pos (Pt * P + Half + Quarter + I) :=
+                       Real (Elementary.Cos (TY));
+                  end;
+               end loop;
+            end;
+         end loop;
+         Kk.all := Kvn.all;
+         K.Add (Kk.all, Pos.all);
+      end if;
+
+      --  Query, key and value, each turned through its own weights; the
+      --  queries attend over every patch, a head at a time.
+      if E.Is_Ok (Status) then
+         Multiply (Qn, Nq, Item.R_Attn_Q, Qh, Item.R_Attn_Q_B);
+         Multiply (Kk, Patches, Item.R_Attn_K, Kh, Item.R_Attn_K_B);
+         Multiply (Kvn, Patches, Item.R_Attn_V, Vh, Item.R_Attn_V_B);
+      end if;
+      if E.Is_Ok (Status) then
+         for H in 0 .. N_Head - 1 loop
+            for I in 0 .. Nq - 1 loop
+               declare
+                  Q_At : constant Element_Count := I * P + H * D_Head;
+                  Ok   : Boolean;
+               begin
+                  for J in 0 .. Patches - 1 loop
+                     declare
+                        K_At : constant Element_Count := J * P + H * D_Head;
+                        Acc  : Real := 0.0;
+                     begin
+                        for D in 0 .. D_Head - 1 loop
+                           Acc := Acc + Qh (Q_At + D) * Kh (K_At + D);
+                        end loop;
+                        Row_Scores (J) := Acc * Scale;
+                     end;
+                  end loop;
+                  K.Softmax (Row_Scores (0 .. Patches - 1), Ok);
+                  if not Ok then
+                     Status := E.Make (E.Sampling_Non_Finite_Logit);
+                     exit;
+                  end if;
+                  for D in 0 .. D_Head - 1 loop
+                     declare
+                        Acc : Real := 0.0;
+                     begin
+                        for J in 0 .. Patches - 1 loop
+                           Acc := Acc
+                             + Row_Scores (J) * Vh (J * P + H * D_Head + D);
+                        end loop;
+                        Att (Q_At + D) := Acc;
+                     end;
+                  end loop;
+               end;
+            end loop;
+            exit when E.Is_Error (Status);
+         end loop;
+      end if;
+
+      --  The blend turned back, normed once more, and projected.
+      if E.Is_Ok (Status) then
+         Multiply (Att, Nq, Item.R_Attn_O, Rout, Item.R_Attn_O_B);
+         Rows_Through (Normalize, Routn, Nq, P, Source => Rout,
+                       Bias => Item.R_Ln_Post_B, Weight => Item.R_Ln_Post_W);
+         Multiply (Routn, Nq, Item.R_Proj, Rows);
+      end if;
+
+      Release;
+      if E.Is_Error (Status) then
+         T.Free (Rows);
+      end if;
+   end Encode_Minicpm;
+
    -----------------
    -- Encode_Qwen --
    -----------------
@@ -2349,6 +2872,10 @@ package body Model_Runner.Vision is
       if Is_Qwen (Item) then
          Encode_Qwen
            (Item, Picture, Team, Rows, Grid_Rows, Grid_Columns, Cancel, Status);
+      elsif Is_Minicpm (Item) then
+         Encode_Minicpm (Item, Picture, Team, Rows, Cancel, Status);
+         Grid_Rows := (if Rows = null then 0 else Item.Num_Query);
+         Grid_Columns := (if Rows = null then 0 else 1);
       else
          Encode_Gemma (Item, Picture, Team, Rows, Cancel, Status);
          declare

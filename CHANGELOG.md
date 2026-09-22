@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM-V images are read** (`resampler`). The first projector here with a
+  resampler rather than a pool or a merge: over a SigLIP encoder read as Gemma
+  3's is -- the patches placed from a seventy-a-side learned bank the grid
+  buckets into, floor(70·row/side) by seventy and floor(70·column/side), the
+  SigLIP position scheme -- a fixed bank of learned query rows reads the patch
+  states by cross-attention. The states are lifted to the text width and
+  normalized, the queries normalized; the keys are the states plus a
+  two-dimensional sinusoidal place of each patch's row and column; query, key
+  and value each turn into heads of a hundred and twenty-eight, the queries
+  attending over every patch; the blend turns back, is normalized once more and
+  projected. A picture becomes as many rows as the file's query count, sixty-four
+  for the current versions, whatever the patch grid. The engine encoder is
+  crossed against an independent binary64 computation of the same network in the
+  suite, a resampler written small, and a projector of another kind is refused
+  by name.
+
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the
   same window merge, the same two-word position of a patch, the same full

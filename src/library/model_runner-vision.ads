@@ -299,6 +299,29 @@ private
       Merge_In_Bias, Merge_Out_Bias : T.Real_Array_Access := null;
       Least_Rows    : Positive := 64;
       Most_Rows     : Positive := 4096;
+
+      --  What the MiniCPM-V resampler has that neither Gemma's pool nor
+      --  Qwen's merge does: a fixed bank of learned query rows that read
+      --  the patch states by cross-attention, so that a picture becomes
+      --  Num_Query rows however many patches it has. The patch states are
+      --  projected to the text width by Kv_Proj and normed (ln_kv); the
+      --  queries normed (ln_q); the keys are the projected states plus a
+      --  two-dimensional sinusoidal place; query, key and value each turn
+      --  through their own weights into heads of a hundred and twenty-eight;
+      --  the blend turns back through the output weights, is normed once
+      --  more (ln_post) and projected. The version the file states, kept
+      --  for the record.
+      Num_Query        : Natural := 0;
+      Minicpm_Version  : Natural := 0;
+      Query_Rows       : T.View := T.Empty_View;
+      Kv_Proj          : T.View := T.Empty_View;
+      R_Attn_Q, R_Attn_K, R_Attn_V, R_Attn_O : T.View := T.Empty_View;
+      R_Attn_Q_B, R_Attn_K_B, R_Attn_V_B, R_Attn_O_B :
+        T.Real_Array_Access := null;
+      R_Ln_Q_W, R_Ln_Q_B     : T.Real_Array_Access := null;
+      R_Ln_Kv_W, R_Ln_Kv_B   : T.Real_Array_Access := null;
+      R_Ln_Post_W, R_Ln_Post_B : T.Real_Array_Access := null;
+      R_Proj           : T.View := T.Empty_View;
    end record;
 
 end Model_Runner.Vision;
