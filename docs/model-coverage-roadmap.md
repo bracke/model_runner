@@ -15,14 +15,14 @@ Done, each crossed against the independent reference over every format and path
   intermediates, not weight-storage formats; no published GGUF stores weights
   in them, so there is nothing to decode. Phase 0 is complete but for #6, which
   is ongoing onboarding rather than a task.
-- **Phase 1:** #7 shared experts, #8 sigmoid gating.
+- **Phase 1:** #7 shared experts, #8 sigmoid gating, #9 wide-mixture gather spill — Phase 1 is complete.
 - **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
   family remains, on demand).
 - **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4, Starcoder2,
   GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
   ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.
 
-Phase 0 is closed (bar #6, ongoing onboarding). Still open: #9, #10 (other
+Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
 quants), and Phases 4–6 (#11, the config-mostly arch batch, is complete).
 
 ## Guiding constraints
@@ -97,12 +97,22 @@ The three MoE refusals share one forward path; do them together.
    for DeepSeek (Phase 4). **Large** (new forward path + device dispatch).
 8. ✅ **Done. Sigmoid gating** (`llama.adb:963`). Add `expert_gating_func = sigmoid`
    beside softmax in the router. **Medium.**
-9. **`[device]` raise the MoE round block limit** (`backend-device.ads:53`,
-   `Block_Limit = 16`). Spill wide-MoE rounds instead of dropping the whole
-   round to the host. **Medium.**
+9. ✅ **Done. `[device]` spill a wide mixture's gather** (the real limit was
+   `Products.Max_Gather = 16`, the experts one gather reads at once — the
+   push block holds sixteen member indices — not `Block_Limit`, which bounds
+   a multi-session round). A token routing to more than sixteen experts used
+   to drop its mixture to the host; now the router chooses up to
+   `Max_Route = 64` in one pass (the route buffer and `route.comp` hold the
+   whole chosen set) and the gather reads them sixteen at a time, each chunk
+   summed by its pre-renormalized shares — exactly additive, so the chunks
+   land where one gather of them all would. The token road sums the chunks on
+   the host (its existing design); the batch road already iterated per expert
+   with no cap. Crossed CPU-vs-device at twenty experts, seventeen chosen, a
+   token, a batch and in chunks. **Medium.**
 
-**Exit:** modern routed+shared MoE loads and runs on-device within the block
-limit. (#2 from Phase 0 is the third leg.)
+**Exit:** modern routed+shared MoE loads and runs on-device, a wide mixture
+spilling its gather rather than dropping to the host. (#2 from Phase 0 is the
+third leg.) **Phase 1 is complete.**
 
 ---
 

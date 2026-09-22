@@ -1441,6 +1441,11 @@ package Model_Runner.Backend.Device is
    --  How many experts one gathered mixture may read at once.
    Max_Members : constant := 16;
 
+   --  How many experts a route may choose. The gather still reads Max_Members
+   --  at once, so a wider route is read in chunks; the route buffer and the
+   --  route shader hold the whole chosen set. Mirrors Products.Max_Route.
+   Max_Route : constant := 64;
+
    type Member_List is array (1 .. Max_Members) of Natural;
 
    --  A batch's choices, position by position.

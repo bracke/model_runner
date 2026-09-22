@@ -7779,7 +7779,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Steps.Held = Sequence_Limit
         or else Source not in 1 .. Steps.Held
         or else Used = 0
-        or else Used > Max_Gather
+        or else Used > Max_Route
         or else Experts < Used
         or else Steps.Items (Source).Rows /= Experts
       then

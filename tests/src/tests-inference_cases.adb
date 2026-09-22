@@ -2302,7 +2302,7 @@ package body Tests.Inference_Cases is
             Experts : Natural := 0;
             Used    : Natural := 0;
          end record;
-         Rows : constant array (1 .. 14) of Case_Row :=
+         Rows : constant array (1 .. 15) of Case_Row :=
            [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0),
             (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0),
             (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0),
@@ -2316,7 +2316,14 @@ package body Tests.Inference_Cases is
             (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2),
             (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0),
             (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2),
-            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0)];
+            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0),
+
+            --  A mixture that routes each position to more experts than one
+            --  gather reads at once: twenty experts, seventeen of them
+            --  chosen, so the device spills the gather into a full round of
+            --  sixteen and one more and sums the two, which must land where
+            --  the processor's one sum of seventeen does.
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 20, 17)];
       begin
          for Row of Rows loop
             declare

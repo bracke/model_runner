@@ -54,6 +54,7 @@ layout(push_constant) uniform Shape {
 
 //  More than any mixture this program has been shown routes over.
 const uint MOST = 512u;
+const uint MAX_ROUTE = 64u;
 const uint LANES = 128u;
 
 shared float score[MOST];
@@ -66,8 +67,8 @@ shared uint  best_at[LANES];
 //  What the lanes are told between the steps lane nought takes alone.
 shared float largest;
 shared float sum;
-shared uint  chosen[16];
-shared float share[16];
+shared uint  chosen[MAX_ROUTE];
+shared float share[MAX_ROUTE];
 
 void main() {
     uint pos  = gl_WorkGroupID.x;

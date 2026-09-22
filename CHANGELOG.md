@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A wide mixture spills its gather on the device instead of dropping to
+  the host.** The device gather reads at most sixteen experts at once -- the
+  push block holds sixteen member indices -- so a token that routed to more
+  than sixteen used to run its whole mixture on the host. Now the router
+  chooses up to sixty-four experts in one pass (the route buffer and the
+  route shader hold the whole chosen set) and the gather reads them sixteen
+  at a time, each chunk summed by its share. The shares are renormalized over
+  the whole chosen set before any gather, so a chunk's partial sum is exactly
+  additive and the chunks land where one gather of them all would. The batch
+  road already iterated per expert with no such cap. Crossed CPU-against-
+  device at twenty experts with seventeen chosen -- across the sixteen
+  boundary -- a token, a batch and in chunks. Completes Phase 1 of the model-
+  coverage roadmap.
 - **Baichuan-13B is read** (the ALiBi size). Baichuan announces the one
   architecture name for both its sizes, and the runtime tells the 13B from
   the 7B by its forty layers alone -- no key in the file says which -- so

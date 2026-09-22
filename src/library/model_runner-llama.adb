@@ -8995,7 +8995,7 @@ package body Model_Runner.Llama is
         Item.Owner.all.Stacked
         and then (Current.Expert_Gate_Bias = null)
                  = (Current.Expert_Up_Bias = null)
-        and then Used <= Model_Runner.Backend.Device.Max_Members
+        and then Used <= Model_Runner.Backend.Device.Max_Route
 
         --  The route kernel softmaxes the scores and renormalizes the
         --  chosen, so a mixture that does neither -- sigmoid-gated, or with
@@ -9163,13 +9163,14 @@ package body Model_Runner.Llama is
             Feed  : constant Element_Count :=
               Element_Count (Settings.Expert_Feed);
 
-            Members : Model_Runner.Backend.Device.Member_List :=
-              [others => 0];
+            --  The gather reads at most Max_Members experts at once, so a
+            --  mixture that chose more is read in chunks of that many, each
+            --  summed before the next: the shares were renormalized over the
+            --  whole chosen set above, so a chunk's partial sum adds to the
+            --  same weighted average one gather of them all would give.
+            Span : constant Natural :=
+              Model_Runner.Backend.Device.Max_Members;
          begin
-            for Slot in Chosen'Range loop
-               Members (Slot + 1) := Chosen (Slot);
-            end loop;
-
             if Item.Mixed = null
               or else Item.Mixed.all'Length < Element_Count (Used) * Width
             then
@@ -9205,33 +9206,53 @@ package body Model_Runner.Llama is
                end loop;
             end if;
 
-            Model_Runner.Backend.Device.Dispatch_Mixture
-              (Current.Gate_Stack, Current.Up_Stack, Current.Down_Stack,
-               Feed, Width, Members, Used, Gate_Unit (Item.Owner.all),
-               Input, Item.Mixed, Status, Item.Stopping,
+            declare
+               Done : Natural := 0;
+            begin
+               while Done < Used loop
+                  declare
+                     Reach   : constant Natural :=
+                       Natural'Min (Span, Used - Done);
+                     Members : Model_Runner.Backend.Device.Member_List :=
+                       [others => 0];
+                  begin
+                     for J in 0 .. Reach - 1 loop
+                        Members (J + 1) := Chosen (Done + J);
+                     end loop;
+
+                     Model_Runner.Backend.Device.Dispatch_Mixture
+                       (Current.Gate_Stack, Current.Up_Stack,
+                        Current.Down_Stack, Feed, Width, Members, Reach,
+                        Gate_Unit (Item.Owner.all), Input, Item.Mixed, Status,
+                        Item.Stopping,
                         Alpha => Item.Owner.all.Settings.Gate_Alpha,
                         Limit => Item.Owner.all.Settings.Gate_Limit,
                         Gate_Bias => Current.Expert_Gate_Bias,
                         Up_Bias   => Current.Expert_Up_Bias,
                         Down_Bias => Current.Expert_Down_Bias);
-            if E.Is_Error (Status) then
-               return;
-            end if;
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-            for Slot in Chosen'Range loop
-               declare
-                  From : constant Element_Count :=
-                    Item.Mixed.all'First + Element_Count (Slot) * Width;
-               begin
-                  Item.Expert_Row.all
-                    (Item.Expert_Row.all'First
-                     .. Item.Expert_Row.all'First + Width - 1) :=
-                    Item.Mixed.all (From .. From + Width - 1);
-               end;
+                     for J in 0 .. Reach - 1 loop
+                        declare
+                           From : constant Element_Count :=
+                             Item.Mixed.all'First + Element_Count (J) * Width;
+                        begin
+                           Item.Expert_Row.all
+                             (Item.Expert_Row.all'First
+                              .. Item.Expert_Row.all'First + Width - 1) :=
+                             Item.Mixed.all (From .. From + Width - 1);
+                        end;
 
-               K.Scale (Item.Expert_Row.all, Share (Slot));
-               K.Add (Result.all, Item.Expert_Row.all);
-            end loop;
+                        K.Scale (Item.Expert_Row.all, Share (Done + J));
+                        K.Add (Result.all, Item.Expert_Row.all);
+                     end loop;
+
+                     Done := Done + Reach;
+                  end;
+               end loop;
+            end;
 
             --  On to the shared expert, not out: this road returned
             --  here, and a hybrid mixture's one position on the device
@@ -9642,7 +9663,7 @@ package body Model_Runner.Llama is
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
-        and then Used <= Model_Runner.Backend.Device.Max_Members
+        and then Used <= Model_Runner.Backend.Device.Max_Route
 
         --  The route kernel softmaxes and renormalizes; a mixture that is
         --  sigmoid-gated or unnormalized is routed on the host, as one
@@ -16206,7 +16227,7 @@ package body Model_Runner.Llama is
           --  shape no file has and the sequence does not take.
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
-                   <= Model_Runner.Backend.Device.Max_Members
+                   <= Model_Runner.Backend.Device.Max_Route
           and then Settings.Renormalize_Experts
           and then not Settings.Sigmoid_Gate);
 

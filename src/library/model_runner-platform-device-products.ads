@@ -510,6 +510,11 @@ package Model_Runner.Platform.Device.Products is
    --  has been shown chooses.
    Max_Gather : constant := 16;
 
+   --  How many experts one route may choose. Larger than Max_Gather -- the
+   --  route buffer holds the whole chosen set for the gather to read in
+   --  chunks of Max_Gather -- and matched by the route shader's own arrays.
+   Max_Route : constant := 64;
+
    type Member_List is array (1 .. Max_Gather) of Natural;
 
    type Sequence is limited private;

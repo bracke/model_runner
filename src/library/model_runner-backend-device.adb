@@ -2585,7 +2585,7 @@ package body Model_Runner.Backend.Device is
             end if;
 
             if Feed = 0 or else Used = 0 or else Experts < Used
-              or else Used > Products.Max_Gather
+              or else Used > Products.Max_Route
               or else Router.Columns /= Width
               or else Natural (Router.Rows) /= Experts
               or else Gate_Stack.Columns /= Width
@@ -4244,7 +4244,7 @@ package body Model_Runner.Backend.Device is
       end if;
 
       if Vectors = null or else Count = 0 or else Used = 0
-        or else Used > Max_Members or else Experts < Used
+        or else Used > Products.Max_Route or else Experts < Used
         or else Router.Base = System.Null_Address
         or else Natural (Router.Rows) /= Experts
         or else Vectors.all'Length < Count * Router.Columns

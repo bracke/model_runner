@@ -18901,6 +18901,19 @@ answer is `mul_mat_id`, which groups a batch's tokens by the expert they
 chose so each expert matrix is read once for all of them. That is the next
 one and it needs a kernel rather than an arrangement.
 
+**A mixture wider than the gather spills into it.** The gather reads sixteen
+experts at once -- its push block holds sixteen member indices -- so a token
+that routes to more than that used to run its whole mixture on the host. It
+does not now: the router chooses up to sixty-four in one pass, the route
+buffer and `route.comp` holding the whole chosen set, and the gather reads
+them sixteen at a time. Each chunk is summed by its share as the one gather
+was, and because the shares are renormalized over the whole chosen set before
+any of this, a chunk's partial sum adds to the same weighted average one
+gather of them all would give -- so seventeen experts are a round of sixteen
+and one more, summed, and land where the processor's one sum of seventeen
+does. Fine-grained mixtures that choose many small experts stay on the device
+rather than dropping off it.
+
 ### A batch's mixture, gathered by expert
 
 The section above left one thing: a mixture's prompt cost about what its
