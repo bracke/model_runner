@@ -1134,7 +1134,8 @@ package body Reference_Transformer is
          when Chatglm => "chatglm.",
          when Command_R => "command-r.",
          when Mamba => "mamba.",
-         when Mamba2 => "mamba2.");
+         when Mamba2 => "mamba2.",
+         when Rwkv6 => "rwkv6.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1592,6 +1593,8 @@ package body Reference_Transformer is
             Item.Kind := Mamba;
          elsif Named = "mamba2" then
             Item.Kind := Mamba2;
+         elsif Named = "rwkv6" then
+            Item.Kind := Rwkv6;
          else
             return;
          end if;
@@ -1820,6 +1823,19 @@ package body Reference_Transformer is
          Item.Ssm_Heads := Item.Time_Rank;
          Item.Head_Dim := Item.Inner_Size / Item.Ssm_Heads;
       end if;
+      if Item.Kind = Rwkv6 then
+         Item.Head_Dim :=
+           Metadata (Source, Prefix (Item) & "wkv.head_size", 0);
+         Item.Mix_Extra :=
+           Metadata (Source, Prefix (Item) & "time_mix_extra_dim", 0);
+         Item.Decay_Extra :=
+           Metadata (Source, Prefix (Item) & "time_decay_extra_dim", 0);
+         Item.Rescale_Every :=
+           Metadata (Source, Prefix (Item) & "rescale_every_n_layers", 0);
+         if Item.Head_Dim > 0 then
+            Item.Ssm_Heads := Item.Embedding / Item.Head_Dim;
+         end if;
+      end if;
       if Item.Window >= Item.Context then
          Item.Window := 0;
       end if;
@@ -1980,11 +1996,27 @@ package body Reference_Transformer is
          end if;
       end if;
 
+      --  RWKV6 normalizes the embedding once before the first block, as
+      --  Bert does, but by centring with a shift (ln0).
+      if Item.Kind = Rwkv6 then
+         Item.Embedding_Norm := Read_Vector ("token_embd_norm.weight", Present);
+         if not Present then
+            return;
+         end if;
+         Item.Embedding_Norm_Bias :=
+           Read_Vector ("token_embd_norm.bias", Present);
+         if not Present then
+            return;
+         end if;
+      end if;
+
       --  Every architecture but Bert normalizes between the last layer and
       --  whatever reads it. Bert's last layer normalized what it produced.
       if Item.Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Item.Output_Norm := Read_Vector ("output_norm.weight", Present);
-         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+         if Present and then Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2
+                                        | Stablelm | Gptneox | Rwkv6
+         then
             Item.Output_Norm_Bias :=
               Read_Vector ("output_norm.bias", Present);
          end if;
@@ -2028,7 +2060,7 @@ package body Reference_Transformer is
             --  the blocks past the stack attend in full whatever their
             --  number.
             Is_Linear : constant Boolean :=
-              Item.Kind in Mamba | Mamba2
+              Item.Kind in Mamba | Mamba2 | Rwkv6
               or else (Item.Kind in Qwen35 | Qwen35_MoE
                        and then Index < Item.Layers
                        and then (Index + 1) mod Item.Linear_Every /= 0);
@@ -2077,7 +2109,9 @@ package body Reference_Transformer is
 
             --  Gemma2's two extra normalizations, required where the
             --  architecture states them.
-            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+            if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm
+                           | Gptneox | Rwkv6
+            then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
                if not Present then
@@ -2103,7 +2137,54 @@ package body Reference_Transformer is
             end if;
 
             --  A linear block's own tensors, and none of attention's.
-            if Is_Linear and then Item.Kind = Mamba2 then
+            if Is_Linear and then Item.Kind = Rwkv6 then
+               --  RWKV6's second normalization and the two mixes' matrices
+               --  and vectors. ln1 was read above; the eight wide matrices,
+               --  the four low projections and the interpolation matrix, and
+               --  the vectors the products do not touch.
+               declare
+                  procedure M (Name : String; Into : out Matrix_Access) is
+                  begin
+                     if Present then
+                        Into := Read_Matrix (Layer_Name (Index, Name), Present);
+                     end if;
+                  end M;
+                  procedure V (Name : String; Into : out Vector_Access) is
+                  begin
+                     if Present then
+                        Into := Read_Vector (Layer_Name (Index, Name), Present);
+                     end if;
+                  end V;
+               begin
+                  Current.Second_Attention_Norm :=
+                    Read_Vector
+                      (Layer_Name (Index, "attn_norm_2.weight"), Present);
+                  V ("attn_norm_2.bias", Current.Second_Attention_Norm_Bias);
+                  M ("time_mix_receptance.weight", Current.Rwkv_R);
+                  M ("time_mix_key.weight", Current.Rwkv_K);
+                  M ("time_mix_value.weight", Current.Rwkv_V);
+                  M ("time_mix_gate.weight", Current.Rwkv_G);
+                  M ("time_mix_output.weight", Current.Rwkv_TM_Out);
+                  M ("channel_mix_key.weight", Current.Rwkv_CM_K);
+                  M ("channel_mix_value.weight", Current.Rwkv_CM_V);
+                  M ("channel_mix_receptance.weight", Current.Rwkv_CM_R);
+                  M ("time_mix_w1.weight", Current.Rwkv_TM_W1);
+                  M ("time_mix_w2.weight", Current.Rwkv_TM_W2);
+                  M ("time_mix_decay_w1.weight", Current.Rwkv_Decay_W1);
+                  M ("time_mix_decay_w2.weight", Current.Rwkv_Decay_W2);
+                  M ("time_mix_lerp_fused.weight", Current.Rwkv_Lerp_F);
+                  V ("time_mix_lerp_x.weight", Current.Rwkv_Lerp_X);
+                  V ("time_mix_first.weight", Current.Rwkv_First);
+                  V ("time_mix_decay.weight", Current.Rwkv_Decay);
+                  V ("time_mix_ln.weight", Current.Rwkv_TM_LN);
+                  V ("time_mix_ln.bias", Current.Rwkv_TM_LN_Bias);
+                  V ("channel_mix_lerp_k.weight", Current.Rwkv_CM_Lerp_K);
+                  V ("channel_mix_lerp_r.weight", Current.Rwkv_CM_Lerp_R);
+                  if not Present then
+                     return;
+                  end if;
+               end;
+            elsif Is_Linear and then Item.Kind = Mamba2 then
                --  Mamba2's one projection in, the convolution over the
                --  activation and B and C, the per-head A, D and step bias,
                --  the gated normalization and the projection out. No ssm_x
@@ -3686,7 +3767,256 @@ package body Reference_Transformer is
             --  the query, normalized, and gated -- one position and one
             --  head at a time over the state itself, which is the plain
             --  form the engine's chunked one unrolls.
-            if Current.Linear and then Item.Kind = Mamba2 then
+            if Current.Linear and then Item.Kind = Rwkv6 then
+               --  RWKV6's block, position by position and carrying its two
+               --  token-shift slots and its linear-attention state. Two
+               --  sublayers each with its own residual: a time mix where
+               --  attention would be and a channel mix where the feed-forward
+               --  would be, each shifted against the position before through
+               --  a data-dependent interpolation. Written out independently
+               --  and joined the residual way -- the block's whole output
+               --  less the row it started from -- so the rescale is carried
+               --  as the engine carries it.
+               declare
+                  RW    : constant Natural := Width;
+                  Heads : constant Natural := Item.Ssm_Heads;
+                  HN    : constant Natural := Item.Head_Dim;
+                  D_TM  : constant Natural := Item.Mix_Extra;
+                  D_Dec : constant Natural := Item.Decay_Extra;
+                  Group_Eps : constant Long_Float := 64.0e-5;
+
+                  Att_Shift : Real_Vector (0 .. RW - 1) := [others => 0.0];
+                  Ffn_Shift : Real_Vector (0 .. RW - 1) := [others => 0.0];
+                  S_St : Real_Vector (0 .. Heads * HN * HN - 1) :=
+                    [others => 0.0];
+               begin
+                  for Step in 0 .. Steps - 1 loop
+                     declare
+                        Cur  : Real_Vector (0 .. RW - 1);
+                        Sx   : Real_Vector (0 .. RW - 1);
+                        Xs   : Real_Vector (0 .. RW - 1);
+                        W1o  : Real_Vector (0 .. 5 * D_TM - 1);
+                        Lora : Real_Vector (0 .. 5 * RW - 1);
+                        Rr   : Real_Vector (0 .. RW - 1);
+                        Kk   : Real_Vector (0 .. RW - 1);
+                        Vv   : Real_Vector (0 .. RW - 1);
+                        Gg   : Real_Vector (0 .. RW - 1);
+                        Ww   : Real_Vector (0 .. RW - 1);
+                        Yy   : Real_Vector (0 .. RW - 1);
+                        Inp  : Real_Vector (0 .. RW - 1);
+                        Cur2 : Real_Vector (0 .. RW - 1);
+                        Ck   : Real_Vector (0 .. Item.Feed_Forward - 1);
+                        Cr   : Real_Vector (0 .. RW - 1);
+                        Cv   : Real_Vector (0 .. RW - 1);
+
+                        procedure Stream (S_At : Natural; Into : out Real_Vector)
+                        is
+                        begin
+                           for C in 0 .. RW - 1 loop
+                              Into (C) :=
+                                Cur (C)
+                                + Sx (C)
+                                  * (Current.Rwkv_Lerp_F (S_At, C)
+                                     + Lora (S_At * RW + C));
+                           end loop;
+                        end Stream;
+                     begin
+                        for Index in 0 .. RW - 1 loop
+                           State (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize_Centred
+                          (State, Current.Attention_Norm.all,
+                           Current.Attention_Norm_Bias, Cur);
+
+                        --  === Time mix ===
+                        for C in 0 .. RW - 1 loop
+                           Sx (C) := Att_Shift (C) - Cur (C);
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Xs (C) := Cur (C)
+                             + Sx (C) * Current.Rwkv_Lerp_X (C);
+                        end loop;
+                        for J in 0 .. 5 * D_TM - 1 loop
+                           declare
+                              Acc : Long_Float := 0.0;
+                           begin
+                              for C in 0 .. RW - 1 loop
+                                 Acc := Acc
+                                   + Current.Rwkv_TM_W1 (J, C) * Xs (C);
+                              end loop;
+                              W1o (J) := Functions.Tanh (Acc);
+                           end;
+                        end loop;
+                        for Str in 0 .. 4 loop
+                           for Out_C in 0 .. RW - 1 loop
+                              declare
+                                 Acc : Long_Float := 0.0;
+                              begin
+                                 for K in 0 .. D_TM - 1 loop
+                                    Acc := Acc
+                                      + Current.Rwkv_TM_W2 (Str * RW + Out_C, K)
+                                        * W1o (Str * D_TM + K);
+                                 end loop;
+                                 Lora (Str * RW + Out_C) := Acc;
+                              end;
+                           end loop;
+                        end loop;
+
+                        Stream (3, Xs);
+                        Project (Current.Rwkv_R.all, Xs, Rr);
+                        Stream (1, Xs);
+                        Project (Current.Rwkv_K.all, Xs, Kk);
+                        Stream (2, Xs);
+                        Project (Current.Rwkv_V.all, Xs, Vv);
+                        Stream (4, Xs);
+                        Project (Current.Rwkv_G.all, Xs, Gg);
+
+                        --  The decay a channel.
+                        Stream (0, Xs);
+                        declare
+                           D1 : Real_Vector (0 .. D_Dec - 1);
+                        begin
+                           for I in 0 .. D_Dec - 1 loop
+                              declare
+                                 Acc : Long_Float := 0.0;
+                              begin
+                                 for C in 0 .. RW - 1 loop
+                                    Acc := Acc
+                                      + Current.Rwkv_Decay_W1 (I, C) * Xs (C);
+                                 end loop;
+                                 D1 (I) := Functions.Tanh (Acc);
+                              end;
+                           end loop;
+                           for C in 0 .. RW - 1 loop
+                              declare
+                                 Acc : Long_Float := Current.Rwkv_Decay (C);
+                              begin
+                                 for I in 0 .. D_Dec - 1 loop
+                                    Acc := Acc
+                                      + Current.Rwkv_Decay_W2 (C, I) * D1 (I);
+                                 end loop;
+                                 Ww (C) :=
+                                   Functions.Exp (-Functions.Exp (Acc));
+                              end;
+                           end loop;
+                        end;
+
+                        --  The linear-attention recurrence, a head at a time.
+                        for H in 0 .. Heads - 1 loop
+                           declare
+                              Base : constant Natural := H * HN;
+                              SB   : constant Natural := H * HN * HN;
+                           begin
+                              for J in 0 .. HN - 1 loop
+                                 declare
+                                    Acc : Long_Float := 0.0;
+                                 begin
+                                    for I in 0 .. HN - 1 loop
+                                       declare
+                                          KV : constant Long_Float :=
+                                            Kk (Base + I) * Vv (Base + J);
+                                          Old : constant Long_Float :=
+                                            S_St (SB + I * HN + J);
+                                       begin
+                                          Acc := Acc
+                                            + Rr (Base + I)
+                                              * (Current.Rwkv_First (Base + I)
+                                                 * KV + Old);
+                                          S_St (SB + I * HN + J) :=
+                                            Ww (Base + I) * Old + KV;
+                                       end;
+                                    end loop;
+                                    Yy (Base + J) := Acc;
+                                 end;
+                              end loop;
+                           end;
+                        end loop;
+
+                        --  Per-head normalization, gain and shift, then gate.
+                        for H in 0 .. Heads - 1 loop
+                           declare
+                              Base : constant Natural := H * HN;
+                              Mean : Long_Float := 0.0;
+                              Var  : Long_Float := 0.0;
+                              Inv  : Long_Float;
+                           begin
+                              for I in 0 .. HN - 1 loop
+                                 Mean := Mean + Yy (Base + I);
+                              end loop;
+                              Mean := Mean / Long_Float (HN);
+                              for I in 0 .. HN - 1 loop
+                                 Var := Var
+                                   + (Yy (Base + I) - Mean)
+                                     * (Yy (Base + I) - Mean);
+                              end loop;
+                              Inv := 1.0
+                                / Functions.Sqrt (Var / Long_Float (HN)
+                                                  + Group_Eps);
+                              for I in 0 .. HN - 1 loop
+                                 Yy (Base + I) :=
+                                   (Yy (Base + I) - Mean) * Inv
+                                   * Current.Rwkv_TM_LN (Base + I)
+                                   + Current.Rwkv_TM_LN_Bias (Base + I);
+                              end loop;
+                           end;
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Yy (C) := Yy (C) * (Gg (C) * Logistic (Gg (C)));
+                        end loop;
+
+                        Project (Current.Rwkv_TM_Out.all, Yy, Cr);
+                        for C in 0 .. RW - 1 loop
+                           Inp (C) := Cr (C) + Whole (Step, C);
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Att_Shift (C) := Cur (C);
+                        end loop;
+
+                        --  === Channel mix ===
+                        Normalize_Centred
+                          (Inp, Current.Second_Attention_Norm.all,
+                           Current.Second_Attention_Norm_Bias, Cur2);
+                        for C in 0 .. RW - 1 loop
+                           Sx (C) := Ffn_Shift (C) - Cur2 (C);
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Xs (C) := Cur2 (C)
+                             + Sx (C) * Current.Rwkv_CM_Lerp_K (C);
+                        end loop;
+                        Project (Current.Rwkv_CM_K.all, Xs, Ck);
+                        for C in 0 .. Item.Feed_Forward - 1 loop
+                           Ck (C) :=
+                             (if Ck (C) > 0.0 then Ck (C) * Ck (C) else 0.0);
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Xs (C) := Cur2 (C)
+                             + Sx (C) * Current.Rwkv_CM_Lerp_R (C);
+                        end loop;
+                        Project (Current.Rwkv_CM_R.all, Xs, Cr);
+                        Project (Current.Rwkv_CM_V.all, Ck, Cv);
+                        for C in 0 .. RW - 1 loop
+                           Cur (C) := Inp (C) + Logistic (Cr (C)) * Cv (C);
+                        end loop;
+                        for C in 0 .. RW - 1 loop
+                           Ffn_Shift (C) := Cur2 (C);
+                        end loop;
+
+                        if Item.Rescale_Every > 0
+                          and then (Block + 1) mod Item.Rescale_Every = 0
+                        then
+                           for C in 0 .. RW - 1 loop
+                              Cur (C) := Cur (C) * 0.5;
+                           end loop;
+                        end if;
+
+                        for Index in 0 .. RW - 1 loop
+                           Linear_Rows (Step, Index) :=
+                             Cur (Index) - Whole (Step, Index);
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            elsif Current.Linear and then Item.Kind = Mamba2 then
                --  Mamba2's block, position by position and carrying the
                --  convolution's memory and the scan's state. One projection
                --  in lays out the gate, the activation, B and C and a step a
@@ -4616,8 +4946,13 @@ package body Reference_Transformer is
                   --  And the code variant's second: the layer's input,
                   --  which Whole still holds for this step, is added once
                   --  more to what the first normalized, and the sum is
-                  --  normalized again by a gain and shift of its own.
-                  if Current.Second_Attention_Norm /= null then
+                  --  normalized again by a gain and shift of its own. This is
+                  --  jina-bert-v2's alone; RWKV6 carries a second
+                  --  normalization under the same field but uses it inside
+                  --  its own block, not here.
+                  if Current.Second_Attention_Norm /= null
+                    and then Item.Kind = Jina_Bert_V2
+                  then
                      declare
                         Room : Real_Vector (0 .. Width - 1) := [others => 0.0];
                      begin
@@ -4633,7 +4968,7 @@ package body Reference_Transformer is
 
                   --  Mamba has no feed-forward: its block is the whole
                   --  layer, joined to the residual just above.
-                  if Item.Kind in Mamba | Mamba2 then
+                  if Item.Kind in Mamba | Mamba2 | Rwkv6 then
                      goto Layer_Written;
                   end if;
 

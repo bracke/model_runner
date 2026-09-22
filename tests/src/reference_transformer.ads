@@ -186,7 +186,7 @@ private
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
-      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2);
+      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -305,6 +305,31 @@ private
       Ssm_A      : Matrix_Access := null;
       Ssm_D      : Vector_Access := null;
       Conv_Bias  : Vector_Access := null;
+
+      --  RWKV6's block: the eight wide matrices of its time and channel
+      --  mixes, the four low projections of its shift and its decay, the
+      --  five streams' interpolation as a matrix (a row a stream), and the
+      --  vectors the products do not touch.
+      Rwkv_R        : Matrix_Access := null;
+      Rwkv_K        : Matrix_Access := null;
+      Rwkv_V        : Matrix_Access := null;
+      Rwkv_G        : Matrix_Access := null;
+      Rwkv_TM_Out   : Matrix_Access := null;
+      Rwkv_CM_K     : Matrix_Access := null;
+      Rwkv_CM_V     : Matrix_Access := null;
+      Rwkv_CM_R     : Matrix_Access := null;
+      Rwkv_TM_W1    : Matrix_Access := null;
+      Rwkv_TM_W2    : Matrix_Access := null;
+      Rwkv_Decay_W1 : Matrix_Access := null;
+      Rwkv_Decay_W2 : Matrix_Access := null;
+      Rwkv_Lerp_F   : Matrix_Access := null;
+      Rwkv_Lerp_X     : Vector_Access := null;
+      Rwkv_First      : Vector_Access := null;
+      Rwkv_Decay      : Vector_Access := null;
+      Rwkv_TM_LN      : Vector_Access := null;
+      Rwkv_TM_LN_Bias : Vector_Access := null;
+      Rwkv_CM_Lerp_K  : Vector_Access := null;
+      Rwkv_CM_Lerp_R  : Vector_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -414,6 +439,9 @@ private
       Groups       : Natural := 0;
       Ssm_Heads    : Natural := 0;
       Head_Dim     : Natural := 0;
+      Mix_Extra    : Natural := 0;
+      Decay_Extra  : Natural := 0;
+      Rescale_Every : Natural := 0;
       Next_Layers  : Natural := 0;
       Next_Proj    : Matrix_Access := null;
       Next_Enorm   : Vector_Access := null;

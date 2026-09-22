@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **RWKV6 (Finch) is read** -- a recurrent model of a different family from
+  the state-space ones: not a selective scan but RWKV's own token-shift and
+  linear attention. Each block is two sublayers, each with its own residual
+  and no attention or feed-forward -- a time mix and a channel mix -- each
+  shifting the position against the one before through an interpolation that
+  is itself data-dependent, computed from the position through a low-rank
+  projection and a tanh, five streams (`w, k, v, r, g`) at once. The time mix
+  keeps a linear-attention state a head, a matrix the head's width square,
+  decayed a channel by `exp(-exp(...))` of a data-dependent factor and driven
+  by the outer product of key and value, read at the receptance with this
+  position's own key-value lifted out of the decay by a learned bonus, then
+  normalized per head (centred, a fixed floor) and gated by a SiLU; the
+  channel mix is a squared-ReLU gate. Every normalization centres and carries
+  a shift, including one over the embedding before the first block, and the
+  output is halved every `rescale_every_n_layers` layers. Crossed against the
+  independent reference over every format and path, outside tolerance nought;
+  the recurrence has no device kernel, so an RWKV6 layer runs on the host
+  under the device backend. Continues Phase 5 of the model-coverage roadmap.
 - **Mamba2 is read** -- Mamba's structured successor, the same pure
   state-space shape restructured. One projection in lays out the gate, the
   inner activation, B and C, and a time step a head all at once

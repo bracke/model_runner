@@ -218,7 +218,14 @@ The largest infra investment; also the largest device win for models already
     gated grouped normalization before the projection out. No `ssm_x`/`ssm_dt`
     matrices. Crossed against the reference over every format and path,
     outside tolerance nought; host-side under the device backend like Mamba.
-    RWKV/Jamba remain.
+    ✅ **RWKV6 (Finch)** is read: a recurrent model of a different family --
+    RWKV's token-shift and linear attention rather than a scan. Two sublayers
+    a block each with its own residual, a data-dependent token shift through a
+    low-rank projection, a linear-attention state a head with a double-
+    exponential decay and a learned first-token bonus, a per-head gated norm,
+    and a squared-ReLU channel mix; all LayerNorm, output halved every so many
+    layers. Crossed against the reference over every format and path, outside
+    tolerance nought; host-side under the device backend. Jamba remains.
 
 **Exit:** hybrid models run mostly on-device; pure state-space models load.
 

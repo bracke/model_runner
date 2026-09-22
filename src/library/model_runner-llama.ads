@@ -189,7 +189,7 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2);
+      Mamba2, Rwkv6);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -227,6 +227,19 @@ package Model_Runner.Llama is
    --  @return True for Mamba2.
    function Is_Mamba2 (Item : Architecture) return Boolean
    is (Item = Mamba2);
+
+   --  Whether an architecture is RWKV: a pure-sequence model like the
+   --  state-space ones -- every layer keeps a state and no attention reads a
+   --  cache -- but its recurrence is neither a selective scan nor the gated
+   --  delta rule. It shifts each token against the one before, mixes them
+   --  through a linear-attention state a head, and runs a squared-ReLU
+   --  channel mix in place of a feed-forward. Not Pure_SSM, which is the
+   --  Mamba family alone.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for an RWKV architecture.
+   function Is_RWKV (Item : Architecture) return Boolean
+   is (Item = Rwkv6);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -278,7 +291,8 @@ package Model_Runner.Llama is
          when Chatglm    => "chatglm",
          when Command_R  => "command-r",
          when Mamba      => "mamba",
-         when Mamba2     => "mamba2");
+         when Mamba2     => "mamba2",
+         when Rwkv6      => "rwkv6");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -563,6 +577,16 @@ package Model_Runner.Llama is
       Groups          : Natural := 0;
       Ssm_Heads       : Natural := 0;
       Head_Dim        : Natural := 0;
+
+      --  RWKV6's shape: the two low ranks its token shift and its decay are
+      --  projected through -- data-dependent, a position at a time -- and
+      --  how often the block's output is halved to keep the residual from
+      --  growing without bound over the depth. Nought for every other
+      --  architecture; RWKV6 reads its head count into Ssm_Heads and its
+      --  head width into Head_Dim, as the state-space models do.
+      Mix_Extra       : Natural := 0;
+      Decay_Extra     : Natural := 0;
+      Rescale_Every   : Natural := 0;
       Shared_Feed     : Natural := 0;
       Next_Layers     : Natural := 0;
    end record;
@@ -590,6 +614,7 @@ package Model_Runner.Llama is
    --  @return True where the layer keeps a state rather than a cache.
    function Linear (Settings : Configuration; Layer : Natural) return Boolean
    is (Pure_SSM (Settings.Kind)
+       or else Is_RWKV (Settings.Kind)
        or else (Settings.Linear_Every > 0
                 and then (Layer + 1) mod Settings.Linear_Every /= 0));
 
@@ -2126,6 +2151,42 @@ private
       --  as the block resolves, for a linear layer; null otherwise.
       Linear_Numbers : Model_Runner.Tensors.Real_Array_Access;
 
+      --  RWKV6's block. Its time mix -- the attention it has instead -- and
+      --  its channel mix -- the feed-forward it has instead. The five
+      --  projections a token is mixed through (receptance, key, value, the
+      --  gate and the way out), and the channel mix's three; all read
+      --  through the product and repacked like any other matrix. Beside
+      --  them the vectors the product does not touch: the shift's own
+      --  interpolation (Rwkv_Lerp_X) and its data-dependent part's two low
+      --  projections (Rwkv_TM_W1/W2), the decay's bias (Rwkv_Decay) and its
+      --  two (Rwkv_Decay_W1/W2), the first token's bonus (Rwkv_First), the
+      --  per-head normalization on the mixed state (Rwkv_TM_LN and its
+      --  shift), the five streams' interpolation laid end to end
+      --  (Rwkv_Lerp_Fused), and the channel mix's two shifts. ln1 and ln2
+      --  are Attention_Norm and Second_Attention_Norm with their shifts,
+      --  and ln0 the model's Embedding_Norm, all read where they belong.
+      Rwkv_R        : aliased Model_Runner.Tensors.View;
+      Rwkv_K        : aliased Model_Runner.Tensors.View;
+      Rwkv_V        : aliased Model_Runner.Tensors.View;
+      Rwkv_G        : aliased Model_Runner.Tensors.View;
+      Rwkv_TM_Out   : aliased Model_Runner.Tensors.View;
+      Rwkv_CM_K     : aliased Model_Runner.Tensors.View;
+      Rwkv_CM_V     : aliased Model_Runner.Tensors.View;
+      Rwkv_CM_R     : aliased Model_Runner.Tensors.View;
+
+      Rwkv_Lerp_X     : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_Lerp_Fused : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_TM_W1      : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_TM_W2      : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_First      : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_Decay      : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_Decay_W1   : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_Decay_W2   : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_TM_LN      : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_TM_LN_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_CM_Lerp_K  : Model_Runner.Tensors.Real_Array_Access;
+      Rwkv_CM_Lerp_R  : Model_Runner.Tensors.Real_Array_Access;
+
       --  The expert every position of a mixture goes through as well,
       --  with the row that gates it; absent where the mixture has none.
       Shared_Gate   : aliased Model_Runner.Tensors.View;
@@ -2655,6 +2716,28 @@ private
       Mamba_DTR  : Model_Runner.Tensors.Real_Array_Access := null;
       Mamba_DT   : Model_Runner.Tensors.Real_Array_Access := null;
       Mamba_Y    : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  RWKV6's scratch for one position: the two normalized inputs and
+      --  the residual between the sublayers (Rwkv_N1/Rwkv_Inp/Rwkv_N2), the
+      --  five mixed streams laid end to end (Rwkv_Mix), the shift's
+      --  data-dependent part (Rwkv_Lora), the decay's (Rwkv_WLora), the
+      --  four projected rows the state reads (Rwkv_R/K/V/G), the decay a
+      --  channel (Rwkv_W), the state's answer (Rwkv_Y) and the channel
+      --  mix's key row (Rwkv_CK). Null for every other architecture.
+      Rwkv_N1    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Inp   : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_N2    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Mix   : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Lora  : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_WLora : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Rr    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Kk    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Vv    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Gg    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Ww    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_Y     : Model_Runner.Tensors.Real_Array_Access := null;
+      Rwkv_CK    : Model_Runner.Tensors.Real_Array_Access := null;
+
       Blend_Row  : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Row : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Up_Row : Model_Runner.Tensors.Real_Array_Access := null;

@@ -4142,6 +4142,15 @@ package body Tests.CLI_Cases is
             Fixtures.Add_U32 (Builder, Named & ".full_attention_interval", 4);
          end if;
 
+         --  And what RWKV6 states of its time and channel mixes: a head
+         --  width that divides the model width, and the two low ranks its
+         --  shift and its decay project through.
+         if Named = "rwkv6" then
+            Fixtures.Add_U32 (Builder, Named & ".wkv.head_size", 4);
+            Fixtures.Add_U32 (Builder, Named & ".time_mix_extra_dim", 2);
+            Fixtures.Add_U32 (Builder, Named & ".time_decay_extra_dim", 2);
+         end if;
+
          Fixtures.Build (Builder, Image);
 
          declare
@@ -4192,7 +4201,7 @@ package body Tests.CLI_Cases is
       --  tested is the refusal to read an architecture this build does not
       --  implement rather than the refusal to read a typo -- and it had to
       --  be changed once, when gemma stopped being one of those.
-      Configured ("rwkv6", Settings, Status);
+      Configured ("rwkv7", Settings, Status);
       Assert (Status.Code = E.Arch_Unsupported,
               "an architecture this build does not read was accepted: "
               & E.Error_Code'Image (Status.Code));
@@ -4870,7 +4879,7 @@ package body Tests.CLI_Cases is
          Source  : Fixed_Arguments;
       begin
          Fixtures.Reset (Builder);
-         Fixtures.Add_String (Builder, "general.architecture", "rwkv6");
+         Fixtures.Add_String (Builder, "general.architecture", "rwkv7");
          Fixtures.Build (Builder, Image);
 
          Ada.Streams.Stream_IO.Create

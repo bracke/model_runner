@@ -393,13 +393,14 @@ package body Tiny_Model is
            when Chatglm   => "chatglm",
            when Command_R => "command-r",
            when Mamba     => "mamba",
-           when Mamba2    => "mamba2");
+           when Mamba2    => "mamba2",
+           when Rwkv6     => "rwkv6");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
       --  The block past the stack attends in full, whatever its number.
       function Linear_Block (Index : Natural) return Boolean
-      is (Kind in Mamba | Mamba2
+      is (Kind in Mamba | Mamba2 | Rwkv6
           or else (Kind = Qwen35 and then Index < Layers
                    and then (Index + 1) mod 2 /= 0));
 
@@ -552,6 +553,24 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".ssm.group_count",
             Interfaces.Unsigned_32 (Linear_Heads));
+      end if;
+
+      --  RWKV6's shape: a head width that divides the model width, the two
+      --  low ranks its shift and its decay project through, and two token
+      --  shift slots. No rescaling in the fixture -- its residual is short
+      --  enough not to need it -- and a plain layer-norm epsilon.
+      if Kind = Rwkv6 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".wkv.head_size",
+            Interfaces.Unsigned_32 (Embedding / Linear_Heads));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".time_mix_extra_dim", 2);
+         Fixtures.Add_U32
+           (Builder, Prefix & ".time_decay_extra_dim", 2);
+         Fixtures.Add_U32 (Builder, Prefix & ".rescale_every_n_layers", 2);
+         Fixtures.Add_U32 (Builder, Prefix & ".token_shift_count", 2);
+         Fixtures.Add_F32
+           (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0e-5);
       end if;
 
       --  Which pooling the model was trained for, which is a thing a bert
@@ -976,6 +995,13 @@ package body Tiny_Model is
          Norm_Of ("token_embd_norm.bias", Embedding);
       end if;
 
+      --  RWKV6 normalizes the embedding once before the first block (ln0),
+      --  by centring with a shift as Bert does.
+      if Kind = Rwkv6 then
+         Norm ("token_embd_norm.weight");
+         Norm_Of ("token_embd_norm.bias", Embedding);
+      end if;
+
       for Index in 0 .. Blocks - 1 loop
          --  Every architecture but Bert normalizes on the way into the
          --  block. Bert's two normalizations are on the way out of its two
@@ -1016,6 +1042,60 @@ package body Tiny_Model is
                  (Builder, Layer_Name (Index, "attn_q.weight"),
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
+            end;
+         elsif Linear_Block (Index) and then Kind = Rwkv6 then
+            --  RWKV6's own: its second normalization, the eight wide
+            --  matrices of its two mixes, the four low projections of its
+            --  shift and its decay, the five streams' interpolation, and the
+            --  vectors the products do not touch.
+            declare
+               D_TM  : constant Natural := 2;
+               D_Dec : constant Natural := 2;
+               Feed  : constant Natural := Feed_Forward;
+            begin
+               Norm (Layer_Name (Index, "attn_norm_2.weight"));
+               Norm_Of (Layer_Name (Index, "attn_norm_2.bias"), Embedding);
+
+               Weight (Layer_Name (Index, "time_mix_receptance.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "time_mix_key.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "time_mix_value.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "time_mix_gate.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "time_mix_output.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "channel_mix_key.weight"),
+                       [G.U64 (Embedding), G.U64 (Feed)]);
+               Weight (Layer_Name (Index, "channel_mix_value.weight"),
+                       [G.U64 (Feed), G.U64 (Embedding)]);
+               Weight (Layer_Name (Index, "channel_mix_receptance.weight"),
+                       [G.U64 (Embedding), G.U64 (Embedding)]);
+
+               Weight (Layer_Name (Index, "time_mix_w1.weight"),
+                       [G.U64 (Embedding), G.U64 (5 * D_TM)]);
+               Weight (Layer_Name (Index, "time_mix_w2.weight"),
+                       [G.U64 (D_TM), G.U64 (5 * Embedding)]);
+               Weight (Layer_Name (Index, "time_mix_decay_w1.weight"),
+                       [G.U64 (Embedding), G.U64 (D_Dec)]);
+               Weight (Layer_Name (Index, "time_mix_decay_w2.weight"),
+                       [G.U64 (D_Dec), G.U64 (Embedding)]);
+
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "time_mix_lerp_fused.weight"),
+                  [G.U64 (Embedding), G.U64 (5)], G.Type_F32,
+                  Fixtures.Encode_F32 (Next (N.Element_Count (5 * Embedding))));
+
+               Norm_Of (Layer_Name (Index, "time_mix_lerp_x.weight"), Embedding);
+               Norm_Of (Layer_Name (Index, "time_mix_first.weight"), Embedding);
+               Norm_Of (Layer_Name (Index, "time_mix_decay.weight"), Embedding);
+               Norm_Of (Layer_Name (Index, "time_mix_ln.weight"), Embedding);
+               Norm_Of (Layer_Name (Index, "time_mix_ln.bias"), Embedding);
+               Norm_Of
+                 (Layer_Name (Index, "channel_mix_lerp_k.weight"), Embedding);
+               Norm_Of
+                 (Layer_Name (Index, "channel_mix_lerp_r.weight"), Embedding);
             end;
          elsif Linear_Block (Index) and then Kind = Mamba2 then
             --  Mamba2's own: one projection in (the gate, the activation, B
@@ -1204,7 +1284,9 @@ package body Tiny_Model is
          --  Falcon's normalization carries a bias, which is a different
          --  thing from the projection biases Qwen2 has: it belongs to the
          --  normalization and every falcon file has one.
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
+           | Rwkv6
+         then
             Norm_Of (Layer_Name (Index, "attn_norm.bias"), Embedding);
          end if;
 
@@ -1455,7 +1537,9 @@ package body Tiny_Model is
       --  reads it: its last layer already normalized what it produced.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Norm ("output_norm.weight");
-         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+         if Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
+                  | Rwkv6
+         then
             Norm ("output_norm.bias");
          end if;
       end if;

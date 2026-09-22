@@ -138,8 +138,14 @@ package body Model_Runner.Llama is
    --  Mamba convolves its inner width; Mamba2 convolves the inner width
    --  and its B and C beside it -- the block the in_projection lays out as
    --  one; the delta rule convolves its mixed projection.
+   --  RWKV6 keeps two token-shift slots a layer -- the last position's ln1
+   --  output for the time mix, its ln2 output for the channel mix -- as one
+   --  memory of a single position (Conv_Kernel is two) that is twice the
+   --  model width.
    function Conv_Width (Settings : Configuration) return Element_Count
-   is (if Is_Mamba2 (Settings.Kind)
+   is (if Is_RWKV (Settings.Kind)
+       then 2 * Element_Count (Settings.Embedding)
+       elsif Is_Mamba2 (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
             + 2 * Element_Count (Settings.Groups)
                 * Element_Count (Settings.State_Size)
@@ -149,8 +155,14 @@ package body Model_Runner.Llama is
 
    --  Mamba's state is a channel by a state, the delta rule's a value head
    --  by a state by a state.
+   --  RWKV6's state is a matrix a head, the head's width by the head's
+   --  width -- the linear attention it keeps instead of a cache.
    function State_Cells (Settings : Configuration) return Element_Count
-   is (if Pure_SSM (Settings.Kind)
+   is (if Is_RWKV (Settings.Kind)
+       then Element_Count (Settings.Ssm_Heads)
+            * Element_Count (Settings.Head_Dim)
+            * Element_Count (Settings.Head_Dim)
+       elsif Pure_SSM (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
             * Element_Count (Settings.State_Size)
        else Element_Count (Settings.Value_Heads)
@@ -501,7 +513,7 @@ package body Model_Runner.Llama is
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                        | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                       | Mamba2 =>
+                       | Mamba2 | Rwkv6 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -617,7 +629,8 @@ package body Model_Runner.Llama is
       --  states either is read and a file that states neither takes the
       --  default both would.
       if Normalizes_After (Settings.Kind)
-        or else Settings.Kind in Starcoder2 | Stablelm | Gptneox | Mpt | Command_R
+        or else Settings.Kind
+                  in Starcoder2 | Stablelm | Gptneox | Mpt | Command_R | Rwkv6
       then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
@@ -1096,6 +1109,74 @@ package body Model_Runner.Llama is
             end if;
             Settings.Head_Dim := Settings.Inner_Size / Settings.Ssm_Heads;
          end if;
+      end if;
+
+      --  RWKV6's shape: the head width the linear-attention state is a
+      --  matrix of, from which the head count follows -- the model width
+      --  over it, which must divide -- and the two low ranks the token
+      --  shift and the decay are projected through a position at a time.
+      --  The block's output is halved every so many layers to keep the
+      --  residual bounded over the depth; a file stating none never halves.
+      --  Two token-shift slots is the only arrangement understood, and the
+      --  convolution memory is set to hold them.
+      if Is_RWKV (Settings.Kind) then
+         Required (Model_Key (Settings.Kind, "wkv.head_size"),
+                   Long_Long_Integer (Bounds.Max_Embedding),
+                   Settings.Head_Dim);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Required (Model_Key (Settings.Kind, "time_mix_extra_dim"),
+                   Long_Long_Integer (Bounds.Max_Embedding),
+                   Settings.Mix_Extra);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Required (Model_Key (Settings.Kind, "time_decay_extra_dim"),
+                   Long_Long_Integer (Bounds.Max_Embedding),
+                   Settings.Decay_Extra);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "rescale_every_n_layers"),
+            0, Long_Long_Integer (Bounds.Max_Layers), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Rescale_Every :=
+           (if E.Is_Ok (Local) then Natural (Number) else 0);
+
+         --  Two shift slots is what the block is written for: the last
+         --  position's two normalized inputs. A file stating another number
+         --  describes a shift this does not keep.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "token_shift_count"),
+            1, 8, Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         elsif E.Is_Ok (Local) and then Natural (Number) /= 2 then
+            Reject_Feature ("a token shift that is not two slots");
+            return;
+         end if;
+
+         if Settings.Head_Dim = 0
+           or else Settings.Embedding mod Settings.Head_Dim /= 0
+         then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "embedding", Long_Long_Integer (Settings.Embedding));
+            E.Add_Integer
+              (Status, "head_size", Long_Long_Integer (Settings.Head_Dim));
+            return;
+         end if;
+         Settings.Ssm_Heads := Settings.Embedding / Settings.Head_Dim;
+         Settings.Conv_Kernel := 2;
       end if;
 
       if Settings.Experts > 0 then
@@ -1602,7 +1683,8 @@ package body Model_Runner.Llama is
         (if Item.Settings.Experts = 0
          then 7
          else 4 + 1 + 3 * Item.Settings.Experts)
-        + (if Hybrid (Item.Settings.Kind) then 9 else 0);
+        + (if Hybrid (Item.Settings.Kind) then 9 else 0)
+        + (if Is_RWKV (Item.Settings.Kind) then 8 else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -1649,6 +1731,18 @@ package body Model_Runner.Llama is
          Add (Which.Ssm_X'Unchecked_Access);
          Add (Which.Ssm_Dt'Unchecked_Access);
          Add (Which.Linear_Out'Unchecked_Access);
+
+         --  RWKV6's eight wide matrices, read through the product like any
+         --  other and so repacked like any other; its low projections and
+         --  its vectors are read whole and are not here.
+         Add (Which.Rwkv_R'Unchecked_Access);
+         Add (Which.Rwkv_K'Unchecked_Access);
+         Add (Which.Rwkv_V'Unchecked_Access);
+         Add (Which.Rwkv_G'Unchecked_Access);
+         Add (Which.Rwkv_TM_Out'Unchecked_Access);
+         Add (Which.Rwkv_CM_K'Unchecked_Access);
+         Add (Which.Rwkv_CM_V'Unchecked_Access);
+         Add (Which.Rwkv_CM_R'Unchecked_Access);
          Add (Which.Shared_Gate'Unchecked_Access);
          Add (Which.Shared_Up'Unchecked_Access);
          Add (Which.Shared_Down'Unchecked_Access);
@@ -2448,7 +2542,7 @@ package body Model_Runner.Llama is
    is (Item.Settings.Kind in Mpt | Command_R
        or else (Item.Settings.Kind
                   in Falcon | Phi2 | GPT2 | Bert | Nomic_Bert | Jina_Bert_V2
-                     | Starcoder2 | Stablelm | Gptneox
+                     | Starcoder2 | Stablelm | Gptneox | Rwkv6
                 and then Bias /= null));
 
    --  Normalize the way the architecture does, into Target.
@@ -3291,7 +3385,9 @@ package body Model_Runner.Llama is
             --  not. The order inside the fused one is queries, then
             --  keys, then values, which is the order the rows are
             --  written in.
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox then
+            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2
+                                   | Stablelm | Gptneox | Rwkv6
+            then
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_norm.bias"),
                   Width, Current.Attention_Norm_Bias, Status);
@@ -3458,6 +3554,147 @@ package body Model_Runner.Llama is
                      if E.Is_Error (Status) then
                         return;
                      end if;
+                  end if;
+               end;
+            elsif Is_Linear and then Is_RWKV (Item.Settings.Kind) then
+               --  RWKV6's block: its second normalization (ln2, the channel
+               --  mix's input; ln1 was read above with the rest), the five
+               --  matrices the time mix projects a token through and the
+               --  channel mix's three -- all through the product, repacked
+               --  like any other -- and the vectors the product does not
+               --  touch: the shift's interpolation and its data-dependent
+               --  two low projections, the decay's bias and its two, the
+               --  first token's bonus, the per-head normalization's gain and
+               --  shift, the five streams' interpolation, and the channel
+               --  mix's two shifts. The low projections are read whole and
+               --  multiplied by hand, being small; the eight wide matrices
+               --  go through the product.
+               declare
+                  RW    : constant Element_Count :=
+                    Element_Count (Item.Settings.Embedding);
+                  Feed  : constant Element_Count :=
+                    Element_Count (Item.Settings.Feed_Forward);
+                  D_TM  : constant Element_Count :=
+                    Element_Count (Item.Settings.Mix_Extra);
+                  D_Dec : constant Element_Count :=
+                    Element_Count (Item.Settings.Decay_Extra);
+
+                  procedure One
+                    (Name : String; Rows, Cols : Element_Count;
+                     Into : out T.Real_Array_Access) is
+                  begin
+                     Resolve_Table (Item, Source, Layer_Key (Index, Name),
+                                    Rows, Cols, Into, Status);
+                  end One;
+
+                  procedure Vec (Name : String; Into : out T.Real_Array_Access)
+                  is
+                  begin
+                     Resolve_Norm (Item, Source, Layer_Key (Index, Name),
+                                   RW, Into, Status);
+                  end Vec;
+               begin
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "attn_norm_2.weight"),
+                     RW, Current.Second_Attention_Norm, Status);
+                  if E.Is_Ok (Status) then
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "attn_norm_2.bias"),
+                        RW, Current.Second_Attention_Norm_Bias, Status);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  --  The eight wide matrices, through the product.
+                  Resolve (Item, Source,
+                           Layer_Key (Index, "time_mix_receptance.weight"),
+                           RW, RW, Current.Rwkv_R, Status, Repack);
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "time_mix_key.weight"),
+                              RW, RW, Current.Rwkv_K, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "time_mix_value.weight"),
+                              RW, RW, Current.Rwkv_V, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "time_mix_gate.weight"),
+                              RW, RW, Current.Rwkv_G, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "time_mix_output.weight"),
+                              RW, RW, Current.Rwkv_TM_Out, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "channel_mix_key.weight"),
+                              Feed, RW, Current.Rwkv_CM_K, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve (Item, Source,
+                              Layer_Key (Index, "channel_mix_value.weight"),
+                              RW, Feed, Current.Rwkv_CM_V, Status, Repack);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Resolve
+                       (Item, Source,
+                        Layer_Key (Index, "channel_mix_receptance.weight"),
+                        RW, RW, Current.Rwkv_CM_R, Status, Repack);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  --  The two low projections of the shift, read whole:
+                  --  w1 maps the model width to five ranks, w2 each rank
+                  --  back to the model width, one map a stream.
+                  One ("time_mix_w1.weight", 5 * D_TM, RW, Current.Rwkv_TM_W1);
+                  if E.Is_Ok (Status) then
+                     One ("time_mix_w2.weight", 5 * RW, D_TM, Current.Rwkv_TM_W2);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     One ("time_mix_decay_w1.weight", D_Dec, RW,
+                          Current.Rwkv_Decay_W1);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     One ("time_mix_decay_w2.weight", RW, D_Dec,
+                          Current.Rwkv_Decay_W2);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     One ("time_mix_lerp_fused.weight", 5, RW,
+                          Current.Rwkv_Lerp_Fused);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  --  And the vectors.
+                  Vec ("time_mix_lerp_x.weight", Current.Rwkv_Lerp_X);
+                  if E.Is_Ok (Status) then
+                     Vec ("time_mix_first.weight", Current.Rwkv_First);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Vec ("time_mix_decay.weight", Current.Rwkv_Decay);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Vec ("time_mix_ln.weight", Current.Rwkv_TM_LN);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Vec ("time_mix_ln.bias", Current.Rwkv_TM_LN_Bias);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Vec ("channel_mix_lerp_k.weight", Current.Rwkv_CM_Lerp_K);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     Vec ("channel_mix_lerp_r.weight", Current.Rwkv_CM_Lerp_R);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
                   end if;
                end;
             elsif Is_Linear then
@@ -4112,7 +4349,8 @@ package body Model_Runner.Llama is
          --  other architecture here hands layer zero the embedding row as it
          --  stands, or scales it by a constant, and has no tensor for this.
          if E.Is_Ok (Status)
-           and then Normalizes_After (Item.Settings.Kind)
+           and then (Normalizes_After (Item.Settings.Kind)
+                     or else Is_RWKV (Item.Settings.Kind))
          then
             Resolve_Norm
               (Item, Source, "token_embd_norm.weight", Width,
@@ -13104,6 +13342,45 @@ package body Model_Runner.Llama is
             end;
          end if;
 
+         --  RWKV6 keeps a state a session as Mamba does: the two token-shift
+         --  slots in the convolution memory and the linear-attention state
+         --  in the delta state, one slot, cleared, no draft or rewind.
+         --  Beside them the scratch one position through the block needs.
+         if Is_RWKV (Settings.Kind) then
+            declare
+               RW   : constant Element_Count :=
+                 Element_Count (Settings.Embedding);
+               Feed : constant Element_Count :=
+                 Element_Count (Settings.Feed_Forward);
+            begin
+               T.Allocate (Conv_Room (Settings), Item.Conv_State);
+               T.Allocate (State_Room (Settings), Item.Delta_State);
+               Item.Kept_States := 0;
+               Item.Kept_Newest := 0;
+               if Item.Conv_State /= null then
+                  Item.Conv_State.all := [others => 0.0];
+               end if;
+               if Item.Delta_State /= null then
+                  Item.Delta_State.all := [others => 0.0];
+               end if;
+
+               T.Allocate (RW, Item.Rwkv_N1);
+               T.Allocate (RW, Item.Rwkv_Inp);
+               T.Allocate (RW, Item.Rwkv_N2);
+               T.Allocate (RW, Item.Rwkv_Mix);
+               T.Allocate (5 * RW, Item.Rwkv_Lora);
+               T.Allocate
+                 (5 * Element_Count (Settings.Mix_Extra), Item.Rwkv_WLora);
+               T.Allocate (RW, Item.Rwkv_Rr);
+               T.Allocate (RW, Item.Rwkv_Kk);
+               T.Allocate (RW, Item.Rwkv_Vv);
+               T.Allocate (RW, Item.Rwkv_Gg);
+               T.Allocate (RW, Item.Rwkv_Ww);
+               T.Allocate (RW, Item.Rwkv_Y);
+               T.Allocate (Feed, Item.Rwkv_CK);
+            end;
+         end if;
+
          --  An architecture that normalizes its heads needs room for one,
          --  whether the plain way (Query_Norm) or Command-R+'s centred way
          --  (Query_Head_Norm).
@@ -14823,6 +15100,329 @@ package body Model_Runner.Llama is
       Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
    end Mamba2_Step;
 
+   --  One position through one RWKV6 layer, on the host. Two sublayers each
+   --  with its own residual, and no attention or feed-forward: a time mix
+   --  where attention would be and a channel mix where the feed-forward
+   --  would be, each shifted against the position before through a
+   --  data-dependent interpolation, the time mix keeping a linear-attention
+   --  state a head and the channel mix a squared-ReLU gate. Every
+   --  normalization centres and carries a shift (LayerNorm, not root mean
+   --  square). The block's output is halved every so many layers.
+   --
+   --  On entry Item.Normalized holds ln1 of the block input (the dispatch
+   --  computed it); Item.Activation is the residual stream. The step owns
+   --  both residuals and writes the block's output back into Item.Activation,
+   --  so the dispatch does not join afterwards. It carries the two
+   --  token-shift slots in the convolution memory and the state in the delta
+   --  state, one slot, as Mamba does.
+   procedure RWKV6_Step
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Status      : out E.Error_Info)
+   is
+      Settings : Configuration renames Source.Settings;
+      RW    : constant Element_Count := Element_Count (Settings.Embedding);
+      Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
+      HN    : constant Element_Count := Element_Count (Settings.Head_Dim);
+      D_TM  : constant Element_Count := Element_Count (Settings.Mix_Extra);
+      D_Dec : constant Element_Count := Element_Count (Settings.Decay_Extra);
+
+      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
+      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
+
+      Group_Eps : constant N.Wide_Real := 64.0e-5;
+
+      Mem : Real_Array renames Item.Conv_State.all;
+      St  : Real_Array renames Item.Delta_State.all;
+      Cur : Real_Array renames Item.Normalized.all;
+      Sx  : Real_Array renames Item.Rwkv_N1.all;
+      Xs  : Real_Array renames Item.Rwkv_Mix.all;
+      Lora : Real_Array renames Item.Rwkv_Lora.all;
+      W1  : Real_Array renames Current.Rwkv_TM_W1.all;
+      W2  : Real_Array renames Current.Rwkv_TM_W2.all;
+
+      function Sigmoid (X : N.Wide_Real) return N.Wide_Real
+      is (1.0 / (1.0 + N.Exp (-X)));
+
+      --  The chosen stream (0=w 1=k 2=v 3=r 4=g) shifted against the
+      --  position before through its own interpolation, into Xs.
+      procedure Stream (S_At : Element_Count) is
+      begin
+         for C in 0 .. RW - 1 loop
+            Xs (C) :=
+              Cur (C)
+              + Sx (C)
+                * (Current.Rwkv_Lerp_Fused.all (S_At * RW + C)
+                   + Lora (S_At * RW + C));
+         end loop;
+      end Stream;
+   begin
+      Status := E.Success;
+
+      --  === Time mix ===
+      --  The shift against the position before -- its ln1 output, kept in
+      --  the first convolution slot -- and the interpolation it feeds.
+      for C in 0 .. RW - 1 loop
+         Sx (C) := Mem (Conv_Base + C) - Cur (C);
+      end loop;
+
+      --  The data-dependent part of the interpolation: the shifted input
+      --  through the first low projection and a tanh, five ranks, then each
+      --  rank back to the model width through its own map -- one a stream.
+      for C in 0 .. RW - 1 loop
+         Xs (C) := Cur (C) + Sx (C) * Current.Rwkv_Lerp_X.all (C);
+      end loop;
+      for J in 0 .. 5 * D_TM - 1 loop
+         declare
+            Acc : N.Wide_Real := 0.0;
+         begin
+            for C in 0 .. RW - 1 loop
+               Acc := Acc + N.Wide_Real (W1 (J * RW + C)) * N.Wide_Real (Xs (C));
+            end loop;
+            Item.Rwkv_WLora.all (J) := Real (N.Tanh (Acc));
+         end;
+      end loop;
+      for Str in 0 .. 4 loop
+         for Out_C in 0 .. RW - 1 loop
+            declare
+               Acc : N.Wide_Real := 0.0;
+            begin
+               for K in 0 .. D_TM - 1 loop
+                  Acc := Acc
+                    + N.Wide_Real
+                        (W2 ((Element_Count (Str) * RW + Out_C) * D_TM + K))
+                      * N.Wide_Real
+                          (Item.Rwkv_WLora.all (Element_Count (Str) * D_TM + K));
+               end loop;
+               Lora (Element_Count (Str) * RW + Out_C) := Real (Acc);
+            end;
+         end loop;
+      end loop;
+
+      --  Receptance, key, value and the gate, each from its own shifted
+      --  stream through its own product.
+      Stream (3);
+      Product (Item, Current.Rwkv_R, Item.Rwkv_Mix, Item.Rwkv_Rr, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Stream (1);
+      Product (Item, Current.Rwkv_K, Item.Rwkv_Mix, Item.Rwkv_Kk, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Stream (2);
+      Product (Item, Current.Rwkv_V, Item.Rwkv_Mix, Item.Rwkv_Vv, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Stream (4);
+      Product (Item, Current.Rwkv_G, Item.Rwkv_Mix, Item.Rwkv_Gg, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The decay a channel: its own shifted stream through its two low
+      --  projections and a tanh, biased, then the double exponential that
+      --  keeps it between nought and one.
+      Stream (0);
+      declare
+         D1 : array (0 .. D_Dec - 1) of N.Wide_Real := [others => 0.0];
+      begin
+         for I in 0 .. D_Dec - 1 loop
+            declare
+               Acc : N.Wide_Real := 0.0;
+            begin
+               for C in 0 .. RW - 1 loop
+                  Acc := Acc
+                    + N.Wide_Real (Current.Rwkv_Decay_W1.all (I * RW + C))
+                      * N.Wide_Real (Xs (C));
+               end loop;
+               D1 (I) := N.Tanh (Acc);
+            end;
+         end loop;
+         for C in 0 .. RW - 1 loop
+            declare
+               Acc : N.Wide_Real :=
+                 N.Wide_Real (Current.Rwkv_Decay.all (C));
+            begin
+               for I in 0 .. D_Dec - 1 loop
+                  Acc := Acc
+                    + N.Wide_Real (Current.Rwkv_Decay_W2.all (C * D_Dec + I))
+                      * D1 (I);
+               end loop;
+               Item.Rwkv_Ww.all (C) := Real (N.Exp (-N.Exp (Acc)));
+            end;
+         end loop;
+      end;
+
+      --  The linear-attention recurrence, a head at a time: a state a head,
+      --  the head's width by the head's width. The receptance, key, decay
+      --  and the first token's bonus are the summed dimension; the value and
+      --  the answer the other. The answer reads the state before the update,
+      --  the bonus lifting this position's own key-value out of the decay.
+      declare
+         R  : Real_Array renames Item.Rwkv_Rr.all;
+         Kk : Real_Array renames Item.Rwkv_Kk.all;
+         Vv : Real_Array renames Item.Rwkv_Vv.all;
+         Ww : Real_Array renames Item.Rwkv_Ww.all;
+         U  : Real_Array renames Current.Rwkv_First.all;
+         Y  : Real_Array renames Item.Rwkv_Y.all;
+      begin
+         for H in 0 .. Heads - 1 loop
+            declare
+               Base : constant Element_Count := H * HN;
+               SB   : constant Element_Count := State_Base + H * HN * HN;
+            begin
+               for J in 0 .. HN - 1 loop
+                  declare
+                     Acc : N.Wide_Real := 0.0;
+                  begin
+                     for I in 0 .. HN - 1 loop
+                        declare
+                           KV : constant N.Wide_Real :=
+                             N.Wide_Real (Kk (Base + I))
+                             * N.Wide_Real (Vv (Base + J));
+                           Cell : constant Element_Count := SB + I * HN + J;
+                           Old  : constant N.Wide_Real := N.Wide_Real (St (Cell));
+                        begin
+                           Acc := Acc
+                             + N.Wide_Real (R (Base + I))
+                               * (N.Wide_Real (U (Base + I)) * KV + Old);
+                           St (Cell) :=
+                             Real (N.Wide_Real (Ww (Base + I)) * Old + KV);
+                        end;
+                     end loop;
+                     Y (Base + J) := Real (Acc);
+                  end;
+               end loop;
+            end;
+         end loop;
+
+         --  The per-head normalization on the answer -- centred, a hardcoded
+         --  floor of its own -- scaled by the stored gain and shift; then
+         --  the gate, the answer weighted by the sigmoid-weighted gate.
+         for H in 0 .. Heads - 1 loop
+            declare
+               Base : constant Element_Count := H * HN;
+               Mean : N.Wide_Real := 0.0;
+               Var  : N.Wide_Real := 0.0;
+               Inv  : N.Wide_Real;
+            begin
+               for I in 0 .. HN - 1 loop
+                  Mean := Mean + N.Wide_Real (Y (Base + I));
+               end loop;
+               Mean := Mean / N.Wide_Real (HN);
+               for I in 0 .. HN - 1 loop
+                  Var := Var
+                    + (N.Wide_Real (Y (Base + I)) - Mean)
+                      * (N.Wide_Real (Y (Base + I)) - Mean);
+               end loop;
+               Inv := 1.0 / N.Sqrt (Var / N.Wide_Real (HN) + Group_Eps);
+               for I in 0 .. HN - 1 loop
+                  Y (Base + I) :=
+                    Real ((N.Wide_Real (Y (Base + I)) - Mean) * Inv
+                          * N.Wide_Real (Current.Rwkv_TM_LN.all (Base + I))
+                          + N.Wide_Real
+                              (Current.Rwkv_TM_LN_Bias.all (Base + I)));
+               end loop;
+            end;
+         end loop;
+
+         for C in 0 .. RW - 1 loop
+            declare
+               G : constant N.Wide_Real := N.Wide_Real (Item.Rwkv_Gg.all (C));
+            begin
+               Y (C) := Real (N.Wide_Real (Y (C)) * (G * Sigmoid (G)));
+            end;
+         end loop;
+      end;
+
+      --  The way out of the time mix, and the first residual.
+      Product (Item, Current.Rwkv_TM_Out, Item.Rwkv_Y, Item.Rwkv_N2, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      for C in 0 .. RW - 1 loop
+         Item.Rwkv_Inp.all (C) :=
+           Item.Rwkv_N2.all (C) + Item.Activation.all (C);
+      end loop;
+
+      --  Keep this position's ln1 output for the next position's time-mix
+      --  shift, now that the shift above has read the last one's.
+      Mem (Conv_Base .. Conv_Base + RW - 1) := Cur (0 .. RW - 1);
+
+      --  === Channel mix ===
+      --  ln2 of the first residual, shifted against the position before --
+      --  its own ln2 output, kept in the second convolution slot.
+      Normalize
+        (Source, Item.Rwkv_Inp.all, Current.Second_Attention_Norm.all,
+         Current.Second_Attention_Norm_Bias, Item.Rwkv_N2.all);
+
+      declare
+         Cur2 : Real_Array renames Item.Rwkv_N2.all;
+      begin
+         for C in 0 .. RW - 1 loop
+            Sx (C) := Mem (Conv_Base + RW + C) - Cur2 (C);
+         end loop;
+
+         --  The key's shifted stream, squared-ReLU'd; the receptance's,
+         --  through a sigmoid; the value of the key weighted by the
+         --  receptance is the channel mix's answer.
+         for C in 0 .. RW - 1 loop
+            Xs (C) := Cur2 (C) + Sx (C) * Current.Rwkv_CM_Lerp_K.all (C);
+         end loop;
+         Product (Item, Current.Rwkv_CM_K, Item.Rwkv_Mix, Item.Rwkv_CK, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         for C in 0 .. Element_Count (Settings.Feed_Forward) - 1 loop
+            declare
+               V : constant N.Wide_Real :=
+                 N.Wide_Real (Item.Rwkv_CK.all (C));
+            begin
+               Item.Rwkv_CK.all (C) :=
+                 (if V > 0.0 then Real (V * V) else 0.0);
+            end;
+         end loop;
+
+         for C in 0 .. RW - 1 loop
+            Xs (C) := Cur2 (C) + Sx (C) * Current.Rwkv_CM_Lerp_R.all (C);
+         end loop;
+         Product (Item, Current.Rwkv_CM_R, Item.Rwkv_Mix, Item.Rwkv_Rr, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Product (Item, Current.Rwkv_CM_V, Item.Rwkv_CK, Item.Rwkv_Gg, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  The second residual, into the buffer the block leaves, and this
+         --  position's ln2 output kept for the next channel-mix shift.
+         for C in 0 .. RW - 1 loop
+            Item.Activation.all (C) :=
+              Item.Rwkv_Inp.all (C)
+              + Real (Sigmoid (N.Wide_Real (Item.Rwkv_Rr.all (C)))
+                      * N.Wide_Real (Item.Rwkv_Gg.all (C)));
+         end loop;
+         Mem (Conv_Base + RW .. Conv_Base + 2 * RW - 1) := Cur2 (0 .. RW - 1);
+      end;
+
+      --  The whole block's output halved every so many layers, which keeps
+      --  the residual from growing without bound over the depth.
+      if Settings.Rescale_Every > 0
+        and then (Layer_Index + 1) mod Settings.Rescale_Every = 0
+      then
+         for C in 0 .. RW - 1 loop
+            Item.Activation.all (C) := Item.Activation.all (C) * 0.5;
+         end loop;
+      end if;
+
+   end RWKV6_Step;
+
    procedure Linear_Position
      (Item    : in out Session;
       Source  : Model'Class;
@@ -15584,6 +16184,17 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
+      --  RWKV6 normalizes the embedding once before the first block sees it,
+      --  the way Bert does -- the batch path does this too, and a generated
+      --  token is the first place the single-token path meets an
+      --  architecture that carries the tensor.
+      if Source.Embedding_Norm /= null then
+         Normalize
+           (Source, Item.Activation.all, Source.Embedding_Norm.all,
+            Source.Embedding_Norm_Bias, Item.Normalized.all);
+         Item.Activation.all := Item.Normalized.all;
+      end if;
+
       --  A text token, where the rotation's position has three parts:
       --  what it turns by is one past the token before it.
       Set_Mark (Item, Item.Committed);
@@ -15833,6 +16444,17 @@ package body Model_Runner.Llama is
                  (Source, Item.Activation.all, Current.Attention_Norm.all,
                   Current.Attention_Norm_Bias, Item.Normalized.all);
                Charge (Item, Normalizing, Mark);
+
+               --  RWKV6 owns both its residuals and writes the block's
+               --  output straight into the activation, so it joins nothing
+               --  below and the layer is done once the step returns.
+               if Is_RWKV (Settings.Kind) then
+                  RWKV6_Step
+                    (Item, Source, Current, Natural (Index), Status);
+                  exit when E.Is_Error (Status);
+                  Charge (Item, Attending, Mark);
+                  goto Layer_Done;
+               end if;
 
                if Pure_SSM (Settings.Kind) then
                   if Is_Mamba2 (Settings.Kind) then
@@ -18322,6 +18944,35 @@ package body Model_Runner.Llama is
                end loop;
                exit when E.Is_Error (Status);
                Charge (Item, Attending, Mark);
+            elsif Is_Linear and then Is_RWKV (Settings.Kind) then
+               --  RWKV6's batch is its positions one after another, each the
+               --  single-token step carrying the state and the two shifts
+               --  the one before it left. The step owns both residuals and
+               --  writes the block's whole output into the activation; what
+               --  the join below adds to the residual is that output less
+               --  the row it started from, so the sum is the output whatever
+               --  the rescale did to it, and the feed is skipped as Mamba's
+               --  is.
+               Charge (Item, Normalizing, Mark);
+               for P in 0 .. Count - 1 loop
+                  declare
+                     At_Row : constant Element_Count := P * Width;
+                  begin
+                     Item.Normalized.all (0 .. Width - 1) :=
+                       Norm.all (At_Row .. At_Row + Width - 1);
+                     Item.Activation.all (0 .. Width - 1) :=
+                       Acts.all (At_Row .. At_Row + Width - 1);
+                     RWKV6_Step
+                       (Item, Source, Current, Natural (Index), Status);
+                     exit when E.Is_Error (Status);
+                     for C in 0 .. Width - 1 loop
+                        Norm.all (At_Row + C) :=
+                          Item.Activation.all (C) - Acts.all (At_Row + C);
+                     end loop;
+                  end;
+               end loop;
+               exit when E.Is_Error (Status);
+               Charge (Item, Attending, Mark);
             elsif Is_Linear then
                --  The linear layer's projections once over the whole batch,
                --  then its positions one after another, since each reads
@@ -18967,8 +19618,10 @@ package body Model_Runner.Llama is
                Charge (Item, Joining, Mark);
 
                --  Mamba's layer is its block and no feed-forward, so once
-               --  the block has joined the residual the layer is done.
-               if Pure_SSM (Settings.Kind) then
+               --  the block has joined the residual the layer is done; and
+               --  RWKV6's is its two mixes, both joined above, with no feed
+               --  after either.
+               if Pure_SSM (Settings.Kind) or else Is_RWKV (Settings.Kind) then
                   goto After_Feed_Batch;
                end if;
 
