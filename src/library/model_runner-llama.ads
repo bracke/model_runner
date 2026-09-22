@@ -188,7 +188,8 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba);
+      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
+      Mamba2);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -208,12 +209,24 @@ package Model_Runner.Llama is
    --  feed-forward block. Mamba is the first here. It keeps a state a
    --  session, like a hybrid's linear layers, but every layer rather than
    --  three in four, and its recurrence is Mamba's selective one rather
-   --  than the gated delta rule.
+   --  than the gated delta rule. Mamba2 is the same kind: a selective scan
+   --  every layer, but structured -- a scalar decay a head where Mamba's is
+   --  a channel by a state, its B and C shared across the heads of a group,
+   --  and a gated normalization before the projection out.
    --
    --  @param Item Architecture to ask about.
    --  @return True for a pure state-space model.
    function Pure_SSM (Item : Architecture) return Boolean
-   is (Item = Mamba);
+   is (Item in Mamba | Mamba2);
+
+   --  Whether an architecture is Mamba's structured successor: the scalar
+   --  decay a head, grouped B and C, and the gated normalization that tell
+   --  its scan and its tensor shapes from Mamba's. Read where the two part.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for Mamba2.
+   function Is_Mamba2 (Item : Architecture) return Boolean
+   is (Item = Mamba2);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -264,7 +277,8 @@ package Model_Runner.Llama is
          when Mpt        => "mpt",
          when Chatglm    => "chatglm",
          when Command_R  => "command-r",
-         when Mamba      => "mamba");
+         when Mamba      => "mamba",
+         when Mamba2     => "mamba2");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -537,8 +551,18 @@ package Model_Runner.Llama is
       --  the model width, and the rank the time step is projected through
       --  before it is broadcast over the inner width. Nought for every
       --  other architecture.
+      --
+      --  Mamba2 splits the inner width into Heads of Head_Dim, and its B
+      --  and C into Groups the heads share: a head decays by one scalar,
+      --  and the heads of a group read the same B and C. Time_Rank carries
+      --  the head count where Mamba2 states one -- the time step is a head
+      --  and no longer a low-rank projection -- so Heads is read from it.
+      --  Nought for Mamba, which is one head of the whole inner width.
       Inner_Size      : Natural := 0;
       Time_Rank       : Natural := 0;
+      Groups          : Natural := 0;
+      Ssm_Heads       : Natural := 0;
+      Head_Dim        : Natural := 0;
       Shared_Feed     : Natural := 0;
       Next_Layers     : Natural := 0;
    end record;

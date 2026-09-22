@@ -186,7 +186,7 @@ private
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
-      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba);
+      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -411,6 +411,9 @@ private
       Conv_Taps    : Natural := 0;
       Inner_Size   : Natural := 0;
       Time_Rank    : Natural := 0;
+      Groups       : Natural := 0;
+      Ssm_Heads    : Natural := 0;
+      Head_Dim     : Natural := 0;
       Next_Layers  : Natural := 0;
       Next_Proj    : Matrix_Access := null;
       Next_Enorm   : Vector_Access := null;

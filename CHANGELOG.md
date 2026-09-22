@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Mamba2 is read** -- Mamba's structured successor, the same pure
+  state-space shape restructured. One projection in lays out the gate, the
+  inner activation, B and C, and a time step a head all at once
+  (`z | x | B | C | dt`); the causal convolution runs over the activation
+  with B and C beside it, through the same sigmoid-weighted unit; the
+  selective scan is a head rather than a channel -- a scalar decay a head
+  where Mamba's is a channel by a state, its B and C shared across the heads
+  of a group as grouped-query attention shares a key head, a skip a head;
+  and the answer is gated by the front of the projection in, then normalized
+  in groups -- a root-mean-square over each group's channels, scaled by a
+  stored gain -- before the projection out, where Mamba only gates. There is
+  no `ssm_x` or `ssm_dt` matrix: B, C and the step come straight out of the
+  split. Its projected matrices repack like any other; the scan's per-head
+  vectors are read whole at load. Crossed against the independent reference
+  over every format and path, outside tolerance nought; the scan has no
+  device kernel, so a Mamba2 layer runs on the host under the device backend.
+  Continues Phase 5 of the model-coverage roadmap.
 - **Mamba is read** -- the first pure state-space model, no attention and no
   feed-forward anywhere. Every layer projects its input to an inner
   activation and a gate, runs a causal convolution over the activation, and

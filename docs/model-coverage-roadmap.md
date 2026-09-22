@@ -211,8 +211,14 @@ The largest infra investment; also the largest device win for models already
     kind; `Mamba_Step` runs the per-position scan; the batch is its positions
     one after another, each carrying the state the one before it left. Crossed
     against the independent reference over every format and path, outside
-    tolerance nought. **Mamba2** (scalar-A multi-head SSD) is next, then
-    RWKV/Jamba.
+    tolerance nought. ✅ **Mamba2** is read: the same pure state-space shape
+    restructured -- one projection in laying out the gate, activation, B, C
+    and a step a head; the convolution over the activation with B and C
+    beside it; a scalar-decay multi-head scan with grouped B and C; and a
+    gated grouped normalization before the projection out. No `ssm_x`/`ssm_dt`
+    matrices. Crossed against the reference over every format and path,
+    outside tolerance nought; host-side under the device backend like Mamba.
+    RWKV/Jamba remain.
 
 **Exit:** hybrid models run mostly on-device; pure state-space models load.
 

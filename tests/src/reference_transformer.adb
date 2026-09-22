@@ -1133,7 +1133,8 @@ package body Reference_Transformer is
          when Mpt => "mpt.",
          when Chatglm => "chatglm.",
          when Command_R => "command-r.",
-         when Mamba => "mamba.");
+         when Mamba => "mamba.",
+         when Mamba2 => "mamba2.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1589,6 +1590,8 @@ package body Reference_Transformer is
             Item.Kind := Command_R;
          elsif Named = "mamba" then
             Item.Kind := Mamba;
+         elsif Named = "mamba2" then
+            Item.Kind := Mamba2;
          else
             return;
          end if;
@@ -1799,7 +1802,7 @@ package body Reference_Transformer is
 
       --  Mamba's widths, with the defaults the other runtime carries where
       --  the file leaves a key out.
-      if Item.Kind = Mamba then
+      if Item.Kind in Mamba | Mamba2 then
          Item.State_Size :=
            Metadata (Source, Prefix (Item) & "ssm.state_size", 16);
          Item.Conv_Taps :=
@@ -1810,6 +1813,12 @@ package body Reference_Transformer is
          Item.Time_Rank :=
            Metadata (Source, Prefix (Item) & "ssm.time_step_rank",
                      (Item.Embedding + 15) / 16);
+      end if;
+      if Item.Kind = Mamba2 then
+         Item.Groups :=
+           Metadata (Source, Prefix (Item) & "ssm.group_count", 1);
+         Item.Ssm_Heads := Item.Time_Rank;
+         Item.Head_Dim := Item.Inner_Size / Item.Ssm_Heads;
       end if;
       if Item.Window >= Item.Context then
          Item.Window := 0;
@@ -2019,7 +2028,7 @@ package body Reference_Transformer is
             --  the blocks past the stack attend in full whatever their
             --  number.
             Is_Linear : constant Boolean :=
-              Item.Kind = Mamba
+              Item.Kind in Mamba | Mamba2
               or else (Item.Kind in Qwen35 | Qwen35_MoE
                        and then Index < Item.Layers
                        and then (Index + 1) mod Item.Linear_Every /= 0);
@@ -2094,7 +2103,52 @@ package body Reference_Transformer is
             end if;
 
             --  A linear block's own tensors, and none of attention's.
-            if Is_Linear and then Item.Kind = Mamba then
+            if Is_Linear and then Item.Kind = Mamba2 then
+               --  Mamba2's one projection in, the convolution over the
+               --  activation and B and C, the per-head A, D and step bias,
+               --  the gated normalization and the projection out. No ssm_x
+               --  or ssm_dt: B, C and the step come out of the split.
+               Current.Ssm_In :=
+                 Read_Matrix (Layer_Name (Index, "ssm_in.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv :=
+                 Read_Matrix (Layer_Name (Index, "ssm_conv1d.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv_Bias :=
+                 Read_Vector (Layer_Name (Index, "ssm_conv1d.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.A_Log :=
+                 Read_Vector (Layer_Name (Index, "ssm_a"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Ssm_D :=
+                 Read_Vector (Layer_Name (Index, "ssm_d"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.DT_Bias :=
+                 Read_Vector (Layer_Name (Index, "ssm_dt.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.State_Norm :=
+                 Read_Vector (Layer_Name (Index, "ssm_norm.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Linear_Out :=
+                 Read_Matrix (Layer_Name (Index, "ssm_out.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+            elsif Is_Linear and then Item.Kind = Mamba then
                Current.Ssm_In :=
                  Read_Matrix (Layer_Name (Index, "ssm_in.weight"), Present);
                if not Present then
@@ -3632,7 +3686,159 @@ package body Reference_Transformer is
             --  the query, normalized, and gated -- one position and one
             --  head at a time over the state itself, which is the plain
             --  form the engine's chunked one unrolls.
-            if Current.Linear and then Item.Kind = Mamba then
+            if Current.Linear and then Item.Kind = Mamba2 then
+               --  Mamba2's block, position by position and carrying the
+               --  convolution's memory and the scan's state. One projection
+               --  in lays out the gate, the activation, B and C and a step a
+               --  head; the convolution runs over the activation with B and
+               --  C beside it, all through the unit; the scan is a head, its
+               --  decay one scalar, its B and C shared across its group, its
+               --  skip one number; the answer is gated by the front of the
+               --  projection in and normalized in groups before the way out.
+               declare
+                  Inner  : constant Natural := Item.Inner_Size;
+                  S_Size : constant Natural := Item.State_Size;
+                  Taps   : constant Natural := Item.Conv_Taps;
+                  Grps   : constant Natural := Item.Groups;
+                  Heads  : constant Natural := Item.Ssm_Heads;
+                  Wide   : constant Natural := Item.Head_Dim;
+
+                  DXBC   : constant Natural := Inner + 2 * Grps * S_Size;
+                  In_Out : constant Natural := Inner + DXBC + Heads;
+                  Grp_W  : constant Natural := Inner / Grps;
+                  Per_G  : constant Natural := Heads / Grps;
+
+                  Memory : Real_Vector (0 .. (Taps - 1) * DXBC - 1) :=
+                    [others => 0.0];
+                  H_St   : Real_Vector (0 .. Inner * S_Size - 1) :=
+                    [others => 0.0];
+               begin
+                  for Step in 0 .. Steps - 1 loop
+                     declare
+                        XZ  : Real_Vector (0 .. In_Out - 1) := [others => 0.0];
+                        Xc  : Real_Vector (0 .. DXBC - 1) := [others => 0.0];
+                        DT  : Real_Vector (0 .. Heads - 1) := [others => 0.0];
+                        Yc  : Real_Vector (0 .. Inner - 1) := [others => 0.0];
+                        Out_V : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           State (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize (State, Current.Attention_Norm.all, Normed);
+
+                        Project (Current.Ssm_In.all, Normed, XZ);
+
+                        --  The convolution over the activation and B and C,
+                        --  the block past the gate.
+                        for C in 0 .. DXBC - 1 loop
+                           declare
+                              Total : Long_Float := Current.Conv_Bias (C);
+                           begin
+                              for K in 0 .. Taps - 1 loop
+                                 declare
+                                    Val : constant Long_Float :=
+                                      (if K < Taps - 1
+                                       then Memory (K * DXBC + C)
+                                       else XZ (Inner + C));
+                                 begin
+                                    Total := Total + Current.Conv (C, K) * Val;
+                                 end;
+                              end loop;
+                              Xc (C) := Total;
+                           end;
+                        end loop;
+                        for K in 0 .. Taps - 3 loop
+                           for C in 0 .. DXBC - 1 loop
+                              Memory (K * DXBC + C) :=
+                                Memory ((K + 1) * DXBC + C);
+                           end loop;
+                        end loop;
+                        if Taps >= 2 then
+                           for C in 0 .. DXBC - 1 loop
+                              Memory ((Taps - 2) * DXBC + C) := XZ (Inner + C);
+                           end loop;
+                        end if;
+                        for C in 0 .. DXBC - 1 loop
+                           Xc (C) := Xc (C) * Logistic (Xc (C));
+                        end loop;
+
+                        for Hd in 0 .. Heads - 1 loop
+                           DT (Hd) :=
+                             XZ (Inner + DXBC + Hd) + Current.DT_Bias (Hd);
+                        end loop;
+
+                        --  The scan a head: the state a channel by a state,
+                        --  its decay one scalar, its B and C its group's.
+                        for Hd in 0 .. Heads - 1 loop
+                           declare
+                              Dt_Soft : constant Long_Float :=
+                                Softplus (DT (Hd));
+                              dA : constant Long_Float :=
+                                Functions.Exp (Dt_Soft * Current.A_Log (Hd));
+                              G_At : constant Natural :=
+                                Inner + (Hd / Per_G) * S_Size;
+                           begin
+                              for P in 0 .. Wide - 1 loop
+                                 declare
+                                    Ch : constant Natural := Hd * Wide + P;
+                                    X_Dt : constant Long_Float :=
+                                      Xc (Ch) * Dt_Soft;
+                                    Sum : Long_Float := 0.0;
+                                 begin
+                                    for S in 0 .. S_Size - 1 loop
+                                       declare
+                                          B_S : constant Long_Float :=
+                                            Xc (G_At + S);
+                                          C_S : constant Long_Float :=
+                                            Xc (G_At + Grps * S_Size + S);
+                                          New_H : constant Long_Float :=
+                                            H_St (Ch * S_Size + S) * dA
+                                            + B_S * X_Dt;
+                                       begin
+                                          H_St (Ch * S_Size + S) := New_H;
+                                          Sum := Sum + C_S * New_H;
+                                       end;
+                                    end loop;
+                                    Yc (Ch) := Sum + Current.Ssm_D (Hd) * Xc (Ch);
+                                 end;
+                              end loop;
+                           end;
+                        end loop;
+
+                        --  The gate first, then a grouped root-mean-square
+                        --  normalization scaled by the stored gain.
+                        for C in 0 .. Inner - 1 loop
+                           Yc (C) := Yc (C) * (XZ (C) * Logistic (XZ (C)));
+                        end loop;
+                        for Grp in 0 .. Grps - 1 loop
+                           declare
+                              Sum : Long_Float := 0.0;
+                              Rms : Long_Float;
+                           begin
+                              for I in 0 .. Grp_W - 1 loop
+                                 Sum := Sum + Yc (Grp * Grp_W + I)
+                                              * Yc (Grp * Grp_W + I);
+                              end loop;
+                              Rms := 1.0 / Functions.Sqrt
+                                             (Sum / Long_Float (Grp_W)
+                                              + Item.Epsilon);
+                              for I in 0 .. Grp_W - 1 loop
+                                 Yc (Grp * Grp_W + I) :=
+                                   Yc (Grp * Grp_W + I) * Rms
+                                   * Current.State_Norm (Grp * Grp_W + I);
+                              end loop;
+                           end;
+                        end loop;
+
+                        Project (Current.Linear_Out.all, Yc, Out_V);
+                        for Index in 0 .. Width - 1 loop
+                           Linear_Rows (Step, Index) := Out_V (Index);
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            elsif Current.Linear and then Item.Kind = Mamba then
                --  Mamba's block, position by position and carrying the
                --  convolution's memory and the scan's state: the input
                --  projected and split, the convolution over each channel
@@ -4427,7 +4633,7 @@ package body Reference_Transformer is
 
                   --  Mamba has no feed-forward: its block is the whole
                   --  layer, joined to the residual just above.
-                  if Item.Kind = Mamba then
+                  if Item.Kind in Mamba | Mamba2 then
                      goto Layer_Written;
                   end if;
 

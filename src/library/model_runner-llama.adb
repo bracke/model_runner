@@ -135,8 +135,15 @@ package body Model_Runner.Llama is
    --  positions' mixed projections, oldest first, Mix_Width apiece.
    --  Mamba's convolution runs over its inner width, the delta rule's over
    --  its mixed projection.
+   --  Mamba convolves its inner width; Mamba2 convolves the inner width
+   --  and its B and C beside it -- the block the in_projection lays out as
+   --  one; the delta rule convolves its mixed projection.
    function Conv_Width (Settings : Configuration) return Element_Count
-   is (if Pure_SSM (Settings.Kind)
+   is (if Is_Mamba2 (Settings.Kind)
+       then Element_Count (Settings.Inner_Size)
+            + 2 * Element_Count (Settings.Groups)
+                * Element_Count (Settings.State_Size)
+       elsif Pure_SSM (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
        else Element_Count (Mix_Width (Settings)));
 
@@ -493,7 +500,8 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba =>
+                       | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
+                       | Mamba2 =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -1051,6 +1059,43 @@ package body Model_Runner.Llama is
          Settings.Time_Rank :=
            (if E.Is_Ok (Local) then Natural (Number)
             else (Settings.Embedding + 15) / 16);
+
+         --  Mamba2's structure, past the widths Mamba shares. The groups
+         --  its B and C are shared across default to one -- the whole inner
+         --  width one group -- and the head count is the time-step rank the
+         --  file states, because Mamba2's step is a head and no longer a
+         --  low-rank projection, so head_dim is the inner width over it.
+         --  A file whose heads do not divide the inner width, or whose
+         --  groups do not divide the heads, describes a shape this does not
+         --  compute and is refused rather than mis-read.
+         if Is_Mamba2 (Settings.Kind) then
+            Containers.Get_Integer
+              (Source, Model_Key (Settings.Kind, "ssm.group_count"),
+               1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+               return;
+            end if;
+            Settings.Groups :=
+              (if E.Is_Ok (Local) then Natural (Number) else 1);
+
+            Settings.Ssm_Heads := Settings.Time_Rank;
+            if Settings.Ssm_Heads = 0
+              or else Settings.Inner_Size mod Settings.Ssm_Heads /= 0
+              or else Settings.Ssm_Heads mod Settings.Groups /= 0
+            then
+               Status := E.Make (E.Arch_Invalid_Dimensions);
+               E.Add_Integer
+                 (Status, "heads", Long_Long_Integer (Settings.Ssm_Heads));
+               E.Add_Integer
+                 (Status, "inner_size",
+                  Long_Long_Integer (Settings.Inner_Size));
+               E.Add_Integer
+                 (Status, "groups", Long_Long_Integer (Settings.Groups));
+               return;
+            end if;
+            Settings.Head_Dim := Settings.Inner_Size / Settings.Ssm_Heads;
+         end if;
       end if;
 
       if Settings.Experts > 0 then
@@ -3272,68 +3317,147 @@ package body Model_Runner.Llama is
                     Element_Count (Item.Settings.Time_Rank);
                   Taps  : constant Element_Count :=
                     Element_Count (Item.Settings.Conv_Kernel);
+                  Group : constant Element_Count :=
+                    Element_Count (Item.Settings.Groups);
+                  Heads : constant Element_Count :=
+                    Element_Count (Item.Settings.Ssm_Heads);
+
+                  --  The block the convolution runs over -- the inner width
+                  --  and B and C beside it -- and the whole of the in
+                  --  projection's output: the gate, that block, and a time
+                  --  step a head.
+                  DXBC   : constant Element_Count :=
+                    Inner + 2 * Group * State;
+                  In_Out : constant Element_Count := Inner + DXBC + Heads;
                begin
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ssm_in.weight"),
-                     2 * Inner, Width, Current.Ssm_In, Status, Repack);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                  if Is_Mamba2 (Item.Settings.Kind) then
+                     --  Mamba2's one projection in: the gate, the inner
+                     --  activation, B and C, and the time step a head, all
+                     --  from the model width. The convolution runs over the
+                     --  inner activation with B and C; A, D and the step's
+                     --  bias are a head; the gated normalization is the inner
+                     --  width; and the projection out is the same as Mamba's.
+                     --  No ssm_x or ssm_dt matrices: B, C and the step come
+                     --  straight out of the split.
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_in.weight"),
+                        In_Out, Width, Current.Ssm_In, Status, Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve_Table
-                    (Item, Source, Layer_Key (Index, "ssm_conv1d.weight"),
-                     Inner, Taps, Current.Conv, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Table
+                       (Item, Source, Layer_Key (Index, "ssm_conv1d.weight"),
+                        DXBC, Taps, Current.Conv, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "ssm_conv1d.bias"),
-                     Inner, Current.Conv_Bias, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_conv1d.bias"),
+                        DXBC, Current.Conv_Bias, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ssm_x.weight"),
-                     Rank + 2 * State, Inner, Current.Ssm_X, Status, Repack);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_a"),
+                        Heads, Current.Ssm_A, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ssm_dt.weight"),
-                     Inner, Rank, Current.Ssm_Dt, Status, Repack);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_d"),
+                        Heads, Current.Ssm_D, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "ssm_dt.bias"),
-                     Inner, Current.DT_Bias, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_dt.bias"),
+                        Heads, Current.DT_Bias, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve_Table
-                    (Item, Source, Layer_Key (Index, "ssm_a"),
-                     Inner, State, Current.Ssm_A, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_norm.weight"),
+                        Inner, Current.State_Norm, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve_Norm
-                    (Item, Source, Layer_Key (Index, "ssm_d"),
-                     Inner, Current.Ssm_D, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_out.weight"),
+                        Width, Inner, Current.Linear_Out, Status, Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  else
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_in.weight"),
+                        2 * Inner, Width, Current.Ssm_In, Status, Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
 
-                  Resolve
-                    (Item, Source, Layer_Key (Index, "ssm_out.weight"),
-                     Width, Inner, Current.Linear_Out, Status, Repack);
-                  if E.Is_Error (Status) then
-                     return;
+                     Resolve_Table
+                       (Item, Source, Layer_Key (Index, "ssm_conv1d.weight"),
+                        Inner, Taps, Current.Conv, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_conv1d.bias"),
+                        Inner, Current.Conv_Bias, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_x.weight"),
+                        Rank + 2 * State, Inner, Current.Ssm_X, Status,
+                        Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_dt.weight"),
+                        Inner, Rank, Current.Ssm_Dt, Status, Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_dt.bias"),
+                        Inner, Current.DT_Bias, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve_Table
+                       (Item, Source, Layer_Key (Index, "ssm_a"),
+                        Inner, State, Current.Ssm_A, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ssm_d"),
+                        Inner, Current.Ssm_D, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Resolve
+                       (Item, Source, Layer_Key (Index, "ssm_out.weight"),
+                        Width, Inner, Current.Linear_Out, Status, Repack);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
                   end if;
                end;
             elsif Is_Linear then
@@ -12937,9 +13061,17 @@ package body Model_Runner.Llama is
             declare
                Inner : constant Element_Count :=
                  Element_Count (Settings.Inner_Size);
+               State : constant Element_Count :=
+                 Element_Count (Settings.State_Size);
                DBC   : constant Element_Count :=
-                 Element_Count (Settings.Time_Rank)
-                 + 2 * Element_Count (Settings.State_Size);
+                 Element_Count (Settings.Time_Rank) + 2 * State;
+
+               --  Mamba2's convolution block and its one projection in: the
+               --  gate, that block and a step a head laid end to end.
+               DXBC   : constant Element_Count :=
+                 Inner + 2 * Element_Count (Settings.Groups) * State;
+               In_Out : constant Element_Count :=
+                 Inner + DXBC + Element_Count (Settings.Ssm_Heads);
             begin
                T.Allocate (Conv_Room (Settings), Item.Conv_State);
                T.Allocate (State_Room (Settings), Item.Delta_State);
@@ -12952,12 +13084,23 @@ package body Model_Runner.Llama is
                   Item.Delta_State.all := [others => 0.0];
                end if;
 
-               T.Allocate (2 * Inner, Item.Mamba_XZ);
-               T.Allocate (Inner, Item.Mamba_X);
-               T.Allocate (DBC, Item.Mamba_DBC);
-               T.Allocate (Element_Count (Settings.Time_Rank), Item.Mamba_DTR);
-               T.Allocate (Inner, Item.Mamba_DT);
-               T.Allocate (Inner, Item.Mamba_Y);
+               if Is_Mamba2 (Settings.Kind) then
+                  --  XZ holds the whole projection in (z, x, B, C, dt); X
+                  --  the convolution block (x, B, C); DT a step a head; Y
+                  --  the scan's answer. DBC and DTR are Mamba's alone.
+                  T.Allocate (In_Out, Item.Mamba_XZ);
+                  T.Allocate (DXBC, Item.Mamba_X);
+                  T.Allocate (Element_Count (Settings.Ssm_Heads), Item.Mamba_DT);
+                  T.Allocate (Inner, Item.Mamba_Y);
+               else
+                  T.Allocate (2 * Inner, Item.Mamba_XZ);
+                  T.Allocate (Inner, Item.Mamba_X);
+                  T.Allocate (DBC, Item.Mamba_DBC);
+                  T.Allocate
+                    (Element_Count (Settings.Time_Rank), Item.Mamba_DTR);
+                  T.Allocate (Inner, Item.Mamba_DT);
+                  T.Allocate (Inner, Item.Mamba_Y);
+               end if;
             end;
          end if;
 
@@ -14502,6 +14645,184 @@ package body Model_Runner.Llama is
       Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
    end Mamba_Step;
 
+   --  One position through one Mamba2 layer, on the host. Mamba's block
+   --  restructured: one projection in lays out the gate, the inner
+   --  activation, B and C and a time step a head end to end; the causal
+   --  convolution runs over the activation with B and C beside it, all
+   --  through a sigmoid-weighted unit; the scan is a head rather than a
+   --  channel -- a scalar decay a head, B and C shared across the heads of
+   --  a group -- and the skip is a head; and the answer is gated by the
+   --  input's gate and normalized in groups before the projection back,
+   --  where Mamba only gates. State and convolution memory carry a session
+   --  in the same one-slot ring, since Mamba2 neither drafts nor rewinds.
+   procedure Mamba2_Step
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Status      : out E.Error_Info)
+   is
+      Settings : Configuration renames Source.Settings;
+      Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
+      State : constant Element_Count := Element_Count (Settings.State_Size);
+      Taps  : constant Element_Count := Element_Count (Settings.Conv_Kernel);
+      Group : constant Element_Count := Element_Count (Settings.Groups);
+      Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
+      Wide  : constant Element_Count := Element_Count (Settings.Head_Dim);
+
+      --  The convolution block (the activation with B and C), the group's
+      --  width for the normalization, and how many heads share a group's
+      --  B and C.
+      DXBC  : constant Element_Count := Inner + 2 * Group * State;
+      Grp_W : constant Element_Count := Inner / Group;
+      Per_G : constant Element_Count := Heads / Group;
+
+      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
+      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
+
+      Memory : Real_Array renames Item.Conv_State.all;
+      H      : Real_Array renames Item.Delta_State.all;
+      XZ     : Real_Array renames Item.Mamba_XZ.all;
+      Xc     : Real_Array renames Item.Mamba_X.all;
+      DT     : Real_Array renames Item.Mamba_DT.all;
+      Yc     : Real_Array renames Item.Mamba_Y.all;
+      Conv   : Real_Array renames Current.Conv.all;
+      A      : Real_Array renames Current.Ssm_A.all;
+
+      function Softplus (X : N.Wide_Real) return N.Wide_Real
+      is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
+   begin
+      --  The one projection in: the gate, the inner activation, B and C,
+      --  and a time step a head, laid out z | x | B | C | dt.
+      Product (Item, Current.Ssm_In, Item.Normalized, Item.Mamba_XZ, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The causal convolution over the activation and B and C beside it --
+      --  the block past the gate -- each channel against its own taps, the
+      --  last Taps positions oldest first and this one last, biased.
+      for C in 0 .. DXBC - 1 loop
+         declare
+            Acc : N.Wide_Real := N.Wide_Real (Current.Conv_Bias.all (C));
+         begin
+            for K_At in 0 .. Taps - 1 loop
+               declare
+                  Value : constant Real :=
+                    (if K_At < Taps - 1
+                     then Memory (Conv_Base + K_At * DXBC + C)
+                     else XZ (Inner + C));
+               begin
+                  Acc := Acc
+                    + N.Wide_Real (Conv (C * Taps + K_At)) * N.Wide_Real (Value);
+               end;
+            end loop;
+            Xc (C) := Real (Acc);
+         end;
+      end loop;
+
+      --  And the memory slides on: the oldest dropped, this position's
+      --  convolution block appended.
+      for C in 0 .. DXBC - 1 loop
+         for T_At in 0 .. Taps - 3 loop
+            Memory (Conv_Base + T_At * DXBC + C) :=
+              Memory (Conv_Base + (T_At + 1) * DXBC + C);
+         end loop;
+         if Taps >= 2 then
+            Memory (Conv_Base + (Taps - 2) * DXBC + C) := XZ (Inner + C);
+         end if;
+      end loop;
+
+      --  The unit on the whole convolved block, so B and C pass through it
+      --  as the activation does.
+      K.SiLU (Xc (0 .. DXBC - 1));
+
+      --  The time step a head, biased before the softplus that the scan
+      --  takes below.
+      for Hd in 0 .. Heads - 1 loop
+         DT (Hd) := XZ (Inner + DXBC + Hd) + Current.DT_Bias.all (Hd);
+      end loop;
+
+      --  The selective scan, a head at a time. A head decays by one scalar,
+      --  its B and C are its group's, and its skip is one number: the state
+      --  a channel by a state, driven by B times the activation times the
+      --  step, read back by C, and the skip D times the activation added.
+      --  Xc holds the activation in 0 .. Inner - 1, then B, then C.
+      for Hd in 0 .. Heads - 1 loop
+         declare
+            Dt_Soft : constant N.Wide_Real := Softplus (N.Wide_Real (DT (Hd)));
+            dA      : constant N.Wide_Real :=
+              N.Exp (Dt_Soft * N.Wide_Real (A (Hd)));
+            G_At    : constant Element_Count :=
+              Inner + (Hd / Per_G) * State;
+         begin
+            for P in 0 .. Wide - 1 loop
+               declare
+                  Ch   : constant Element_Count := Hd * Wide + P;
+                  X_Dt : constant N.Wide_Real :=
+                    N.Wide_Real (Xc (Ch)) * Dt_Soft;
+                  Sum  : N.Wide_Real := 0.0;
+               begin
+                  for S in 0 .. State - 1 loop
+                     declare
+                        B_S : constant N.Wide_Real :=
+                          N.Wide_Real (Xc (G_At + S));
+                        C_S : constant N.Wide_Real :=
+                          N.Wide_Real (Xc (G_At + Group * State + S));
+                        Cell : constant Element_Count :=
+                          State_Base + Ch * State + S;
+                        New_H : constant N.Wide_Real :=
+                          N.Wide_Real (H (Cell)) * dA + B_S * X_Dt;
+                     begin
+                        H (Cell) := Real (New_H);
+                        Sum := Sum + C_S * New_H;
+                     end;
+                  end loop;
+                  Yc (Ch) :=
+                    Real (Sum + N.Wide_Real (Current.Ssm_D.all (Hd))
+                                  * N.Wide_Real (Xc (Ch)));
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  The gate first -- the answer weighted by the sigmoid-weighted gate,
+      --  the gate the front of the projection in -- then a root-mean-square
+      --  normalization in groups, the group the width B and C share, scaled
+      --  by the stored gain. Mamba gates and stops; Mamba2 normalizes here.
+      for C in 0 .. Inner - 1 loop
+         declare
+            Z : constant N.Wide_Real := N.Wide_Real (XZ (C));
+         begin
+            Yc (C) :=
+              Real (N.Wide_Real (Yc (C)) * (Z / (1.0 + N.Exp (-Z))));
+         end;
+      end loop;
+
+      for Grp in 0 .. Group - 1 loop
+         declare
+            Sum : N.Wide_Real := 0.0;
+            Rms : N.Wide_Real;
+         begin
+            for I in 0 .. Grp_W - 1 loop
+               Sum := Sum + N.Wide_Real (Yc (Grp * Grp_W + I))
+                            * N.Wide_Real (Yc (Grp * Grp_W + I));
+            end loop;
+            Rms := 1.0 / N.Sqrt
+                           (Sum / N.Wide_Real (Grp_W)
+                            + N.Wide_Real (Settings.Epsilon));
+            for I in 0 .. Grp_W - 1 loop
+               Yc (Grp * Grp_W + I) :=
+                 Real (N.Wide_Real (Yc (Grp * Grp_W + I)) * Rms
+                       * N.Wide_Real (Current.State_Norm.all (Grp * Grp_W + I)));
+            end loop;
+         end;
+      end loop;
+
+      --  And the projection back, into the buffer the residual reads.
+      Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
+   end Mamba2_Step;
+
    procedure Linear_Position
      (Item    : in out Session;
       Source  : Model'Class;
@@ -15514,8 +15835,13 @@ package body Model_Runner.Llama is
                Charge (Item, Normalizing, Mark);
 
                if Pure_SSM (Settings.Kind) then
-                  Mamba_Step
-                    (Item, Source, Current, Natural (Index), Status);
+                  if Is_Mamba2 (Settings.Kind) then
+                     Mamba2_Step
+                       (Item, Source, Current, Natural (Index), Status);
+                  else
+                     Mamba_Step
+                       (Item, Source, Current, Natural (Index), Status);
+                  end if;
                else
                   Linear_Position
                     (Item, Source, Current, Natural (Index),
@@ -17983,8 +18309,13 @@ package body Model_Runner.Llama is
                for P in 0 .. Count - 1 loop
                   Item.Normalized.all (0 .. Width - 1) :=
                     Norm.all (P * Width .. P * Width + Width - 1);
-                  Mamba_Step
-                    (Item, Source, Current, Natural (Index), Status);
+                  if Is_Mamba2 (Settings.Kind) then
+                     Mamba2_Step
+                       (Item, Source, Current, Natural (Index), Status);
+                  else
+                     Mamba_Step
+                       (Item, Source, Current, Natural (Index), Status);
+                  end if;
                   exit when E.Is_Error (Status);
                   Norm.all (P * Width .. P * Width + Width - 1) :=
                     Item.Normalized.all (0 .. Width - 1);

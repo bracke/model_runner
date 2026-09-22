@@ -392,13 +392,14 @@ package body Tiny_Model is
            when Mpt       => "mpt",
            when Chatglm   => "chatglm",
            when Command_R => "command-r",
-           when Mamba     => "mamba");
+           when Mamba     => "mamba",
+           when Mamba2    => "mamba2");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
       --  The block past the stack attends in full, whatever its number.
       function Linear_Block (Index : Natural) return Boolean
-      is (Kind = Mamba
+      is (Kind in Mamba | Mamba2
           or else (Kind = Qwen35 and then Index < Layers
                    and then (Index + 1) mod 2 /= 0));
 
@@ -528,6 +529,29 @@ package body Tiny_Model is
            (Builder, Prefix & ".ssm.inner_size",
             Interfaces.Unsigned_32 (2 * Embedding));
          Fixtures.Add_U32 (Builder, Prefix & ".ssm.time_step_rank", 2);
+      end if;
+
+      --  Mamba2's widths: the same small state and short convolution, an
+      --  inner width twice the model's split into four heads, and B and C
+      --  shared across two groups -- two heads a group, so the group
+      --  sharing and the two-group normalization are both exercised. The
+      --  time-step rank carries the head count, as Mamba2 states it.
+      if Kind = Mamba2 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.state_size",
+            Interfaces.Unsigned_32 (Linear_State));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.conv_kernel",
+            Interfaces.Unsigned_32 (Linear_Taps));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.inner_size",
+            Interfaces.Unsigned_32 (2 * Embedding));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.time_step_rank",
+            Interfaces.Unsigned_32 (2 * Linear_Heads));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.group_count",
+            Interfaces.Unsigned_32 (Linear_Heads));
       end if;
 
       --  Which pooling the model was trained for, which is a thing a bert
@@ -992,6 +1016,47 @@ package body Tiny_Model is
                  (Builder, Layer_Name (Index, "attn_q.weight"),
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
+            end;
+         elsif Linear_Block (Index) and then Kind = Mamba2 then
+            --  Mamba2's own: one projection in (the gate, the activation, B
+            --  and C, and a step a head), the convolution over the
+            --  activation and B and C with its bias, the per-head transition
+            --  -- negative, so the state decays -- the per-head skip and
+            --  step bias, the gated normalization's gain, and the way back.
+            declare
+               Inner  : constant Natural := 2 * Embedding;
+               State  : constant Natural := Linear_State;
+               Heads  : constant Natural := 2 * Linear_Heads;
+               Grps   : constant Natural := Linear_Heads;
+               DXBC   : constant Natural := Inner + 2 * Grps * State;
+               In_Out : constant Natural := Inner + DXBC + Heads;
+               A_Vals : N.Real_Array (0 .. N.Element_Count (Heads) - 1);
+            begin
+               Weight (Layer_Name (Index, "ssm_in.weight"),
+                       [G.U64 (Embedding), G.U64 (In_Out)]);
+
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_conv1d.weight"),
+                  [G.U64 (Linear_Taps), G.U64 (DXBC)], G.Type_F32,
+                  Fixtures.Encode_F32
+                    (Next (N.Element_Count (Linear_Taps * DXBC))));
+               Norm_Of (Layer_Name (Index, "ssm_conv1d.bias"), DXBC);
+
+               --  The transition a head, already the negative exponential
+               --  the file stores: a decay between nought and one.
+               for H in A_Vals'Range loop
+                  A_Vals (H) := -(0.5 + 0.25 * N.Real (Natural (H)));
+               end loop;
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_a"),
+                  [G.U64 (Heads)], G.Type_F32,
+                  Fixtures.Encode_F32 (A_Vals));
+
+               Norm_Of (Layer_Name (Index, "ssm_d"), Heads);
+               Norm_Of (Layer_Name (Index, "ssm_dt.bias"), Heads);
+               Norm_Of (Layer_Name (Index, "ssm_norm.weight"), Inner);
+               Weight (Layer_Name (Index, "ssm_out.weight"),
+                       [G.U64 (Inner), G.U64 (Embedding)]);
             end;
          elsif Linear_Block (Index) and then Kind = Mamba then
             --  Mamba's own: the input projection to the inner activation and
