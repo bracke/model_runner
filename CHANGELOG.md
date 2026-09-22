@@ -35,10 +35,12 @@ Keep a Changelog and the project uses semantic versioning.
   crossed against an independent binary64 computation of the same network in the
   suite, a resampler written small, and a projector of another kind is refused
   by name. The engine's rows were also checked numerically against llama.cpp's
-  own clip on the real 2.6 projector -- a white square at two patch grids, 448
-  and 224 a side -- and agree to a hundredth, within the half-precision the
-  reference runs the encoder in; a spec mistake would part them by more than
-  rounding.
+  own clip on the real 2.6 projector, on both a plain and a varied input: a white
+  square at two patch grids (448 and 224 a side) and a rainbow of every hue. All
+  agree to a cosine of 0.9995 and better -- a mean element a hundredth to two
+  hundredths apart, within the half-precision the reference runs the encoder in
+  and the rounding of a picture's bytes -- where a mistake in the sinusoidal
+  place, the position bucket or the resampler math would part them by far more.
   A real MiniCPM-V-2.6 projector file opens and encodes: its width and query
   count are read from the resampler's query tensor (the file's projection-dim
   key is nought), its feed-forward halves are told apart by shape rather than by
