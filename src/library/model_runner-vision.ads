@@ -109,6 +109,15 @@ package Model_Runner.Vision is
    --  @return The projector type.
    function Projector (Item : Encoder) return String;
 
+   --  Which MiniCPM-V the resampler is, as the file states -- 2 for 2.5,
+   --  3 for 2.6, 6 for 4.5 -- or 0 where the projector is not a resampler.
+   --  The slice prompt-framing is the 2.6-and-later shape, so a caller
+   --  reads this to know whether to place a large picture's slices.
+   --
+   --  @param Item Open encoder.
+   --  @return The version, or 0.
+   function Minicpm_Version (Item : Encoder) return Natural;
+
    --  Encode a picture.
    --
    --  The picture is resampled to Image_Size square -- or, for an encoder

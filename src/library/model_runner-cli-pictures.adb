@@ -257,15 +257,31 @@ package body Model_Runner.CLI.Pictures is
          Item.Lead := Model_Runner.Text.Empty;
          Item.Bridge := Model_Runner.Text.Empty;
          Item.Gap := Model_Runner.Text.Empty;
-         --  The slices' frame: <slice> ... </slice> a slice, a line break
-         --  after each grid row. Where the file has no slice tokens the
-         --  seer shows the overview alone.
-         Item.Slice_Marker :=
-           Model_Runner.Tokenizer.Find (Words.all, "<slice>");
-         Item.Slice_Closer :=
-           Model_Runner.Tokenizer.Find (Words.all, "</slice>");
-         Item.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("<slice>");
-         Item.Slice_Row_End := Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+         --  The slices' frame, for 2.6 and later (version 3 and up):
+         --  <slice> ... </slice> a slice, a line break after each grid
+         --  row. Version 2 (2.5) wraps its slices differently -- one
+         --  <slice> ... </slice> round them all, each slice in
+         --  <image> ... </image> -- which this build does not write, so a
+         --  2.5 picture is shown as the overview alone (as a small one is)
+         --  rather than in a shape the model was not trained to read.
+         --  Where the file has no slice tokens the overview stands alone too.
+         if Model_Runner.Vision.Minicpm_Version (Item.Eyes) >= 3 then
+            Item.Slice_Marker :=
+              Model_Runner.Tokenizer.Find (Words.all, "<slice>");
+            Item.Slice_Closer :=
+              Model_Runner.Tokenizer.Find (Words.all, "</slice>");
+            if Item.Slice_Marker /= Model_Runner.Tokenizer.No_Token
+              and then Item.Slice_Closer /= Model_Runner.Tokenizer.No_Token
+            then
+               Item.Slice_Marker_Text :=
+                 Model_Runner.Text.To_Bounded ("<slice>");
+               Item.Slice_Row_End :=
+                 Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+            else
+               Item.Slice_Marker := Model_Runner.Tokenizer.No_Token;
+               Item.Slice_Closer := Model_Runner.Tokenizer.No_Token;
+            end if;
+         end if;
       else
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
          Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
@@ -698,6 +714,8 @@ package body Model_Runner.CLI.Pictures is
 
                      if E.Is_Ok (Status) and then Cnt > 0
                        and then RW > 0 and then RH > 0
+                       and then Item.Slice_Marker
+                                  /= Model_Runner.Tokenizer.No_Token
                      then
                         Slice_Cols_Val := GC;
                         Tiles := 1 + Cnt;

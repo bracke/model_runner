@@ -1036,6 +1036,9 @@ package body Model_Runner.Vision is
    function Projector (Item : Encoder) return String
    is (Item.Kind (1 .. Item.Kind_Last));
 
+   function Minicpm_Version (Item : Encoder) return Natural
+   is (if Is_Minicpm (Item) then Item.Minicpm_Version else 0);
+
    ------------
    -- Encode --
    ------------

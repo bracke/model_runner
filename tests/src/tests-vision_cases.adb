@@ -2861,7 +2861,7 @@ package body Tests.Vision_Cases is
 
    procedure Write_Minicpm_Projector
      (Path : String; W : Minicpm_Weights; Kind : String := "resampler";
-      Swapped : Boolean := False)
+      Swapped : Boolean := False; Version : Natural := 3)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -2886,7 +2886,8 @@ package body Tests.Vision_Cases is
       Fixtures.Add_U32 (Builder, "clip.vision.block_count", Blocks_M);
       Fixtures.Add_U32 (Builder, "clip.vision.attention.head_count", Heads_M);
       Fixtures.Add_U32 (Builder, "clip.minicpmv_query_num", Nq_M);
-      Fixtures.Add_U32 (Builder, "clip.minicpmv_version", 3);
+      Fixtures.Add_U32
+        (Builder, "clip.minicpmv_version", Interfaces.Unsigned_32 (Version));
       Fixtures.Add_F32
         (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
       Fixtures.Begin_Array
@@ -3428,7 +3429,8 @@ package body Tests.Vision_Cases is
                  and then not Vision.Placed_Rows (Eyes)
                  and then Vision.Rows_Per_Picture (Eyes) = Nq_M
                  and then Vision.Row_Width (Eyes) = P_M
-                 and then Vision.Projector (Eyes) = "resampler",
+                 and then Vision.Projector (Eyes) = "resampler"
+                 and then Vision.Minicpm_Version (Eyes) = 3,
                  "the small resampler's shape was misread");
 
          Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
@@ -3484,6 +3486,14 @@ package body Tests.Vision_Cases is
                  and then Sl (4) = (12, 20, 12, 20),
                  "a tall picture was sliced wrong");
       end;
+      Vision.Close (Eyes);
+
+      --  A version-2 (2.5) file reads its version back, which is what the
+      --  command reads to know the older file frames its slices its own way.
+      Write_Minicpm_Projector ("obj/vision-minicpm.gguf", W.all, Version => 2);
+      Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
+      Assert (E.Is_Ok (Status) and then Vision.Minicpm_Version (Eyes) = 2,
+              "a version-2 resampler did not read its version");
       Vision.Close (Eyes);
 
       --  A resampler named as another kind is refused by name.
