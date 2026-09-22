@@ -1166,6 +1166,105 @@ package body Tests.Vision_Cases is
             Pictures.Frame_After := Model_Runner.Text.Empty;
          end;
 
+         --  A large picture's slices: the overview between the marker and
+         --  its closer, then each slice between the slice marker and its
+         --  own closer, a row-end token between grid rows. Here the marker
+         --  is "c", each slice "b", the row-end a line break; a two-slice,
+         --  one-column grid, so the rewrite of the marker "c" is
+         --  "ac" -- an "a" ahead of the overview -- then "b", a line break,
+         --  and "b" (a frame ending in "a" would let the first slice's "b"
+         --  merge into "ab"). Each "c" opens to the soft token and the
+         --  closer, each
+         --  "b" to the soft token and the slice's own closer.
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Read     : Natural;
+            Plain_N  : constant Natural := Outcome.Prompt_Tokens;
+
+            procedure Expect_Slices (Text : String) is
+               Raw : Vocab.Token_Array (1 .. 128);
+            begin
+               Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the slice text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Closer;
+                  elsif Raw (Index) = Pictures.Slice_Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Slice_Closer;
+                  end if;
+               end loop;
+            end Expect_Slices;
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Frame_Before := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Frame_After := Model_Runner.Text.Empty;
+            Pictures.Slice_Marker := Vocab.Find (Words.all, "b");
+            Pictures.Slice_Closer := Vocab.Find (Words.all, "<0x61>");
+            Pictures.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("b");
+            Pictures.Slice_Row_End :=
+              Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+            Pictures.Slice_Cols := new Gen.Crop_Counts'(1 => 1);
+            Pictures.Crops := new Gen.Crop_Counts'(1 => 2);
+            Assert (Pictures.Slice_Marker /= Vocab.No_Token
+                    and then Pictures.Slice_Closer /= Vocab.No_Token
+                    and then Pictures.Slice_Marker /= Pictures.Marker,
+                    "the tiny vocabulary lacks the slice pieces this test needs");
+
+            T.Free (Pictures.Rows);
+            T.Allocate (3 * Per * Width, Pictures.Rows);
+            Seed := 909;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            Expect_Slices ("ac" & "b" & ASCII.LF & "b");
+            Assert (Count > Plain_N + Per,
+                    "the overview and its slices opened nothing");
+
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "c", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the sliced picture run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the sliced prompt is" & Natural'Image (Outcome.Prompt_Tokens)
+                    & " tokens, not" & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the sliced prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Free (Pictures.Crops);
+            Free (Pictures.Slice_Cols);
+            Pictures.Slice_Marker := Vocab.No_Token;
+            Pictures.Slice_Closer := Vocab.No_Token;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Frame_Before := Model_Runner.Text.Empty;
+            Pictures.Frame_After := Model_Runner.Text.Empty;
+            Pictures.Slice_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Row_End := Model_Runner.Text.Empty;
+         end;
+
          --  Two pictures given and one marked, or one given and none
          --  marked: refused before anything is evaluated.
          Pictures.Count := 2;
