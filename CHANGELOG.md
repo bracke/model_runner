@@ -9,6 +9,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The default sampling temperature is 0.4, down from 0.8.** For a personal
+  tool driving mostly instruct and code models, steadier output is the better
+  starting point than the chattier 0.8 the wider ecosystem defaults to; a caller
+  who wants more variety raises `--temperature` (or sets it in the settings
+  file), and this only moves the value the flag starts from. Greedy mode (0) and
+  every other sampling default are unchanged.
+
 - **MiniCPM-V's resampler cross-attention runs on the pool.** The learned
   queries' attention over the patch states was a plain loop on the calling task,
   the one part of the encoder that did not share the work; it now runs over the

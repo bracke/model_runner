@@ -61,7 +61,7 @@ package Model_Runner.Sampling is
    --  token.
    type Configuration is record
       --  Softmax temperature. Zero selects greedy mode.
-      Temperature : Real := 0.8;
+      Temperature : Real := 0.4;
 
       --  How far the temperature is allowed to move from Temperature with
       --  the distribution's own uncertainty: none where this is zero, and a
