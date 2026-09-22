@@ -332,6 +332,46 @@ package body Model_Runner.Generation is
                         end loop;
                         Crops_Written := Crops_Written + Crops;
                      end;
+                  elsif Model_Runner.Text.To_String (Pictures.Slice_Group_Open)
+                          /= ""
+                  then
+                     --  MiniCPM-V 2.5: the overview, then one group round
+                     --  all the slices, each slice its own picture marker,
+                     --  a line break after each grid row but the last.
+                     declare
+                        Cols : constant Natural :=
+                          (if Pictures.Slice_Cols /= null
+                             and then Which in Pictures.Slice_Cols.all'Range
+                             and then Pictures.Slice_Cols.all (Which) > 0
+                           then Pictures.Slice_Cols.all (Which) else Crops);
+                        Slice : constant String :=
+                          Model_Runner.Text.To_String
+                            (Pictures.Slice_Marker_Text);
+                        Row_End : constant String :=
+                          Model_Runner.Text.To_String (Pictures.Slice_Row_End);
+                        Done : Natural := 0;
+                     begin
+                        Ada.Strings.Unbounded.Append (Result, Frame);
+                        Ada.Strings.Unbounded.Append
+                          (Result,
+                           Model_Runner.Text.To_String
+                             (Pictures.Slice_Group_Open));
+                        while Done < Crops loop
+                           for Column in 1 .. Natural'Min (Cols, Crops - Done)
+                           loop
+                              Ada.Strings.Unbounded.Append (Result, Slice);
+                              Done := Done + 1;
+                           end loop;
+                           if Done < Crops then
+                              Ada.Strings.Unbounded.Append (Result, Row_End);
+                           end if;
+                        end loop;
+                        Ada.Strings.Unbounded.Append
+                          (Result,
+                           Model_Runner.Text.To_String
+                             (Pictures.Slice_Group_Close));
+                        Crops_Written := Crops_Written + Crops;
+                     end;
                   else
                      Ada.Strings.Unbounded.Append
                        (Result,

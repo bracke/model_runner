@@ -1404,6 +1404,87 @@ package body Tests.Vision_Cases is
             Pictures.Count := 1;
          end;
 
+         --  MiniCPM-V 2.5's older slice shape: the overview, then one group
+         --  round all the slices, each slice its own picture marker, a line
+         --  break between grid rows. Here the group markers are "a", the
+         --  picture marker "c"; "c" becomes "c" (overview) "a" (group open)
+         --  "c" (slice) line-break "c" (slice) "a" (group close).
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Read     : Natural;
+
+            procedure Expect_Group (Text : String) is
+               Raw : Vocab.Token_Array (1 .. 128);
+            begin
+               Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the grouped text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Closer;
+                  end if;
+               end loop;
+            end Expect_Group;
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Frame_Before := Model_Runner.Text.Empty;
+            Pictures.Frame_After := Model_Runner.Text.Empty;
+            --  Version-2 mode: no per-slice marker; the group wrappers, and
+            --  each slice the picture marker.
+            Pictures.Slice_Marker := Vocab.No_Token;
+            Pictures.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Slice_Group_Open := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Slice_Group_Close := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Slice_Row_End :=
+              Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+            Pictures.Slice_Cols := new Gen.Crop_Counts'(1 => 1);
+            Pictures.Crops := new Gen.Crop_Counts'(1 => 2);
+
+            T.Free (Pictures.Rows);
+            T.Allocate (3 * Per * Width, Pictures.Rows);
+            Seed := 404;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            Expect_Group ("c" & "a" & "c" & ASCII.LF & "c" & "a");
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "c", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the grouped-slice run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the grouped prompt is"
+                    & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
+                    & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the grouped prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Free (Pictures.Crops);
+            Free (Pictures.Slice_Cols);
+            Pictures.Slice_Group_Open := Model_Runner.Text.Empty;
+            Pictures.Slice_Group_Close := Model_Runner.Text.Empty;
+            Pictures.Slice_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Row_End := Model_Runner.Text.Empty;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+         end;
+
          --  Two pictures given and one marked, or one given and none
          --  marked: refused before anything is evaluated.
          Pictures.Count := 2;

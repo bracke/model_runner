@@ -79,7 +79,10 @@ Keep a Changelog and the project uses semantic versioning.
   the encoder's side is the overview alone, upscaled to fill it; a larger one is
   a grid of at most nine slices over a refined whole, the grid nearest the
   picture's aspect, every size a whole number of patches. Checked against a
-  faithful port of the reference geometry.
+  faithful port of the reference geometry, and against llama.cpp's own clip on
+  real pictures -- 900x600, 1920x1080 and 500x1400 -- whose overview, refined
+  size and slice grid it prints under verbose logging and which this build's
+  plan matches to the pixel.
 
 - **A MiniCPM-V picture is shown to the model.** `run --mmproj RESAMPLER.gguf`
   on a MiniCPM-V-2.6 model reads a picture: its rows stand behind the model's
@@ -101,11 +104,12 @@ Keep a Changelog and the project uses semantic versioning.
   of the overview and every slice placed in that order, so a 900-by-600 picture
   becomes an overview and two slices, 192 rows behind three markers. That
   framing is MiniCPM-V's 2.6-and-later shape (versions 3-6, so 2.6 and 4.5);
-  version 2 (2.5) wraps its slices another way, which this build does not write,
-  so a large 2.5 picture is shown as the overview alone -- a valid prompt the
-  model reads as it reads a small picture's -- rather than in a shape it was not
-  trained on. `Vision.Minicpm_Version` reports the version the seer reads to
-  enable slices only from 3 up.
+  version 2 (2.5) wraps its slices another way, which is now written too: one
+  `<slice>` ... `</slice>` round all the slices, each slice its own
+  `<image>` ... `</image>` rather than its own `<slice>`, a line break between
+  rows. `Vision.Minicpm_Version` reports the version the seer reads to choose the
+  shape. (The 2.5 shape is written from llama.cpp's mtmd template; it is not
+  crossed against a running 2.5, which this machine does not carry.)
 
 - **A template renders a picture's parts inline.** A model whose own template
   writes `message['content']` -- or adds it to text, as MiniCPM-V's writes

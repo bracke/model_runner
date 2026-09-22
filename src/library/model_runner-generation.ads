@@ -410,6 +410,14 @@ package Model_Runner.Generation is
       Slice_Row_End     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Slice_Cols        : Crop_Counts_Access := null;
 
+      --  MiniCPM-V 2.5's older slice shape: one <slice> ... </slice> round
+      --  all the slices, each slice its own <image> ... </image> (the
+      --  picture marker) rather than its own <slice> a slice. Set only for
+      --  version 2; where they are set the slices go between them and the
+      --  slice marker above is not used.
+      Slice_Group_Open  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Slice_Group_Close : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
       --  What a picture's number is written between where the model names
       --  its pictures -- MiniCPM-V's <image_id> and </image_id>, the whole
       --  picture (its overview and slices) prefixed with its index counted

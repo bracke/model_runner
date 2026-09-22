@@ -163,6 +163,12 @@ private
       --  written between; empty where it does not.
       Image_Id_Start, Image_Id_End : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
+      --  Whether a large picture is sliced, and MiniCPM-V 2.5's group
+      --  wrappers round all the slices (empty for 2.6 and later, which
+      --  wrap each slice on its own).
+      Has_Slices : Boolean := False;
+      Slice_Group_Open, Slice_Group_Close : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;
