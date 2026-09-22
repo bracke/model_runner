@@ -2860,7 +2860,8 @@ package body Tests.Vision_Cases is
    end Fresh_Minicpm_Weights;
 
    procedure Write_Minicpm_Projector
-     (Path : String; W : Minicpm_Weights; Kind : String := "resampler")
+     (Path : String; W : Minicpm_Weights; Kind : String := "resampler";
+      Swapped : Boolean := False)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -2922,10 +2923,21 @@ package body Tests.Vision_Cases is
             Tensor (Prefix & "attn_v.bias", [Width_M], Current.V_B);
             Tensor (Prefix & "attn_out.weight", [Width_M, Width_M], Current.O);
             Tensor (Prefix & "attn_out.bias", [Width_M], Current.O_B);
-            Tensor (Prefix & "ffn_up.weight", [Width_M, Feed_M], Current.Up);
-            Tensor (Prefix & "ffn_up.bias", [Feed_M], Current.Up_B);
-            Tensor (Prefix & "ffn_down.weight", [Feed_M, Width_M], Current.Down);
-            Tensor (Prefix & "ffn_down.bias", [Width_M], Current.Down_B);
+            --  The widening half is named "ffn_up" here, but a real
+            --  MiniCPM-V file names it "ffn_down"; Swapped writes it that
+            --  way to exercise Bind's shape-told naming.
+            declare
+               Widen  : constant String :=
+                 (if Swapped then "ffn_down" else "ffn_up");
+               Narrow : constant String :=
+                 (if Swapped then "ffn_up" else "ffn_down");
+            begin
+               Tensor (Prefix & Widen & ".weight", [Width_M, Feed_M], Current.Up);
+               Tensor (Prefix & Widen & ".bias", [Feed_M], Current.Up_B);
+               Tensor (Prefix & Narrow & ".weight", [Feed_M, Width_M],
+                       Current.Down);
+               Tensor (Prefix & Narrow & ".bias", [Width_M], Current.Down_B);
+            end;
          end;
       end loop;
       Tensor ("v.post_ln.weight", [Width_M], W.Post_W);
@@ -3402,33 +3414,42 @@ package body Tests.Vision_Cases is
 
       Minicpm_Reference_Rows (W.all, Picture, Wanted);
 
-      Write_Minicpm_Projector ("obj/vision-minicpm.gguf", W.all);
-      Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
-      Assert (E.Is_Ok (Status), "the small resampler did not open: "
-              & E.Error_Code'Image (Status.Code));
-      Assert (Vision.Is_Ready (Eyes)
-              and then Vision.Image_Size (Eyes) = Size_M
-              and then Vision.Fixed_Rows (Eyes)
-              and then not Vision.Placed_Rows (Eyes)
-              and then Vision.Rows_Per_Picture (Eyes) = Nq_M
-              and then Vision.Row_Width (Eyes) = P_M
-              and then Vision.Projector (Eyes) = "resampler",
-              "the small resampler's shape was misread");
+      --  Encodes to the reference rows however the feed-forward halves
+      --  are named -- the fixture's way and a real file's swapped way.
+      for Swapped in Boolean loop
+         Write_Minicpm_Projector
+           ("obj/vision-minicpm.gguf", W.all, Swapped => Swapped);
+         Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
+         Assert (E.Is_Ok (Status), "the small resampler did not open: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Vision.Is_Ready (Eyes)
+                 and then Vision.Image_Size (Eyes) = Size_M
+                 and then Vision.Fixed_Rows (Eyes)
+                 and then not Vision.Placed_Rows (Eyes)
+                 and then Vision.Rows_Per_Picture (Eyes) = Nq_M
+                 and then Vision.Row_Width (Eyes) = P_M
+                 and then Vision.Projector (Eyes) = "resampler",
+                 "the small resampler's shape was misread");
 
-      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
-                     Status => Status);
-      Assert (E.Is_Ok (Status), "the small resampler did not encode: "
-              & E.Error_Code'Image (Status.Code));
-      Assert (Rows /= null and then Rows.all'Length = Nq_M * P_M,
-              "the resampler made the wrong number of rows");
-      for J in 0 .. N.Element_Count (Nq_M * P_M - 1) loop
-         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
-                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
-                 "row element" & N.Element_Count'Image (J) & " is "
-                 & N.Real'Image (Rows (J)) & " where the reference has "
-                 & N.Wide_Real'Image (Wanted (J)));
+         Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                        Status => Status);
+         Assert (E.Is_Ok (Status), "the small resampler did not encode: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Rows /= null and then Rows.all'Length = Nq_M * P_M,
+                 "the resampler made the wrong number of rows");
+         for J in 0 .. N.Element_Count (Nq_M * P_M - 1) loop
+            Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                    <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                    "row element" & N.Element_Count'Image (J) & " is "
+                    & N.Real'Image (Rows (J)) & " where the reference has "
+                    & N.Wide_Real'Image (Wanted (J))
+                    & (if Swapped then " with the halves swapped" else ""));
+         end loop;
+         T.Free (Rows);
+         if not Swapped then
+            Vision.Close (Eyes);
+         end if;
       end loop;
-      T.Free (Rows);
 
       --  The llava-uhd slicing: a picture within the side is the overview
       --  alone, upscaled to fill it; a larger one is a grid of slices over
