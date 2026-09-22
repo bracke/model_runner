@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM-V numbers its pictures.** Where the model's vocabulary carries the
+  `<image_id>` and `</image_id>` tokens -- MiniCPM-V's do -- each picture is now
+  written with its number ahead of it, `<image_id>0</image_id>` before the first,
+  `<image_id>1</image_id>` before the second, counted from zero across the
+  conversation, the whole picture (overview and slices) behind its number, as the
+  model's own processor writes several pictures. A single picture is numbered
+  zero and reads back as before; a video's frames are not numbered, as the
+  processor does not number them. Verified on the real 2.6: two solid pictures,
+  red then blue, are placed each behind its own id, and one picture still reads
+  its colour.
+
 - **MiniCPM-V reads video.** A `{"type": "video", "path": "DIR-OR-FILE", "fps": N}`
   part to a resampler is now taken, not refused: MiniCPM-V has no video reader of
   its own, so each sampled frame is a picture -- its overview, fit to the

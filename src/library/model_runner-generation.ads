@@ -410,6 +410,13 @@ package Model_Runner.Generation is
       Slice_Row_End     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Slice_Cols        : Crop_Counts_Access := null;
 
+      --  What a picture's number is written between where the model names
+      --  its pictures -- MiniCPM-V's <image_id> and </image_id>, the whole
+      --  picture (its overview and slices) prefixed with its index counted
+      --  from zero. Empty where the model does not number its pictures.
+      Image_Id_Start : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Image_Id_End   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
       --  The videos, as described above: their marker, which is their
       --  soft token too; its text and the opener and closer the rewrite
       --  sets a slot between; which entries are slots, how many slots

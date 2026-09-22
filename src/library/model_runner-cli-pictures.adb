@@ -293,6 +293,17 @@ package body Model_Runner.CLI.Pictures is
          --  the mark below, opened out into one picture marker a frame.
          Item.Video_Frames := True;
          Item.Video_Text := Model_Runner.Text.To_Bounded (Video_Frames_Mark);
+
+         --  MiniCPM-V numbers its pictures, each between <image_id> and
+         --  </image_id>, where the file's vocabulary carries the tokens.
+         if Model_Runner.Tokenizer.Find (Words.all, "<image_id>")
+              /= Model_Runner.Tokenizer.No_Token
+           and then Model_Runner.Tokenizer.Find (Words.all, "</image_id>")
+              /= Model_Runner.Tokenizer.No_Token
+         then
+            Item.Image_Id_Start := Model_Runner.Text.To_Bounded ("<image_id>");
+            Item.Image_Id_End := Model_Runner.Text.To_Bounded ("</image_id>");
+         end if;
       else
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
          Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
@@ -457,6 +468,8 @@ package body Model_Runner.CLI.Pictures is
       Into.Slice_Marker_Text := Item.Slice_Marker_Text;
       Into.Slice_Row_End := Item.Slice_Row_End;
       Into.Video_As_Frames := Item.Video_Frames;
+      Into.Image_Id_Start := Item.Image_Id_Start;
+      Into.Image_Id_End := Item.Image_Id_End;
 
       if Total <= Parts_Done then
          return;

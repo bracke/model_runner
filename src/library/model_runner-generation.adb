@@ -282,6 +282,18 @@ package body Model_Runner.Generation is
                  (Result, Prompt (From .. At_Marker - 1));
                Which := Which + 1;
 
+               --  Where the model numbers its pictures, this one's number
+               --  ahead of it, counted from zero: <image_id>k</image_id>
+               --  before the whole picture, its overview and slices.
+               if Model_Runner.Text.To_String (Pictures.Image_Id_Start) /= ""
+               then
+                  Ada.Strings.Unbounded.Append
+                    (Result,
+                     Model_Runner.Text.To_String (Pictures.Image_Id_Start)
+                     & Model_Runner.Text.Image (Long_Long_Integer (Which - 1))
+                     & Model_Runner.Text.To_String (Pictures.Image_Id_End));
+               end if;
+
                declare
                   Crops : constant Natural :=
                     (if Pictures.Crops /= null

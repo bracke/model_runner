@@ -1333,6 +1333,77 @@ package body Tests.Vision_Cases is
             Pictures.Count := 1;
          end;
 
+         --  Where the model numbers its pictures, each one's number is
+         --  written ahead of it between the id markers, counted from zero:
+         --  two pictures marked "c" become "a0a c" and "a1a c" (the id
+         --  markers "a" here). The count check still sees two picture
+         --  markers, since the id text is not one.
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Read     : Natural;
+
+            procedure Expect_Id (Text : String) is
+               Raw : Vocab.Token_Array (1 .. 128);
+            begin
+               Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the numbered text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker then
+                     for Row in 1 .. Per loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Closer;
+                  end if;
+               end loop;
+            end Expect_Id;
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Frame_Before := Model_Runner.Text.Empty;
+            Pictures.Frame_After := Model_Runner.Text.Empty;
+            Pictures.Image_Id_Start := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Image_Id_End := Model_Runner.Text.To_Bounded ("a");
+            Pictures.Count := 2;
+            T.Free (Pictures.Rows);
+            T.Allocate (2 * Per * Width, Pictures.Rows);
+            Seed := 202;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            --  "cc" -> each "c" numbered: a0a c , a1a c.
+            Expect_Id ("a0a" & "c" & "a1a" & "c");
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "cc", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the numbered run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the numbered prompt is"
+                    & Natural'Image (Outcome.Prompt_Tokens) & " tokens, not"
+                    & Natural'Image (Count));
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the numbered prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Pictures.Image_Id_Start := Model_Runner.Text.Empty;
+            Pictures.Image_Id_End := Model_Runner.Text.Empty;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Count := 1;
+         end;
+
          --  Two pictures given and one marked, or one given and none
          --  marked: refused before anything is evaluated.
          Pictures.Count := 2;

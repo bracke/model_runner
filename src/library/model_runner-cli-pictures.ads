@@ -159,6 +159,10 @@ private
       --  Whether a video's frames are shown as pictures (MiniCPM-V), each
       --  behind the picture marker, rather than as a video reader's slots.
       Video_Frames : Boolean := False;
+      --  Where the model numbers its pictures, the tokens their number is
+      --  written between; empty where it does not.
+      Image_Id_Start, Image_Id_End : Model_Runner.Text.Bounded :=
+        Model_Runner.Text.Empty;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;
