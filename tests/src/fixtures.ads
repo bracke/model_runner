@@ -337,6 +337,42 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as IQ2_XS: as IQ2_XXS but a byte carries two four-bit
+   --  sub-scales, and a lane's nine-bit grid index and seven-bit sign index
+   --  share a word. Each group of eight is matched to the nearest grid entry.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ2_XS (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as IQ2_S: as IQ2_XS with a larger grid, its top index
+   --  bits in a high-bit byte, and a whole eight-bit sign a lane.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ2_S (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as IQ3_XXS: two grid indices a lane into a four-value
+   --  grid, with a four-bit scale and four sign indices packed past them.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ3_XXS (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as IQ1_S: a signed grid lifted by an eighth-step delta,
+   --  a three-bit scale and a delta sign a sub-block in a high-bit word.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ1_S (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as IQ1_M: as IQ1_S but the half is spread across four
+   --  scale words and each sub-block half has its own three-bit scale.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ1_M (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode values as Q5_K: as Q4_K with a fifth bit for every element,
    --  kept in thirty-two bytes of their own, in 176 bytes.
    --

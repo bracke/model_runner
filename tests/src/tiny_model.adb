@@ -306,6 +306,26 @@ package body Tiny_Model is
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_IQ2_XXS,
                   Fixtures.Encode_IQ2_XXS (Values));
+            elsif Format = IQ2_XS and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ2_XS,
+                  Fixtures.Encode_IQ2_XS (Values));
+            elsif Format = IQ2_S and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ2_S,
+                  Fixtures.Encode_IQ2_S (Values));
+            elsif Format = IQ3_XXS and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ3_XXS,
+                  Fixtures.Encode_IQ3_XXS (Values));
+            elsif Format = IQ1_S and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ1_S,
+                  Fixtures.Encode_IQ1_S (Values));
+            elsif Format = IQ1_M and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_IQ1_M,
+                  Fixtures.Encode_IQ1_M (Values));
             elsif Format = MXFP4 and then Total mod 32 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_MXFP4,

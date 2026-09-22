@@ -6,6 +6,7 @@ with Interfaces;
 
 with Quantizer;
 with Recipes;
+with IQ_Reference;
 
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
@@ -2516,6 +2517,119 @@ package body Tests.GGUF_Cases is
          Check (Model_Runner.GGUF.Type_Q6_K, Block, 0, -16.0);
       end;
    end Decoders_Produce_The_Documented_Values;
+
+   --  The five low-bit IQ formats decode a block byte-for-byte as llama.cpp's
+   --  own dequantizer does. The reference is one fixed block per format,
+   --  dequantized by ggml itself and carried in IQ_Reference; a spec error the
+   --  self-consistent sweep cannot see -- a grid read a lane out, a sign or a
+   --  scale nibble misplaced -- shows here as a row that disagrees with the C
+   --  implementation. The tolerance is a ten-thousandth of the value, the room
+   --  between this engine's binary64 arithmetic and ggml's binary32.
+   procedure Low_Bit_IQ_Formats_Match_The_Reference
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+
+      procedure One
+        (Name     : String;
+         Format   : Model_Runner.GGUF.Tensor_Type;
+         Block    : B.Byte_Array;
+         Expected : N.Real_Array)
+      is
+         Data : B.Byte_Array_Access;
+      begin
+         B.Allocate (Block'Length, Data);
+         Data.all := Block;
+         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Assert (Ok, "decode failed for " & Name);
+         for I in Decoded'Range loop
+            declare
+               Got  : constant N.Real := Decoded (I);
+               Want : constant N.Real := Expected (I);
+               Tol  : constant N.Real := 1.0E-4 * (1.0 + abs Want);
+            begin
+               Assert
+                 (abs (Got - Want) <= Tol,
+                  Name & " element" & N.Element_Count'Image (I)
+                  & " decoded as" & N.Real'Image (Got)
+                  & ", llama.cpp gives" & N.Real'Image (Want));
+            end;
+         end loop;
+         B.Free (Data);
+      end One;
+   begin
+      One ("IQ2_XS", Model_Runner.GGUF.Type_IQ2_XS,
+           IQ_Reference.Block_IQ2_XS, IQ_Reference.Expected_IQ2_XS);
+      One ("IQ2_S", Model_Runner.GGUF.Type_IQ2_S,
+           IQ_Reference.Block_IQ2_S, IQ_Reference.Expected_IQ2_S);
+      One ("IQ3_XXS", Model_Runner.GGUF.Type_IQ3_XXS,
+           IQ_Reference.Block_IQ3_XXS, IQ_Reference.Expected_IQ3_XXS);
+      One ("IQ1_S", Model_Runner.GGUF.Type_IQ1_S,
+           IQ_Reference.Block_IQ1_S, IQ_Reference.Expected_IQ1_S);
+      One ("IQ1_M", Model_Runner.GGUF.Type_IQ1_M,
+           IQ_Reference.Block_IQ1_M, IQ_Reference.Expected_IQ1_M);
+   end Low_Bit_IQ_Formats_Match_The_Reference;
+
+   --  The fixture encoder for each low-bit IQ format tracks what it was given:
+   --  encode a graded spread, read it back through the engine's decoder (the
+   --  one just shown to match llama.cpp), and the root-mean-square distance is
+   --  within what the format's bits allow. A bit placed wrong in the encoder
+   --  scrambles the block and blows this bound; the coarse formats simply get
+   --  a coarser bound. It also confirms the encoded block decodes at all.
+   procedure Low_Bit_IQ_Encoders_Track_The_Values
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Values  : N.Real_Array (0 .. 255);
+      Decoded : N.Real_Array (0 .. 255);
+      Ok      : Boolean;
+
+      procedure One
+        (Name    : String;
+         Format  : Model_Runner.GGUF.Tensor_Type;
+         Encoded : B.Byte_Array;
+         Bound   : N.Real)
+      is
+         Data : B.Byte_Array_Access;
+         Sum  : N.Real := 0.0;
+         Mean_Square : N.Real;
+      begin
+         B.Allocate (Encoded'Length, Data);
+         Data.all := Encoded;
+         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Assert (Ok, "encoded " & Name & " did not decode");
+         for I in Values'Range loop
+            Sum := Sum + (Decoded (I) - Values (I)) * (Decoded (I) - Values (I));
+         end loop;
+         Mean_Square := Sum / 256.0;
+         Assert (Mean_Square <= Bound * Bound,
+                 Name & " round-tripped with mean square"
+                 & N.Real'Image (Mean_Square)
+                 & ", beyond the format's bound" & N.Real'Image (Bound * Bound));
+         B.Free (Data);
+      end One;
+   begin
+      --  A signed ramp in minus-one to one, the range the bounds are set for.
+      for I in Values'Range loop
+         Values (I) :=
+           N.Real (Integer (I) mod 32) / 16.0 - 1.0;
+      end loop;
+
+      --  Bits buy precision: the two-and-a-fraction-bit formats sit near a
+      --  tenth of the span, the one-bit ones near a third.
+      One ("IQ2_XS", Model_Runner.GGUF.Type_IQ2_XS,
+           Fixtures.Encode_IQ2_XS (Values), 0.20);
+      One ("IQ2_S", Model_Runner.GGUF.Type_IQ2_S,
+           Fixtures.Encode_IQ2_S (Values), 0.20);
+      One ("IQ3_XXS", Model_Runner.GGUF.Type_IQ3_XXS,
+           Fixtures.Encode_IQ3_XXS (Values), 0.15);
+      One ("IQ1_S", Model_Runner.GGUF.Type_IQ1_S,
+           Fixtures.Encode_IQ1_S (Values), 0.45);
+      One ("IQ1_M", Model_Runner.GGUF.Type_IQ1_M,
+           Fixtures.Encode_IQ1_M (Values), 0.45);
+   end Low_Bit_IQ_Encoders_Track_The_Values;
 
    --  Metadata is shown with its type and value, and an array is described
    --  rather than dumped.
@@ -7297,6 +7411,12 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Decoders_Produce_The_Documented_Values'Access,
          "each decoder produces the values its layout documents");
+      Register_Routine
+        (T, Low_Bit_IQ_Formats_Match_The_Reference'Access,
+         "the low-bit IQ formats decode as llama.cpp's dequantizer does");
+      Register_Routine
+        (T, Low_Bit_IQ_Encoders_Track_The_Values'Access,
+         "each low-bit IQ fixture encoder tracks the values it was given");
       Register_Routine
         (T, Packing_In_Pieces_Is_Packing_Whole'Access,
          "a run of activations packed in pieces is the run packed whole, "

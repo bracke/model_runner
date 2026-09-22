@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Five more low-bit quant formats read: IQ2_XS, IQ2_S, IQ3_XXS, IQ1_S and
+  IQ1_M.** These are the sub-three-bit codebook formats that let a large model
+  fit a small machine -- IQ1_S and IQ1_M are about a bit and a half an element.
+  Each is decoded a block at a time like the formats already carried; the grid
+  and sign tables are transcribed verbatim from ggml. The decoder is checked
+  against llama.cpp's own dequantizer -- one fixed block per format,
+  dequantized by ggml itself and carried as a fixture, matched element for
+  element -- so a spec error the self-consistent sweep cannot see is caught
+  against the C implementation. They decode on the processor and the reference
+  backend; the device backend falls back to the host for them, as it does for
+  IQ3_S and IQ2_XXS.
+
 ### Fixed
 
 - **A picture survives a filter or a string method in a chat template.** A
