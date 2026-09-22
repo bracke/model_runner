@@ -33,8 +33,17 @@ Keep a Changelog and the project uses semantic versioning.
   the encoder's side is the overview alone, upscaled to fill it; a larger one is
   a grid of at most nine slices over a refined whole, the grid nearest the
   picture's aspect, every size a whole number of patches. Checked against a
-  faithful port of the reference geometry; the prompt framing that places the
-  slices is not wired yet.
+  faithful port of the reference geometry.
+
+- **A MiniCPM-V picture is shown to the model.** `run --mmproj RESAMPLER.gguf`
+  on a MiniCPM-V-2.6 model reads a picture: its rows stand behind the model's
+  unknown token, wrapped in `<image>` and `</image>` as the processor wraps
+  them, sixty-four of them a picture. A picture larger than the encoder's side
+  is shown as the overview -- the whole fit to the side, aspect kept -- which is
+  the common case; the grid of slices around it, which `Plan_Slices` already
+  computes, is not yet placed in the prompt. The projector's rows are the
+  model's width, checked at open as the other projectors are, and a model
+  without the `<image>` tokens is refused by name.
 
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the

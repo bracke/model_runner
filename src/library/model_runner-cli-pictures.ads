@@ -132,6 +132,10 @@ private
       Eyes   : Model_Runner.Vision.Encoder;
       Ready  : Boolean := False;
       Width  : Natural := 0;
+      --  Whether the projector is MiniCPM-V's resampler, which frames a
+      --  picture with <image> and </image> and shows a large one as an
+      --  overview fit to the encoder's side.
+      Resampler : Boolean := False;
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;

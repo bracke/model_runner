@@ -178,6 +178,8 @@ package body Model_Runner.CLI.Pictures is
            = Model_Runner.Tokenizer.No_Token
         and then Model_Runner.Tokenizer.Find (Words.all, "<|image_pad|>")
            = Model_Runner.Tokenizer.No_Token
+        and then Model_Runner.Tokenizer.Find (Words.all, "<image>")
+           = Model_Runner.Tokenizer.No_Token
       then
          Status := E.Make (E.Arch_Vision_Tokens_Missing);
          E.Add_Text (Status, "token", "<start_of_image>", E.Param_Identifier);
@@ -224,6 +226,37 @@ package body Model_Runner.CLI.Pictures is
          Item.Video_Text := Model_Runner.Text.To_Bounded ("<|video_pad|>");
          Item.Video_Open := Model_Runner.Text.To_Bounded ("<|vision_start|>");
          Item.Video_Close := Model_Runner.Text.To_Bounded ("<|vision_end|>");
+      elsif Model_Runner.Vision.Projector (Item.Eyes) = "resampler" then
+         --  MiniCPM-V's resampler. Its processor wraps a picture's rows in
+         --  <image> and </image>, one unknown token a row between them; a
+         --  picture larger than the encoder's side becomes an overview so
+         --  wrapped and a grid of slices each wrapped in <slice> and
+         --  </slice>. This build shows the overview alone, fit to the side.
+         Item.Resampler := True;
+         Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<image>");
+         Item.Soft := Model_Runner.Tokenizer.Unknown_Token (Words.all);
+         Item.Closer := Model_Runner.Tokenizer.Find (Words.all, "</image>");
+         Item.Keeps_Marker := True;
+         if Item.Marker = Model_Runner.Tokenizer.No_Token
+           or else Item.Soft = Model_Runner.Tokenizer.No_Token
+           or else Item.Closer = Model_Runner.Tokenizer.No_Token
+         then
+            Status := E.Make (E.Arch_Vision_Tokens_Missing);
+            E.Add_Text
+              (Status, "token",
+               (if Item.Marker = Model_Runner.Tokenizer.No_Token then "<image>"
+                elsif Item.Closer = Model_Runner.Tokenizer.No_Token
+                then "</image>" else "<unk>"),
+               E.Param_Identifier);
+            Model_Runner.Vision.Close (Item.Eyes);
+            return;
+         end if;
+         Item.Marker_Text := Model_Runner.Text.To_Bounded ("<image>");
+         Item.Before := Model_Runner.Text.Empty;
+         Item.After := Model_Runner.Text.Empty;
+         Item.Lead := Model_Runner.Text.Empty;
+         Item.Bridge := Model_Runner.Text.Empty;
+         Item.Gap := Model_Runner.Text.Empty;
       else
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<start_of_image>");
          Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<image_soft_token>");
@@ -606,43 +639,69 @@ package body Model_Runner.CLI.Pictures is
                   return;
                end if;
 
-               if Crops and then not Placed
-                 and then Picture.Width > 0 and then Picture.Height > 0
-               then
-                  Grid := Model_Runner.Images.Pan_And_Scan
-                    (Picture.Width, Picture.Height);
-                  Tiles := 1 + Grid.Across * Grid.Down;
-               end if;
+               if Item.Resampler then
+                  --  MiniCPM-V: show the overview, the whole fit to the
+                  --  encoder's side keeping its aspect, and nothing else.
+                  --  Tiles stays one, so the entry below is the overview's
+                  --  own rows behind its <image> marker.
+                  declare
+                     OW, OH : Positive;
+                     RW, RH, GC, GR, Cnt : Natural;
+                     Sl : Model_Runner.Vision.Slice_List;
+                     Fitted : Model_Runner.Images.Raster;
+                  begin
+                     Model_Runner.Vision.Plan_Slices
+                       (Item.Eyes, Picture.Width, Picture.Height,
+                        OW, OH, RW, RH, GC, GR, Sl, Cnt);
+                     Model_Runner.Images.Resample (Picture, OW, OH, Fitted);
+                     if Fitted.Pixels = null then
+                        Status := E.Make (E.Memory_Allocation_Failed);
+                        E.Add_Text
+                          (Status, "category", "pictures", E.Param_Identifier);
+                     else
+                        Encode_One (Fitted);
+                        Model_Runner.Images.Free (Fitted);
+                     end if;
+                  end;
+               else
+                  if Crops and then not Placed
+                    and then Picture.Width > 0 and then Picture.Height > 0
+                  then
+                     Grid := Model_Runner.Images.Pan_And_Scan
+                       (Picture.Width, Picture.Height);
+                     Tiles := 1 + Grid.Across * Grid.Down;
+                  end if;
 
-               Encode_One (Picture);
+                  Encode_One (Picture);
 
-               if E.Is_Ok (Status) and then Tiles > 1 then
-                  Rows_Loop :
-                  for Row in 0 .. Grid.Down - 1 loop
-                     for Column in 0 .. Grid.Across - 1 loop
-                        declare
-                           Left, Top : Natural;
-                           Wide, Tall : Positive;
-                           Piece : Model_Runner.Images.Raster;
-                        begin
-                           Model_Runner.Images.Crop_Bounds
-                             (Picture.Width, Picture.Height, Grid, Column, Row,
-                              Left, Top, Wide, Tall);
-                           Model_Runner.Images.Crop
-                             (Picture, Left, Top, Wide, Tall, Piece);
-                           if Piece.Pixels = null then
-                              Status := E.Make (E.Memory_Allocation_Failed);
-                              E.Add_Text
-                                (Status, "category", "pictures",
-                                 E.Param_Identifier);
-                           else
-                              Encode_One (Piece);
-                              Model_Runner.Images.Free (Piece);
-                           end if;
-                        end;
-                        exit Rows_Loop when E.Is_Error (Status);
-                     end loop;
-                  end loop Rows_Loop;
+                  if E.Is_Ok (Status) and then Tiles > 1 then
+                     Rows_Loop :
+                     for Row in 0 .. Grid.Down - 1 loop
+                        for Column in 0 .. Grid.Across - 1 loop
+                           declare
+                              Left, Top : Natural;
+                              Wide, Tall : Positive;
+                              Piece : Model_Runner.Images.Raster;
+                           begin
+                              Model_Runner.Images.Crop_Bounds
+                                (Picture.Width, Picture.Height, Grid,
+                                 Column, Row, Left, Top, Wide, Tall);
+                              Model_Runner.Images.Crop
+                                (Picture, Left, Top, Wide, Tall, Piece);
+                              if Piece.Pixels = null then
+                                 Status := E.Make (E.Memory_Allocation_Failed);
+                                 E.Add_Text
+                                   (Status, "category", "pictures",
+                                    E.Param_Identifier);
+                              else
+                                 Encode_One (Piece);
+                                 Model_Runner.Images.Free (Piece);
+                              end if;
+                           end;
+                           exit Rows_Loop when E.Is_Error (Status);
+                        end loop;
+                     end loop Rows_Loop;
+                  end if;
                end if;
 
                Model_Runner.Images.Free (Picture);

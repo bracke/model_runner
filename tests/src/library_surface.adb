@@ -35,7 +35,6 @@ package body Library_Surface is
       new String'("Is_Normal"),
       new String'("Seed_Used"),
       new String'("String_Count"),
-      new String'("Unknown_Token"),
 
       --  Building a diagnostic.
       new String'("Add_Boolean"),
@@ -76,12 +75,6 @@ package body Library_Surface is
       --  a program laying out room for a conversation's pictures before
       --  encoding any asks first.
       new String'("Fixed_Rows"),
-
-      --  A MiniCPM-V picture's overview and slice grid. The geometry is
-      --  the library's; the command will call it once the prompt framing
-      --  that places the slices is wired, and the suite already checks it
-      --  against the reference plans.
-      new String'("Plan_Slices"),
 
       --  What a session's position turns by, in its three parts. The
       --  engine marks and reads them itself; the suite reads them back
