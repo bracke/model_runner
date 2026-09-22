@@ -44,8 +44,17 @@ package body Model_Runner.Vision is
    Gemma_3 : constant String := "gemma3";
    Qwen_3  : constant String := "qwen3vl_merger";
 
+   --  Qwen2-VL's merger is Qwen3-VL's without the deepstack layers, which
+   --  Qwen3-VL adds and this refuses either way: the same window merge, the
+   --  same two-word position of a patch, the same full attention over the
+   --  patches, the same two-projection head, the same block of a
+   --  normalization, a biased attention and a gated feed-forward. So it
+   --  runs the Qwen path, told apart only by the name the file carries.
+   Qwen_2  : constant String := "qwen2vl_merger";
+
    function Is_Qwen (Item : Encoder) return Boolean
-   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3);
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3
+       or else Item.Kind (1 .. Item.Kind_Last) = Qwen_2);
 
    ------------------
    -- Bind helpers --
@@ -412,13 +421,16 @@ package body Model_Runner.Vision is
          Kind : constant String :=
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
-         if Kind /= Gemma_3 and then Kind /= Qwen_3 then
+         if Kind /= Gemma_3 and then Kind /= Qwen_3
+           and then Kind /= Qwen_2
+         then
             Status := E.Make (E.Arch_Unsupported_Projector);
             E.Add_Text
               (Status, "format", (if Kind = "" then "none" else Kind),
                E.Param_Identifier);
             E.Add_Text
-              (Status, "supported", Gemma_3 & " " & Qwen_3, E.Param_Identifier);
+              (Status, "supported",
+               Gemma_3 & " " & Qwen_2 & " " & Qwen_3, E.Param_Identifier);
             Fail (Status);
             return;
          end if;
@@ -541,7 +553,8 @@ package body Model_Runner.Vision is
                E.Add_Text
                  (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
                E.Add_Text
-                 (Status, "supported", Gemma_3 & " " & Qwen_3, E.Param_Identifier);
+                 (Status, "supported",
+               Gemma_3 & " " & Qwen_2 & " " & Qwen_3, E.Param_Identifier);
                Fail (Status);
                return;
             end if;

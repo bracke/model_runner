@@ -1537,7 +1537,9 @@ package body Tests.Vision_Cases is
       return W;
    end Fresh_Qwen_Weights;
 
-   procedure Write_Qwen_Projector (Path : String; W : Qwen_Weights) is
+   procedure Write_Qwen_Projector
+     (Path : String; W : Qwen_Weights;
+      Kind : String := "qwen3vl_merger") is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
       use Ada.Streams.Stream_IO;
@@ -1552,7 +1554,7 @@ package body Tests.Vision_Cases is
    begin
       Fixtures.Reset (Builder);
       Fixtures.Add_String (Builder, "general.architecture", "clip");
-      Fixtures.Add_String (Builder, "clip.projector_type", "qwen3vl_merger");
+      Fixtures.Add_String (Builder, "clip.projector_type", Kind);
       Fixtures.Add_U32 (Builder, "clip.vision.image_size", 768);
       Fixtures.Add_U32 (Builder, "clip.vision.patch_size", Patch_Q);
       Fixtures.Add_U32 (Builder, "clip.vision.embedding_length", Width_Q);
@@ -2039,6 +2041,33 @@ package body Tests.Vision_Cases is
          T.Free (Rows);
          Images.Free (Small);
       end;
+      Vision.Close (Eyes);
+
+      --  Qwen2-VL's merger is the same shape read under a name of its own,
+      --  its deepstack the one thing Qwen3-VL adds and this leaves out, so
+      --  the same weights written under it encode a picture to the same
+      --  rows: the reference the sweep already computed.
+      Write_Qwen_Projector
+        ("obj/vision-qwen.gguf", W.all, Kind => "qwen2vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
+      Assert (E.Is_Ok (Status), "the Qwen2-VL projector did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Projector (Eyes) = "qwen2vl_merger",
+              "the Qwen2-VL projector's kind was misread");
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the Qwen2-VL projector did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Rows /= null and then Rows.all'Length = Windows_Q * Text_Q,
+              "the Qwen2-VL encoder made the wrong number of rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "Qwen2-VL row element" & N.Element_Count'Image (J)
+                 & " is " & N.Real'Image (Rows (J)) & " where the reference "
+                 & "has " & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
       Vision.Close (Eyes);
 
       --  The cubic filter: a two-pixel row 0 and 200 stretched to four

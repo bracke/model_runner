@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
+  without the deepstack layers Qwen3-VL adds and this refuses either way: the
+  same window merge, the same two-word position of a patch, the same full
+  attention over the patches, the same two-projection head, and the same block
+  of a normalization, a biased attention and a gated feed-forward. So a
+  Qwen2-VL projector file runs the Qwen encoder already here, told apart only by
+  the name it carries, and is crossed against the same independent reference in
+  the suite -- the same weights written under the Qwen2-VL name encode a picture
+  to the same rows.
+
 - **IQ2_XXS is decoded** -- the two-bit importance-matrix grid quant, about
   2.06 bits an element. A super-block of 256 carries a half-precision scale and
   eight sub-blocks of 32, each two 32-bit words: the first four eight-bit

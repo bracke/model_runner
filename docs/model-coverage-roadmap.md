@@ -268,7 +268,7 @@ The largest infra investment; also the largest device win for models already
 
 ## Phase 6 — Vision projectors
 
-16. **Beyond gemma3 / qwen3vl_merger** (`vision.adb:416`, `:540`). Per projector:
+16. ⏳ **Partial. Done: gemma3, qwen3vl_merger, qwen2vl_merger. Beyond:** (`vision.adb:416`, `:540`). Per projector:
     pixtral, llama4/mtmd, MiniCPM-V, InternVL, SmolVLM, LLaVA, Qwen2-VL. Each is
     a distinct patch-embed + merge shape. **Large in aggregate; Medium each.**
 17. ✅ **`[device]` sink-room depth cap** — done. The device cache reserved a
