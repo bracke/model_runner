@@ -132,12 +132,15 @@ Per format: `gguf.ads` enum entry → CPU decoder + interleave → device shader
 pack (`backend-device.adb:706`) → fixture. Keep CPU and device in lockstep.
 Order by what actually gets downloaded.
 
-10. ⏳ **Partial (IQ3_S done). IQ4-family gaps, then IQ3_S/XXS, IQ2_*, IQ1_*, TQ1_0/TQ2_0**
-    (`gguf.ads:122`, refusal via `Type_Unknown`). Each format is a self-
-    contained decoder+shader+fixture. These are what fits 70B+/big-MoE into
-    consumer memory, so prioritize the specific quant of a model you want.
-    IQ3_S landed (grid decoder + encoder + reference + fixture; host-only, the
-    device falls back). **Large in aggregate; Medium per format.**
+10. ⏳ **Partial. Done: IQ4_NL, IQ4_XS, IQ3_S, IQ2_XXS. Remaining: IQ3_XXS,
+    IQ2_XS/S, IQ1_S/M, TQ1_0/TQ2_0** (`gguf.ads`, refusal via `Type_Unknown`).
+    Each format is a self-contained decoder + fixture encoder + independent
+    reference decoder (host-only; the device falls back). These are what fits
+    70B+/big-MoE into consumer memory, so prioritize the specific quant of a
+    model you want. The grid quants' tables are ggml's, transcribed from the
+    source; the three readings of the layout are crossed against each other.
+    IQ2_XXS landed (about two bits an element, a 256-entry eight-value grid and
+    the shared sign table). **Large in aggregate; Medium per format.**
 
 **Exit:** sub-4-bit downloads stop bouncing at load. Do formats on demand rather
 than all at once.

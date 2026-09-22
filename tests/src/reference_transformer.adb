@@ -1007,6 +1007,164 @@ package body Reference_Transformer is
       16#0F0D0703#, 16#0F0F0101#
 ];
 
+   --  IQ2_XXS's grid and sign table, carried here independently of the
+   --  engine's copy: 256 eight-value entries and the 128 sign patterns the
+   --  IQ2 formats share. The values are ggml's; the decode is arrived at
+   --  from the layout separately.
+   IQ2XXS_Grid_Ref : constant array (0 .. 255) of Interfaces.Unsigned_64 :=
+     [
+      16#0808080808080808#, 16#080808080808082B#, 16#0808080808081919#, 16#0808080808082B08#,
+      16#0808080808082B2B#, 16#0808080808190819#, 16#0808080808191908#, 16#08080808082B0808#,
+      16#08080808082B082B#, 16#08080808082B2B08#, 16#08080808082B2B2B#, 16#0808080819080819#,
+      16#0808080819081908#, 16#0808080819190808#, 16#0808080819192B08#, 16#08080808192B0819#,
+      16#08080808192B1908#, 16#080808082B080808#, 16#080808082B08082B#, 16#080808082B082B2B#,
+      16#080808082B2B082B#, 16#0808081908080819#, 16#0808081908081908#, 16#0808081908190808#,
+      16#0808081908191919#, 16#0808081919080808#, 16#080808192B081908#, 16#080808192B192B08#,
+      16#0808082B08080808#, 16#0808082B0808082B#, 16#0808082B082B082B#, 16#0808082B2B08082B#,
+      16#0808190808080819#, 16#0808190808081908#, 16#0808190808190808#, 16#08081908082B0819#,
+      16#08081908082B1908#, 16#0808190819080808#, 16#080819081908082B#, 16#0808190819082B08#,
+      16#08081908192B0808#, 16#080819082B080819#, 16#080819082B081908#, 16#080819082B190808#,
+      16#080819082B2B1908#, 16#0808191908080808#, 16#080819190808082B#, 16#0808191908082B08#,
+      16#08081919082B0808#, 16#080819191908192B#, 16#08081919192B2B19#, 16#080819192B080808#,
+      16#080819192B190819#, 16#0808192B08082B19#, 16#0808192B08190808#, 16#0808192B19080808#,
+      16#0808192B2B081908#, 16#0808192B2B2B1908#, 16#08082B0808080808#, 16#08082B0808081919#,
+      16#08082B0808082B08#, 16#08082B0808191908#, 16#08082B08082B2B08#, 16#08082B0819080819#,
+      16#08082B0819081908#, 16#08082B0819190808#, 16#08082B081919082B#, 16#08082B082B082B08#,
+      16#08082B1908081908#, 16#08082B1919080808#, 16#08082B2B0808082B#, 16#08082B2B08191908#,
+      16#0819080808080819#, 16#0819080808081908#, 16#0819080808190808#, 16#08190808082B0819#,
+      16#0819080819080808#, 16#08190808192B0808#, 16#081908082B081908#, 16#081908082B190808#,
+      16#081908082B191919#, 16#0819081908080808#, 16#0819081908082B08#, 16#08190819082B0808#,
+      16#0819081919190808#, 16#0819081919192B2B#, 16#081908192B080808#, 16#0819082B082B1908#,
+      16#0819082B19081919#, 16#0819190808080808#, 16#0819190808082B08#, 16#08191908082B0808#,
+      16#08191908082B1919#, 16#0819190819082B19#, 16#081919082B080808#, 16#0819191908192B08#,
+      16#08191919192B082B#, 16#0819192B08080808#, 16#0819192B0819192B#, 16#08192B0808080819#,
+      16#08192B0808081908#, 16#08192B0808190808#, 16#08192B0819080808#, 16#08192B082B080819#,
+      16#08192B1908080808#, 16#08192B1908081919#, 16#08192B192B2B0808#, 16#08192B2B19190819#,
+      16#082B080808080808#, 16#082B08080808082B#, 16#082B080808082B2B#, 16#082B080819081908#,
+      16#082B0808192B0819#, 16#082B08082B080808#, 16#082B08082B08082B#, 16#082B0819082B2B19#,
+      16#082B081919082B08#, 16#082B082B08080808#, 16#082B082B0808082B#, 16#082B190808080819#,
+      16#082B190808081908#, 16#082B190808190808#, 16#082B190819080808#, 16#082B19081919192B#,
+      16#082B191908080808#, 16#082B191919080819#, 16#082B1919192B1908#, 16#082B192B2B190808#,
+      16#082B2B0808082B08#, 16#082B2B08082B0808#, 16#082B2B082B191908#, 16#082B2B2B19081908#,
+      16#1908080808080819#, 16#1908080808081908#, 16#1908080808190808#, 16#1908080808192B08#,
+      16#19080808082B0819#, 16#19080808082B1908#, 16#1908080819080808#, 16#1908080819082B08#,
+      16#190808081919192B#, 16#19080808192B0808#, 16#190808082B080819#, 16#190808082B081908#,
+      16#190808082B190808#, 16#1908081908080808#, 16#19080819082B0808#, 16#19080819192B0819#,
+      16#190808192B080808#, 16#190808192B081919#, 16#1908082B08080819#, 16#1908082B08190808#,
+      16#1908082B19082B08#, 16#1908082B1919192B#, 16#1908082B192B2B08#, 16#1908190808080808#,
+      16#1908190808082B08#, 16#19081908082B0808#, 16#190819082B080808#, 16#190819082B192B19#,
+      16#190819190819082B#, 16#19081919082B1908#, 16#1908192B08080808#, 16#19082B0808080819#,
+      16#19082B0808081908#, 16#19082B0808190808#, 16#19082B0819080808#, 16#19082B0819081919#,
+      16#19082B1908080808#, 16#19082B1919192B08#, 16#19082B19192B0819#, 16#19082B192B08082B#,
+      16#19082B2B19081919#, 16#19082B2B2B190808#, 16#1919080808080808#, 16#1919080808082B08#,
+      16#1919080808190819#, 16#1919080808192B19#, 16#19190808082B0808#, 16#191908082B080808#,
+      16#191908082B082B08#, 16#1919081908081908#, 16#191908191908082B#, 16#191908192B2B1908#,
+      16#1919082B2B190819#, 16#191919082B190808#, 16#191919082B19082B#, 16#1919191908082B2B#,
+      16#1919192B08080819#, 16#1919192B19191908#, 16#19192B0808080808#, 16#19192B0808190819#,
+      16#19192B0808192B19#, 16#19192B08192B1908#, 16#19192B1919080808#, 16#19192B2B08082B08#,
+      16#192B080808081908#, 16#192B080808190808#, 16#192B080819080808#, 16#192B0808192B2B08#,
+      16#192B081908080808#, 16#192B081919191919#, 16#192B082B08192B08#, 16#192B082B192B0808#,
+      16#192B190808080808#, 16#192B190808081919#, 16#192B191908190808#, 16#192B19190819082B#,
+      16#192B19192B081908#, 16#192B2B081908082B#, 16#2B08080808080808#, 16#2B0808080808082B#,
+      16#2B08080808082B2B#, 16#2B08080819080819#, 16#2B0808082B08082B#, 16#2B08081908081908#,
+      16#2B08081908192B08#, 16#2B08081919080808#, 16#2B08082B08190819#, 16#2B08190808080819#,
+      16#2B08190808081908#, 16#2B08190808190808#, 16#2B08190808191919#, 16#2B08190819080808#,
+      16#2B081908192B0808#, 16#2B08191908080808#, 16#2B0819191908192B#, 16#2B0819192B191908#,
+      16#2B08192B08082B19#, 16#2B08192B19080808#, 16#2B08192B192B0808#, 16#2B082B080808082B#,
+      16#2B082B1908081908#, 16#2B082B2B08190819#, 16#2B19080808081908#, 16#2B19080808190808#,
+      16#2B190808082B1908#, 16#2B19080819080808#, 16#2B1908082B2B0819#, 16#2B1908190819192B#,
+      16#2B1908192B080808#, 16#2B19082B19081919#, 16#2B19190808080808#, 16#2B191908082B082B#,
+      16#2B19190819081908#, 16#2B19191919190819#, 16#2B192B082B080819#, 16#2B192B19082B0808#,
+      16#2B2B08080808082B#, 16#2B2B080819190808#, 16#2B2B08082B081919#, 16#2B2B081908082B19#,
+      16#2B2B082B08080808#, 16#2B2B190808192B08#, 16#2B2B2B0819190808#, 16#2B2B2B1908081908#];
+
+   KSigns_IQ2XS_Ref : constant array (0 .. 127) of Interfaces.Unsigned_8 :=
+     [
+      0, 129, 130, 3, 132, 5, 6, 135, 136, 9, 10, 139, 12, 141, 142, 15,
+      144, 17, 18, 147, 20, 149, 150, 23, 24, 153, 154, 27, 156, 29, 30, 159,
+      160, 33, 34, 163, 36, 165, 166, 39, 40, 169, 170, 43, 172, 45, 46, 175,
+      48, 177, 178, 51, 180, 53, 54, 183, 184, 57, 58, 187, 60, 189, 190, 63,
+      192, 65, 66, 195, 68, 197, 198, 71, 72, 201, 202, 75, 204, 77, 78, 207,
+      80, 209, 210, 83, 212, 85, 86, 215, 216, 89, 90, 219, 92, 221, 222, 95,
+      96, 225, 226, 99, 228, 101, 102, 231, 232, 105, 106, 235, 108, 237, 238, 111,
+      240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255];
+
+   --  One element of an IQ2_XXS super-block: two hundred and fifty-six in
+   --  eight sub-blocks of thirty-two, a half-precision block scale, and a
+   --  sub-block of two thirty-two-bit words -- the first four grid indices,
+   --  the second four seven-bit sign indices and a four-bit scale in its top.
+   --  A group of eight reads a grid entry's eight magnitudes, each signed by
+   --  a bit of the pattern the index names, scaled by half the odd scale a
+   --  quarter over.
+   function Decode_IQ2_XXS
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+      Sub    : constant Natural := Within / 32;
+      In_Sub : constant Natural := Within mod 32;
+      L      : constant Natural := In_Sub / 8;
+      J      : constant Natural := In_Sub mod 8;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 66;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      function Half_At (Offset : Interfaces.Unsigned_64) return Long_Float is
+         Raw      : constant Natural :=
+           Byte_At (Offset) + 256 * Byte_At (Offset + 1);
+         Sign     : constant Long_Float :=
+           (if Raw >= 16#8000# then -1.0 else 1.0);
+         Exponent : constant Integer := (Raw / 1024) mod 32;
+         Mantissa : constant Integer := Raw mod 1024;
+      begin
+         if Exponent = 0 then
+            return Sign * Long_Float (Mantissa) * (2.0 ** (-24));
+         elsif Exponent = 31 then
+            return 0.0;
+         else
+            return Sign * (1.0 + Long_Float (Mantissa) / 1024.0)
+              * (2.0 ** (Exponent - 15));
+         end if;
+      end Half_At;
+
+      D : constant Long_Float := Half_At (At_Block);
+
+      Base_Sub : constant Interfaces.Unsigned_64 :=
+        At_Block + 2 + Interfaces.Unsigned_64 (Sub) * 8;
+
+      Aux1 : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Byte_At (Base_Sub + 4))
+        + 256 * Interfaces.Unsigned_64 (Byte_At (Base_Sub + 5))
+        + 65536 * Interfaces.Unsigned_64 (Byte_At (Base_Sub + 6))
+        + 16777216 * Interfaces.Unsigned_64 (Byte_At (Base_Sub + 7));
+
+      Scale4 : constant Natural := Natural (Aux1 / (2 ** 28));
+      DB     : constant Long_Float :=
+        D * (0.5 + Long_Float (Scale4)) * 0.25;
+
+      Grid_Index : constant Natural :=
+        Byte_At (Base_Sub + Interfaces.Unsigned_64 (L));
+      Grid       : constant Interfaces.Unsigned_64 :=
+        IQ2XXS_Grid_Ref (Grid_Index);
+      Magnitude  : constant Natural :=
+        Natural ((Grid / (2 ** (8 * J))) mod 256);
+
+      Sign_Index : constant Natural :=
+        Natural ((Aux1 / (2 ** (7 * L))) mod 128);
+      Signs      : constant Natural :=
+        Natural (KSigns_IQ2XS_Ref (Sign_Index));
+      Sign       : constant Long_Float :=
+        (if (Signs / (2 ** J)) mod 2 = 1 then -1.0 else 1.0);
+   begin
+      return DB * Long_Float (Magnitude) * Sign;
+   end Decode_IQ2_XXS;
+
    --  One element of an IQ3_S super-block: two hundred and fifty-six elements
    --  in eight sub-blocks of thirty-two, a half-precision block scale, and a
    --  four-bit sub-block scale that multiplies it by an odd number one to
@@ -1196,6 +1354,7 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_IQ4_NL
                         | Model_Runner.GGUF.Type_IQ4_XS
                         | Model_Runner.GGUF.Type_IQ3_S
+                        | Model_Runner.GGUF.Type_IQ2_XXS
                         | Model_Runner.GGUF.Type_MXFP4
          then
             return null;
@@ -1362,6 +1521,16 @@ package body Reference_Transformer is
                          (Image,
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 110
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_IQ2_XXS
+                  then
+                     Result (Row, Column) :=
+                       Decode_IQ2_XXS
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 66
                             * Interfaces.Unsigned_64 (Columns / 256),
                           Column);
                   elsif Containers.Tensor_Format (Source, Index)

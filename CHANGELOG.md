@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **IQ2_XXS is decoded** -- the two-bit importance-matrix grid quant, about
+  2.06 bits an element. A super-block of 256 carries a half-precision scale and
+  eight sub-blocks of 32, each two 32-bit words: the first four eight-bit
+  indices into a grid of 256 eight-value entries, the second four seven-bit
+  indices into a shared sign table and, in its top four bits, a scale. Each
+  group of eight reads a grid entry's eight magnitudes, signs them by the
+  pattern its index names, and scales them by the block scale times an odd step.
+  Decoded on the processor and the reference backend, one block at a time; the
+  device shader has no branch for it, so a model carrying it falls back to the
+  host there. The grid and sign tables are ggml's, transcribed from the source;
+  the engine decode, the independent reference decode and the fixture encode are
+  three separate readings of the layout, and the sweep crosses them. What fits
+  70B-and-larger and big-mixture models into consumer memory.
+
 - **DeepSeek-V2/V3 (`deepseek2`) is read** -- multi-head latent attention with
   a mixture of experts. A position's query is projected through a low-rank
   latent of `attention.q_lora_rank`, or straight where the file states none as

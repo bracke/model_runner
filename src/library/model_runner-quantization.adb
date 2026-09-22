@@ -473,6 +473,7 @@ package body Model_Runner.Quantization is
                 | G.Type_Q2_K | G.Type_Q3_K
                 | G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K
                 | G.Type_IQ4_NL | G.Type_IQ4_XS | G.Type_IQ3_S
+                | G.Type_IQ2_XXS
                 | G.Type_MXFP4);
 
    -------------------

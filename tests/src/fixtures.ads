@@ -326,6 +326,17 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_IQ3_S (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as IQ2_XXS: 256 elements a super-block, a half-precision
+   --  block scale, and eight sub-blocks of thirty-two, each two words -- the
+   --  first four grid indices, the second four seven-bit sign indices and a
+   --  four-bit scale. Each group of eight is matched to the nearest of the
+   --  format's 256 grid entries, whose eight bytes are the group's
+   --  magnitudes, and to the sign pattern nearest its eight signs.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode values as Q5_K: as Q4_K with a fifth bit for every element,
    --  kept in thirty-two bytes of their own, in 176 bytes.
    --

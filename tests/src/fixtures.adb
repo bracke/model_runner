@@ -1808,6 +1808,85 @@ package body Fixtures is
       return Result;
    end Encode_Q8_0;
 
+   --  IQ2_XXS's grid and the sign table the IQ2 formats share, from ggml.
+   IQ2XXS_Grid : constant array (0 .. 255) of Interfaces.Unsigned_64 :=
+     [
+      16#0808080808080808#, 16#080808080808082B#, 16#0808080808081919#, 16#0808080808082B08#,
+      16#0808080808082B2B#, 16#0808080808190819#, 16#0808080808191908#, 16#08080808082B0808#,
+      16#08080808082B082B#, 16#08080808082B2B08#, 16#08080808082B2B2B#, 16#0808080819080819#,
+      16#0808080819081908#, 16#0808080819190808#, 16#0808080819192B08#, 16#08080808192B0819#,
+      16#08080808192B1908#, 16#080808082B080808#, 16#080808082B08082B#, 16#080808082B082B2B#,
+      16#080808082B2B082B#, 16#0808081908080819#, 16#0808081908081908#, 16#0808081908190808#,
+      16#0808081908191919#, 16#0808081919080808#, 16#080808192B081908#, 16#080808192B192B08#,
+      16#0808082B08080808#, 16#0808082B0808082B#, 16#0808082B082B082B#, 16#0808082B2B08082B#,
+      16#0808190808080819#, 16#0808190808081908#, 16#0808190808190808#, 16#08081908082B0819#,
+      16#08081908082B1908#, 16#0808190819080808#, 16#080819081908082B#, 16#0808190819082B08#,
+      16#08081908192B0808#, 16#080819082B080819#, 16#080819082B081908#, 16#080819082B190808#,
+      16#080819082B2B1908#, 16#0808191908080808#, 16#080819190808082B#, 16#0808191908082B08#,
+      16#08081919082B0808#, 16#080819191908192B#, 16#08081919192B2B19#, 16#080819192B080808#,
+      16#080819192B190819#, 16#0808192B08082B19#, 16#0808192B08190808#, 16#0808192B19080808#,
+      16#0808192B2B081908#, 16#0808192B2B2B1908#, 16#08082B0808080808#, 16#08082B0808081919#,
+      16#08082B0808082B08#, 16#08082B0808191908#, 16#08082B08082B2B08#, 16#08082B0819080819#,
+      16#08082B0819081908#, 16#08082B0819190808#, 16#08082B081919082B#, 16#08082B082B082B08#,
+      16#08082B1908081908#, 16#08082B1919080808#, 16#08082B2B0808082B#, 16#08082B2B08191908#,
+      16#0819080808080819#, 16#0819080808081908#, 16#0819080808190808#, 16#08190808082B0819#,
+      16#0819080819080808#, 16#08190808192B0808#, 16#081908082B081908#, 16#081908082B190808#,
+      16#081908082B191919#, 16#0819081908080808#, 16#0819081908082B08#, 16#08190819082B0808#,
+      16#0819081919190808#, 16#0819081919192B2B#, 16#081908192B080808#, 16#0819082B082B1908#,
+      16#0819082B19081919#, 16#0819190808080808#, 16#0819190808082B08#, 16#08191908082B0808#,
+      16#08191908082B1919#, 16#0819190819082B19#, 16#081919082B080808#, 16#0819191908192B08#,
+      16#08191919192B082B#, 16#0819192B08080808#, 16#0819192B0819192B#, 16#08192B0808080819#,
+      16#08192B0808081908#, 16#08192B0808190808#, 16#08192B0819080808#, 16#08192B082B080819#,
+      16#08192B1908080808#, 16#08192B1908081919#, 16#08192B192B2B0808#, 16#08192B2B19190819#,
+      16#082B080808080808#, 16#082B08080808082B#, 16#082B080808082B2B#, 16#082B080819081908#,
+      16#082B0808192B0819#, 16#082B08082B080808#, 16#082B08082B08082B#, 16#082B0819082B2B19#,
+      16#082B081919082B08#, 16#082B082B08080808#, 16#082B082B0808082B#, 16#082B190808080819#,
+      16#082B190808081908#, 16#082B190808190808#, 16#082B190819080808#, 16#082B19081919192B#,
+      16#082B191908080808#, 16#082B191919080819#, 16#082B1919192B1908#, 16#082B192B2B190808#,
+      16#082B2B0808082B08#, 16#082B2B08082B0808#, 16#082B2B082B191908#, 16#082B2B2B19081908#,
+      16#1908080808080819#, 16#1908080808081908#, 16#1908080808190808#, 16#1908080808192B08#,
+      16#19080808082B0819#, 16#19080808082B1908#, 16#1908080819080808#, 16#1908080819082B08#,
+      16#190808081919192B#, 16#19080808192B0808#, 16#190808082B080819#, 16#190808082B081908#,
+      16#190808082B190808#, 16#1908081908080808#, 16#19080819082B0808#, 16#19080819192B0819#,
+      16#190808192B080808#, 16#190808192B081919#, 16#1908082B08080819#, 16#1908082B08190808#,
+      16#1908082B19082B08#, 16#1908082B1919192B#, 16#1908082B192B2B08#, 16#1908190808080808#,
+      16#1908190808082B08#, 16#19081908082B0808#, 16#190819082B080808#, 16#190819082B192B19#,
+      16#190819190819082B#, 16#19081919082B1908#, 16#1908192B08080808#, 16#19082B0808080819#,
+      16#19082B0808081908#, 16#19082B0808190808#, 16#19082B0819080808#, 16#19082B0819081919#,
+      16#19082B1908080808#, 16#19082B1919192B08#, 16#19082B19192B0819#, 16#19082B192B08082B#,
+      16#19082B2B19081919#, 16#19082B2B2B190808#, 16#1919080808080808#, 16#1919080808082B08#,
+      16#1919080808190819#, 16#1919080808192B19#, 16#19190808082B0808#, 16#191908082B080808#,
+      16#191908082B082B08#, 16#1919081908081908#, 16#191908191908082B#, 16#191908192B2B1908#,
+      16#1919082B2B190819#, 16#191919082B190808#, 16#191919082B19082B#, 16#1919191908082B2B#,
+      16#1919192B08080819#, 16#1919192B19191908#, 16#19192B0808080808#, 16#19192B0808190819#,
+      16#19192B0808192B19#, 16#19192B08192B1908#, 16#19192B1919080808#, 16#19192B2B08082B08#,
+      16#192B080808081908#, 16#192B080808190808#, 16#192B080819080808#, 16#192B0808192B2B08#,
+      16#192B081908080808#, 16#192B081919191919#, 16#192B082B08192B08#, 16#192B082B192B0808#,
+      16#192B190808080808#, 16#192B190808081919#, 16#192B191908190808#, 16#192B19190819082B#,
+      16#192B19192B081908#, 16#192B2B081908082B#, 16#2B08080808080808#, 16#2B0808080808082B#,
+      16#2B08080808082B2B#, 16#2B08080819080819#, 16#2B0808082B08082B#, 16#2B08081908081908#,
+      16#2B08081908192B08#, 16#2B08081919080808#, 16#2B08082B08190819#, 16#2B08190808080819#,
+      16#2B08190808081908#, 16#2B08190808190808#, 16#2B08190808191919#, 16#2B08190819080808#,
+      16#2B081908192B0808#, 16#2B08191908080808#, 16#2B0819191908192B#, 16#2B0819192B191908#,
+      16#2B08192B08082B19#, 16#2B08192B19080808#, 16#2B08192B192B0808#, 16#2B082B080808082B#,
+      16#2B082B1908081908#, 16#2B082B2B08190819#, 16#2B19080808081908#, 16#2B19080808190808#,
+      16#2B190808082B1908#, 16#2B19080819080808#, 16#2B1908082B2B0819#, 16#2B1908190819192B#,
+      16#2B1908192B080808#, 16#2B19082B19081919#, 16#2B19190808080808#, 16#2B191908082B082B#,
+      16#2B19190819081908#, 16#2B19191919190819#, 16#2B192B082B080819#, 16#2B192B19082B0808#,
+      16#2B2B08080808082B#, 16#2B2B080819190808#, 16#2B2B08082B081919#, 16#2B2B081908082B19#,
+      16#2B2B082B08080808#, 16#2B2B190808192B08#, 16#2B2B2B0819190808#, 16#2B2B2B1908081908#];
+
+   KSigns_IQ2XS : constant array (0 .. 127) of Interfaces.Unsigned_8 :=
+     [
+      0, 129, 130, 3, 132, 5, 6, 135, 136, 9, 10, 139, 12, 141, 142, 15,
+      144, 17, 18, 147, 20, 149, 150, 23, 24, 153, 154, 27, 156, 29, 30, 159,
+      160, 33, 34, 163, 36, 165, 166, 39, 40, 169, 170, 43, 172, 45, 46, 175,
+      48, 177, 178, 51, 180, 53, 54, 183, 184, 57, 58, 187, 60, 189, 190, 63,
+      192, 65, 66, 195, 68, 197, 198, 71, 72, 201, 202, 75, 204, 77, 78, 207,
+      80, 209, 210, 83, 212, 85, 86, 215, 216, 89, 90, 219, 92, 221, 222, 95,
+      96, 225, 226, 99, 228, 101, 102, 231, 232, 105, 106, 235, 108, 237, 238, 111,
+      240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255];
+
    function Encode_IQ3_S (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_32;
@@ -1951,5 +2030,156 @@ package body Fixtures is
 
       return Result;
    end Encode_IQ3_S;
+
+   function Encode_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+      use type Interfaces.Unsigned_32;
+
+      function Grid_Byte (Index : Natural; J : Natural) return N.Real
+      is (N.Real
+            (Integer
+               (Interfaces.Shift_Right (IQ2XXS_Grid (Index), 8 * J)
+                and 16#FF#)));
+
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 66 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count :=
+              Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 66;
+
+            --  The scale each sub-block wants -- its largest magnitude over
+            --  the largest grid byte, forty-three -- and the largest of
+            --  those, which the block scale reaches at sub-block step
+            --  fifteen, where the multiplier (0.5 + 15) * 0.25 is 3.875.
+            Wants   : array (0 .. 7) of N.Real := [others => 0.0];
+            Largest : N.Real := 0.0;
+            D       : N.Real;
+         begin
+            for Sub in 0 .. 7 loop
+               declare
+                  Top : N.Real := 0.0;
+               begin
+                  for K in 0 .. 31 loop
+                     Top := N.Real'Max
+                       (Top,
+                        abs Values (First + N.Element_Count (Sub * 32 + K)));
+                  end loop;
+                  Wants (Sub) := Top / 43.0;
+                  Largest := N.Real'Max (Largest, Wants (Sub));
+               end;
+            end loop;
+
+            D := (if Largest = 0.0 then 0.0 else Largest / 3.875);
+            Result (At_Byte .. At_Byte + 1) :=
+              B.Put_U16 (Interfaces.Unsigned_16 (N.To_Half (D)));
+
+            for Sub in 0 .. 7 loop
+               declare
+                  Scale4 : constant Integer :=
+                    (if D = 0.0 then 0
+                     else Integer'Max
+                            (0, Integer'Min
+                                  (15,
+                                   Integer (N.Real'Rounding
+                                     (4.0 * Wants (Sub) / D - 0.5)))));
+                  DB   : constant N.Real := D * (0.5 + N.Real (Scale4)) * 0.25;
+                  Word : Interfaces.Unsigned_32 :=
+                    Interfaces.Shift_Left
+                      (Interfaces.Unsigned_32 (Scale4), 28);
+                  Sub_At : constant B.Byte_Count :=
+                    At_Byte + 2 + B.Byte_Count (Sub) * 8;
+               begin
+                  for L in 0 .. 3 loop
+                     declare
+                        Base : constant N.Element_Count :=
+                          First + N.Element_Count (Sub * 32 + L * 8);
+                        Best_Grid  : Natural := 0;
+                        Best_Cost  : N.Real := N.Real'Last;
+                        Best_Sign  : Natural := 0;
+                        Best_SCost : N.Real := N.Real'Last;
+                     begin
+                        for Cand in IQ2XXS_Grid'Range loop
+                           declare
+                              Cost : N.Real := 0.0;
+                           begin
+                              for J in 0 .. 7 loop
+                                 declare
+                                    Target : constant N.Real :=
+                                      (if DB = 0.0 then 0.0
+                                       else abs Values
+                                              (Base + N.Element_Count (J))
+                                            / DB);
+                                    Diff : constant N.Real :=
+                                      Grid_Byte (Cand, J) - Target;
+                                 begin
+                                    Cost := Cost + Diff * Diff;
+                                 end;
+                              end loop;
+                              if Cost < Best_Cost then
+                                 Best_Cost := Cost;
+                                 Best_Grid := Cand;
+                              end if;
+                           end;
+                        end loop;
+
+                        for Cand in 0 .. 127 loop
+                           declare
+                              Pattern : constant Interfaces.Unsigned_8 :=
+                                KSigns_IQ2XS (Cand);
+                              Cost : N.Real := 0.0;
+                           begin
+                              for J in 0 .. 7 loop
+                                 declare
+                                    Negative : constant Boolean :=
+                                      Values (Base + N.Element_Count (J))
+                                        < 0.0;
+                                    Set : constant Boolean :=
+                                      (Pattern
+                                       and Interfaces.Unsigned_8 (2 ** J))
+                                        /= 0;
+                                 begin
+                                    if Negative /= Set then
+                                       Cost := Cost
+                                         + abs Values
+                                             (Base + N.Element_Count (J));
+                                    end if;
+                                 end;
+                              end loop;
+                              if Cost < Best_SCost then
+                                 Best_SCost := Cost;
+                                 Best_Sign := Cand;
+                              end if;
+                           end;
+                        end loop;
+
+                        Result (Sub_At + B.Byte_Count (L)) :=
+                          Interfaces.Unsigned_8 (Best_Grid);
+                        Word := Word or Interfaces.Shift_Left
+                          (Interfaces.Unsigned_32 (Best_Sign), 7 * L);
+                     end;
+                  end loop;
+
+                  Result (Sub_At + 4) :=
+                    Interfaces.Unsigned_8 (Word and 16#FF#);
+                  Result (Sub_At + 5) :=
+                    Interfaces.Unsigned_8
+                      (Interfaces.Shift_Right (Word, 8) and 16#FF#);
+                  Result (Sub_At + 6) :=
+                    Interfaces.Unsigned_8
+                      (Interfaces.Shift_Right (Word, 16) and 16#FF#);
+                  Result (Sub_At + 7) :=
+                    Interfaces.Unsigned_8
+                      (Interfaces.Shift_Right (Word, 24) and 16#FF#);
+               end;
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_IQ2_XXS;
 
 end Fixtures;
