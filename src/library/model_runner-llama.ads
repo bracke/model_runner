@@ -189,7 +189,7 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2, Rwkv6);
+      Mamba2, Rwkv6, Jamba);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -240,6 +240,18 @@ package Model_Runner.Llama is
    --  @return True for an RWKV architecture.
    function Is_RWKV (Item : Architecture) return Boolean
    is (Item = Rwkv6);
+
+   --  Whether an architecture is Jamba: a hybrid that interleaves Mamba
+   --  mixer layers with attention ones and a mixture of experts on some
+   --  layers with a dense feed-forward on others -- Mamba's scan, ordinary
+   --  attention and the mixture path stitched together, a block that is a
+   --  mixer and a feed-forward like any transformer's rather than the
+   --  mixer alone a pure state-space model is.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for Jamba.
+   function Is_Jamba (Item : Architecture) return Boolean
+   is (Item = Jamba);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -292,7 +304,8 @@ package Model_Runner.Llama is
          when Command_R  => "command-r",
          when Mamba      => "mamba",
          when Mamba2     => "mamba2",
-         when Rwkv6      => "rwkv6");
+         when Rwkv6      => "rwkv6",
+         when Jamba      => "jamba");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -304,6 +317,17 @@ package Model_Runner.Llama is
      (Pool_Unstated, Pool_None, Pool_Mean, Pool_Cls, Pool_Last, Pool_Rank);
 
    --  Validated architecture configuration.
+   --  The largest block count a per-layer classification is kept for, which
+   --  is the largest a model may have. A file deeper than this is refused
+   --  where its layers are counted, before any of this is read.
+   Max_Block_Count : constant := 512;
+
+   --  Which layers of a mixed architecture are one thing rather than
+   --  another -- Jamba's Mamba layers against its attention ones -- kept a
+   --  layer so that the predicates that key a session's per-layer state can
+   --  ask without the file in hand.
+   type Layer_Flags is array (0 .. Max_Block_Count - 1) of Boolean;
+
    --
    --  Every field is read from metadata through a typed accessor and range
    --  checked; the derived fields are checked for exact divisibility so that
@@ -589,6 +613,12 @@ package Model_Runner.Llama is
       Rescale_Every   : Natural := 0;
       Shared_Feed     : Natural := 0;
       Next_Layers     : Natural := 0;
+
+      --  Jamba's mixers: true where the layer keeps a Mamba state, false
+      --  where it attends. Read from the file's per-layer key-value head
+      --  count -- nought heads is a Mamba layer -- and all false for every
+      --  other architecture, whose layers are all of one kind.
+      Mamba_Layer     : Layer_Flags := [others => False];
    end record;
 
    --  What the attention scores are scaled by before the softmax: one over
@@ -615,6 +645,9 @@ package Model_Runner.Llama is
    function Linear (Settings : Configuration; Layer : Natural) return Boolean
    is (Pure_SSM (Settings.Kind)
        or else Is_RWKV (Settings.Kind)
+       or else (Is_Jamba (Settings.Kind)
+                and then Layer < Max_Block_Count
+                and then Settings.Mamba_Layer (Layer))
        or else (Settings.Linear_Every > 0
                 and then (Layer + 1) mod Settings.Linear_Every /= 0));
 
@@ -639,11 +672,16 @@ package Model_Runner.Llama is
 
    --  The feed-forward width one activation buffer has to hold: an expert's
    --  when the model has experts, and the dense block's when it does not.
+   --  Jamba is both at once -- a mixture on some layers, a dense block on
+   --  others -- so its buffer holds the wider of the two, or a dense layer
+   --  whose width is the larger overflows a buffer cut to the expert's.
    --
    --  @param Settings Configuration to inspect.
    --  @return Width in elements.
    function Feed_Width (Settings : Configuration) return Natural
-   is (if Settings.Experts > 0
+   is (if Is_Jamba (Settings.Kind)
+       then Natural'Max (Settings.Expert_Feed, Settings.Feed_Forward)
+       elsif Settings.Experts > 0
        then Settings.Expert_Feed
        else Settings.Feed_Forward);
 
@@ -2145,6 +2183,14 @@ private
       Ssm_A      : Model_Runner.Tensors.Real_Array_Access;
       Ssm_D      : Model_Runner.Tensors.Real_Array_Access;
       Conv_Bias  : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Jamba normalizes the time step and the B and C its scan reads --
+      --  each the slice the ssm_x projection produced -- before the scan,
+      --  by root mean square with a gain of its own. Null for plain Mamba,
+      --  which does not.
+      Ssm_Dt_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Ssm_B_Norm  : Model_Runner.Tensors.Real_Array_Access;
+      Ssm_C_Norm  : Model_Runner.Tensors.Real_Array_Access;
 
       --  A_Log, DT_Bias and State_Norm laid end to end, which is how the
       --  device's rule step takes the three: one resident weight. Built

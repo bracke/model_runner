@@ -149,7 +149,7 @@ package body Model_Runner.Llama is
        then Element_Count (Settings.Inner_Size)
             + 2 * Element_Count (Settings.Groups)
                 * Element_Count (Settings.State_Size)
-       elsif Pure_SSM (Settings.Kind)
+       elsif Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
        else Element_Count (Mix_Width (Settings)));
 
@@ -162,7 +162,7 @@ package body Model_Runner.Llama is
        then Element_Count (Settings.Ssm_Heads)
             * Element_Count (Settings.Head_Dim)
             * Element_Count (Settings.Head_Dim)
-       elsif Pure_SSM (Settings.Kind)
+       elsif Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
             * Element_Count (Settings.State_Size)
        else Element_Count (Settings.Value_Heads)
@@ -513,7 +513,7 @@ package body Model_Runner.Llama is
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                        | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                       | Mamba2 | Rwkv6 =>
+                       | Mamba2 | Rwkv6 | Jamba =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -609,17 +609,79 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  Key-value head count is optional; a model that omits it is
-      --  multi-head rather than grouped-query.
-      Containers.Get_Integer
-        (Source, Model_Key (Settings.Kind, "attention.head_count_kv"), 1,
-         Long_Long_Integer (Settings.Heads), Number, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+      --  Jamba states its key-value head count a layer, nought where the
+      --  layer keeps a Mamba state and the attention count where it attends,
+      --  which is how the file says which layers are which. Read as the
+      --  array it is: a nought marks a Mamba layer, and any non-nought is
+      --  the count the attention layers share. Every other architecture
+      --  states one number for the whole model.
+      if Is_Jamba (Settings.Kind) then
+         if Settings.Layers > Max_Block_Count then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "block_count", Long_Long_Integer (Settings.Layers));
+            return;
+         end if;
+
+         Settings.KV_Heads := Settings.Heads;
+         declare
+            Length : Natural := 0;
+            Probe  : E.Error_Info;
+         begin
+            Containers.Get_Array_Length
+              (Source, Model_Key (Settings.Kind, "attention.head_count_kv"),
+               Model_Runner.GGUF.Value_Int32, Length, Probe);
+
+            if E.Is_Ok (Probe) and then Length >= Settings.Layers then
+               --  The per-layer array a real file states: nought heads a
+               --  Mamba layer, the attention count where it attends.
+               for Layer in 0 .. Settings.Layers - 1 loop
+                  Containers.Get_Integer_Element
+                    (Source,
+                     Model_Key (Settings.Kind, "attention.head_count_kv"),
+                     Layer + 1, Number, Local);
+                  if E.Is_Error (Local) then
+                     Status := E.Make (E.GGUF_Missing_Metadata_Key);
+                     E.Add_Text
+                       (Status, "key",
+                        Model_Key (Settings.Kind, "attention.head_count_kv"),
+                        E.Param_Identifier);
+                     return;
+                  end if;
+                  Settings.Mamba_Layer (Layer) := Number = 0;
+                  if Number /= 0 then
+                     Settings.KV_Heads := Natural (Number);
+                  end if;
+               end loop;
+
+            else
+               --  A file stating one number, or none, has no Mamba layers
+               --  by that account: every layer attends. A minimal fixture
+               --  that only checks the keys load takes this road.
+               Containers.Get_Integer
+                 (Source,
+                  Model_Key (Settings.Kind, "attention.head_count_kv"), 1,
+                  Long_Long_Integer (Settings.Heads), Number, Local);
+               if E.Is_Ok (Local) then
+                  Settings.KV_Heads := Natural (Number);
+               end if;
+               Settings.Mamba_Layer := [others => False];
+            end if;
+         end;
+
+      else
+         --  Key-value head count is optional; a model that omits it is
+         --  multi-head rather than grouped-query.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "attention.head_count_kv"), 1,
+            Long_Long_Integer (Settings.Heads), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.KV_Heads :=
+           (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
       end if;
-      Settings.KV_Heads :=
-        (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
 
       --  The floor under a normalization's divisor. An architecture that
       --  normalizes by root mean square states it under one key and Bert,
@@ -1029,8 +1091,9 @@ package body Model_Runner.Llama is
       --  taps, an inner width twice the model's, and a time step of the
       --  model width over sixteen rounded up. Read under the same ssm keys
       --  the hybrid uses, but their meaning is Mamba's -- the time step is a
-      --  projection rank, not a count of heads.
-      if Pure_SSM (Settings.Kind) then
+      --  projection rank, not a count of heads. Jamba's Mamba layers read
+      --  the same widths under the same keys.
+      if Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind) then
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "ssm.state_size"),
             1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
@@ -1207,6 +1270,13 @@ package body Model_Runner.Llama is
             end if;
             Settings.Renormalize_Experts :=
               (if E.Is_Ok (Local) then Normalized else True);
+
+            --  Jamba softmaxes its experts and takes the highest few as
+            --  they are, without renormalizing the few over themselves,
+            --  whatever the file says -- the other runtime does the same.
+            if Is_Jamba (Settings.Kind) then
+               Settings.Renormalize_Experts := False;
+            end if;
          end;
 
          --  The scalar the renormalized weights are multiplied by, which
@@ -1589,7 +1659,7 @@ package body Model_Runner.Llama is
       --  ships. That is the same trap gpt2's output bias fell into, found
       --  the same way: by reading a file somebody else published.
       Settings.Rotary :=
-        (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt
+        (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt | Jamba
             or else (Settings.Kind = Baichuan and then Settings.Layers = 40)
           then 0
          elsif E.Is_Ok (Local) then Natural (Number)
@@ -3396,7 +3466,10 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Is_Linear and then Pure_SSM (Item.Settings.Kind) then
+            if Is_Linear
+              and then (Pure_SSM (Item.Settings.Kind)
+                        or else Is_Jamba (Item.Settings.Kind))
+            then
                --  Mamba's block, all of it a linear layer: the input split
                --  into an inner activation and its gate, a causal
                --  convolution over the inner activation with a bias, the
@@ -3518,6 +3591,31 @@ package body Model_Runner.Llama is
                         Repack);
                      if E.Is_Error (Status) then
                         return;
+                     end if;
+
+                     --  Jamba's three normalizations of the slices ssm_x
+                     --  produced: the time step, and the B and C the scan
+                     --  reads, each by root mean square with its own gain.
+                     if Is_Jamba (Item.Settings.Kind) then
+                        Resolve_Norm
+                          (Item, Source,
+                           Layer_Key (Index, "ssm_dt_norm.weight"),
+                           Rank, Current.Ssm_Dt_Norm, Status);
+                        if E.Is_Ok (Status) then
+                           Resolve_Norm
+                             (Item, Source,
+                              Layer_Key (Index, "ssm_b_norm.weight"),
+                              State, Current.Ssm_B_Norm, Status);
+                        end if;
+                        if E.Is_Ok (Status) then
+                           Resolve_Norm
+                             (Item, Source,
+                              Layer_Key (Index, "ssm_c_norm.weight"),
+                              State, Current.Ssm_C_Norm, Status);
+                        end if;
+                        if E.Is_Error (Status) then
+                           return;
+                        end if;
                      end if;
 
                      Resolve
@@ -4183,7 +4281,16 @@ package body Model_Runner.Llama is
                   return;
                end if;
 
-            elsif Item.Settings.Experts = 0 then
+            elsif Item.Settings.Experts = 0
+              or else (Is_Jamba (Item.Settings.Kind)
+                       and then Containers.Find_Tensor
+                                  (Source,
+                                   Layer_Key (Index, "ffn_gate_inp.weight"))
+                                = 0)
+            then
+               --  Jamba's dense layers -- the ones without a router -- go
+               --  through the plain gated feed-forward; its mixture layers
+               --  fall to Resolve_Experts below, a layer at a time.
                Resolve
                  (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
                   Feed, Width, Current.Gate, Status, Repack);
@@ -5705,6 +5812,7 @@ package body Model_Runner.Llama is
         (if Group_Size = 0 then 0 else To_Head / Group_Size);
    begin
       Ok := True;
+
 
       --  Nothing to do is not a refusal.
       if To_Head < From_Head or else Last < First then
@@ -11286,6 +11394,9 @@ package body Model_Runner.Llama is
             T.Free (Which.DT_Bias);
             T.Free (Which.Conv);
             T.Free (Which.State_Norm);
+            T.Free (Which.Ssm_Dt_Norm);
+            T.Free (Which.Ssm_B_Norm);
+            T.Free (Which.Ssm_C_Norm);
             T.Free (Which.Shared_Router);
             T.Free (Which.Next_ENorm);
             T.Free (Which.Next_HNorm);
@@ -13295,7 +13406,9 @@ package body Model_Runner.Llama is
          --  the convolution's last positions and the scan's state, one slot,
          --  cleared. It does not draft or rewind, so the ring never grows
          --  past the one slot. Beside them the scratch one position needs.
-         if Pure_SSM (Settings.Kind) then
+         --  Jamba keeps the same, for its Mamba layers alone -- the rooms
+         --  count only those, through Linear.
+         if Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind) then
             declare
                Inner : constant Element_Count :=
                  Element_Count (Settings.Inner_Size);
@@ -14863,6 +14976,35 @@ package body Model_Runner.Llama is
       Product (Item, Current.Ssm_X, Item.Mamba_X, Item.Mamba_DBC, Status);
       if E.Is_Error (Status) then
          return;
+      end if;
+
+      --  Jamba normalizes the time step and the B and C the projection
+      --  produced -- each its own slice of DBC -- by root mean square with a
+      --  gain of its own, before the scan reads them. Plain Mamba leaves the
+      --  three gains null and does not.
+      if Current.Ssm_Dt_Norm /= null then
+         declare
+            procedure RMS (First, Count : Element_Count; Gain : Real_Array) is
+               Sum : N.Wide_Real := 0.0;
+               Inv : N.Wide_Real;
+            begin
+               for I in 0 .. Count - 1 loop
+                  Sum := Sum + N.Wide_Real (DBC (First + I))
+                             * N.Wide_Real (DBC (First + I));
+               end loop;
+               Inv := 1.0 / N.Sqrt (Sum / N.Wide_Real (Count)
+                                    + N.Wide_Real (Settings.Epsilon));
+               for I in 0 .. Count - 1 loop
+                  DBC (First + I) :=
+                    Real (N.Wide_Real (DBC (First + I)) * Inv
+                          * N.Wide_Real (Gain (Gain'First + I)));
+               end loop;
+            end RMS;
+         begin
+            RMS (0, Rank, Current.Ssm_Dt_Norm.all);
+            RMS (Rank, State, Current.Ssm_B_Norm.all);
+            RMS (Rank + State, State, Current.Ssm_C_Norm.all);
+         end;
       end if;
 
       --  The time step projected up to the inner width and biased.
@@ -16456,7 +16598,11 @@ package body Model_Runner.Llama is
                   goto Layer_Done;
                end if;
 
-               if Pure_SSM (Settings.Kind) then
+               --  Jamba's linear layers are Mamba layers -- its stateful
+               --  mixer is Mamba's scan, not the gated delta rule -- so they
+               --  take Mamba's step and then, unlike a pure state-space
+               --  model, go on to a feed-forward below.
+               if Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind) then
                   if Is_Mamba2 (Settings.Kind) then
                      Mamba2_Step
                        (Item, Source, Current, Natural (Index), Status);
@@ -16763,6 +16909,7 @@ package body Model_Runner.Llama is
                   Status);
                exit when E.Is_Error (Status);
 
+
                Charge (Item, Projecting, Mark);
 
                if Hybrid (Settings.Kind) then
@@ -16907,6 +17054,7 @@ package body Model_Runner.Llama is
                      Ok       => True);
                   Shared : E.Error_Info;
                begin
+
                   --  A layer with sinks the device has no room for attends
                   --  on the host; the pair below is given the others'.
                   if Item.Held = Halved or else not Resident
@@ -17041,6 +17189,7 @@ package body Model_Runner.Llama is
                        (Item, Current.Attention_Out, Item.Attention,
                         Item.Normalized, Status);
                      exit when E.Is_Error (Status);
+
                   end if;
 
                   Charge (Item, Projecting, Mark);
@@ -17073,6 +17222,7 @@ package body Model_Runner.Llama is
                   Charge (Item, Joining, Mark);
                end if;
 
+
                --  Feed-forward block. It reads what the layer normalized on
                --  the way in where the architecture runs the two in parallel
                --  (Falcon), the residual as it stands where the architecture
@@ -17099,7 +17249,12 @@ package body Model_Runner.Llama is
 
                Charge (Item, Normalizing, Mark);
 
-               if Settings.Experts > 0 then
+               --  A mixture layer runs its router and experts; a dense one
+               --  the plain feed-forward. Which a layer is is the layer's
+               --  own, not the model's -- Jamba has both -- so the per-layer
+               --  presence of experts decides, which is the model's answer
+               --  for every architecture whose layers are all of one kind.
+               if Current.Experts /= null then
                   Mixture
                     (Item, Current, Item.Normalized, Item.Mixture, Status);
                   exit when E.Is_Error (Status);
@@ -17205,6 +17360,7 @@ package body Model_Runner.Llama is
             Charge (Item, Joining, Mark);
 
             <<Layer_Done>>
+
 
             --  What became of this layer, for the run's report: the whole
             --  of it over as one sequence, or not -- and, where the device
@@ -17360,9 +17516,12 @@ package body Model_Runner.Llama is
       Has_Runs  : Boolean := False;
       --  Zero for a mixture of experts: the batch never holds a
       --  feed-forward activation there, because that block runs a position
-      --  at a time through the session's own buffers.
+      --  at a time through the session's own buffers. Jamba is the exception
+      --  -- a mixture on some layers, a dense feed-forward on others -- and
+      --  its dense layers run the batch through this buffer, so it is cut to
+      --  the dense width rather than to nothing.
       Feed      : constant Element_Count :=
-        (if Settings.Experts > 0
+        (if Settings.Experts > 0 and then not Is_Jamba (Settings.Kind)
          then 0
          else Element_Count (Settings.Feed_Forward));
       Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
@@ -18919,14 +19078,19 @@ package body Model_Runner.Llama is
             if Is_Linear and then Fused then
                --  Gone over whole above, feed-forward and all.
                null;
-            elsif Is_Linear and then Pure_SSM (Settings.Kind) then
+            elsif Is_Linear
+              and then (Pure_SSM (Settings.Kind)
+                        or else Is_Jamba (Settings.Kind))
+            then
                --  Mamba's batch is its positions one after another, each
                --  the single-token step over its own row of the normalized
                --  batch and each carrying the state the one before it left,
                --  because the selective scan is a recurrence with nothing to
                --  parallelize over the batch. Each row's answer is written
                --  back in its place for the join below to take, exactly as
-               --  the single-token path leaves it in Normalized.
+               --  the single-token path leaves it in Normalized. Jamba's
+               --  Mamba layers go the same way, and then on to a
+               --  feed-forward where a pure state-space model stops.
                Charge (Item, Normalizing, Mark);
                for P in 0 .. Count - 1 loop
                   Item.Normalized.all (0 .. Width - 1) :=
@@ -19630,7 +19794,7 @@ package body Model_Runner.Llama is
                --  block that runs a token at a time however many were handed
                --  in. Everything before it -- the projections, the attention,
                --  the output -- still goes through the batch.
-               if Settings.Experts > 0 then
+               if Current.Experts /= null then
                   --  Gathered by expert, which is what makes an expert's
                   --  matrices cross once a layer instead of once for every
                   --  position that chose them. This used to be the device's

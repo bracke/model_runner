@@ -1135,7 +1135,8 @@ package body Reference_Transformer is
          when Command_R => "command-r.",
          when Mamba => "mamba.",
          when Mamba2 => "mamba2.",
-         when Rwkv6 => "rwkv6.");
+         when Rwkv6 => "rwkv6.",
+         when Jamba => "jamba.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1595,6 +1596,8 @@ package body Reference_Transformer is
             Item.Kind := Mamba2;
          elsif Named = "rwkv6" then
             Item.Kind := Rwkv6;
+         elsif Named = "jamba" then
+            Item.Kind := Jamba;
          else
             return;
          end if;
@@ -1613,8 +1616,33 @@ package body Reference_Transformer is
       end if;
 
       Item.Heads := Metadata (Source, Prefix (Item) & "attention.head_count", 0);
-      Item.KV_Heads :=
-        Metadata (Source, Prefix (Item) & "attention.head_count_kv", Item.Heads);
+      --  Jamba writes its key-value head count as a per-layer array -- nought
+      --  where a layer keeps a Mamba state, the attention count where it
+      --  attends -- so a scalar read finds nothing and falls back to the query
+      --  count, which is wrong wherever the model groups its queries. Read the
+      --  array and take the first attending layer's count, which every
+      --  attending layer shares.
+      if Item.Kind = Jamba then
+         declare
+            Value   : Long_Long_Integer := 0;
+            Ignored : Model_Runner.Errors.Error_Info;
+            Key     : constant String :=
+              Prefix (Item) & "attention.head_count_kv";
+         begin
+            Item.KV_Heads := Item.Heads;
+            for Slot in 1 .. Item.Layers loop
+               Value := 0;
+               Containers.Get_Integer_Element (Source, Key, Slot, Value, Ignored);
+               if Value > 0 then
+                  Item.KV_Heads := Natural (Value);
+                  exit;
+               end if;
+            end loop;
+         end;
+      else
+         Item.KV_Heads :=
+           Metadata (Source, Prefix (Item) & "attention.head_count_kv", Item.Heads);
+      end if;
       Item.Context := Metadata (Source, Prefix (Item) & "context_length", 0);
 
       if Item.Embedding = 0 or else Item.Layers = 0 or else Item.Heads = 0
@@ -1805,7 +1833,7 @@ package body Reference_Transformer is
 
       --  Mamba's widths, with the defaults the other runtime carries where
       --  the file leaves a key out.
-      if Item.Kind in Mamba | Mamba2 then
+      if Item.Kind in Mamba | Mamba2 | Jamba then
          Item.State_Size :=
            Metadata (Source, Prefix (Item) & "ssm.state_size", 16);
          Item.Conv_Taps :=
@@ -1847,7 +1875,7 @@ package body Reference_Transformer is
       --  trap bert's absent key was and is why the fixture states nothing
       --  here either.
       Item.Rotary :=
-        (if Item.Kind in Jina_Bert_V2 | Mpt
+        (if Item.Kind in Jina_Bert_V2 | Mpt | Jamba
             or else (Item.Kind = Baichuan and then Item.Layers = 40)
           then 0
          else Metadata
@@ -2059,8 +2087,22 @@ package body Reference_Transformer is
             --  Linear_Every-th attends in full, counting from one, and
             --  the blocks past the stack attend in full whatever their
             --  number.
+            --  Jamba states which layers are Mamba and which attend, in the
+            --  per-layer key-value head count: nought heads is a Mamba
+            --  layer. The reference reads the same array the engine does.
+            function Jamba_Mamba return Boolean is
+               Value  : Long_Long_Integer := 0;
+               Ignored : Model_Runner.Errors.Error_Info;
+            begin
+               Containers.Get_Integer_Element
+                 (Source, Prefix (Item) & "attention.head_count_kv",
+                  Index + 1, Value, Ignored);
+               return Value = 0;
+            end Jamba_Mamba;
+
             Is_Linear : constant Boolean :=
               Item.Kind in Mamba | Mamba2 | Rwkv6
+              or else (Item.Kind = Jamba and then Jamba_Mamba)
               or else (Item.Kind in Qwen35 | Qwen35_MoE
                        and then Index < Item.Layers
                        and then (Index + 1) mod Item.Linear_Every /= 0);
@@ -2229,7 +2271,7 @@ package body Reference_Transformer is
                if not Present then
                   return;
                end if;
-            elsif Is_Linear and then Item.Kind = Mamba then
+            elsif Is_Linear and then Item.Kind in Mamba | Jamba then
                Current.Ssm_In :=
                  Read_Matrix (Layer_Name (Index, "ssm_in.weight"), Present);
                if not Present then
@@ -2250,6 +2292,27 @@ package body Reference_Transformer is
                if not Present then
                   return;
                end if;
+
+               --  Jamba's three normalizations of the ssm_x slices.
+               if Item.Kind = Jamba then
+                  Current.Ssm_Dt_Norm :=
+                    Read_Vector
+                      (Layer_Name (Index, "ssm_dt_norm.weight"), Present);
+                  if Present then
+                     Current.Ssm_B_Norm :=
+                       Read_Vector
+                         (Layer_Name (Index, "ssm_b_norm.weight"), Present);
+                  end if;
+                  if Present then
+                     Current.Ssm_C_Norm :=
+                       Read_Vector
+                         (Layer_Name (Index, "ssm_c_norm.weight"), Present);
+                  end if;
+                  if not Present then
+                     return;
+                  end if;
+               end if;
+
                Current.Ssm_Dt :=
                  Read_Matrix (Layer_Name (Index, "ssm_dt.weight"), Present);
                if not Present then
@@ -2628,7 +2691,13 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Experts > 0 then
+            if Item.Experts > 0
+              and then (Item.Kind /= Jamba
+                        or else Containers.Find_Tensor
+                                  (Source,
+                                   Layer_Name (Index, "ffn_gate_inp.weight"))
+                                /= 0)
+            then
                Current.Router :=
                  Read_Matrix (Layer_Name (Index, "ffn_gate_inp.weight"),
                               Present);
@@ -3396,7 +3465,7 @@ package body Reference_Transformer is
       procedure Feed_Forward (Current : Layer; Normed : in out Real_Vector)
       is
       begin
-         if Item.Experts > 0 then
+         if Current.Router /= null then
             --  A mixture: the router scores the experts, the softmax
             --  turns the scores into shares, the highest few are kept
             --  and their shares put back on a scale of one, and each
@@ -3468,9 +3537,14 @@ package body Reference_Transformer is
                   end;
                end loop;
 
+               --  The highest few put back on a scale of one, except where
+               --  the model takes them as they are -- Jamba softmaxes over
+               --  every expert and keeps the few's shares without
+               --  renormalizing them over the few.
                for Slot in Share'Range loop
                   Share (Slot) :=
-                    Share (Slot) / Total * Item.Expert_Scale;
+                    (if Item.Kind = Jamba then Share (Slot)
+                     else Share (Slot) / Total) * Item.Expert_Scale;
                end loop;
 
                for Slot in Picked'Range loop
@@ -4168,7 +4242,7 @@ package body Reference_Transformer is
                      end;
                   end loop;
                end;
-            elsif Current.Linear and then Item.Kind = Mamba then
+            elsif Current.Linear and then Item.Kind in Mamba | Jamba then
                --  Mamba's block, position by position and carrying the
                --  convolution's memory and the scan's state: the input
                --  projected and split, the convolution over each channel
@@ -4243,6 +4317,38 @@ package body Reference_Transformer is
                         end loop;
 
                         Project (Current.Ssm_X.all, Xc, DBC);
+
+                        --  Jamba normalizes the time step and the B and C
+                        --  the projection produced, each its own slice, by
+                        --  root mean square with a gain of its own.
+                        if Current.Ssm_Dt_Norm /= null then
+                           declare
+                              procedure RMS
+                                (First, Count : Natural; Gain : Real_Vector)
+                              is
+                                 Sum : Long_Float := 0.0;
+                                 Inv : Long_Float;
+                              begin
+                                 for I in 0 .. Count - 1 loop
+                                    Sum := Sum + DBC (First + I)
+                                               * DBC (First + I);
+                                 end loop;
+                                 Inv := 1.0
+                                   / Functions.Sqrt
+                                       (Sum / Long_Float (Count) + Item.Epsilon);
+                                 for I in 0 .. Count - 1 loop
+                                    DBC (First + I) :=
+                                      DBC (First + I) * Inv
+                                      * Gain (Gain'First + I);
+                                 end loop;
+                              end RMS;
+                           begin
+                              RMS (0, Rank, Current.Ssm_Dt_Norm.all);
+                              RMS (Rank, S_Size, Current.Ssm_B_Norm.all);
+                              RMS (Rank + S_Size, S_Size, Current.Ssm_C_Norm.all);
+                           end;
+                        end if;
+
                         for I in 0 .. Rank - 1 loop
                            DTr (I) := DBC (I);
                         end loop;
@@ -5045,6 +5151,7 @@ package body Reference_Transformer is
                   for Index in 0 .. Width - 1 loop
                      Whole (Step, Index) := State (Index);
                   end loop;
+
                end;
             end loop;
          end;

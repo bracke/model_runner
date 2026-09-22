@@ -186,7 +186,8 @@ private
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
-      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6);
+      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6,
+      Jamba);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -305,6 +306,12 @@ private
       Ssm_A      : Matrix_Access := null;
       Ssm_D      : Vector_Access := null;
       Conv_Bias  : Vector_Access := null;
+
+      --  Jamba's three normalizations of the time step and the B and C its
+      --  scan reads. Null for plain Mamba.
+      Ssm_Dt_Norm : Vector_Access := null;
+      Ssm_B_Norm  : Vector_Access := null;
+      Ssm_C_Norm  : Vector_Access := null;
 
       --  RWKV6's block: the eight wide matrices of its time and channel
       --  mixes, the four low projections of its shift and its decay, the

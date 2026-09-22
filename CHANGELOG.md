@@ -7,6 +7,25 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Jamba is read** -- a hybrid that interleaves Mamba mixer layers with
+  attention ones and puts a mixture of experts on some layers and a dense
+  feed-forward on others. It reuses Mamba's scan, ordinary attention and the
+  mixture path: a block is a mixer and a feed-forward like any transformer's,
+  rather than the mixer alone a pure state-space model is. A layer is a Mamba
+  layer where the per-layer `attention.head_count_kv` states it nought heads
+  and an attention layer where it states the count the attention layers share;
+  a layer is a mixture where the file carries a `ffn_gate_inp` router for it
+  and dense where it does not -- the two axes independent, so all four
+  combinations occur. Its Mamba layers are Mamba-v1's scan with three extra
+  normalizations (of the time step and of the B and C the projection produced,
+  each root-mean-square with its own gain) and then a feed-forward after,
+  where a pure state-space model stops. Its attention does not rotate and
+  carries no bias; its mixture softmaxes over every expert and keeps the
+  highest few's shares without renormalizing them. Only the Mamba layers carry
+  conv and scan state, which the linear-layer predicate keys per Mamba layer.
+  Crossed against the independent reference over every format and path, all
+  four layer combinations, outside tolerance nought; it runs on the host under
+  the device backend. Continues Phase 5 of the model-coverage roadmap.
 - **RWKV6 (Finch) is read** -- a recurrent model of a different family from
   the state-space ones: not a selective scan but RWKV's own token-shift and
   linear attention. Each block is two sublayers, each with its own residual

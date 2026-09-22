@@ -77,7 +77,7 @@ package Tiny_Model is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite,
       Olmo2, Glm4, Starcoder2, Stablelm, Gptneox, Internlm2, Baichuan, Mpt,
-      Chatglm, Command_R, Mamba, Mamba2, Rwkv6);
+      Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba);
 
    Linear_State : constant := 4;
    Linear_Heads : constant := 2;
@@ -210,15 +210,17 @@ package Tiny_Model is
    is (case Shape is
          when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2
                               | Stablelm | Gptneox | Mpt | Mamba | Mamba2
-                              | Rwkv6,
+                              | Rwkv6 | Jamba,
          when Stretched =>
-           Kind in GPT2 | Bert | Jina_Bert_V2 | Mpt | Mamba | Mamba2 | Rwkv6,
+           Kind in GPT2 | Bert | Jina_Bert_V2 | Mpt | Mamba | Mamba2 | Rwkv6
+                 | Jamba,
          when Windowed =>
-           Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Mamba | Mamba2 | Rwkv6,
-         when Apart => Kind in Qwen35 | Mamba | Mamba2 | Rwkv6,
+           Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Mamba | Mamba2 | Rwkv6
+                 | Jamba,
+         when Apart => Kind in Qwen35 | Mamba | Mamba2 | Rwkv6 | Jamba,
          when Reaching =>
            Kind in GPT2 | Bert | Nomic_Bert | Jina_Bert_V2 | Mpt | Mamba
-                 | Mamba2 | Rwkv6,
+                 | Mamba2 | Rwkv6 | Jamba,
          when Plain => False);
 
    --  Write a fixture in one of those shapes.

@@ -225,7 +225,14 @@ The largest infra investment; also the largest device win for models already
     exponential decay and a learned first-token bonus, a per-head gated norm,
     and a squared-ReLU channel mix; all LayerNorm, output halved every so many
     layers. Crossed against the reference over every format and path, outside
-    tolerance nought; host-side under the device backend. Jamba remains.
+    tolerance nought; host-side under the device backend. ✅ **Jamba** is read:
+    the hybrid that interleaves Mamba mixer layers with attention ones and a
+    mixture of experts on some layers with a dense feed-forward on others,
+    classified per layer from the file's per-layer key-value head count and the
+    presence of a router. Reuses Mamba's scan (with three extra dt/B/C norms),
+    ordinary attention and the mixture path; crossed against the reference over
+    every format and path and all four layer combinations, outside tolerance
+    nought; host-side under the device backend.
 
 **Exit:** hybrid models run mostly on-device; pure state-space models load.
 

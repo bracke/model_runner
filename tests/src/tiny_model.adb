@@ -157,7 +157,27 @@ package body Tiny_Model is
       Blocks : constant Natural :=
         (if Depth > 0 then Depth
          elsif Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
+         elsif Kind = Jamba then 4
          else Layers);
+
+      --  Jamba's four layers, one of each of its two mixers crossed with its
+      --  two feed-forwards: a Mamba layer where the index is even and an
+      --  attention layer where it is odd, a mixture where it is below two and
+      --  a dense feed-forward where it is not -- so a Mamba layer with a
+      --  mixture (0), an attention layer with a mixture (1), a Mamba layer
+      --  with a dense feed-forward (2) and an attention layer with a dense
+      --  one (3), which crosses everything the reader must tell apart.
+      function Jamba_Mamba (At_Layer : Natural) return Boolean
+      is (At_Layer mod 2 = 0);
+      function Jamba_MoE (At_Layer : Natural) return Boolean
+      is (At_Layer < 2);
+
+      --  Jamba is a mixture on some layers whatever the sweep asked for, so
+      --  it carries a count of its own where the caller named none.
+      Eff_Experts : constant Natural :=
+        (if Kind = Jamba and then Experts = 0 then 4 else Experts);
+      Eff_Used    : constant Natural :=
+        (if Kind = Jamba and then Experts_Used = 0 then 2 else Experts_Used);
 
       Score_Amplitude : constant N.Real :=
         0.5 * N.Real
@@ -394,13 +414,15 @@ package body Tiny_Model is
            when Command_R => "command-r",
            when Mamba     => "mamba",
            when Mamba2    => "mamba2",
-           when Rwkv6     => "rwkv6");
+           when Rwkv6     => "rwkv6",
+           when Jamba     => "jamba");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
       --  The block past the stack attends in full, whatever its number.
       function Linear_Block (Index : Natural) return Boolean
       is (Kind in Mamba | Mamba2 | Rwkv6
+          or else (Kind = Jamba and then Jamba_Mamba (Index))
           or else (Kind = Qwen35 and then Index < Layers
                    and then (Index + 1) mod 2 /= 0));
 
@@ -427,7 +449,26 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, Prefix & ".feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
       Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count", Heads);
-      Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count_kv", KV_Heads);
+
+      --  Jamba states its key-value head count a layer, nought where a layer
+      --  keeps a Mamba state and the attention count where it attends, which
+      --  is how the file says which layers are which; every other
+      --  architecture states one number for the whole model.
+      if Kind = Jamba then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".attention.head_count_kv",
+            Model_Runner.GGUF.Value_Int32, Blocks);
+         for Index in 0 .. Blocks - 1 loop
+            Fixtures.Int32_Element
+              (Builder,
+               (if Jamba_Mamba (Index) then 0
+                else Interfaces.Integer_32 (KV_Heads)));
+         end loop;
+         Fixtures.End_Array (Builder);
+      else
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.head_count_kv", KV_Heads);
+      end if;
       --  Bert states the same quantity under the key that names the
       --  normalization it belongs to, which is not the root-mean-square
       --  one. A fixture that wrote the other key would be a file the
@@ -573,6 +614,22 @@ package body Tiny_Model is
            (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0e-5);
       end if;
 
+      --  Jamba's Mamba layers read the same widths under the same keys plain
+      --  Mamba does: a small state, a short convolution, an inner width
+      --  twice the model's and a low time step.
+      if Kind = Jamba then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.state_size",
+            Interfaces.Unsigned_32 (Linear_State));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.conv_kernel",
+            Interfaces.Unsigned_32 (Linear_Taps));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.inner_size",
+            Interfaces.Unsigned_32 (2 * Embedding));
+         Fixtures.Add_U32 (Builder, Prefix & ".ssm.time_step_rank", 2);
+      end if;
+
       --  Which pooling the model was trained for, which is a thing a bert
       --  file states and a decoder does not. Written as the first position,
       --  because that is what these vocabularies put a marker at.
@@ -644,14 +701,15 @@ package body Tiny_Model is
       end if;
 
       --  A mixture of experts, when one is asked for. Absent otherwise,
-      --  which is what a dense model looks like.
-      if Experts > 0 then
+      --  which is what a dense model looks like. Jamba carries a count of
+      --  its own, being a mixture on some of its layers whatever was asked.
+      if Eff_Experts > 0 then
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_count",
-            Interfaces.Unsigned_32 (Experts));
+            Interfaces.Unsigned_32 (Eff_Experts));
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_used_count",
-            Interfaces.Unsigned_32 (Experts_Used));
+            Interfaces.Unsigned_32 (Eff_Used));
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_feed_forward_length",
             Interfaces.Unsigned_32 (Expert_Feed));
@@ -1138,12 +1196,13 @@ package body Tiny_Model is
                Weight (Layer_Name (Index, "ssm_out.weight"),
                        [G.U64 (Inner), G.U64 (Embedding)]);
             end;
-         elsif Linear_Block (Index) and then Kind = Mamba then
+         elsif Linear_Block (Index) and then Kind in Mamba | Jamba then
             --  Mamba's own: the input projection to the inner activation and
             --  its gate, the convolution with its bias, the projection to
             --  the time step and B and C, the time step's projection up with
             --  its bias, the transition -- negative, so the state decays --
-            --  the skip and the projection back.
+            --  the skip and the projection back. Jamba's Mamba layers add a
+            --  normalization of the time step and of the B and C.
             declare
                Inner : constant Natural := 2 * Embedding;
                State : constant Natural := Linear_State;
@@ -1164,6 +1223,13 @@ package body Tiny_Model is
 
                Weight (Layer_Name (Index, "ssm_x.weight"),
                        [G.U64 (Inner), G.U64 (Rank + 2 * State)]);
+
+               if Kind = Jamba then
+                  Norm_Of (Layer_Name (Index, "ssm_dt_norm.weight"), Rank);
+                  Norm_Of (Layer_Name (Index, "ssm_b_norm.weight"), State);
+                  Norm_Of (Layer_Name (Index, "ssm_c_norm.weight"), State);
+               end if;
+
                Weight (Layer_Name (Index, "ssm_dt.weight"),
                        [G.U64 (Rank), G.U64 (Inner)]);
                Norm_Of (Layer_Name (Index, "ssm_dt.bias"), Inner);
@@ -1434,18 +1500,19 @@ package body Tiny_Model is
             end if;
          end if;
 
-         if Experts > 0 then
+         if (if Kind = Jamba then Jamba_MoE (Index) else Experts > 0) then
             --  The router, then the experts stacked on an outermost axis,
             --  which is how a file writes them: one tensor a matrix rather
-            --  than one tensor an expert.
+            --  than one tensor an expert. Jamba carries this on its mixture
+            --  layers and the plain feed-forward below on its dense ones.
             Weight (Layer_Name (Index, "ffn_gate_inp.weight"),
-                    [G.U64 (Embedding), G.U64 (Experts)]);
+                    [G.U64 (Embedding), G.U64 (Eff_Experts)]);
             Weight (Layer_Name (Index, "ffn_gate_exps.weight"),
-                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
+                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Eff_Experts)]);
             Weight (Layer_Name (Index, "ffn_up_exps.weight"),
-                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Experts)]);
+                    [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Eff_Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
-                    [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Experts)]);
+                    [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Eff_Experts)]);
 
             --  And the biases GPT_OSS carries on all of them, laid out the
             --  way the weights are: every expert's in one tensor.

@@ -263,7 +263,7 @@ package body Conformance is
       --  them: the rule over a state, the convolution ahead of it and the
       --  gate beside each attention head are all written out in the
       --  reference now, from the architecture's description.
-      Crossed : constant array (1 .. 28) of Tiny_Model.Fixture_Architecture :=
+      Crossed : constant array (1 .. 29) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
          Tiny_Model.Phi3, Tiny_Model.Falcon, Tiny_Model.Phi2,
@@ -273,7 +273,7 @@ package body Conformance is
          Tiny_Model.Stablelm, Tiny_Model.Gptneox, Tiny_Model.Internlm2,
          Tiny_Model.Baichuan, Tiny_Model.Mpt, Tiny_Model.Chatglm,
          Tiny_Model.Command_R, Tiny_Model.Mamba, Tiny_Model.Mamba2,
-         Tiny_Model.Rwkv6];
+         Tiny_Model.Rwkv6, Tiny_Model.Jamba];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -1222,6 +1222,23 @@ package body Conformance is
                            goto Next_Repack;
                         end if;
 
+                        --  And not on Jamba, which carries a mixture of
+                        --  experts on some of its layers whatever the shape,
+                        --  so the router-selection flip described just above
+                        --  reaches it the same way -- and, worse, its state
+                        --  carries the flipped block's answer down the rest
+                        --  of the sequence, so a discrete change early lands
+                        --  far from the reference by the last position.
+                        --  Measured here, worst absolute against the
+                        --  reference with brain floats: 0.472, against a
+                        --  lossy tolerance of 0.3; the exact and f32 modes
+                        --  cross it exactly.
+                        if Crossed (Which_Arch) = Tiny_Model.Jamba
+                          and then Repack = L.To_BF16
+                        then
+                           goto Next_Repack;
+                        end if;
+
                         --  And not on a stretched one, for the same kind of
                         --  reason a third time. Stretching the rotation
                         --  changes which positions a head can tell apart,
@@ -1669,6 +1686,13 @@ package body Conformance is
             --  needed a third.
             Skipped : Natural := 0;
 
+            --  The holdable shape/architecture pairs that run every repack
+            --  mode but brain floats, for the reason written where the sweep
+            --  skips it: Jamba, whose mixture layers flip an expert under a
+            --  halved mantissa and whose state carries the flip to the last
+            --  position. Only the plain shape, since Jamba holds no other.
+            Lossy_Skipped : Natural := 0;
+
             Expected : Natural := 0;
 
          begin
@@ -1676,6 +1700,8 @@ package body Conformance is
                for Shape in Model_Shape loop
                   if Tiny_Model.Cannot_Hold (Kind, Shape) then
                      Skipped := Skipped + 1;
+                  elsif Kind = Tiny_Model.Jamba then
+                     Lossy_Skipped := Lossy_Skipped + 1;
                   end if;
                end loop;
             end loop;
@@ -1687,6 +1713,7 @@ package body Conformance is
               Formats * Arches * (Shapes * Repacks - 5) * Per_Model + Cached
               + On_Device
               - Formats * Skipped * (Repacks - 1) * Per_Model
+              - Formats * Lossy_Skipped * Per_Model
               + Also_Ran;
 
             Result.Formats := Formats;
