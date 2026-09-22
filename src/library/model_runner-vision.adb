@@ -1184,6 +1184,68 @@ package body Model_Runner.Vision is
       end loop;
    end Run;
 
+   --  MiniCPM-V's resampler cross-attention, a query at a time: each
+   --  learned query over every patch, a head of a hundred and twenty-eight
+   --  at once, the scores softened and blended, on the worker the query
+   --  fell to. Each query keeps its own row of scores, so the workers
+   --  share the keys and values but nothing they write.
+   type Cross_Work is new Model_Runner.Shares.Work with record
+      Queries, Keys, Values, Scores, Blended : T.Real_Array_Access;
+      Width, Patches, Heads, Head : Element_Count := 0;
+      Scale  : Real := 0.0;
+      Failed : Boolean := False with Atomic;
+   end record;
+
+   overriding procedure Run
+     (Item : in out Cross_Work; First : Element_Count; Last : Element_Count)
+   is
+      Ok : Boolean;
+   begin
+      for Query in First .. Last loop
+         declare
+            S_At : constant Element_Count := Query * Item.Patches;
+         begin
+            for H in 0 .. Item.Heads - 1 loop
+               declare
+                  Q_At : constant Element_Count :=
+                    Query * Item.Width + H * Item.Head;
+               begin
+                  for J in 0 .. Item.Patches - 1 loop
+                     declare
+                        K_At : constant Element_Count :=
+                          J * Item.Width + H * Item.Head;
+                        Acc  : Real := 0.0;
+                     begin
+                        for D in 0 .. Item.Head - 1 loop
+                           Acc := Acc
+                             + Item.Queries (Q_At + D) * Item.Keys (K_At + D);
+                        end loop;
+                        Item.Scores (S_At + J) := Acc * Item.Scale;
+                     end;
+                  end loop;
+                  K.Softmax
+                    (Item.Scores (S_At .. S_At + Item.Patches - 1), Ok);
+                  if not Ok then
+                     Item.Failed := True;
+                  end if;
+                  for D in 0 .. Item.Head - 1 loop
+                     declare
+                        Acc : Real := 0.0;
+                     begin
+                        for J in 0 .. Item.Patches - 1 loop
+                           Acc := Acc + Item.Scores (S_At + J)
+                             * Item.Values
+                                 (J * Item.Width + H * Item.Head + D);
+                        end loop;
+                        Item.Blended (Q_At + D) := Acc;
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
    --  Rows one product on the device takes at once: where the device's
    --  own batch is fastest, and the working set its shader was measured
    --  with.
@@ -2201,7 +2263,7 @@ package body Model_Runner.Vision is
       T.Allocate (Nq * P, Att);
       T.Allocate (Nq * P, Rout);
       T.Allocate (Nq * P, Routn);
-      T.Allocate (Patches, Row_Scores);
+      T.Allocate (Nq * Patches, Row_Scores);
       T.Allocate (Nq * P, Rows);
 
       if X = null or else Normed = null or else Q = null or else Kv = null
@@ -2385,43 +2447,27 @@ package body Model_Runner.Vision is
          Multiply (Kvn, Patches, Item.R_Attn_V, Vh, Item.R_Attn_V_B);
       end if;
       if E.Is_Ok (Status) then
-         for H in 0 .. N_Head - 1 loop
-            for I in 0 .. Nq - 1 loop
-               declare
-                  Q_At : constant Element_Count := I * P + H * D_Head;
-                  Ok   : Boolean;
-               begin
-                  for J in 0 .. Patches - 1 loop
-                     declare
-                        K_At : constant Element_Count := J * P + H * D_Head;
-                        Acc  : Real := 0.0;
-                     begin
-                        for D in 0 .. D_Head - 1 loop
-                           Acc := Acc + Qh (Q_At + D) * Kh (K_At + D);
-                        end loop;
-                        Row_Scores (J) := Acc * Scale;
-                     end;
-                  end loop;
-                  K.Softmax (Row_Scores (0 .. Patches - 1), Ok);
-                  if not Ok then
-                     Status := E.Make (E.Sampling_Non_Finite_Logit);
-                     exit;
-                  end if;
-                  for D in 0 .. D_Head - 1 loop
-                     declare
-                        Acc : Real := 0.0;
-                     begin
-                        for J in 0 .. Patches - 1 loop
-                           Acc := Acc
-                             + Row_Scores (J) * Vh (J * P + H * D_Head + D);
-                        end loop;
-                        Att (Q_At + D) := Acc;
-                     end;
-                  end loop;
-               end;
-            end loop;
-            exit when E.Is_Error (Status);
-         end loop;
+         declare
+            Cross : aliased Cross_Work;
+         begin
+            Cross.Queries := Qh;
+            Cross.Keys := Kh;
+            Cross.Values := Vh;
+            Cross.Scores := Row_Scores;
+            Cross.Blended := Att;
+            Cross.Width := P;
+            Cross.Patches := Patches;
+            Cross.Heads := N_Head;
+            Cross.Head := D_Head;
+            Cross.Scale := Scale;
+            Cross.Failed := False;
+            CPU.Dispatch_Shares
+              (Team, Nq, Cross'Unchecked_Access, Status,
+               Cost => Nq * N_Head * Patches * D_Head);
+            if E.Is_Ok (Status) and then Cross.Failed then
+               Status := E.Make (E.Sampling_Non_Finite_Logit);
+            end if;
+         end;
       end if;
 
       --  The blend turned back, normed once more, and projected.

@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+### Changed
+
+- **MiniCPM-V's resampler cross-attention runs on the pool.** The learned
+  queries' attention over the patch states was a plain loop on the calling task,
+  the one part of the encoder that did not share the work; it now runs over the
+  pool a query at a time, each query with its own row of scores, as the vision
+  transformer's own attention already does. The rows it makes are unchanged --
+  the suite's cross-check against the binary64 reference holds to a ten-
+  thousandth either way -- so this is only where the work runs, not what it is.
+  (The transformer, not the resampler, is the bulk of an encode, so a picture is
+  not much faster; the resampler no longer pins one core is the point.)
+
 - **MiniCPM-V numbers its pictures.** Where the model's vocabulary carries the
   `<image_id>` and `</image_id>` tokens -- MiniCPM-V's do -- each picture is now
   written with its number ahead of it, `<image_id>0</image_id>` before the first,
