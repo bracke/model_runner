@@ -22,14 +22,17 @@ Done, each crossed against the independent reference over every format and path
   GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
   ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.
 
-- **Phase 5:** #15 **Mamba** (the first pure state-space model) is read, host-
-  first, crossed against the independent reference over every format and path.
-  Mamba2/RWKV/Jamba and the #14 delta-rule device shader remain.
+- **Phase 5:** **complete.** #14 the delta-rule / linear-attention device shader
+  is done — a hybrid's linear layers run on the Vulkan device, the first
+  stateful device kernel. #15's state-space families are all read, host-first,
+  each crossed against the independent reference over every format and path:
+  Mamba, Mamba2, RWKV6 (Finch) and Jamba (the Mamba/attention/mixture hybrid).
 
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
-quants), Phase 4 (#13 DeepSeek MLA, now unblocked), the rest of Phase 5
-(#14 delta-rule device shader; #15 Mamba2/RWKV/Jamba), and Phase 6 (vision).
-(#11, the config-mostly arch batch, and #12 the reranker head are complete.)
+quants), Phase 4 (#13 DeepSeek MLA, now unblocked), and Phase 6 (vision).
+(#11, the config-mostly arch batch, and #12 the reranker head are complete;
+Phase 5 — #14 the delta-rule device shader and #15 the state-space families —
+is complete.)
 
 ## Guiding constraints
 
@@ -199,10 +202,21 @@ Depends on Phase 1. DeepSeek needs three things at once:
 The largest infra investment; also the largest device win for models already
 "supported."
 
-14. **`[device]` delta-rule / linear-attention shader** (`llama.adb:13165`,
-    `:14044`). Today a hybrid's linear layers (delta rule + short conv + gated
-    norm) run entirely on the host — for Qwen3.5/3.6 that's ~75% of the network
-    off-device. Write the device shaders and a device state path. **Large.**
+14. ✅ **`[device]` delta-rule / linear-attention shader** — done. A hybrid's
+    linear layers now run on the Vulkan device rather than falling to the host:
+    the four projections, a short convolution over the memory a ring keeps
+    (`conv.comp`), the gated delta rule over the state it keeps (`rule.comp`,
+    the rule unrolled a chunk of sixteen positions at a time), a per-head gated
+    normalization and the projection out. The state is a device-resident ring
+    seated a session like the key-value cache, pushed from the host's
+    `Delta_State`/`Conv_State` and read through a runs table; `Linear_Layer_Fits`
+    with `Runs_Linear` takes the layer on device where the tensors and the ring
+    are present and falls to the host otherwise. Crossed against the independent
+    reference — Qwen3.5 over every format and path, the device backend included
+    — outside tolerance nought, with an isolated backend test that says the
+    device layer matches the host's, the ring included. This is the first
+    stateful device kernel; #15's state-space families build on its ring and
+    state-buffer infrastructure.
 15. **State-space architectures** (Mamba/Mamba2/RWKV/Jamba). Build on the
     host-then-device pattern #14 establishes: a new sequence-layer kind with its
     own recurrence, on host first, then the device shader. **Large per family.**
