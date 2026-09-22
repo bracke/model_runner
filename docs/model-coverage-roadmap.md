@@ -4,7 +4,7 @@ A plan to close every model-related gap the survey found — the live refusal
 paths and host fallbacks that block or slow real models. Ordered by dependency
 and cost, not by tier, so the sequence is buildable start-to-finish.
 
-## Progress (as of 2026-09-21)
+## Progress (as of 2026-09-22)
 
 Done, each crossed against the independent reference over every format and path
 (conformance outside tolerance nought) and committed to main:
@@ -22,8 +22,14 @@ Done, each crossed against the independent reference over every format and path
   GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
   ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.
 
+- **Phase 5:** #15 **Mamba** (the first pure state-space model) is read, host-
+  first, crossed against the independent reference over every format and path.
+  Mamba2/RWKV/Jamba and the #14 delta-rule device shader remain.
+
 Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
-quants), and Phases 4–6 (#11, the config-mostly arch batch, is complete).
+quants), Phase 4 (#13 DeepSeek MLA, now unblocked), the rest of Phase 5
+(#14 delta-rule device shader; #15 Mamba2/RWKV/Jamba), and Phase 6 (vision).
+(#11, the config-mostly arch batch, and #12 the reranker head are complete.)
 
 ## Guiding constraints
 
@@ -200,6 +206,13 @@ The largest infra investment; also the largest device win for models already
 15. **State-space architectures** (Mamba/Mamba2/RWKV/Jamba). Build on the
     host-then-device pattern #14 establishes: a new sequence-layer kind with its
     own recurrence, on host first, then the device shader. **Large per family.**
+    ✅ **Mamba** is read (host-first): every layer a selective scan over a
+    recurrent state, no attention and no feed-forward. `Pure_SSM` marks the
+    kind; `Mamba_Step` runs the per-position scan; the batch is its positions
+    one after another, each carrying the state the one before it left. Crossed
+    against the independent reference over every format and path, outside
+    tolerance nought. **Mamba2** (scalar-A multi-head SSD) is next, then
+    RWKV/Jamba.
 
 **Exit:** hybrid models run mostly on-device; pure state-space models load.
 
