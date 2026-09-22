@@ -9508,7 +9508,21 @@ package body Model_Runner.Templates is
 
             when Filter_Trim | Filter_Lower | Filter_Upper
                | Filter_Capitalize | Filter_Title | Filter_Replace =>
-               return As_Text (Filtered (Step, Printed (Value)));
+               --  A message's content parts render inline before a text
+               --  filter too -- the words and a marker where each picture
+               --  stands -- as they do where the value is printed on its
+               --  own. A template that trims or recases its content, which
+               --  MiniCPM-V 2.5's own template does with `content | trim`,
+               --  keeps the picture rather than dropping it with the parts'
+               --  JSON. A value that is not parts, or with no markers to
+               --  write, prints as it printed.
+               return As_Text (Filtered (Step,
+                 (if not Testing and then Value.Kind = Value_Data
+                    and then Value.Parts
+                    and then Image_Marker'Length + Video_Marker'Length > 0
+                  then Conv.Prompt_Of_Parts
+                         (Text_Of (Value), Image_Marker, Video_Marker)
+                  else Printed (Value))));
          end case;
       end Filter_On;
 

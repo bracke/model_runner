@@ -1731,6 +1731,39 @@ package body Tests.Template_Cases is
          Conv.Close (Talk);
       end;
 
+      --  The same content taken through a text filter renders the parts
+      --  inline too. MiniCPM-V 2.5's own template writes its content as
+      --  message['content'] | trim, and a filter that read the parts' JSON
+      --  rather than their inline shape would trim the picture's marker
+      --  away and leave the prompt marking no pictures where one was given.
+      declare
+         Talk   : Conv.History;
+         Status : E.Error_Info;
+         Own    : Tmpl.Compiled;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+         Body_T : constant String :=
+           "{% for message in messages %}"
+           & "{{ message['content'] | trim }}{% endfor %}";
+         Parts  : constant String :=
+           "[{""type"": ""image""}, {""type"": ""text"", ""text"": ""hi""}]";
+      begin
+         Conv.Open (Talk, Status => Status);
+         Conv.Append_Parts (Talk, Conv.User_Role, Parts, Status);
+         Assert (E.Is_Ok (Status), "the parts turn was refused before the filter");
+
+         Tmpl.Compile (Own, Body_T, Status => Status);
+         Assert (E.Is_Ok (Status), "the content-filtering template did not compile");
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status,
+                      Image_Marker => "<IMG>");
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "<IMG>hi",
+                 "content parts through a text filter dropped the marker: "
+                 & (if E.Is_Ok (Status) then Room (1 .. Last)
+                    else E.Error_Code'Image (Status.Code)));
+         Tmpl.Close (Own);
+         Conv.Close (Talk);
+      end;
+
       --  A turn given as parts reads as its words wherever text is wanted,
       --  keeps its list for the template, survives a checkpoint, and is
       --  refused when the list is not one.

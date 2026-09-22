@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+### Fixed
+
+- **A picture survives a text filter in a chat template.** A message's content
+  given as parts -- a picture and words -- renders inline where the template
+  writes the content, the words with a marker where the picture stands. That
+  held where the content was printed or added to text, but a text filter --
+  `trim`, `lower` and the rest -- read the parts' JSON instead and trimmed the
+  marker away, so the prompt marked no picture and the run was refused
+  (`MR-GEN-0009`). MiniCPM-V 2.5's own template writes `content | trim`, so its
+  pictures were lost this way; the filter now renders the parts inline as the
+  bare mention does. MiniCPM-V 2.5 encodes and answers about a picture end to
+  end, its llava-uhd slices framed in the 2.5 group form.
+
 ### Changed
 
 - **The default sampling temperature is 0.4, down from 0.8.** For a personal
