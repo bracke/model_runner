@@ -1132,7 +1132,8 @@ package body Reference_Transformer is
          when Baichuan => "baichuan.",
          when Mpt => "mpt.",
          when Chatglm => "chatglm.",
-         when Command_R => "command-r.");
+         when Command_R => "command-r.",
+         when Mamba => "mamba.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -1586,6 +1587,8 @@ package body Reference_Transformer is
             Item.Kind := Chatglm;
          elsif Named = "command-r" then
             Item.Kind := Command_R;
+         elsif Named = "mamba" then
+            Item.Kind := Mamba;
          else
             return;
          end if;
@@ -1792,6 +1795,21 @@ package body Reference_Transformer is
          end if;
 
          Item.Layers := Item.Layers - Item.Next_Layers;
+      end if;
+
+      --  Mamba's widths, with the defaults the other runtime carries where
+      --  the file leaves a key out.
+      if Item.Kind = Mamba then
+         Item.State_Size :=
+           Metadata (Source, Prefix (Item) & "ssm.state_size", 16);
+         Item.Conv_Taps :=
+           Metadata (Source, Prefix (Item) & "ssm.conv_kernel", 4);
+         Item.Inner_Size :=
+           Metadata (Source, Prefix (Item) & "ssm.inner_size",
+                     2 * Item.Embedding);
+         Item.Time_Rank :=
+           Metadata (Source, Prefix (Item) & "ssm.time_step_rank",
+                     (Item.Embedding + 15) / 16);
       end if;
       if Item.Window >= Item.Context then
          Item.Window := 0;
@@ -2001,9 +2019,10 @@ package body Reference_Transformer is
             --  the blocks past the stack attend in full whatever their
             --  number.
             Is_Linear : constant Boolean :=
-              Item.Kind in Qwen35 | Qwen35_MoE
-              and then Index < Item.Layers
-              and then (Index + 1) mod Item.Linear_Every /= 0;
+              Item.Kind = Mamba
+              or else (Item.Kind in Qwen35 | Qwen35_MoE
+                       and then Index < Item.Layers
+                       and then (Index + 1) mod Item.Linear_Every /= 0);
          begin
             Current.Linear := Is_Linear;
             --  Every architecture but Bert normalizes on the way into the
@@ -2075,7 +2094,53 @@ package body Reference_Transformer is
             end if;
 
             --  A linear block's own tensors, and none of attention's.
-            if Is_Linear then
+            if Is_Linear and then Item.Kind = Mamba then
+               Current.Ssm_In :=
+                 Read_Matrix (Layer_Name (Index, "ssm_in.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv :=
+                 Read_Matrix (Layer_Name (Index, "ssm_conv1d.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv_Bias :=
+                 Read_Vector (Layer_Name (Index, "ssm_conv1d.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Ssm_X :=
+                 Read_Matrix (Layer_Name (Index, "ssm_x.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Ssm_Dt :=
+                 Read_Matrix (Layer_Name (Index, "ssm_dt.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.DT_Bias :=
+                 Read_Vector (Layer_Name (Index, "ssm_dt.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Ssm_A :=
+                 Read_Matrix (Layer_Name (Index, "ssm_a"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Ssm_D :=
+                 Read_Vector (Layer_Name (Index, "ssm_d"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Linear_Out :=
+                 Read_Matrix (Layer_Name (Index, "ssm_out.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+            elsif Is_Linear then
                Current.Mix :=
                  Read_Matrix (Layer_Name (Index, "attn_qkv.weight"), Present);
                if not Present then
@@ -3567,7 +3632,132 @@ package body Reference_Transformer is
             --  the query, normalized, and gated -- one position and one
             --  head at a time over the state itself, which is the plain
             --  form the engine's chunked one unrolls.
-            if Current.Linear then
+            if Current.Linear and then Item.Kind = Mamba then
+               --  Mamba's block, position by position and carrying the
+               --  convolution's memory and the scan's state: the input
+               --  projected and split, the convolution over each channel
+               --  with its bias and unit, the projection to the time step
+               --  and B and C, the time step up and biased, the selective
+               --  scan a channel over the state, the skip and the gate, and
+               --  the projection back added to the residual. Its transition
+               --  is already the negative exponential the file stores, and
+               --  its time step goes through the softplus in the scan.
+               declare
+                  Inner  : constant Natural := Item.Inner_Size;
+                  S_Size : constant Natural := Item.State_Size;
+                  Rank   : constant Natural := Item.Time_Rank;
+                  Taps   : constant Natural := Item.Conv_Taps;
+
+                  Memory : Real_Vector (0 .. (Taps - 1) * Inner - 1) :=
+                    [others => 0.0];
+                  H_St   : Real_Vector (0 .. Inner * S_Size - 1) :=
+                    [others => 0.0];
+               begin
+                  for Step in 0 .. Steps - 1 loop
+                     declare
+                        XZ  : Real_Vector (0 .. 2 * Inner - 1) :=
+                          [others => 0.0];
+                        Xc  : Real_Vector (0 .. Inner - 1) := [others => 0.0];
+                        DBC : Real_Vector (0 .. Rank + 2 * S_Size - 1) :=
+                          [others => 0.0];
+                        DTr : Real_Vector (0 .. Rank - 1) := [others => 0.0];
+                        DT  : Real_Vector (0 .. Inner - 1) := [others => 0.0];
+                        Yc  : Real_Vector (0 .. Inner - 1) := [others => 0.0];
+                        Out_V : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           State (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize (State, Current.Attention_Norm.all, Normed);
+
+                        Project (Current.Ssm_In.all, Normed, XZ);
+
+                        for C in 0 .. Inner - 1 loop
+                           declare
+                              Total : Long_Float :=
+                                Current.Conv_Bias (C);
+                           begin
+                              for K in 0 .. Taps - 1 loop
+                                 declare
+                                    Val : constant Long_Float :=
+                                      (if K < Taps - 1
+                                       then Memory (K * Inner + C)
+                                       else XZ (C));
+                                 begin
+                                    Total := Total + Current.Conv (C, K) * Val;
+                                 end;
+                              end loop;
+                              Xc (C) := Total;
+                           end;
+                        end loop;
+                        for K in 0 .. Taps - 3 loop
+                           for C in 0 .. Inner - 1 loop
+                              Memory (K * Inner + C) :=
+                                Memory ((K + 1) * Inner + C);
+                           end loop;
+                        end loop;
+                        if Taps >= 2 then
+                           for C in 0 .. Inner - 1 loop
+                              Memory ((Taps - 2) * Inner + C) := XZ (C);
+                           end loop;
+                        end if;
+                        for C in 0 .. Inner - 1 loop
+                           Xc (C) := Xc (C) * Logistic (Xc (C));
+                        end loop;
+
+                        Project (Current.Ssm_X.all, Xc, DBC);
+                        for I in 0 .. Rank - 1 loop
+                           DTr (I) := DBC (I);
+                        end loop;
+                        Project (Current.Ssm_Dt.all, DTr, DT);
+                        for C in 0 .. Inner - 1 loop
+                           DT (C) := DT (C) + Current.DT_Bias (C);
+                        end loop;
+
+                        for C in 0 .. Inner - 1 loop
+                           declare
+                              Dt_Soft : constant Long_Float :=
+                                Softplus (DT (C));
+                              X_Dt : constant Long_Float := Xc (C) * Dt_Soft;
+                              Sum  : Long_Float := 0.0;
+                           begin
+                              for S in 0 .. S_Size - 1 loop
+                                 declare
+                                    dA : constant Long_Float :=
+                                      Functions.Exp
+                                        (Dt_Soft * Current.Ssm_A (C, S));
+                                    B_S : constant Long_Float := DBC (Rank + S);
+                                    C_S : constant Long_Float :=
+                                      DBC (Rank + S_Size + S);
+                                    New_H : constant Long_Float :=
+                                      H_St (C * S_Size + S) * dA + B_S * X_Dt;
+                                 begin
+                                    H_St (C * S_Size + S) := New_H;
+                                    Sum := Sum + C_S * New_H;
+                                 end;
+                              end loop;
+                              Yc (C) := Sum + Current.Ssm_D (C) * Xc (C);
+                           end;
+                        end loop;
+
+                        for C in 0 .. Inner - 1 loop
+                           Yc (C) :=
+                             Yc (C)
+                             * (XZ (Inner + C) * Logistic (XZ (Inner + C)));
+                        end loop;
+
+                        --  The block's answer, left for the second pass to
+                        --  join to the residual, as a hybrid's linear layer
+                        --  leaves its own; Mamba runs no feed-forward after.
+                        Project (Current.Linear_Out.all, Yc, Out_V);
+                        for Index in 0 .. Width - 1 loop
+                           Linear_Rows (Step, Index) := Out_V (Index);
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            elsif Current.Linear then
                declare
                   S_Size    : constant Natural := Item.State_Size;
                   Keys_Wide : constant Natural := Item.Key_Heads * S_Size;
@@ -4235,6 +4425,12 @@ package body Reference_Transformer is
                      end;
                   end if;
 
+                  --  Mamba has no feed-forward: its block is the whole
+                  --  layer, joined to the residual just above.
+                  if Item.Kind = Mamba then
+                     goto Layer_Written;
+                  end if;
+
                   --  Feed-forward block. It reads the block's own
                   --  normalized input where the two sublayers run in
                   --  parallel, the residual as it stands where the block
@@ -4304,6 +4500,7 @@ package body Reference_Transformer is
                      end;
                   end if;
 
+                  <<Layer_Written>>
                   for Index in 0 .. Width - 1 loop
                      Whole (Step, Index) := State (Index);
                   end loop;

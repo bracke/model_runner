@@ -5037,7 +5037,7 @@ package body Tests.GGUF_Cases is
 
       --  It says what it is, and it is not this.
       Fixtures.Reset (Builder);
-      Fixtures.Add_String (Builder, "general.architecture", "mamba");
+      Fixtures.Add_String (Builder, "general.architecture", "rwkv6");
       Assert (Outcome (Builder) = E.Arch_Unsupported,
               "an architecture this profile does not run was accepted");
 

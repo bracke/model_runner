@@ -186,7 +186,7 @@ private
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
-      Internlm2, Baichuan, Mpt, Chatglm, Command_R);
+      Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -295,6 +295,16 @@ private
       Conv       : Matrix_Access := null;
       State_Norm : Vector_Access := null;
       Linear_Out : Matrix_Access := null;
+
+      --  Mamba's own: the input projection, the projection to the time
+      --  step and B and C, the time step's projection up, the transition a
+      --  state a channel, the skip a channel and the convolution's bias.
+      Ssm_In     : Matrix_Access := null;
+      Ssm_X      : Matrix_Access := null;
+      Ssm_Dt     : Matrix_Access := null;
+      Ssm_A      : Matrix_Access := null;
+      Ssm_D      : Vector_Access := null;
+      Conv_Bias  : Vector_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -399,6 +409,8 @@ private
       Key_Heads    : Natural := 0;
       Value_Heads  : Natural := 0;
       Conv_Taps    : Natural := 0;
+      Inner_Size   : Natural := 0;
+      Time_Rank    : Natural := 0;
       Next_Layers  : Natural := 0;
       Next_Proj    : Matrix_Access := null;
       Next_Enorm   : Vector_Access := null;

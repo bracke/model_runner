@@ -7,6 +7,28 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Mamba is read** -- the first pure state-space model, no attention and no
+  feed-forward anywhere. Every layer projects its input to an inner
+  activation and a gate, runs a causal convolution over the activation, and
+  drives a selective scan: a recurrent state a channel, decayed by a
+  per-channel step through the softplus and driven by the input, read back
+  through a per-position matrix, with a skip a channel and a sigmoid-weighted
+  gate on the answer. The block keeps a state a session, like a hybrid's
+  linear layers, but every layer rather than three in four and Mamba's own
+  selective recurrence rather than the gated delta rule. The batch is its
+  positions one after another, each carrying the state the one before it
+  left. Crossed against the independent reference over every format and path,
+  outside tolerance nought; the scan has no device kernel, so a Mamba layer
+  runs on the host under the device backend. Begins Phase 5 of the model-
+  coverage roadmap. A repacked Mamba read its own weights wrong until the fix
+  below: its three projected matrices -- `ssm_in`, `ssm_x`, `ssm_dt` -- were
+  missing from the list of matrices the repacking (`--repack`, and the
+  conformance sweep's `to_f32` and `to_bf16`) converts and rehouses, so a
+  repacked model read them out of the storage the repacking had freed:
+  finite in, non-finite out, and the selective scan carried the NaN down the
+  stack. They are read through the shared product like any other matrix and
+  now repacked like any other; the scan's own vectors (`ssm_a`, the
+  convolution, `ssm_d`), read whole at load, stay out of the list as before.
 - **A wide mixture spills its gather on the device instead of dropping to
   the host.** The device gather reads at most sixteen experts at once -- the
   push block holds sixteen member indices -- so a token that routed to more

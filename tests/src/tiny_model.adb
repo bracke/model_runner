@@ -391,14 +391,16 @@ package body Tiny_Model is
            when Baichuan  => "baichuan",
            when Mpt       => "mpt",
            when Chatglm   => "chatglm",
-           when Command_R => "command-r");
+           when Command_R => "command-r",
+           when Mamba     => "mamba");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
       --  The block past the stack attends in full, whatever its number.
       function Linear_Block (Index : Natural) return Boolean
-      is (Kind = Qwen35 and then Index < Layers
-          and then (Index + 1) mod 2 /= 0);
+      is (Kind = Mamba
+          or else (Kind = Qwen35 and then Index < Layers
+                   and then (Index + 1) mod 2 /= 0));
 
       function Layer_Name (Index : Natural; Suffix : String) return String is
          Number : constant String := Natural'Image (Index);
@@ -510,6 +512,22 @@ package body Tiny_Model is
            (Builder, Prefix & ".ssm.inner_size",
             Interfaces.Unsigned_32 (Linear_Heads * Linear_State));
          Fixtures.Add_U32 (Builder, Prefix & ".nextn_predict_layers", 1);
+      end if;
+
+      --  Mamba's widths: a small state, a short convolution, an inner width
+      --  twice the model's and a time step of a couple of ranks. Every layer
+      --  is a selective scan and there is no attention anywhere.
+      if Kind = Mamba then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.state_size",
+            Interfaces.Unsigned_32 (Linear_State));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.conv_kernel",
+            Interfaces.Unsigned_32 (Linear_Taps));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.inner_size",
+            Interfaces.Unsigned_32 (2 * Embedding));
+         Fixtures.Add_U32 (Builder, Prefix & ".ssm.time_step_rank", 2);
       end if;
 
       --  Which pooling the model was trained for, which is a thing a bert
@@ -974,6 +992,51 @@ package body Tiny_Model is
                  (Builder, Layer_Name (Index, "attn_q.weight"),
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
+            end;
+         elsif Linear_Block (Index) and then Kind = Mamba then
+            --  Mamba's own: the input projection to the inner activation and
+            --  its gate, the convolution with its bias, the projection to
+            --  the time step and B and C, the time step's projection up with
+            --  its bias, the transition -- negative, so the state decays --
+            --  the skip and the projection back.
+            declare
+               Inner : constant Natural := 2 * Embedding;
+               State : constant Natural := Linear_State;
+               Rank  : constant Natural := 2;
+               A_Vals : N.Real_Array (0 .. N.Element_Count (Inner * State) - 1);
+               Drawn  : constant N.Real_Array :=
+                 Next (N.Element_Count (Inner * State));
+            begin
+               Weight (Layer_Name (Index, "ssm_in.weight"),
+                       [G.U64 (Embedding), G.U64 (2 * Inner)]);
+
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_conv1d.weight"),
+                  [G.U64 (Linear_Taps), G.U64 (Inner)], G.Type_F32,
+                  Fixtures.Encode_F32
+                    (Next (N.Element_Count (Linear_Taps * Inner))));
+               Norm_Of (Layer_Name (Index, "ssm_conv1d.bias"), Inner);
+
+               Weight (Layer_Name (Index, "ssm_x.weight"),
+                       [G.U64 (Inner), G.U64 (Rank + 2 * State)]);
+               Weight (Layer_Name (Index, "ssm_dt.weight"),
+                       [G.U64 (Rank), G.U64 (Inner)]);
+               Norm_Of (Layer_Name (Index, "ssm_dt.bias"), Inner);
+
+               --  The transition a state a channel, already the negative
+               --  exponential the file stores rather than the log-of-minus
+               --  it trains: a decay between nought and one, never a growth.
+               for I in A_Vals'Range loop
+                  A_Vals (I) := -(0.5 + 0.5 * abs (Drawn (I)));
+               end loop;
+               Fixtures.Add_Tensor
+                 (Builder, Layer_Name (Index, "ssm_a"),
+                  [G.U64 (State), G.U64 (Inner)], G.Type_F32,
+                  Fixtures.Encode_F32 (A_Vals));
+
+               Norm_Of (Layer_Name (Index, "ssm_d"), Inner);
+               Weight (Layer_Name (Index, "ssm_out.weight"),
+                       [G.U64 (Inner), G.U64 (Embedding)]);
             end;
          elsif Linear_Block (Index) then
             --  The linear layer's own: the three projections in one, the

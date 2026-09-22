@@ -133,11 +133,28 @@ package body Model_Runner.Llama is
 
    --  Where a linear layer's convolution memory begins: Conv_Kernel - 1
    --  positions' mixed projections, oldest first, Mix_Width apiece.
+   --  Mamba's convolution runs over its inner width, the delta rule's over
+   --  its mixed projection.
+   function Conv_Width (Settings : Configuration) return Element_Count
+   is (if Pure_SSM (Settings.Kind)
+       then Element_Count (Settings.Inner_Size)
+       else Element_Count (Mix_Width (Settings)));
+
+   --  Mamba's state is a channel by a state, the delta rule's a value head
+   --  by a state by a state.
+   function State_Cells (Settings : Configuration) return Element_Count
+   is (if Pure_SSM (Settings.Kind)
+       then Element_Count (Settings.Inner_Size)
+            * Element_Count (Settings.State_Size)
+       else Element_Count (Settings.Value_Heads)
+            * Element_Count (Settings.State_Size)
+            * Element_Count (Settings.State_Size));
+
    function Conv_At
      (Settings : Configuration; Layer : Natural) return Element_Count
    is (Element_Count (Linear_Ordinal (Settings, Layer))
        * Element_Count (Settings.Conv_Kernel - 1)
-       * Element_Count (Mix_Width (Settings)));
+       * Conv_Width (Settings));
 
    --  Where a linear layer's state begins within a slot: State_Size by
    --  State_Size a value head, the heads one after another, and within
@@ -146,23 +163,18 @@ package body Model_Runner.Llama is
    --  into a running row.
    function State_At
      (Settings : Configuration; Layer : Natural) return Element_Count
-   is (Element_Count (Linear_Ordinal (Settings, Layer))
-       * Element_Count (Settings.Value_Heads)
-       * Element_Count (Settings.State_Size)
-       * Element_Count (Settings.State_Size));
+   is (Element_Count (Linear_Ordinal (Settings, Layer)) * State_Cells (Settings));
 
    --  How many numbers all of a session's linear states take, and all of
    --  its convolution memories.
    function State_Room (Settings : Configuration) return Element_Count
    is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
-       * Element_Count (Settings.Value_Heads)
-       * Element_Count (Settings.State_Size)
-       * Element_Count (Settings.State_Size));
+       * State_Cells (Settings));
 
    function Conv_Room (Settings : Configuration) return Element_Count
    is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
        * Element_Count (Settings.Conv_Kernel - 1)
-       * Element_Count (Mix_Width (Settings)));
+       * Conv_Width (Settings));
 
    --  Which slot of the ring holds the state a position reads: the one
    --  the position before it wrote. Kept_States + 1 slots, the one slot
@@ -481,7 +493,7 @@ package body Model_Runner.Llama is
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
-                       | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt =>
+                       | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -989,6 +1001,56 @@ package body Model_Runner.Llama is
             Settings.Shared_Feed :=
               (if E.Is_Ok (Local) then Natural (Number) else 0);
          end if;
+      end if;
+
+      --  Mamba's widths, each with the default the other runtime carries
+      --  where the file leaves it out: sixteen states, four convolution
+      --  taps, an inner width twice the model's, and a time step of the
+      --  model width over sixteen rounded up. Read under the same ssm keys
+      --  the hybrid uses, but their meaning is Mamba's -- the time step is a
+      --  projection rank, not a count of heads.
+      if Pure_SSM (Settings.Kind) then
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "ssm.state_size"),
+            1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.State_Size :=
+           (if E.Is_Ok (Local) then Natural (Number) else 16);
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "ssm.conv_kernel"),
+            1, 16, Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Conv_Kernel :=
+           (if E.Is_Ok (Local) then Natural (Number) else 4);
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "ssm.inner_size"),
+            1, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Inner_Size :=
+           (if E.Is_Ok (Local) then Natural (Number)
+            else 2 * Settings.Embedding);
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "ssm.time_step_rank"),
+            1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Time_Rank :=
+           (if E.Is_Ok (Local) then Natural (Number)
+            else (Settings.Embedding + 15) / 16);
       end if;
 
       if Settings.Experts > 0 then
@@ -1531,6 +1593,16 @@ package body Model_Runner.Llama is
          Add (Which.Z_Gate'Unchecked_Access);
          Add (Which.Alpha'Unchecked_Access);
          Add (Which.Beta'Unchecked_Access);
+
+         --  Mamba's three projected matrices, read through Product like any
+         --  other and so repacked like any other; the scan's own vectors
+         --  (Ssm_A, the convolution, Ssm_D) are read whole at load and are
+         --  not here. Left out once, and a repacked model read Ssm_In out
+         --  of storage the repacking had freed -- finite in, non-finite
+         --  out, and the selective scan carried the NaN down the stack.
+         Add (Which.Ssm_In'Unchecked_Access);
+         Add (Which.Ssm_X'Unchecked_Access);
+         Add (Which.Ssm_Dt'Unchecked_Access);
          Add (Which.Linear_Out'Unchecked_Access);
          Add (Which.Shared_Gate'Unchecked_Access);
          Add (Which.Shared_Up'Unchecked_Access);
@@ -3183,7 +3255,88 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Is_Linear then
+            if Is_Linear and then Pure_SSM (Item.Settings.Kind) then
+               --  Mamba's block, all of it a linear layer: the input split
+               --  into an inner activation and its gate, a causal
+               --  convolution over the inner activation with a bias, the
+               --  inner activation projected to the time step and to B and
+               --  C, the time step projected up with a bias, the state
+               --  transition a state a channel, the skip a channel, and the
+               --  projection back. No queries, keys or values, no attention.
+               declare
+                  Inner : constant Element_Count :=
+                    Element_Count (Item.Settings.Inner_Size);
+                  State : constant Element_Count :=
+                    Element_Count (Item.Settings.State_Size);
+                  Rank  : constant Element_Count :=
+                    Element_Count (Item.Settings.Time_Rank);
+                  Taps  : constant Element_Count :=
+                    Element_Count (Item.Settings.Conv_Kernel);
+               begin
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ssm_in.weight"),
+                     2 * Inner, Width, Current.Ssm_In, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Table
+                    (Item, Source, Layer_Key (Index, "ssm_conv1d.weight"),
+                     Inner, Taps, Current.Conv, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ssm_conv1d.bias"),
+                     Inner, Current.Conv_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ssm_x.weight"),
+                     Rank + 2 * State, Inner, Current.Ssm_X, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ssm_dt.weight"),
+                     Inner, Rank, Current.Ssm_Dt, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ssm_dt.bias"),
+                     Inner, Current.DT_Bias, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Table
+                    (Item, Source, Layer_Key (Index, "ssm_a"),
+                     Inner, State, Current.Ssm_A, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ssm_d"),
+                     Inner, Current.Ssm_D, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ssm_out.weight"),
+                     Width, Inner, Current.Linear_Out, Status, Repack);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end;
+            elsif Is_Linear then
                --  The linear layer's projections: the queries, keys and
                --  values in one tensor, the gate, the decay and the
                --  rate a value head, the taps, the decay's shape, the
@@ -12776,6 +12929,38 @@ package body Model_Runner.Llama is
             end;
          end if;
 
+         --  Mamba keeps a state a session as a hybrid's linear layers do:
+         --  the convolution's last positions and the scan's state, one slot,
+         --  cleared. It does not draft or rewind, so the ring never grows
+         --  past the one slot. Beside them the scratch one position needs.
+         if Pure_SSM (Settings.Kind) then
+            declare
+               Inner : constant Element_Count :=
+                 Element_Count (Settings.Inner_Size);
+               DBC   : constant Element_Count :=
+                 Element_Count (Settings.Time_Rank)
+                 + 2 * Element_Count (Settings.State_Size);
+            begin
+               T.Allocate (Conv_Room (Settings), Item.Conv_State);
+               T.Allocate (State_Room (Settings), Item.Delta_State);
+               Item.Kept_States := 0;
+               Item.Kept_Newest := 0;
+               if Item.Conv_State /= null then
+                  Item.Conv_State.all := [others => 0.0];
+               end if;
+               if Item.Delta_State /= null then
+                  Item.Delta_State.all := [others => 0.0];
+               end if;
+
+               T.Allocate (2 * Inner, Item.Mamba_XZ);
+               T.Allocate (Inner, Item.Mamba_X);
+               T.Allocate (DBC, Item.Mamba_DBC);
+               T.Allocate (Element_Count (Settings.Time_Rank), Item.Mamba_DTR);
+               T.Allocate (Inner, Item.Mamba_DT);
+               T.Allocate (Inner, Item.Mamba_Y);
+            end;
+         end if;
+
          --  An architecture that normalizes its heads needs room for one,
          --  whether the plain way (Query_Norm) or Command-R+'s centred way
          --  (Query_Head_Norm).
@@ -14169,6 +14354,154 @@ package body Model_Runner.Llama is
         Natural'Max (Item.Kept_Newest, Position + Natural (Rows.Count));
    end Linear_Chunk;
 
+   --  One position through one Mamba layer, on the host. It reads the
+   --  layer's normalized input in Item.Normalized and leaves the block's
+   --  output there for the residual to take, carrying the convolution's
+   --  memory and the scan's state a session in the same ring a hybrid's
+   --  linear layers use -- one slot, since Mamba neither drafts nor rewinds.
+   --
+   --  The block: the input projected to an inner activation and its gate; a
+   --  depthwise causal convolution over the activation, biased and passed
+   --  through a sigmoid-weighted unit; that projected to a time step and to
+   --  B and C; the time step projected up and biased; the selective scan,
+   --  channel by channel over the state; the skip added; the gate applied;
+   --  and the projection back. The transition A is already the negative
+   --  exponential the file stores, and the time step's softplus is taken
+   --  here, in the scan, where the reference implementation takes it too.
+   procedure Mamba_Step
+     (Item    : in out Session;
+      Source  : Model'Class;
+      Current : Layer;
+      Layer_Index : Natural;
+      Status  : out E.Error_Info)
+   is
+      Settings : Configuration renames Source.Settings;
+      Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
+      State : constant Element_Count := Element_Count (Settings.State_Size);
+      Rank  : constant Element_Count := Element_Count (Settings.Time_Rank);
+      Taps  : constant Element_Count := Element_Count (Settings.Conv_Kernel);
+
+      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
+      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
+
+      Memory : Real_Array renames Item.Conv_State.all;
+      H      : Real_Array renames Item.Delta_State.all;
+      XZ     : Real_Array renames Item.Mamba_XZ.all;
+      Xc     : Real_Array renames Item.Mamba_X.all;
+      DBC    : Real_Array renames Item.Mamba_DBC.all;
+      DT     : Real_Array renames Item.Mamba_DT.all;
+      Yc     : Real_Array renames Item.Mamba_Y.all;
+      Conv   : Real_Array renames Current.Conv.all;
+      A      : Real_Array renames Current.Ssm_A.all;
+
+      function Softplus (X : N.Wide_Real) return N.Wide_Real
+      is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
+   begin
+      --  The input projected to the inner activation and its gate.
+      Product (Item, Current.Ssm_In, Item.Normalized, Item.Mamba_XZ, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The causal convolution over each channel: the last Taps positions,
+      --  oldest first and this one last, against the channel's taps, biased.
+      for C in 0 .. Inner - 1 loop
+         declare
+            Acc : N.Wide_Real := N.Wide_Real (Current.Conv_Bias.all (C));
+         begin
+            for K_At in 0 .. Taps - 1 loop
+               declare
+                  Value : constant Real :=
+                    (if K_At < Taps - 1
+                     then Memory (Conv_Base + K_At * Inner + C)
+                     else XZ (C));
+               begin
+                  Acc := Acc
+                    + N.Wide_Real (Conv (C * Taps + K_At)) * N.Wide_Real (Value);
+               end;
+            end loop;
+            Xc (C) := Real (Acc);
+         end;
+      end loop;
+
+      --  And the memory slides on: the oldest dropped, this position's
+      --  inner activation appended.
+      for C in 0 .. Inner - 1 loop
+         for T_At in 0 .. Taps - 3 loop
+            Memory (Conv_Base + T_At * Inner + C) :=
+              Memory (Conv_Base + (T_At + 1) * Inner + C);
+         end loop;
+         if Taps >= 2 then
+            Memory (Conv_Base + (Taps - 2) * Inner + C) := XZ (C);
+         end if;
+      end loop;
+
+      --  The unit on the convolved activation.
+      K.SiLU (Xc (0 .. Inner - 1));
+
+      --  That projected to the time step, B and C.
+      Product (Item, Current.Ssm_X, Item.Mamba_X, Item.Mamba_DBC, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The time step projected up to the inner width and biased.
+      Item.Mamba_DTR.all (0 .. Rank - 1) := DBC (0 .. Rank - 1);
+      Product (Item, Current.Ssm_Dt, Item.Mamba_DTR, Item.Mamba_DT, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      for C in 0 .. Inner - 1 loop
+         DT (C) := DT (C) + Current.DT_Bias.all (C);
+      end loop;
+
+      --  The selective scan, a channel at a time: the time step through the
+      --  softplus, the state decayed by exp(dt*A) and driven by B times the
+      --  input times the time step, the answer C against the state, and the
+      --  skip D times the input added.
+      for C in 0 .. Inner - 1 loop
+         declare
+            Dt_Soft : constant N.Wide_Real := Softplus (N.Wide_Real (DT (C)));
+            X_Dt    : constant N.Wide_Real :=
+              N.Wide_Real (Xc (C)) * Dt_Soft;
+            Sum     : N.Wide_Real := 0.0;
+         begin
+            for S in 0 .. State - 1 loop
+               declare
+                  dA : constant N.Wide_Real :=
+                    N.Exp (Dt_Soft * N.Wide_Real (A (C * State + S)));
+                  B_S : constant N.Wide_Real :=
+                    N.Wide_Real (DBC (Rank + S));
+                  C_S : constant N.Wide_Real :=
+                    N.Wide_Real (DBC (Rank + State + S));
+                  Cell : constant Element_Count := State_Base + C * State + S;
+                  New_H : constant N.Wide_Real :=
+                    N.Wide_Real (H (Cell)) * dA + B_S * X_Dt;
+               begin
+                  H (Cell) := Real (New_H);
+                  Sum := Sum + C_S * New_H;
+               end;
+            end loop;
+            Yc (C) :=
+              Real (Sum + N.Wide_Real (Current.Ssm_D.all (C))
+                            * N.Wide_Real (Xc (C)));
+         end;
+      end loop;
+
+      --  The gate: the answer weighted by the sigmoid-weighted gate.
+      for C in 0 .. Inner - 1 loop
+         declare
+            Z : constant N.Wide_Real := N.Wide_Real (XZ (Inner + C));
+         begin
+            Yc (C) :=
+              Real (N.Wide_Real (Yc (C)) * (Z / (1.0 + N.Exp (-Z))));
+         end;
+      end loop;
+
+      --  And the projection back, into the buffer the residual reads.
+      Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
+   end Mamba_Step;
+
    procedure Linear_Position
      (Item    : in out Session;
       Source  : Model'Class;
@@ -15180,9 +15513,14 @@ package body Model_Runner.Llama is
                   Current.Attention_Norm_Bias, Item.Normalized.all);
                Charge (Item, Normalizing, Mark);
 
-               Linear_Position
-                 (Item, Source, Current, Natural (Index),
-                  Natural (Reserved), Status);
+               if Pure_SSM (Settings.Kind) then
+                  Mamba_Step
+                    (Item, Source, Current, Natural (Index), Status);
+               else
+                  Linear_Position
+                    (Item, Source, Current, Natural (Index),
+                     Natural (Reserved), Status);
+               end if;
                exit when E.Is_Error (Status);
                Charge (Item, Attending, Mark);
 
@@ -15191,6 +15529,14 @@ package body Model_Runner.Llama is
                   Current.Post_Attention_Norm_Bias, Status);
                exit when E.Is_Error (Status);
                Charge (Item, Joining, Mark);
+
+               --  Mamba's layer is the block and nothing after it: no
+               --  feed-forward follows, where a hybrid's linear layer has
+               --  every layer's. So the layer is done once the block has
+               --  joined the residual.
+               if Pure_SSM (Settings.Kind) then
+                  goto Layer_Done;
+               end if;
             else
 
                --  The whole layer as one submission. A generated token made
@@ -17625,6 +17971,26 @@ package body Model_Runner.Llama is
             if Is_Linear and then Fused then
                --  Gone over whole above, feed-forward and all.
                null;
+            elsif Is_Linear and then Pure_SSM (Settings.Kind) then
+               --  Mamba's batch is its positions one after another, each
+               --  the single-token step over its own row of the normalized
+               --  batch and each carrying the state the one before it left,
+               --  because the selective scan is a recurrence with nothing to
+               --  parallelize over the batch. Each row's answer is written
+               --  back in its place for the join below to take, exactly as
+               --  the single-token path leaves it in Normalized.
+               Charge (Item, Normalizing, Mark);
+               for P in 0 .. Count - 1 loop
+                  Item.Normalized.all (0 .. Width - 1) :=
+                    Norm.all (P * Width .. P * Width + Width - 1);
+                  Mamba_Step
+                    (Item, Source, Current, Natural (Index), Status);
+                  exit when E.Is_Error (Status);
+                  Norm.all (P * Width .. P * Width + Width - 1) :=
+                    Item.Normalized.all (0 .. Width - 1);
+               end loop;
+               exit when E.Is_Error (Status);
+               Charge (Item, Attending, Mark);
             elsif Is_Linear then
                --  The linear layer's projections once over the whole batch,
                --  then its positions one after another, since each reads
@@ -18269,6 +18635,12 @@ package body Model_Runner.Llama is
 
                Charge (Item, Joining, Mark);
 
+               --  Mamba's layer is its block and no feed-forward, so once
+               --  the block has joined the residual the layer is done.
+               if Pure_SSM (Settings.Kind) then
+                  goto After_Feed_Batch;
+               end if;
+
                --  Which experts run is decided per position, so a batch has no
                --  one matrix to multiply the whole of it by: this is the one
                --  block that runs a token at a time however many were handed
@@ -18422,6 +18794,8 @@ package body Model_Runner.Llama is
 
                Charge (Item, Joining, Mark);
 
+               <<After_Feed_Batch>>
+               null;
             end if;
 
             --  What became of this layer, for the run's report.

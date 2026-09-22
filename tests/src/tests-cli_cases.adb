@@ -4192,7 +4192,7 @@ package body Tests.CLI_Cases is
       --  tested is the refusal to read an architecture this build does not
       --  implement rather than the refusal to read a typo -- and it had to
       --  be changed once, when gemma stopped being one of those.
-      Configured ("mamba", Settings, Status);
+      Configured ("rwkv6", Settings, Status);
       Assert (Status.Code = E.Arch_Unsupported,
               "an architecture this build does not read was accepted: "
               & E.Error_Code'Image (Status.Code));
@@ -4870,7 +4870,7 @@ package body Tests.CLI_Cases is
          Source  : Fixed_Arguments;
       begin
          Fixtures.Reset (Builder);
-         Fixtures.Add_String (Builder, "general.architecture", "mamba");
+         Fixtures.Add_String (Builder, "general.architecture", "rwkv6");
          Fixtures.Build (Builder, Image);
 
          Ada.Streams.Stream_IO.Create

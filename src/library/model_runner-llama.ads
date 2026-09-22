@@ -188,7 +188,7 @@ package Model_Runner.Llama is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
-      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R);
+      Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -202,6 +202,18 @@ package Model_Runner.Llama is
    --  @return True where some layers are linear rather than attending.
    function Hybrid (Item : Architecture) return Boolean
    is (Item in Qwen35 | Qwen35_MoE);
+
+   --  Whether an architecture is a pure state-space model: every layer a
+   --  selective scan over a recurrent state, no attention anywhere and no
+   --  feed-forward block. Mamba is the first here. It keeps a state a
+   --  session, like a hybrid's linear layers, but every layer rather than
+   --  three in four, and its recurrence is Mamba's selective one rather
+   --  than the gated delta rule.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for a pure state-space model.
+   function Pure_SSM (Item : Architecture) return Boolean
+   is (Item = Mamba);
 
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
@@ -251,7 +263,8 @@ package Model_Runner.Llama is
          when Baichuan   => "baichuan",
          when Mpt        => "mpt",
          when Chatglm    => "chatglm",
-         when Command_R  => "command-r");
+         when Command_R  => "command-r",
+         when Mamba      => "mamba");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -519,6 +532,13 @@ package Model_Runner.Llama is
       Value_Heads     : Natural := 0;
       State_Size      : Natural := 0;
       Conv_Kernel     : Natural := 0;
+
+      --  Mamba's widths: the inner width its projections work over, twice
+      --  the model width, and the rank the time step is projected through
+      --  before it is broadcast over the inner width. Nought for every
+      --  other architecture.
+      Inner_Size      : Natural := 0;
+      Time_Rank       : Natural := 0;
       Shared_Feed     : Natural := 0;
       Next_Layers     : Natural := 0;
    end record;
@@ -545,8 +565,9 @@ package Model_Runner.Llama is
    --  @param Layer Layer index, counting from nought.
    --  @return True where the layer keeps a state rather than a cache.
    function Linear (Settings : Configuration; Layer : Natural) return Boolean
-   is (Settings.Linear_Every > 0
-       and then (Layer + 1) mod Settings.Linear_Every /= 0);
+   is (Pure_SSM (Settings.Kind)
+       or else (Settings.Linear_Every > 0
+                and then (Layer + 1) mod Settings.Linear_Every /= 0));
 
    --  Widths the linear layers' projections have: the queries and keys
    --  together, the values, and the three at once, which is what the
@@ -2060,6 +2081,22 @@ private
       State_Norm : Model_Runner.Tensors.Real_Array_Access;
       Linear_Out : aliased Model_Runner.Tensors.View;
 
+      --  Mamba's projections and the vectors its scan reads. Ssm_In splits
+      --  the input into the inner activation and its gate; Ssm_X projects
+      --  the inner activation to the time step, B and C; Ssm_Dt projects the
+      --  time step up to the inner width; Ssm_A is the state transition, one
+      --  a state a channel and already the negative exponential the file
+      --  stores; Ssm_D the skip a channel; Conv_Bias the convolution's bias.
+      --  Conv, DT_Bias and Linear_Out above hold the convolution's taps, the
+      --  time step's bias and the projection back, whose names Mamba shares
+      --  with the gated delta rule. Null for every other architecture.
+      Ssm_In     : aliased Model_Runner.Tensors.View;
+      Ssm_X      : aliased Model_Runner.Tensors.View;
+      Ssm_Dt     : aliased Model_Runner.Tensors.View;
+      Ssm_A      : Model_Runner.Tensors.Real_Array_Access;
+      Ssm_D      : Model_Runner.Tensors.Real_Array_Access;
+      Conv_Bias  : Model_Runner.Tensors.Real_Array_Access;
+
       --  A_Log, DT_Bias and State_Norm laid end to end, which is how the
       --  device's rule step takes the three: one resident weight. Built
       --  as the block resolves, for a linear layer; null otherwise.
@@ -2582,6 +2619,18 @@ private
       Z_Row      : Model_Runner.Tensors.Real_Array_Access := null;
       Alpha_Row  : Model_Runner.Tensors.Real_Array_Access := null;
       Beta_Row   : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Mamba's scratch for one position: the input projected to the inner
+      --  activation and its gate (Mamba_XZ), the convolved inner activation
+      --  (Mamba_X), the projection to the time step and B and C (Mamba_DBC),
+      --  the time step projected up (Mamba_DT) and the scan's answer before
+      --  the projection back (Mamba_Y). Null for every other architecture.
+      Mamba_XZ   : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_X    : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_DBC  : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_DTR  : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_DT   : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_Y    : Model_Runner.Tensors.Real_Array_Access := null;
       Blend_Row  : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Row : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Up_Row : Model_Runner.Tensors.Real_Array_Access := null;
