@@ -84,6 +84,21 @@ package Model_Runner.CLI.Pictures is
    --  @return True when pictures can be gathered.
    function Is_Open (Item : Seer) return Boolean;
 
+   --  The text a picture stands as in the prompt: the marker a model's own
+   --  template writes where a picture goes, empty on a seer that is not
+   --  open. A caller hands it to the template so that content given as
+   --  parts renders with the picture where it stands.
+   --
+   --  @param Item Seer to inspect.
+   --  @return The marker text, or "" where there is none.
+   function Picture_Marker (Item : Seer) return String;
+
+   --  The text a video slot stands as, as Picture_Marker is for a picture.
+   --
+   --  @param Item Seer to inspect.
+   --  @return The marker text, or "" where there is none.
+   function Video_Marker (Item : Seer) return String;
+
    --  Whether a list of parts names a picture or a video: a part of type
    --  image or image_url with a path or url, or of type video with a path.
    --

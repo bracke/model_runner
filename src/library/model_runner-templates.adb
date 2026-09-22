@@ -5347,7 +5347,9 @@ package body Model_Runner.Templates is
       Status                : out E.Error_Info;
       Thinking              : Thinking_Choice := Thinking_Unstated;
       Tools                 : access constant Offered_Tools.Definitions
-        := null)
+        := null;
+      Image_Marker          : String := "";
+      Video_Marker          : String := "")
    is
       Count      : constant Natural := Conv.Length (Messages);
 
@@ -5508,6 +5510,10 @@ package body Model_Runner.Templates is
          Text  : Ada.Strings.Unbounded.Unbounded_String;
          Start : Natural := 0;
          Index : Natural := 0;
+         --  Whether a Value_Data is a message's content parts, which are
+         --  rendered inline -- text and the picture markers -- where the
+         --  value is wanted as text, rather than as their JSON.
+         Parts : Boolean := False;
       end record;
 
       function Text_Of (Value : Held) return String
@@ -5521,6 +5527,12 @@ package body Model_Runner.Templates is
       function As_Data (Value : String) return Held
       is (Kind => Value_Data,
           Text => Ada.Strings.Unbounded.To_Unbounded_String (Value),
+          others => <>);
+
+      function As_Parts (Value : String) return Held
+      is (Kind => Value_Data,
+          Text => Ada.Strings.Unbounded.To_Unbounded_String (Value),
+          Parts => True,
           others => <>);
 
       --  A number as its canonical text: a whole number as written, and
@@ -5979,7 +5991,7 @@ package body Model_Runner.Templates is
             Parts : constant String := Conv.Parts_At (Messages, At_Message);
          begin
             if Parts'Length > 0 then
-               return As_Data (Parts);
+               return As_Parts (Parts);
             end if;
             return As_Text (Conv.Content_At (Messages, At_Message));
          end;
@@ -9811,6 +9823,15 @@ package body Model_Runner.Templates is
                end if;
                return "";
             when others =>
+               --  A message's content parts, where the value is wanted as
+               --  text and the picture markers are known, render inline:
+               --  the words and a marker where each picture stands.
+               if not Testing and then R.Kind = Value_Data and then R.Parts
+                 and then Image_Marker'Length + Video_Marker'Length > 0
+               then
+                  return Conv.Prompt_Of_Parts
+                    (Text_Of (R), Image_Marker, Video_Marker);
+               end if;
                return Printed (R);
          end case;
       end Value_Of;
@@ -9903,10 +9924,21 @@ package body Model_Runner.Templates is
                     and then (Left.Kind in Value_Text | Value_Data)
                     and then (Right.Kind in Value_Text | Value_Data)
                   then
-                     Refuse (Value.Terms (Index).Join_At,
-                             Value.Terms (Index).Join_Len,
-                             E.Template_Unsupported_Construct);
-                     return True;
+                     --  A picture's parts added to text render inline where
+                     --  the markers are known; only refuse where they are
+                     --  not, so the join is never run together as spelling.
+                     if (Image_Marker'Length + Video_Marker'Length > 0)
+                       and then ((Left.Kind = Value_Data and then Left.Parts)
+                                 or else
+                                 (Right.Kind = Value_Data and then Right.Parts))
+                     then
+                        null;
+                     else
+                        Refuse (Value.Terms (Index).Join_At,
+                                Value.Terms (Index).Join_Len,
+                                E.Template_Unsupported_Construct);
+                        return True;
+                     end if;
                   end if;
                end;
             end if;

@@ -1693,6 +1693,44 @@ package body Tests.Template_Cases is
                  "Gemma's parts branch wrote: " & Room (1 .. Last));
       end;
 
+      --  A model's own template that writes message['content'] -- adding it
+      --  to text, as MiniCPM-V's does -- renders a picture's parts inline:
+      --  the words and the picture's marker where it stands, when the caller
+      --  hands Render the marker. Without a marker the add is refused, as it
+      --  was, rather than run together as the parts' spelling.
+      declare
+         Talk   : Conv.History;
+         Status : E.Error_Info;
+         Own    : Tmpl.Compiled;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+         Body_T : constant String :=
+           "{% for message in messages %}"
+           & "{{ '[' + message['content'] + ']' }}{% endfor %}";
+         Parts  : constant String :=
+           "[{""type"": ""image""}, {""type"": ""text"", ""text"": ""hi""}]";
+      begin
+         Conv.Open (Talk, Status => Status);
+         Conv.Append_Parts (Talk, Conv.User_Role, Parts, Status);
+         Assert (E.Is_Ok (Status), "the parts turn was refused");
+
+         Tmpl.Compile (Own, Body_T, Status => Status);
+         Assert (E.Is_Ok (Status), "the content-adding template did not compile");
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status,
+                      Image_Marker => "<IMG>");
+         Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "[<IMG>hi]",
+                 "content parts did not render inline: "
+                 & (if E.Is_Ok (Status) then Room (1 .. Last)
+                    else E.Error_Code'Image (Status.Code)));
+
+         --  With no marker the add of text and a parts list is refused.
+         Tmpl.Render (Own, Talk, "<s>", "</s>", False, Room, Last, Status);
+         Assert (Status.Code = E.Template_Unsupported_Construct,
+                 "adding text to parts without a marker was not refused");
+         Tmpl.Close (Own);
+         Conv.Close (Talk);
+      end;
+
       --  A turn given as parts reads as its words wherever text is wanted,
       --  keeps its list for the template, survives a checkpoint, and is
       --  refused when the list is not one.

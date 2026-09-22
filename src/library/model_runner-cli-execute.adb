@@ -3788,7 +3788,11 @@ package body Model_Runner.CLI.Execute is
                         Thinking => Item.Thinking,
                         Tools =>
                           (if Tools_Ready
-                           then Offered'Unchecked_Access else null));
+                           then Offered'Unchecked_Access else null),
+                        Image_Marker =>
+                          Model_Runner.CLI.Pictures.Picture_Marker (Seer),
+                        Video_Marker =>
+                          Model_Runner.CLI.Pictures.Video_Marker (Seer));
                      Conv.Close (Messages);
 
                      if E.Is_Error (Condition) then

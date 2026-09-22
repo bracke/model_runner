@@ -354,6 +354,11 @@ package Model_Runner.Templates is
    --    none. A template that never mentions them renders the same either
    --    way, which is why a caller with tools asks Reads_Tools first rather
    --    than finding out from a prompt that says nothing about them.
+   --  @param Image_Marker What a picture stands as where a turn given as
+   --    parts is rendered as text -- the projector's marker -- or "" where
+   --    a picture's parts are then refused rather than rendered inline.
+   --  @param Video_Marker What a video stands as, as Image_Marker is for a
+   --    picture.
    procedure Render
      (Item                  : Compiled;
       Messages              : Model_Runner.Conversation.History;
@@ -365,7 +370,9 @@ package Model_Runner.Templates is
       Status                : out Model_Runner.Errors.Error_Info;
       Thinking              : Thinking_Choice := Thinking_Unstated;
       Tools                 : access constant Model_Runner.Tools.Definitions
-        := null);
+        := null;
+      Image_Marker          : String := "";
+      Video_Marker          : String := "");
 
    --  Report whether a template reads the tools a caller may offer.
    --

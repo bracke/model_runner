@@ -285,6 +285,18 @@ package Model_Runner.Conversation is
    --  @return Every "text" member's value, in order.
    function Text_Of_Parts (Parts : String) return String;
 
+   --  A parts list written as a prompt: each part in its order -- a text
+   --  part's words, an image part replaced by Image_Marker and a video
+   --  part by Video_Marker -- run together, which is what a model's own
+   --  template gets when it writes message['content'] or adds it to text.
+   --
+   --  @param Parts The parts, as one JSON list.
+   --  @param Image_Marker What an image part stands as.
+   --  @param Video_Marker What a video part stands as.
+   --  @return The parts as one string.
+   function Prompt_Of_Parts
+     (Parts : String; Image_Marker, Video_Marker : String) return String;
+
    --  The parts of a message, as the JSON list it was given, or the empty
    --  string where its content is text.
    --

@@ -309,6 +309,12 @@ package body Model_Runner.CLI.Pictures is
 
    function Is_Open (Item : Seer) return Boolean is (Item.Ready);
 
+   function Picture_Marker (Item : Seer) return String
+   is (Model_Runner.Text.To_String (Item.Marker_Text));
+
+   function Video_Marker (Item : Seer) return String
+   is (Model_Runner.Text.To_String (Item.Video_Text));
+
    ----------------------
    -- Names_A_Picture --
    ----------------------

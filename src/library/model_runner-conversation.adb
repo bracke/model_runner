@@ -311,6 +311,117 @@ package body Model_Runner.Conversation is
       return Ada.Strings.Unbounded.To_String (R);
    end Text_Of_Parts;
 
+   ---------------------
+   -- Prompt_Of_Parts --
+   ---------------------
+
+   function Prompt_Of_Parts
+     (Parts : String; Image_Marker, Video_Marker : String) return String
+   is
+      Trimmed : constant String := Model_Runner.Text.Trim (Parts);
+      R : Ada.Strings.Unbounded.Unbounded_String;
+      I : Natural := Trimmed'First;
+      Depth : Natural := 0;
+
+      --  What the object being read is, and its words, gathered until it
+      --  closes and is written out in one go.
+      Kind : Ada.Strings.Unbounded.Unbounded_String;
+      Words : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Skip_Blanks is
+      begin
+         while I <= Trimmed'Last
+           and then Trimmed (I) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+         loop
+            I := I + 1;
+         end loop;
+      end Skip_Blanks;
+
+      function Read_String return String is
+         From : constant Natural := I + 1;
+      begin
+         I := From;
+         while I <= Trimmed'Last and then Trimmed (I) /= '"' loop
+            if Trimmed (I) = '\' and then I < Trimmed'Last then
+               I := I + 1;
+            end if;
+            I := I + 1;
+         end loop;
+         I := I + 1;
+         return Unescaped (Trimmed (From .. Natural'Min (I - 2, Trimmed'Last)));
+      end Read_String;
+
+      procedure Flush is
+         K : constant String := Ada.Strings.Unbounded.To_String (Kind);
+      begin
+         if K = "text" then
+            Ada.Strings.Unbounded.Append (R, Words);
+         elsif K = "image" or else K = "image_url" then
+            Ada.Strings.Unbounded.Append (R, Image_Marker);
+         elsif K = "video" then
+            Ada.Strings.Unbounded.Append (R, Video_Marker);
+         end if;
+         Kind := Ada.Strings.Unbounded.Null_Unbounded_String;
+         Words := Ada.Strings.Unbounded.Null_Unbounded_String;
+      end Flush;
+   begin
+      --  Each top-level object is one part; its "type" and "text" are read
+      --  wherever they stand in it, and it is written when it closes.
+      while I <= Trimmed'Last loop
+         case Trimmed (I) is
+            when '{' =>
+               Depth := Depth + 1;
+               I := I + 1;
+            when '}' =>
+               if Depth = 1 then
+                  Flush;
+               end if;
+               if Depth > 0 then
+                  Depth := Depth - 1;
+               end if;
+               I := I + 1;
+            when '"' =>
+               if Depth = 1 then
+                  declare
+                     Key : constant String := Read_String;
+                  begin
+                     Skip_Blanks;
+                     if I <= Trimmed'Last and then Trimmed (I) = ':' then
+                        I := I + 1;
+                        Skip_Blanks;
+                        if I <= Trimmed'Last and then Trimmed (I) = '"' then
+                           declare
+                              Value : constant String := Read_String;
+                           begin
+                              if Key = "type" then
+                                 Kind :=
+                                   Ada.Strings.Unbounded.To_Unbounded_String
+                                     (Value);
+                              elsif Key = "text" then
+                                 Words :=
+                                   Ada.Strings.Unbounded.To_Unbounded_String
+                                     (Value);
+                              end if;
+                           end;
+                        end if;
+                     end if;
+                  end;
+               else
+                  --  A string outside a part: skip it whole.
+                  declare
+                     Ignore : constant String := Read_String;
+                     pragma Unreferenced (Ignore);
+                  begin
+                     null;
+                  end;
+               end if;
+            when others =>
+               I := I + 1;
+         end case;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (R);
+   end Prompt_Of_Parts;
+
    ------------------
    -- Append_Parts --
    ------------------

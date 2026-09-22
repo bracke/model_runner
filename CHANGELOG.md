@@ -47,12 +47,24 @@ Keep a Changelog and the project uses semantic versioning.
   Verified end to end on the real openbmb/MiniCPM-V-2_6 (Q2_K text model beside
   the f16 projector): a solid red picture reads back as "red" and a blue one as
   "Blue", and a photograph draws a sentence about what is in it -- the sixty-four
-  encoded rows are placed and the model attends them. The picture's marker,
-  `<image>`, is written where the picture stands, as MiniCPM-V's own format
-  writes it; the model's shipped chat template uses Jinja `+`, which this build's
-  template subset does not carry, so a MiniCPM-V run names `--chat-template
-  chatml` (its base is Qwen2). Placing the slices around the overview in the
-  prompt is still to come.
+  encoded rows are placed and the model attends them, through the model's own
+  chat template with the picture given as a part -- no marker written by hand.
+  Placing the slices around the overview in the prompt is still to come.
+
+- **A template renders a picture's parts inline.** A model whose own template
+  writes `message['content']` -- or adds it to text, as MiniCPM-V's writes
+  `'\n' + message['content']` -- now renders a turn given as parts in place: the
+  words, and each picture's marker where it stands. Before, the engine refused
+  adding text to a parts list (it would not run text and a list together as
+  spelling) and printed a bare `{{ content }}` of parts as their JSON, so a
+  picture given as a part reached no template but the few written to walk the
+  parts themselves. The renderer is handed the projector's markers -- the text a
+  picture and a video stand as -- and a content-parts value, wanted as text,
+  becomes the walked parts; wanted as a list, it still walks item by item as
+  before, so the templates that iterate parts are unchanged. Where no markers
+  are given the old refusal stands, naming the join. `Model_Runner.Templates.
+  Render` gained `Image_Marker` and `Video_Marker`, and the command hands it the
+  seer's.
 
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the

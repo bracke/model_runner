@@ -311,7 +311,9 @@ package body Model_Runner.CLI.Interactive is
             Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
             Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
             True, Buffer.all, Last, Outcome,
-            Thinking => Item.Thinking, Tools => Tools);
+            Thinking => Item.Thinking, Tools => Tools,
+            Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
+            Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer));
          if E.Is_Ok (Outcome) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
