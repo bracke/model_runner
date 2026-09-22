@@ -44,6 +44,15 @@ Keep a Changelog and the project uses semantic versioning.
   computes, is not yet placed in the prompt. The projector's rows are the
   model's width, checked at open as the other projectors are, and a model
   without the `<image>` tokens is refused by name.
+  Verified end to end on the real openbmb/MiniCPM-V-2_6 (Q2_K text model beside
+  the f16 projector): a solid red picture reads back as "red" and a blue one as
+  "Blue", and a photograph draws a sentence about what is in it -- the sixty-four
+  encoded rows are placed and the model attends them. The picture's marker,
+  `<image>`, is written where the picture stands, as MiniCPM-V's own format
+  writes it; the model's shipped chat template uses Jinja `+`, which this build's
+  template subset does not carry, so a MiniCPM-V run names `--chat-template
+  chatml` (its base is Qwen2). Placing the slices around the overview in the
+  prompt is still to come.
 
 - **Qwen2-VL images are read** (`qwen2vl_merger`). Its merger is Qwen3-VL's
   without the deepstack layers Qwen3-VL adds and this refuses either way: the
