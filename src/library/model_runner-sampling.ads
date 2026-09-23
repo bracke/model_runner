@@ -357,12 +357,47 @@ package Model_Runner.Sampling is
    --    whatever the team does with them, each block reduces into a slot of
    --    its own, and the slots are combined in block order afterwards -- so
    --    the token is the same token however many shares ran, and with none.
+   --  @param Probs When given -- its range the vocabulary, indexed from its
+   --    first -- filled with the probability the sampling distribution
+   --    assigned each token after the whole pipeline ran: zero for a token a
+   --    filter dropped, summing to one over the survivors. This is the
+   --    distribution the token was drawn from, which speculative sampling
+   --    reads as p and q. Greedy leaves a one at the chosen token, zero else.
    procedure Sample
      (Item   : in out Sampler;
       Logits : Real_Array;
       Token  : out Token_Id;
       Status : out Model_Runner.Errors.Error_Info;
-      Across : Model_Runner.Shares.Team_Access := null);
+      Across : Model_Runner.Shares.Team_Access := null;
+      Probs  : access Real_Array := null);
+
+   --  Draw a number in the half-open unit interval from the sampler's own
+   --  generator, so a caller's own random choice -- the accept test of
+   --  speculative sampling -- advances the one reproducible stream.
+   --
+   --  @param Item Sampler whose generator to draw from.
+   --  @param X The draw, in 0 .. 1.
+   procedure Draw_Uniform
+     (Item : in out Sampler;
+      X    : out Model_Runner.Numerics.Real);
+
+   --  Draw a token from the residual distribution of speculative sampling:
+   --  the target's probabilities less the draft's, floored at zero and
+   --  renormalized -- what a rejected draft position is replaced from, so
+   --  the round's output keeps the target's own distribution. Both arrays are
+   --  vocabulary-wide probabilities as Sample's Probs gives them.
+   --
+   --  @param Item Sampler whose generator draws the token.
+   --  @param Target The target model's probabilities, p.
+   --  @param Draft The draft's probabilities, q.
+   --  @param Token The drawn token; No_Token when the residual is empty.
+   --  @param Status Success, or Sampling_Invalid_Distribution.
+   procedure Sample_Residual
+     (Item   : in out Sampler;
+      Target : Real_Array;
+      Draft  : Real_Array;
+      Token  : out Token_Id;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Largest number of alternatives an explanation will carry.
    Max_Alternatives : constant := 32;

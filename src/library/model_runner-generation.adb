@@ -470,11 +470,22 @@ package body Model_Runner.Generation is
         not By_Model and then Item.Draft_From_Next
         and then L.Drafts_Next (Session);
 
+      --  Drafting runs greedily on any source, and above temperature zero on
+      --  a draft model or the context -- there it verifies by speculative
+      --  sampling, which keeps the target's own distribution. The self-draft
+      --  block stays greedy: its state cache and a residual token replacing a
+      --  rejected one do not yet fit together. Grammar is greedy-only either
+      --  way, the verify pass carrying no grammar mask.
       Drafting : constant Boolean :=
         (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
-        and then S.Is_Greedy (Item.Sampling)
-        and then Rules = null;
+        and then Rules = null
+        and then (S.Is_Greedy (Item.Sampling) or else not By_Next);
+
+      --  Whether this run's drafting verifies by speculative sampling rather
+      --  than by matching the target's own greedy choice.
+      Sampled_Draft : constant Boolean :=
+        Drafting and then not S.Is_Greedy (Item.Sampling);
 
       --  Drafting with nothing to draft from but the text. Everything below
       --  that reaches for the draft session is skipped: there is no second
@@ -525,6 +536,15 @@ package body Model_Runner.Generation is
       --  model drafting for itself, which is what the first test used --
       --  cannot tell the two apart.
       Aside : T.Real_Array_Access := null;
+
+      --  For speculative sampling: the draft's distribution at each proposal
+      --  (q, one vocabulary-wide row a proposal), the target's at the position
+      --  being verified (p), and a point mass for a proposal a lookup made
+      --  without a distribution of its own.
+      Draft_Dist : T.Real_Array_Access := null;
+      Tgt_Dist   : T.Real_Array_Access := null;
+      Point_Dist : T.Real_Array_Access := null;
+
       Next_In     : T.Real_Array_Access := null;
 
       --  What a position run through the next block only for its cache
@@ -550,6 +570,9 @@ package body Model_Runner.Generation is
          T.Free (Every);
          T.Free (Opened);
          T.Free (Aside);
+         T.Free (Draft_Dist);
+         T.Free (Tgt_Dist);
+         T.Free (Point_Dist);
          T.Free (Next_In);
          T.Free (Next_Out);
          T.Free (Next_States);
@@ -763,6 +786,16 @@ package body Model_Runner.Generation is
             * N.Element_Count (Largest_Draft + 1), Every);
 
          T.Allocate (N.Element_Count (Settings.Vocabulary), Aside);
+
+         --  The distributions speculative sampling reads: q a proposal, p and
+         --  a point mass a scratch.
+         if Sampled_Draft then
+            T.Allocate
+              (N.Element_Count (Settings.Vocabulary)
+               * N.Element_Count (Largest_Draft), Draft_Dist);
+            T.Allocate (N.Element_Count (Settings.Vocabulary), Tgt_Dist);
+            T.Allocate (N.Element_Count (Settings.Vocabulary), Point_Dist);
+         end if;
 
          --  The next block's chain: the state it is given and the one it
          --  hands back, and every position's state of a checked round,
@@ -1300,6 +1333,13 @@ package body Model_Runner.Generation is
             Local  : E.Error_Info;
             Guess  : Token_Id;
 
+            --  Speculative sampling's outcome: how many proposals were kept
+            --  (the target's own always is), and, when one was rejected, the
+            --  token drawn from the residual to stand in its place.
+            Accepted : Natural := 1;
+            Rejected : Boolean := False;
+            Residual : Token_Id := Vocab.No_Token;
+
             --  Drop the oldest positions from both sessions at once, when
             --  the caller asked for that. Both, because the draft is only
             --  useful while it is looking at what the target is looking at:
@@ -1442,11 +1482,27 @@ package body Model_Runner.Generation is
                      return;
                   end if;
 
-                  S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
+                  S.Sample
+                    (Sampler, Aside.all, Guess, Local, Sharing,
+                     Probs => (if Sampled_Draft then Tgt_Dist else null));
                   if E.Is_Error (Local) then
                      Conclude (Runtime_Error, Local);
                      Failed := True;
                      return;
+                  end if;
+
+                  --  Keep the draft's distribution q for this proposal, which
+                  --  the verify pass below reads to accept or reject it.
+                  if Sampled_Draft then
+                     declare
+                        Vocab : constant N.Element_Count :=
+                          N.Element_Count (Settings.Vocabulary);
+                        Base  : constant N.Element_Count :=
+                          N.Element_Count (Count - 1) * Vocab;
+                     begin
+                        Draft_Dist.all (Base .. Base + Vocab - 1) :=
+                          Tgt_Dist.all;
+                     end;
                   end if;
 
                   Count := Count + 1;
@@ -1542,39 +1598,127 @@ package body Model_Runner.Generation is
             --  penalty counts twice.
             S.Record_Token (Sampler, Proposed.all (1));
 
-            for Step in 2 .. Count loop
-               declare
-                  Row : constant N.Element_Count :=
-                    N.Element_Count (Step - 2)
-                    * N.Element_Count (Settings.Vocabulary);
+            if not Sampled_Draft then
+               --  Greedy: keep a proposal while the target's own choice at the
+               --  position before it is that proposal, stopping at the first
+               --  it would not have made.
+               for Step in 2 .. Count loop
+                  declare
+                     Row : constant N.Element_Count :=
+                       N.Element_Count (Step - 2)
+                       * N.Element_Count (Settings.Vocabulary);
 
-                  Wanted : Token_Id;
-               begin
-                  S.Sample
-                    (Sampler,
-                     Every.all (Every.all'First + Row
-                                .. Every.all'First + Row
-                                   + N.Element_Count (Settings.Vocabulary)
-                                   - 1),
-                     Wanted, Local);
-                  if E.Is_Error (Local) then
-                     Conclude (Runtime_Error, Local);
-                     Failed := True;
-                     return;
-                  end if;
+                     Wanted : Token_Id;
+                  begin
+                     S.Sample
+                       (Sampler,
+                        Every.all (Every.all'First + Row
+                                   .. Every.all'First + Row
+                                      + N.Element_Count (Settings.Vocabulary)
+                                      - 1),
+                        Wanted, Local);
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Failed := True;
+                        return;
+                     end if;
 
-                  exit when Wanted /= Proposed.all (Step);
+                     exit when Wanted /= Proposed.all (Step);
 
-                  Verified_Count := Verified_Count + 1;
-                  Verified.all (Verified_Count) := Proposed.all (Step);
-                  S.Record_Token (Sampler, Proposed.all (Step));
-               end;
-            end loop;
+                     Verified_Count := Verified_Count + 1;
+                     Verified.all (Verified_Count) := Proposed.all (Step);
+                     S.Record_Token (Sampler, Proposed.all (Step));
+                  end;
+               end loop;
+               Accepted := Verified_Count;
+            else
+               --  Speculative sampling: accept proposal x with probability
+               --  min(1, p(x) / q(x)) -- p the target's distribution at the
+               --  position, q the draft's -- with the accept test drawn from
+               --  the sampler's own stream. On the first rejection the
+               --  position takes a token from the residual max(0, p - q) and
+               --  the round stops there. So the run's tokens keep the target's
+               --  own distribution, drafted or not, as Leviathan and Chen show.
+               for Step in 2 .. Count loop
+                  declare
+                     V_Size : constant N.Element_Count :=
+                       N.Element_Count (Settings.Vocabulary);
+                     Row    : constant N.Element_Count :=
+                       N.Element_Count (Step - 2) * V_Size;
+                     Q_Base : constant N.Element_Count :=
+                       N.Element_Count (Step - 2) * V_Size;
+                     P_At   : constant N.Element_Count :=
+                       N.Element_Count (Proposed.all (Step));
+                     Wanted : Token_Id;
+                     R, P_X, Q_X : N.Real;
+                     use type N.Real;
+                  begin
+                     --  The target's distribution p at this position, and its
+                     --  own draw from it -- unused unless every proposal is
+                     --  kept, when it is the round's next token.
+                     S.Sample
+                       (Sampler,
+                        Every.all (Every.all'First + Row
+                                   .. Every.all'First + Row + V_Size - 1),
+                        Wanted, Local, Sharing, Probs => Tgt_Dist);
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Failed := True;
+                        return;
+                     end if;
+
+                     --  q: the draft's kept row, or a point mass where a
+                     --  lookup proposed without a distribution of its own.
+                     if By_Context then
+                        Point_Dist.all := [others => 0.0];
+                        Point_Dist.all (Point_Dist.all'First + P_At) := 1.0;
+                     end if;
+
+                     P_X := Tgt_Dist.all (Tgt_Dist.all'First + P_At);
+                     Q_X :=
+                       (if By_Context
+                        then Point_Dist.all (Point_Dist.all'First + P_At)
+                        else Draft_Dist.all
+                               (Draft_Dist.all'First + Q_Base + P_At));
+
+                     S.Draw_Uniform (Sampler, R);
+
+                     if Q_X <= 0.0 or else R * Q_X <= P_X then
+                        Accepted := Accepted + 1;
+                        Verified_Count := Verified_Count + 1;
+                        Verified.all (Verified_Count) := Proposed.all (Step);
+                        S.Record_Token (Sampler, Proposed.all (Step));
+                     else
+                        S.Sample_Residual
+                          (Sampler, Tgt_Dist.all,
+                           (if By_Context then Point_Dist.all
+                            else Draft_Dist.all
+                                   (Draft_Dist.all'First + Q_Base
+                                    .. Draft_Dist.all'First + Q_Base
+                                       + V_Size - 1)),
+                           Residual, Local);
+                        if E.Is_Error (Local) then
+                           Conclude (Runtime_Error, Local);
+                           Failed := True;
+                           return;
+                        end if;
+
+                        Rejected := True;
+                        Verified_Count := Verified_Count + 1;
+                        Verified.all (Verified_Count) := Residual;
+                        S.Record_Token (Sampler, Residual);
+                        exit;
+                     end if;
+                  end;
+               end loop;
+            end if;
 
             --  Back to what was agreed, on both sides. The target committed
             --  every proposal and the draft committed every proposal but the
-            --  last, so both have gone further than the text has.
-            L.Rewind (Session, Before + Verified_Count, Local);
+            --  last, so both have gone further than the text has. To the
+            --  accepted proposals only: a residual token that replaced a
+            --  rejected one is committed just below, by evaluating it.
+            L.Rewind (Session, Before + Accepted, Local);
             if E.Is_Error (Local) then
                Conclude (Runtime_Error, Local);
                Failed := True;
@@ -1585,7 +1729,7 @@ package body Model_Runner.Generation is
                L.Rewind
                  (Draft_Session.all,
                   Natural'Min (L.Position (Draft_Session.all),
-                               Before + Verified_Count),
+                               Before + Accepted),
                   Local);
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
@@ -1629,10 +1773,30 @@ package body Model_Runner.Generation is
             --  or the next single step to sample from. A round of one never
             --  filled Every: what it wants is already in Logits, which is
             --  where a token evaluated on its own leaves it.
-            if Count > 1 then
+            --
+            --  A rejected round is different: its residual token stands where
+            --  a proposal did, so the target's row for the next position --
+            --  computed over the proposal, not the residual -- is the wrong
+            --  conditioning. The residual is evaluated instead, which commits
+            --  it to the session and leaves the right distribution behind.
+            if Rejected then
+               L.Evaluate (Session, Source, Residual, Logits.all,
+                           Cancel, Local);
+               if E.Is_Error (Local) then
+                  if Local.Code = E.Generation_Cancelled then
+                     Conclude (Cancelled);
+                  elsif Local.Code = E.Generation_Context_Exhausted then
+                     Conclude (Context_Full);
+                  else
+                     Conclude (Runtime_Error, Local);
+                  end if;
+                  Failed := True;
+                  return;
+               end if;
+            elsif Count > 1 then
                declare
                   Row : constant N.Element_Count :=
-                    N.Element_Count (Verified_Count - 1)
+                    N.Element_Count (Accepted - 1)
                     * N.Element_Count (Settings.Vocabulary);
                begin
                   Logits.all :=
@@ -1683,7 +1847,9 @@ package body Model_Runner.Generation is
                Next_Chained := False;
             end if;
 
-            Outcome.Accepted := Outcome.Accepted + Verified_Count - 1;
+            --  Accepted proposals, not counting the target's own first token
+            --  nor a residual that replaced a rejected one.
+            Outcome.Accepted := Outcome.Accepted + Accepted - 1;
 
             Verified_At := 0;
             Produced_Here := Verified_Count;

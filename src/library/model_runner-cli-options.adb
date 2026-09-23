@@ -2744,8 +2744,10 @@ package body Model_Runner.CLI.Options is
          return;
       end if;
 
-      --  A draft model that cannot draft. Drafting runs only at temperature
-      --  zero and only without a grammar, and both of those are checked here
+      --  A draft model that cannot draft. Above temperature zero a draft is
+      --  verified by speculative sampling, which keeps the target's own
+      --  distribution, so a temperature is no longer refused; a grammar still
+      --  is, the verify pass carrying no grammar mask. This is checked here
       --  rather than shrugged off later: a draft is a second model file, and
       --  a run that loads one and then never asks it anything has spent the
       --  loading and the memory to do exactly what it would have done
@@ -2753,14 +2755,6 @@ package body Model_Runner.CLI.Options is
       --  refusal is the only thing that tells the caller their configuration
       --  does not mean what they think.
       if not T.Is_Empty (Result.Draft_Path) then
-         if Result.Sampling.Temperature /= 0.0 then
-            Status := E.Make (E.CLI_Option_Combination);
-            E.Add_Text (Status, "option", "--draft-model", E.Param_Identifier);
-            E.Add_Text (Status, "other", "--temperature above zero",
-                        E.Param_Identifier);
-            return;
-         end if;
-
          if Result.Grammar_Text /= null
            or else not T.Is_Empty (Result.Grammar_Path)
          then

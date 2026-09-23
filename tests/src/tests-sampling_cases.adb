@@ -1,4 +1,5 @@
 with Ada.Numerics.Generic_Elementary_Functions;
+with Ada.Unchecked_Deallocation;
 with Fixtures;
 with AUnit.Assertions;
 
@@ -2984,6 +2985,101 @@ package body Tests.Sampling_Cases is
               "a pool that is not there answered a team");
    end A_Team_Does_Not_Change_The_Token;
 
+   --  Speculative sampling's guarantee: a token drawn by proposing from the
+   --  draft q, accepting with probability min(1, p/q) and, on rejection,
+   --  drawing from the residual max(0, p - q), is distributed as the target p.
+   --  This runs the exact primitives the drafting loop uses -- Sample with its
+   --  Probs, Draw_Uniform, Sample_Residual -- over a draft and a target that
+   --  disagree sharply, and the emitted tokens land on p, not q.
+   procedure Speculative_Sampling_Keeps_The_Target
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      type Prob_Access is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Real_Array, Prob_Access);
+
+      Sampler : S.Sampler;
+      Config  : S.Configuration;
+      Status  : E.Error_Info;
+
+      P : constant N.Real_Array (0 .. 3) := [0.4, 0.3, 0.2, 0.1];
+      Q : constant N.Real_Array (0 .. 3) := [0.1, 0.2, 0.3, 0.4];
+      Log_P, Log_Q : N.Real_Array (0 .. 3);
+
+      P_Probs : Prob_Access := new N.Real_Array (0 .. 3);
+      Q_Probs : Prob_Access := new N.Real_Array (0 .. 3);
+
+      Trials : constant := 400_000;
+      Tally  : array (N.Element_Count range 0 .. 3) of Natural :=
+        [others => 0];
+      X, Emit : Vocab.Token_Id;
+      R       : N.Real;
+   begin
+      for I in P'Range loop
+         Log_P (I) := N.Real (N.Log (N.Wide_Real (P (I))));
+         Log_Q (I) := N.Real (N.Log (N.Wide_Real (Q (I))));
+      end loop;
+
+      --  A plain softmax, every filter and penalty disabled, so Sample's Probs
+      --  is exactly the distribution its logits name.
+      Config := S.Greedy_Configuration;
+      Config.Temperature := 1.0;
+      Config.Top_K := 0;
+      Config.Top_P := 1.0;
+      Config.Min_P := 0.0;
+      Config.Top_A := 0.0;
+      Config.Repeat_Penalty := 1.0;
+      Config.Typical_P := 1.0;
+      Config.Tail_Free := 1.0;
+
+      S.Open (Sampler, Config, 4, 20240607, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      --  p, once: it does not change between trials.
+      S.Sample (Sampler, Log_P, X, Status, Probs => P_Probs);
+      Assert (E.Is_Ok (Status), "sampling p failed");
+
+      for Trial in 1 .. Trials loop
+         --  Draw a proposal from q and its distribution.
+         S.Sample (Sampler, Log_Q, X, Status, Probs => Q_Probs);
+         Assert (E.Is_Ok (Status), "sampling q failed");
+         S.Draw_Uniform (Sampler, R);
+
+         declare
+            P_X : constant N.Real := P_Probs (N.Element_Count (X));
+            Q_X : constant N.Real := Q_Probs (N.Element_Count (X));
+         begin
+            if Q_X <= 0.0 or else R * Q_X <= P_X then
+               Emit := X;
+            else
+               S.Sample_Residual (Sampler, P_Probs.all, Q_Probs.all,
+                                  Emit, Status);
+               Assert (E.Is_Ok (Status), "the residual would not draw");
+            end if;
+         end;
+
+         Tally (N.Element_Count (Emit)) :=
+           Tally (N.Element_Count (Emit)) + 1;
+      end loop;
+
+      S.Close (Sampler);
+      Free (P_Probs);
+      Free (Q_Probs);
+
+      for I in P'Range loop
+         declare
+            Got : constant N.Real := N.Real (Tally (I)) / N.Real (Trials);
+         begin
+            Assert (abs (Got - P (I)) < 0.01,
+                    "token" & N.Element_Count'Image (I) & " came out at"
+                    & N.Real'Image (Got) & ", target is"
+                    & N.Real'Image (P (I)) & " -- the draft's is"
+                    & N.Real'Image (Q (I)));
+         end;
+      end loop;
+   end Speculative_Sampling_Keeps_The_Target;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3104,6 +3200,10 @@ package body Tests.Sampling_Cases is
         (T, Penalties_Reach_The_Greedy_Path'Access,
          "the penalties act at temperature zero, which is where a caller "
          & "reaches for them");
+      Register_Routine
+        (T, Speculative_Sampling_Keeps_The_Target'Access,
+         "accepting a draft by the p-over-q test and drawing the rest from "
+         & "the residual leaves the target's own distribution");
       Register_Routine
         (T, Bias_Moves_A_Token'Access,
          "a per-token bias moves that token and only that token, on both "

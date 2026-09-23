@@ -1168,7 +1168,8 @@ package body Model_Runner.Sampling is
       Logits : Real_Array;
       Token  : out Token_Id;
       Status : out E.Error_Info;
-      Across : Model_Runner.Shares.Team_Access := null)
+      Across : Model_Runner.Shares.Team_Access := null;
+      Probs  : access Real_Array := null)
    is
       Count     : Element_Count := 0;
       Surviving : Element_Count := 0;
@@ -1239,6 +1240,12 @@ package body Model_Runner.Sampling is
       --  it: the vocabulary is read once a token, not twice.
       if Is_Greedy (Item.Settings) then
          Select_Greedy (Item, Logits, Token, Status, Across);
+         if Probs /= null and then E.Is_Ok (Status)
+           and then Natural (Token) < Item.Vocabulary
+         then
+            Probs.all := [others => 0.0];
+            Probs.all (Probs.all'First + Element_Count (Token)) := 1.0;
+         end if;
          return;
       end if;
 
@@ -1829,6 +1836,20 @@ package body Model_Runner.Sampling is
                   exit;
                end if;
             end loop;
+
+            --  The distribution the token was drawn from, when it was asked
+            --  for: each survivor's share of the whole, scattered by token,
+            --  the rest zero. This is the p or q speculative sampling reads.
+            if Probs /= null then
+               Probs.all := [others => 0.0];
+               for Index in 0 .. Surviving - 1 loop
+                  Probs.all
+                    (Probs.all'First
+                     + Element_Count (Item.Working.all (Index).Token)) :=
+                    Real (N.Wide_Real (Item.Working.all (Index).Probability)
+                          / Total);
+               end loop;
+            end if;
          end;
 
          --  And what that choice was worth, for mirostat's target to steer
@@ -1862,5 +1883,74 @@ package body Model_Runner.Sampling is
 
       Status := E.Success;
    end Sample;
+
+   ------------------
+   -- Draw_Uniform --
+   ------------------
+
+   procedure Draw_Uniform
+     (Item : in out Sampler;
+      X    : out Real)
+   is
+      W : N.Wide_Real;
+   begin
+      Uniform (Item.State, W);
+      X := Real (W);
+   end Draw_Uniform;
+
+   ---------------------
+   -- Sample_Residual --
+   ---------------------
+
+   procedure Sample_Residual
+     (Item   : in out Sampler;
+      Target : Real_Array;
+      Draft  : Real_Array;
+      Token  : out Token_Id;
+      Status : out E.Error_Info)
+   is
+      Last  : constant Element_Count := Element_Count (Item.Vocabulary) - 1;
+      Total : N.Wide_Real := 0.0;
+      Draw  : N.Wide_Real;
+      Run   : N.Wide_Real := 0.0;
+
+      function Residual_At (Index : Element_Count) return N.Wide_Real
+      is (N.Wide_Real'Max
+            (0.0,
+             N.Wide_Real (Target (Target'First + Index))
+             - N.Wide_Real (Draft (Draft'First + Index))));
+   begin
+      Token := Model_Runner.Tokenizer.No_Token;
+
+      if Target'Length /= Element_Count (Item.Vocabulary)
+        or else Draft'Length /= Element_Count (Item.Vocabulary)
+      then
+         Status := E.Make (E.Sampling_Vocabulary_Mismatch);
+         return;
+      end if;
+
+      for Index in 0 .. Last loop
+         Total := Total + Residual_At (Index);
+      end loop;
+
+      if Total <= 0.0 or else not N.Is_Finite (Total) then
+         Status := E.Make (E.Sampling_Invalid_Distribution);
+         return;
+      end if;
+
+      Uniform (Item.State, Draw);
+      Draw := Draw * Total;
+
+      Token := Token_Id (Last);
+      for Index in 0 .. Last loop
+         Run := Run + Residual_At (Index);
+         if Draw < Run then
+            Token := Token_Id (Index);
+            exit;
+         end if;
+      end loop;
+
+      Status := E.Success;
+   end Sample_Residual;
 
 end Model_Runner.Sampling;

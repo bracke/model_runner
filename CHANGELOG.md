@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Speculative decoding works above temperature zero.** A draft model (or the
+  context lookup) may now propose for a sampled run, not only a greedy one:
+  each proposal is accepted with probability min(1, p/q) -- p the target's
+  distribution at that position, q the draft's -- and, on the first rejection,
+  the position takes a token drawn from the residual max(0, p - q). This is the
+  Leviathan/Chen speculative-sampling test, and it leaves the run's tokens with
+  the target's own distribution, drafted or not. The sampler gained the pieces
+  it needs -- a Sample that also reports the distribution a token was drawn
+  from, a draw from its own stream, and a residual draw -- and a test confirms
+  that proposing from a sharply different draft and verifying this way still
+  lands the output on the target. `--draft-model` no longer refuses a
+  temperature (a grammar it still does; the verify pass carries no grammar
+  mask), and the self-draft next-token block stays greedy-only.
+
 - **Five more low-bit quant formats read: IQ2_XS, IQ2_S, IQ3_XXS, IQ1_S and
   IQ1_M.** These are the sub-three-bit codebook formats that let a large model
   fit a small machine -- IQ1_S and IQ1_M are about a bit and a half an element.
