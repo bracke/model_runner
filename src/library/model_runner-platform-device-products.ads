@@ -909,7 +909,12 @@ package Model_Runner.Platform.Device.Products is
       Key         : System.Address := System.Null_Address;
       Kept        : Boolean := True;
       Members     : Member_List := [others => 0];
-      Count       : Natural := 0);
+      Count       : Natural := 0;
+      Source_At     : Natural := 0;
+      Source_Stride : Natural := 0);
+   --  Source_At and Source_Stride slice a fused source: a projection bias
+   --  over Each of the source's rows, its own rows lying at Source_At and
+   --  every Source_Stride after. Both zero is a bias over the whole source.
 
    --  Name a step that picks every other stretch of a row.
    --
@@ -2968,6 +2973,18 @@ private
       --  elements. A residual join reads the residual, which travels beside
       --  the queries in one array rather than in a buffer of its own.
       At_Vector : Natural := 0;
+
+      --  A slice of the step this one reads, rather than the whole of it.
+      --  Where three projections were made by one fused product -- the
+      --  queries, keys and values in a single matrix against one
+      --  normalization -- each reader takes its own rows out of the fused
+      --  answer: Reads_At is the first row it wants, in elements, and
+      --  Reads_Stride is how far apart two positions lie in the fused answer,
+      --  which is the fused product's whole row count and not the reader's.
+      --  Both zero is the ordinary case, a reader over the whole of its
+      --  source with the source's own width for a stride.
+      Reads_At     : Natural := 0;
+      Reads_Stride : Natural := 0;
 
       --  A join folded into the product it followed, and the two sides of
       --  that folding.

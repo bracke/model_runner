@@ -2718,6 +2718,96 @@ package body Model_Runner.Backend.Device is
             goto Attended;
          end if;
 
+         --  One matmul for the queries, keys and values where the file keeps
+         --  them as one tensor and each carries a bias: the three projections
+         --  are a single matrix against the one normalization, and each
+         --  reader takes its own rows out of the fused answer with its bias
+         --  added. Two of every three of these dispatches go away, which a
+         --  batch feels most. Only where the three lie one after another in
+         --  the file, share a format and a width, and each has a bias -- the
+         --  bias step is what slices the fused answer back apart, so without
+         --  one the readers after it would need slicing too.
+         declare
+            use type Products.Weight_Packing;
+
+            function Row_Bytes (V : T.View)
+              return Model_Runner.Bytes.Byte_Count
+            is (Model_Runner.Bytes.Byte_Count
+                  (V.Columns
+                   / Model_Runner.Numerics.Element_Count
+                       (Model_Runner.GGUF.Block_Elements (V.Format)))
+                * Model_Runner.Bytes.Byte_Count
+                    (Model_Runner.GGUF.Block_Bytes (V.Format)));
+
+            Fusing : constant Boolean :=
+              not Head_Gates and then not Mirror
+              and then Query_Bias /= null and then Key_Bias /= null
+              and then Value_Bias /= null
+              and then Q_P = K_P and then K_P = V_P
+              and then Query.Format = Key.Format
+              and then Key.Format = Value.Format
+              and then Query.Columns = Key.Columns
+              and then Key.Columns = Value.Columns
+              and then Query.Base = Key.Base and then Key.Base = Value.Base
+              and then Query.Span = Key.Span and then Key.Span = Value.Span
+              and then Key.Offset
+                       = Query.Offset
+                         + Row_Bytes (Query)
+                           * Model_Runner.Bytes.Byte_Count (Query.Rows)
+              and then Value.Offset
+                       = Key.Offset
+                         + Row_Bytes (Key)
+                           * Model_Runner.Bytes.Byte_Count (Key.Rows);
+
+            Total : constant Model_Runner.Numerics.Element_Count :=
+              Query.Rows + Key.Rows + Value.Rows;
+
+            Fused      : T.View := Query;
+            Step_Fused : Natural := 0;
+
+            --  A bias over Each of the fused answer's rows, this reader's own
+            --  beginning At_Row in and every Total apart. The step it makes
+            --  is a plain contiguous answer, so everything after it reads it
+            --  as it read a projection of its own.
+            procedure Slice_Bias
+              (Bias   : T.Real_Array_Access;
+               Rows   : Model_Runner.Numerics.Element_Count;
+               At_Row : Model_Runner.Numerics.Element_Count;
+               Which  : in out Natural) is
+            begin
+               Products.Add_Bias
+                 (Steps, Bias.all (Bias.all'First)'Address,
+                  Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4, 0,
+                  1, Natural (Rows), Step_Fused, 0, Added,
+                  Key => Bias.all (Bias.all'First)'Address, Kept => False,
+                  Source_At => Natural (At_Row),
+                  Source_Stride => Natural (Total));
+               Which := Products.Length (Steps);
+               Step_Room (Rows);
+            end Slice_Bias;
+         begin
+            if Fusing then
+               Fused.Rows := Total;
+               Add_Input_Product (Fused, Q_P, False, Added);
+               if Added then
+                  Step_Fused := Products.Length (Steps);
+                  Step_Room (Total);
+                  Slice_Bias (Query_Bias, Query.Rows, 0, Step_Q);
+               end if;
+               if Added then
+                  Slice_Bias (Key_Bias, Key.Rows, Query.Rows, Step_K);
+               end if;
+               if Added then
+                  Slice_Bias (Value_Bias, Value.Rows,
+                              Query.Rows + Key.Rows, Step_V);
+               end if;
+               if not Added then
+                  return;
+               end if;
+               goto After_Projections;
+            end if;
+         end;
+
          --  The queries, the keys and the values, each reading the
          --  normalization rather than the step before it.
          Add_Input_Product (Query, Q_P, False, Added);
@@ -2801,6 +2891,8 @@ package body Model_Runner.Backend.Device is
          if not Added then
             return;
          end if;
+
+         <<After_Projections>>
 
          --  The heads made ready in two dispatches where the device has the
          --  kernel: the queries normalized and turned into their own room,

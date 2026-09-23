@@ -63,8 +63,12 @@ layout(push_constant) uniform Shape {
     //  the device kept, in elements.
     uint base;
 
-    uint unused_joins;
-    uint unused_table;
+    //  A projection bias over a slice of a fused source: how far apart two
+    //  positions lie in that source (its whole row count), and where this
+    //  reader's own rows begin. Zero stride is a bias over the whole source,
+    //  a position every Each, which is every case but the fused one.
+    uint src_stride;
+    uint src_base;
 
     //  The members the host chose, where listed is one: Used of them.
     uint members[16];
@@ -77,10 +81,16 @@ void main() {
     uint lane = gl_LocalInvocationID.x;
 
     if (shape.used == 0u) {
-        uint at = member * shape.each;
+        //  The answer is written a position after another, Each wide; the
+        //  source is read the same way unless it is a fused product, where
+        //  a position spans src_stride and this reader's rows begin src_base
+        //  in.
+        uint stride = shape.src_stride == 0u ? shape.each : shape.src_stride;
+        uint out_at = member * shape.each;
+        uint src_at = member * stride + shape.src_base;
 
         for (uint c = lane; c < shape.each; c += LANES) {
-            y[at + c] = x[at + c] + b[shape.base + c];
+            y[out_at + c] = x[src_at + c] + b[shape.base + c];
         }
         return;
     }

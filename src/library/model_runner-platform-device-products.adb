@@ -7975,7 +7975,15 @@ package body Model_Runner.Platform.Device.Products is
       Key         : System.Address := System.Null_Address;
       Kept        : Boolean := True;
       Members     : Member_List := [others => 0];
-      Count       : Natural := 0) is
+      Count       : Natural := 0;
+      Source_At     : Natural := 0;
+      Source_Stride : Natural := 0) is
+
+      --  A sliced bias reads Each rows out of a wider fused product, its own
+      --  lying at Source_At and every Source_Stride after; the stride is the
+      --  fused product's whole row count. Both zero is the ordinary bias
+      --  whose rows are all of its source's, laid one position after another.
+      Sliced : constant Boolean := Source_Stride /= 0;
    begin
       Added := False;
 
@@ -7986,12 +7994,21 @@ package body Model_Runner.Platform.Device.Products is
         or else Span < At_Byte + Model_Runner.Bytes.Byte_Count (Experts * Each) * 4
         or else Source_Step > Steps.Held
         or else Route_Step > Steps.Held
-        or else Steps.Items (Source_Step).Rows mod Each /= 0
+        or else (not Sliced and then Steps.Items (Source_Step).Rows mod Each /= 0)
         or else Count > Max_Gather
         or else (Count > 0 and then Route_Step /= 0)
         or else (for some Index in 1 .. Count => Members (Index) >= Experts)
+        --  A sliced bias: one slice, over Each rows lying within a fused
+        --  product whose stride is its whole row count and which holds the
+        --  slice Source_At begins.
+        or else (Sliced
+                 and then (Experts /= 1
+                           or else Count /= 0
+                           or else Route_Step /= 0
+                           or else Source_Stride /= Steps.Items (Source_Step).Rows
+                           or else Source_At + Each > Source_Stride))
         --  A projection's bias: one slice, over a product of Each rows.
-        or else (Route_Step = 0 and then Count = 0
+        or else (not Sliced and then Route_Step = 0 and then Count = 0
                  and then (Experts /= 1
                            or else Steps.Items (Source_Step).Rows /= Each))
         --  A gather the host chose: as many members as the source has.
@@ -8017,8 +8034,11 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte,
          Packing => Weight_Packing'First,
-         Rows => Steps.Items (Source_Step).Rows,
-         Columns => Steps.Items (Source_Step).Rows,
+         --  A sliced bias writes Each rows, the slice it took; an ordinary
+         --  one writes all of its source's.
+         Rows => (if Sliced then Each else Steps.Items (Source_Step).Rows),
+         Columns => (if Sliced then Each else Steps.Items (Source_Step).Rows),
+         Reads_At => Source_At, Reads_Stride => Source_Stride,
          Key => Key,
          Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
          Kept => Kept, Biases => True,
@@ -11231,6 +11251,13 @@ package body Model_Runner.Platform.Device.Products is
                         --  with whatever else the device kept, in
                         --  elements, as a norm's weight is found.
                         Base    => C.unsigned (Places (Index).Base / 4),
+
+                        --  A slice of a fused source: how far apart two
+                        --  positions lie in it, and where this reader's rows
+                        --  begin. Zero stride is a bias over the whole
+                        --  source, a position every Each.
+                        Joins   => C.unsigned (This.Reads_Stride),
+                        Table   => C.unsigned (This.Reads_At),
                         Members =>
                           [for Which in Member_Words'Range =>
                              C.unsigned (This.Members (Which + 1))],
