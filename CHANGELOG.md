@@ -17,7 +17,10 @@ Keep a Changelog and the project uses semantic versioning.
   reuse the SigLIP half; the picture is placed the way MiniCPM-V's resampler
   places one, in `<image>`/`</image>`. Cross-checked against llama.cpp's clip on
   the real `mmproj-MiniCPM-V-4.6` (encoder embeddings agree to fp16 noise), and
-  a red picture reads back "solid red" end to end through the text model.
+  a red picture reads back "solid red" end to end through the text model. An
+  in-repo binary64 self-check now stands beside the other projectors': a merger
+  written small encodes a picture to the rows a plain computation of the whole
+  windowed-merger network gives, to a ten-thousandth.
 
 - **`run --delegate-system-file PATH` sets the sub-agent's system prompt.** The
   sub-agents a `delegate` call spawns were opened with one hard-coded system

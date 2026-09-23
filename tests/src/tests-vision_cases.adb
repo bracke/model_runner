@@ -3826,6 +3826,712 @@ package body Tests.Vision_Cases is
       Free (W);
    end The_Minicpm_Projector_Encodes_As_The_Reference;
 
+   --  MiniCPM-V 4.6's small fixture and its binary64 reference. Sixteen
+   --  patches (a four-by-four grid) through the same SigLIP encoder the
+   --  resampler runs, then the windowed merger -- a windowed self-attention
+   --  after the window layer and a two-by-two downsample -- and, after the
+   --  rest of the ViT and a post norm, a final two-by-two merge to one row.
+   Insert46 : constant := 0;
+   VFeed46  : constant := 24;
+   Merged46 : constant := 4 * Width_M;
+   Text46   : constant := 4;
+   NP2_M    : constant := 1;  --  one row of a four-by-four merged twice
+
+   type Minicpm46_Weights is record
+      Patch   : N.Real_Array (0 .. Width_M * Elements_M - 1);
+      Patch_B : N.Real_Array (0 .. Width_M - 1);
+      Pos     : N.Real_Array (0 .. Bank_M * Width_M - 1);
+      Blocks  : Minicpm_Block_List;
+      Post_W, Post_B : N.Real_Array (0 .. Width_M - 1);
+      VM_Ln1_W, VM_Ln1_B : N.Real_Array (0 .. Width_M - 1);
+      VM_Q, VM_K, VM_V, VM_O : N.Real_Array (0 .. Width_M * Width_M - 1);
+      VM_Q_B, VM_K_B, VM_V_B, VM_O_B : N.Real_Array (0 .. Width_M - 1);
+      VM_Ds_Ln_W, VM_Ds_Ln_B : N.Real_Array (0 .. Merged46 - 1);
+      VM_Ds_Up   : N.Real_Array (0 .. VFeed46 * Merged46 - 1);
+      VM_Ds_Up_B : N.Real_Array (0 .. VFeed46 - 1);
+      VM_Ds_Down : N.Real_Array (0 .. Width_M * VFeed46 - 1);
+      VM_Ds_Down_B : N.Real_Array (0 .. Width_M - 1);
+      MM_Norm_W, MM_Norm_B : N.Real_Array (0 .. Merged46 - 1);
+      MM_Up   : N.Real_Array (0 .. Merged46 * Merged46 - 1);
+      MM_Up_B : N.Real_Array (0 .. Merged46 - 1);
+      MM_Down : N.Real_Array (0 .. Text46 * Merged46 - 1);
+      MM_Down_B : N.Real_Array (0 .. Text46 - 1);
+   end record;
+   type Minicpm46_Weights_Access is access Minicpm46_Weights;
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Minicpm46_Weights, Minicpm46_Weights_Access);
+
+   function Fresh_Minicpm46_Weights return Minicpm46_Weights_Access is
+      W : constant Minicpm46_Weights_Access := new Minicpm46_Weights;
+   begin
+      Seed := 13579;
+      W.Patch := Random_Row (Width_M * Elements_M, 0.05);
+      W.Patch_B := Random_Row (Width_M, 0.1);
+      W.Pos := Random_Row (Bank_M * Width_M, 0.3);
+      for Index in W.Blocks'Range loop
+         W.Blocks (Index).Ln1_W := Gain_Row (Width_M);
+         W.Blocks (Index).Ln1_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Ln2_W := Gain_Row (Width_M);
+         W.Blocks (Index).Ln2_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Q := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).K := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).V := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).O := Random_Row (Width_M * Width_M, 0.3);
+         W.Blocks (Index).Q_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).K_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).V_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).O_B := Random_Row (Width_M, 0.1);
+         W.Blocks (Index).Up := Random_Row (Feed_M * Width_M, 0.3);
+         W.Blocks (Index).Up_B := Random_Row (Feed_M, 0.1);
+         W.Blocks (Index).Down := Random_Row (Width_M * Feed_M, 0.2);
+         W.Blocks (Index).Down_B := Random_Row (Width_M, 0.1);
+      end loop;
+      W.Post_W := Gain_Row (Width_M);
+      W.Post_B := Random_Row (Width_M, 0.1);
+      W.VM_Ln1_W := Gain_Row (Width_M);
+      W.VM_Ln1_B := Random_Row (Width_M, 0.1);
+      W.VM_Q := Random_Row (Width_M * Width_M, 0.3);
+      W.VM_K := Random_Row (Width_M * Width_M, 0.3);
+      W.VM_V := Random_Row (Width_M * Width_M, 0.3);
+      W.VM_O := Random_Row (Width_M * Width_M, 0.3);
+      W.VM_Q_B := Random_Row (Width_M, 0.1);
+      W.VM_K_B := Random_Row (Width_M, 0.1);
+      W.VM_V_B := Random_Row (Width_M, 0.1);
+      W.VM_O_B := Random_Row (Width_M, 0.1);
+      W.VM_Ds_Ln_W := Gain_Row (Merged46);
+      W.VM_Ds_Ln_B := Random_Row (Merged46, 0.1);
+      W.VM_Ds_Up := Random_Row (VFeed46 * Merged46, 0.2);
+      W.VM_Ds_Up_B := Random_Row (VFeed46, 0.1);
+      W.VM_Ds_Down := Random_Row (Width_M * VFeed46, 0.2);
+      W.VM_Ds_Down_B := Random_Row (Width_M, 0.1);
+      W.MM_Norm_W := Gain_Row (Merged46);
+      W.MM_Norm_B := Random_Row (Merged46, 0.1);
+      W.MM_Up := Random_Row (Merged46 * Merged46, 0.2);
+      W.MM_Up_B := Random_Row (Merged46, 0.1);
+      W.MM_Down := Random_Row (Text46 * Merged46, 0.2);
+      W.MM_Down_B := Random_Row (Text46, 0.1);
+      return W;
+   end Fresh_Minicpm46_Weights;
+
+   procedure Write_Minicpm46_Projector
+     (Path : String; W : Minicpm46_Weights; Kind : String := "minicpmv4_6")
+   is
+      Builder : Fixtures.Builder;
+      File    : B.Byte_Array_Access;
+      use Ada.Streams.Stream_IO;
+      Handle  : File_Type;
+
+      procedure Tensor
+        (Name : String; Dims : Fixtures.Dimension_List; Values : N.Real_Array)
+      is
+      begin
+         Fixtures.Add_Tensor
+           (Builder, Name, Dims, G.Type_F32, Fixtures.Encode_F32 (Values));
+      end Tensor;
+   begin
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "clip");
+      Fixtures.Add_String (Builder, "clip.projector_type", Kind);
+      Fixtures.Add_U32 (Builder, "clip.vision.image_size", Size_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.patch_size", Patch_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.embedding_length", Width_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.feed_forward_length", Feed_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.projection_dim", Text46);
+      Fixtures.Add_U32 (Builder, "clip.vision.block_count", Blocks_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.attention.head_count", Heads_M);
+      Fixtures.Add_U32 (Builder, "clip.vision.projector.scale_factor", 4);
+      Fixtures.Add_F32
+        (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.wa_layer_indexes", G.Value_Int32, 1);
+      Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (Insert46));
+      Fixtures.End_Array (Builder);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_mean", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+      Fixtures.Begin_Array
+        (Builder, "clip.vision.image_std", G.Value_Float32, 3);
+      for Channel in 1 .. 3 loop
+         Fixtures.Float_Element (Builder, 0.5);
+      end loop;
+      Fixtures.End_Array (Builder);
+
+      Tensor ("v.patch_embd.weight", [Patch_M, Patch_M, 3, Width_M], W.Patch);
+      Tensor ("v.patch_embd.bias", [Width_M], W.Patch_B);
+      Tensor ("v.position_embd.weight", [Width_M, Bank_M], W.Pos);
+      for Index in W.Blocks'Range loop
+         declare
+            Prefix : constant String :=
+              "v.blk." & Model_Runner.Text.Image (Long_Long_Integer (Index))
+              & ".";
+            Current : Minicpm_Block renames W.Blocks (Index);
+         begin
+            Tensor (Prefix & "ln1.weight", [Width_M], Current.Ln1_W);
+            Tensor (Prefix & "ln1.bias", [Width_M], Current.Ln1_B);
+            Tensor (Prefix & "ln2.weight", [Width_M], Current.Ln2_W);
+            Tensor (Prefix & "ln2.bias", [Width_M], Current.Ln2_B);
+            Tensor (Prefix & "attn_q.weight", [Width_M, Width_M], Current.Q);
+            Tensor (Prefix & "attn_q.bias", [Width_M], Current.Q_B);
+            Tensor (Prefix & "attn_k.weight", [Width_M, Width_M], Current.K);
+            Tensor (Prefix & "attn_k.bias", [Width_M], Current.K_B);
+            Tensor (Prefix & "attn_v.weight", [Width_M, Width_M], Current.V);
+            Tensor (Prefix & "attn_v.bias", [Width_M], Current.V_B);
+            Tensor (Prefix & "attn_out.weight", [Width_M, Width_M], Current.O);
+            Tensor (Prefix & "attn_out.bias", [Width_M], Current.O_B);
+            Tensor (Prefix & "ffn_up.weight", [Width_M, Feed_M], Current.Up);
+            Tensor (Prefix & "ffn_up.bias", [Feed_M], Current.Up_B);
+            Tensor (Prefix & "ffn_down.weight", [Feed_M, Width_M], Current.Down);
+            Tensor (Prefix & "ffn_down.bias", [Width_M], Current.Down_B);
+         end;
+      end loop;
+      Tensor ("v.post_ln.weight", [Width_M], W.Post_W);
+      Tensor ("v.post_ln.bias", [Width_M], W.Post_B);
+
+      Tensor ("v.vit_merger.ln1.weight", [Width_M], W.VM_Ln1_W);
+      Tensor ("v.vit_merger.ln1.bias", [Width_M], W.VM_Ln1_B);
+      Tensor ("v.vit_merger.attn_q.weight", [Width_M, Width_M], W.VM_Q);
+      Tensor ("v.vit_merger.attn_q.bias", [Width_M], W.VM_Q_B);
+      Tensor ("v.vit_merger.attn_k.weight", [Width_M, Width_M], W.VM_K);
+      Tensor ("v.vit_merger.attn_k.bias", [Width_M], W.VM_K_B);
+      Tensor ("v.vit_merger.attn_v.weight", [Width_M, Width_M], W.VM_V);
+      Tensor ("v.vit_merger.attn_v.bias", [Width_M], W.VM_V_B);
+      Tensor ("v.vit_merger.attn_out.weight", [Width_M, Width_M], W.VM_O);
+      Tensor ("v.vit_merger.attn_out.bias", [Width_M], W.VM_O_B);
+      Tensor ("v.vit_merger.ds_ln.weight", [Merged46], W.VM_Ds_Ln_W);
+      Tensor ("v.vit_merger.ds_ln.bias", [Merged46], W.VM_Ds_Ln_B);
+      Tensor ("v.vit_merger.ds_ffn_up.weight", [Merged46, VFeed46],
+              W.VM_Ds_Up);
+      Tensor ("v.vit_merger.ds_ffn_up.bias", [VFeed46], W.VM_Ds_Up_B);
+      Tensor ("v.vit_merger.ds_ffn_down.weight", [VFeed46, Width_M],
+              W.VM_Ds_Down);
+      Tensor ("v.vit_merger.ds_ffn_down.bias", [Width_M], W.VM_Ds_Down_B);
+
+      Tensor ("mm.input_norm.weight", [Merged46], W.MM_Norm_W);
+      Tensor ("mm.input_norm.bias", [Merged46], W.MM_Norm_B);
+      Tensor ("mm.up.weight", [Merged46, Merged46], W.MM_Up);
+      Tensor ("mm.up.bias", [Merged46], W.MM_Up_B);
+      Tensor ("mm.down.weight", [Merged46, Text46], W.MM_Down);
+      Tensor ("mm.down.bias", [Text46], W.MM_Down_B);
+
+      Fixtures.Build (Builder, File);
+      Create (Handle, Out_File, Path);
+      declare
+         Block : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (File.all'Length))
+           with Import, Address => File.all'Address;
+      begin
+         Write (Handle, Block);
+      end;
+      Close (Handle);
+      B.Free (File);
+   end Write_Minicpm46_Projector;
+
+   --  The one row the small 4.6 merger should make of a picture, in
+   --  binary64, computed straight from the spec on the fixed square grid.
+   procedure Minicpm46_Reference_Rows
+     (W : Minicpm46_Weights; Picture : Images.Raster;
+      Rows : out N.Wide_Real_Array)
+   is
+      subtype WR is N.Wide_Real;
+      Grid : constant Natural := Size_M / Patch_M;
+      NP0  : constant Natural := Grid * Grid;
+      S1   : constant Natural := Grid / 2;
+      NP1  : constant Natural := S1 * S1;
+      S2   : constant Natural := S1 / 2;
+      Target : constant Natural := Grid * Patch_M;
+      Eps  : constant WR := 1.0e-6;
+      Pixels : Images.Raster;
+
+      --  Token states at each stage, flat (token * Width_M + dim).
+      X  : N.Wide_Real_Array (0 .. N.Element_Count (NP0 * Width_M - 1)) :=
+        [others => 0.0];
+      X2 : N.Wide_Real_Array (0 .. N.Element_Count (NP1 * Width_M - 1)) :=
+        [others => 0.0];
+
+      function GELU (Value : WR) return WR
+      is (0.5 * Value
+          * (1.0 + Wide_Math.Tanh
+                     (0.797_884_560_802_865_4
+                      * (Value + 0.044_715 * Value * Value * Value))));
+
+      function Erf_GELU (Value : WR) return WR is
+         P  : constant WR := 0.327_591_1;
+         A1 : constant WR := 0.254_829_592;
+         A2 : constant WR := -0.284_496_736;
+         A3 : constant WR := 1.421_413_741;
+         A4 : constant WR := -1.453_152_027;
+         A5 : constant WR := 1.061_405_429;
+         X0 : constant WR := Value * 0.707_106_781_186_547_5;
+         Z  : constant WR := abs X0;
+         T  : constant WR := 1.0 / (1.0 + P * Z);
+         Y  : constant WR :=
+           1.0 - (((((A5 * T + A4) * T) + A3) * T + A2) * T + A1) * T
+                 * Wide_Math.Exp (-Z * Z);
+         Erf : constant WR := (if X0 < 0.0 then -Y else Y);
+      begin
+         return 0.5 * Value * (1.0 + Erf);
+      end Erf_GELU;
+
+      --  Layer-norm one row of Wide wide, in place across a flat array.
+      procedure Norm_Row
+        (A : in out N.Wide_Real_Array; At_Row, Wide : Natural;
+         Gain, Bias : N.Real_Array)
+      is
+         Mean, Variance : WR := 0.0;
+      begin
+         for D in 0 .. Wide - 1 loop
+            Mean := Mean + A (N.Element_Count (At_Row + D));
+         end loop;
+         Mean := Mean / WR (Wide);
+         for D in 0 .. Wide - 1 loop
+            Variance := Variance
+              + (A (N.Element_Count (At_Row + D)) - Mean) ** 2;
+         end loop;
+         Variance := Variance / WR (Wide);
+         for D in 0 .. Wide - 1 loop
+            A (N.Element_Count (At_Row + D)) :=
+              (A (N.Element_Count (At_Row + D)) - Mean)
+              / Wide_Math.Sqrt (Variance + Eps)
+              * WR (Gain (N.Element_Count (D)))
+              + WR (Bias (N.Element_Count (D)));
+         end loop;
+      end Norm_Row;
+
+      --  One SigLIP block over Count tokens of Width_M held in Buf.
+      procedure Block_Pass
+        (Buf : in out N.Wide_Real_Array; Count : Natural;
+         Blk : Minicpm_Block)
+      is
+         H : N.Wide_Real_Array (Buf'Range);
+         Q, Kk, Vv, A : N.Wide_Real_Array (Buf'Range);
+         Fh : N.Wide_Real_Array (0 .. N.Element_Count (Count * Feed_M - 1));
+         function WI (P, D : Natural) return N.Element_Count
+         is (N.Element_Count (P * Width_M + D));
+      begin
+         H := Buf;
+         for P in 0 .. Count - 1 loop
+            Norm_Row (H, P * Width_M, Width_M, Blk.Ln1_W, Blk.Ln1_B);
+         end loop;
+         for P in 0 .. Count - 1 loop
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sq : WR := WR (Blk.Q_B (N.Element_Count (R)));
+                  Sk : WR := WR (Blk.K_B (N.Element_Count (R)));
+                  Sv : WR := WR (Blk.V_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sq := Sq + H (WI (P, C))
+                       * WR (Blk.Q (N.Element_Count (R * Width_M + C)));
+                     Sk := Sk + H (WI (P, C))
+                       * WR (Blk.K (N.Element_Count (R * Width_M + C)));
+                     Sv := Sv + H (WI (P, C))
+                       * WR (Blk.V (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  Q (WI (P, R)) := Sq; Kk (WI (P, R)) := Sk;
+                  Vv (WI (P, R)) := Sv;
+               end;
+            end loop;
+         end loop;
+         for Hd in 0 .. Heads_M - 1 loop
+            for P in 0 .. Count - 1 loop
+               declare
+                  Scores : array (0 .. Count - 1) of WR;
+                  Largest, Total : WR;
+               begin
+                  for O in 0 .. Count - 1 loop
+                     Scores (O) := 0.0;
+                     for D in 0 .. Head_M - 1 loop
+                        Scores (O) := Scores (O)
+                          + Q (WI (P, Hd * Head_M + D))
+                          * Kk (WI (O, Hd * Head_M + D));
+                     end loop;
+                     Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (Head_M));
+                  end loop;
+                  Largest := Scores (0);
+                  for O in 1 .. Count - 1 loop
+                     Largest := WR'Max (Largest, Scores (O));
+                  end loop;
+                  Total := 0.0;
+                  for O in 0 .. Count - 1 loop
+                     Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
+                     Total := Total + Scores (O);
+                  end loop;
+                  for D in 0 .. Head_M - 1 loop
+                     declare
+                        Sum : WR := 0.0;
+                     begin
+                        for O in 0 .. Count - 1 loop
+                           Sum := Sum
+                             + Scores (O) / Total * Vv (WI (O, Hd * Head_M + D));
+                        end loop;
+                        A (WI (P, Hd * Head_M + D)) := Sum;
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+         for P in 0 .. Count - 1 loop
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sum : WR := WR (Blk.O_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sum := Sum + A (WI (P, C))
+                       * WR (Blk.O (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  Buf (WI (P, R)) := Buf (WI (P, R)) + Sum;
+               end;
+            end loop;
+         end loop;
+         H := Buf;
+         for P in 0 .. Count - 1 loop
+            Norm_Row (H, P * Width_M, Width_M, Blk.Ln2_W, Blk.Ln2_B);
+         end loop;
+         for P in 0 .. Count - 1 loop
+            for R in 0 .. Feed_M - 1 loop
+               declare
+                  Sum : WR := WR (Blk.Up_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sum := Sum + H (WI (P, C))
+                       * WR (Blk.Up (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  Fh (N.Element_Count (P * Feed_M + R)) := GELU (Sum);
+               end;
+            end loop;
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sum : WR := WR (Blk.Down_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Feed_M - 1 loop
+                     Sum := Sum + Fh (N.Element_Count (P * Feed_M + C))
+                       * WR (Blk.Down (N.Element_Count (R * Feed_M + C)));
+                  end loop;
+                  Buf (WI (P, R)) := Buf (WI (P, R)) + Sum;
+               end;
+            end loop;
+         end loop;
+      end Block_Pass;
+
+      function Corner (G, I, J, N4 : Natural) return Natural
+      is (case N4 is
+             when 0 => (2 * I) * G + (2 * J),
+             when 1 => (2 * I) * G + (2 * J + 1),
+             when 2 => (2 * I + 1) * G + (2 * J),
+             when others => (2 * I + 1) * G + (2 * J + 1));
+   begin
+      Images.Resample (Picture, Target, Target, Pixels);
+      for PY in 0 .. Grid - 1 loop
+         for PX in 0 .. Grid - 1 loop
+            declare
+               P : constant Natural := PY * Grid + PX;
+               Bucket : constant Natural :=
+                 (70 * PY / Grid) * 70 + (70 * PX / Grid);
+            begin
+               for R in 0 .. Width_M - 1 loop
+                  declare
+                     Sum : WR := WR (W.Patch_B (N.Element_Count (R)))
+                       + WR (W.Pos (N.Element_Count (Bucket * Width_M + R)));
+                  begin
+                     for C in 0 .. 2 loop
+                        for KY in 0 .. Patch_M - 1 loop
+                           for KX in 0 .. Patch_M - 1 loop
+                              declare
+                                 Value : constant WR :=
+                                   (WR (Pixel (Pixels, PX * Patch_M + KX,
+                                               PY * Patch_M + KY, C)) / 255.0
+                                    - 0.5) / 0.5;
+                                 Idx : constant Natural :=
+                                   C * Patch_M * Patch_M + KY * Patch_M + KX;
+                              begin
+                                 Sum := Sum + Value
+                                   * WR (W.Patch (N.Element_Count
+                                                    (R * Elements_M + Idx)));
+                              end;
+                           end loop;
+                        end loop;
+                     end loop;
+                     X (N.Element_Count (P * Width_M + R)) := Sum;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+      Images.Free (Pixels);
+
+      for Index in 0 .. Insert46 loop
+         Block_Pass (X, NP0, W.Blocks (Index));
+      end loop;
+
+      --  The windowed merger's self-attention: each two-by-two window's
+      --  four tokens attend only among themselves.
+      declare
+         H : N.Wide_Real_Array (X'Range) := X;
+         Q, Kk, Vv, A : N.Wide_Real_Array (X'Range);
+         function WI (P, D : Natural) return N.Element_Count
+         is (N.Element_Count (P * Width_M + D));
+      begin
+         for P in 0 .. NP0 - 1 loop
+            Norm_Row (H, P * Width_M, Width_M, W.VM_Ln1_W, W.VM_Ln1_B);
+         end loop;
+         for P in 0 .. NP0 - 1 loop
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sq : WR := WR (W.VM_Q_B (N.Element_Count (R)));
+                  Sk : WR := WR (W.VM_K_B (N.Element_Count (R)));
+                  Sv : WR := WR (W.VM_V_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sq := Sq + H (WI (P, C))
+                       * WR (W.VM_Q (N.Element_Count (R * Width_M + C)));
+                     Sk := Sk + H (WI (P, C))
+                       * WR (W.VM_K (N.Element_Count (R * Width_M + C)));
+                     Sv := Sv + H (WI (P, C))
+                       * WR (W.VM_V (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  Q (WI (P, R)) := Sq; Kk (WI (P, R)) := Sk;
+                  Vv (WI (P, R)) := Sv;
+               end;
+            end loop;
+         end loop;
+         for I in 0 .. S1 - 1 loop
+            for J in 0 .. S1 - 1 loop
+               declare
+                  T4 : constant array (0 .. 3) of Natural :=
+                    [Corner (Grid, I, J, 0), Corner (Grid, I, J, 1),
+                     Corner (Grid, I, J, 2), Corner (Grid, I, J, 3)];
+               begin
+                  for Hd in 0 .. Heads_M - 1 loop
+                     for Ai in 0 .. 3 loop
+                        declare
+                           Sc : array (0 .. 3) of WR;
+                           Largest, Total : WR;
+                        begin
+                           for Bi in 0 .. 3 loop
+                              Sc (Bi) := 0.0;
+                              for D in 0 .. Head_M - 1 loop
+                                 Sc (Bi) := Sc (Bi)
+                                   + Q (WI (T4 (Ai), Hd * Head_M + D))
+                                   * Kk (WI (T4 (Bi), Hd * Head_M + D));
+                              end loop;
+                              Sc (Bi) := Sc (Bi) / Wide_Math.Sqrt (WR (Head_M));
+                           end loop;
+                           Largest := Sc (0);
+                           for Bi in 1 .. 3 loop
+                              Largest := WR'Max (Largest, Sc (Bi));
+                           end loop;
+                           Total := 0.0;
+                           for Bi in 0 .. 3 loop
+                              Sc (Bi) := Wide_Math.Exp (Sc (Bi) - Largest);
+                              Total := Total + Sc (Bi);
+                           end loop;
+                           for D in 0 .. Head_M - 1 loop
+                              declare
+                                 Sum : WR := 0.0;
+                              begin
+                                 for Bi in 0 .. 3 loop
+                                    Sum := Sum + Sc (Bi) / Total
+                                      * Vv (WI (T4 (Bi), Hd * Head_M + D));
+                                 end loop;
+                                 A (WI (T4 (Ai), Hd * Head_M + D)) := Sum;
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+         for P in 0 .. NP0 - 1 loop
+            for R in 0 .. Width_M - 1 loop
+               declare
+                  Sum : WR := WR (W.VM_O_B (N.Element_Count (R)));
+               begin
+                  for C in 0 .. Width_M - 1 loop
+                     Sum := Sum + A (WI (P, C))
+                       * WR (W.VM_O (N.Element_Count (R * Width_M + C)));
+                  end loop;
+                  X (WI (P, R)) := X (WI (P, R)) + Sum;
+               end;
+            end loop;
+         end loop;
+      end;
+
+      --  The windowed merger's two-by-two downsample.
+      for I in 0 .. S1 - 1 loop
+         for J in 0 .. S1 - 1 loop
+            declare
+               O : constant Natural := I * S1 + J;
+               Joined : N.Wide_Real_Array (0 .. Merged46 - 1);
+               Mean   : N.Wide_Real_Array (0 .. Width_M - 1) := [others => 0.0];
+               Up     : N.Wide_Real_Array (0 .. VFeed46 - 1);
+            begin
+               for N4 in 0 .. 3 loop
+                  declare
+                     Src : constant Natural := Corner (Grid, I, J, N4) * Width_M;
+                  begin
+                     for D in 0 .. Width_M - 1 loop
+                        Joined (N.Element_Count (N4 * Width_M + D)) :=
+                          X (N.Element_Count (Src + D));
+                        Mean (N.Element_Count (D)) :=
+                          Mean (N.Element_Count (D))
+                          + X (N.Element_Count (Src + D)) * 0.25;
+                     end loop;
+                  end;
+               end loop;
+               Norm_Row (Joined, 0, Merged46, W.VM_Ds_Ln_W, W.VM_Ds_Ln_B);
+               for R in 0 .. VFeed46 - 1 loop
+                  declare
+                     Sum : WR := WR (W.VM_Ds_Up_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Merged46 - 1 loop
+                        Sum := Sum + Joined (N.Element_Count (C))
+                          * WR (W.VM_Ds_Up
+                                  (N.Element_Count (R * Merged46 + C)));
+                     end loop;
+                     Up (N.Element_Count (R)) := GELU (Sum);
+                  end;
+               end loop;
+               for R in 0 .. Width_M - 1 loop
+                  declare
+                     Sum : WR := WR (W.VM_Ds_Down_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. VFeed46 - 1 loop
+                        Sum := Sum + Up (N.Element_Count (C))
+                          * WR (W.VM_Ds_Down
+                                  (N.Element_Count (R * VFeed46 + C)));
+                     end loop;
+                     X2 (N.Element_Count (O * Width_M + R)) :=
+                       Sum + Mean (N.Element_Count (R));
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      for Index in Insert46 + 1 .. Blocks_M - 1 loop
+         Block_Pass (X2, NP1, W.Blocks (Index));
+      end loop;
+
+      for P in 0 .. NP1 - 1 loop
+         Norm_Row (X2, P * Width_M, Width_M, W.Post_W, W.Post_B);
+      end loop;
+
+      --  The final two-by-two merge and the downsample-MLP head.
+      for I in 0 .. S2 - 1 loop
+         for J in 0 .. S2 - 1 loop
+            declare
+               O : constant Natural := I * S2 + J;
+               Joined : N.Wide_Real_Array (0 .. Merged46 - 1);
+               Up     : N.Wide_Real_Array (0 .. Merged46 - 1);
+            begin
+               for N4 in 0 .. 3 loop
+                  declare
+                     Src : constant Natural := Corner (S1, I, J, N4) * Width_M;
+                  begin
+                     for D in 0 .. Width_M - 1 loop
+                        Joined (N.Element_Count (N4 * Width_M + D)) :=
+                          X2 (N.Element_Count (Src + D));
+                     end loop;
+                  end;
+               end loop;
+               Norm_Row (Joined, 0, Merged46, W.MM_Norm_W, W.MM_Norm_B);
+               for R in 0 .. Merged46 - 1 loop
+                  declare
+                     Sum : WR := WR (W.MM_Up_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Merged46 - 1 loop
+                        Sum := Sum + Joined (N.Element_Count (C))
+                          * WR (W.MM_Up (N.Element_Count (R * Merged46 + C)));
+                     end loop;
+                     Up (N.Element_Count (R)) := Erf_GELU (Sum);
+                  end;
+               end loop;
+               for R in 0 .. Text46 - 1 loop
+                  declare
+                     Sum : WR := WR (W.MM_Down_B (N.Element_Count (R)));
+                  begin
+                     for C in 0 .. Merged46 - 1 loop
+                        Sum := Sum + Up (N.Element_Count (C))
+                          * WR (W.MM_Down (N.Element_Count (R * Merged46 + C)));
+                     end loop;
+                     Rows (N.Element_Count (O * Text46 + R)) := Sum;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Minicpm46_Reference_Rows;
+
+   procedure The_Minicpmv46_Projector_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : Minicpm46_Weights_Access := Fresh_Minicpm46_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Text46 - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * 20 * 20);
+      begin
+         for Y in 0 .. 19 loop
+            for X in 0 .. 19 loop
+               declare
+                  At_Pixel : constant B.Byte_Count :=
+                    B.Byte_Count (3 * (Y * 20 + X)) + 1;
+               begin
+                  Data (At_Pixel) := B.Byte (X * 12);
+                  Data (At_Pixel + 1) := B.Byte (Y * 12);
+                  Data (At_Pixel + 2) :=
+                    (if X in 5 .. 12 and then Y in 6 .. 15 then 240 else 30);
+               end;
+            end loop;
+         end loop;
+         Images.Decode (Bytes_Of ("P6 20 20 255 ") & Data, "test", Picture,
+                        Status);
+         Assert (E.Is_Ok (Status), "the 4.6 test picture was refused");
+      end;
+
+      Minicpm46_Reference_Rows (W.all, Picture, Wanted);
+
+      Write_Minicpm46_Projector ("obj/vision-minicpm46.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-minicpm46.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small 4.6 merger did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Is_Ready (Eyes)
+              and then Vision.Fixed_Rows (Eyes)
+              and then not Vision.Placed_Rows (Eyes)
+              and then Vision.Rows_Per_Picture (Eyes) = NP2_M
+              and then Vision.Row_Width (Eyes) = Text46
+              and then Vision.Projector (Eyes) = "minicpmv4_6",
+              "the small 4.6 merger's shape was misread");
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the small 4.6 merger did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Rows /= null and then Rows.all'Length = NP2_M * Text46,
+              "the 4.6 merger made the wrong number of rows");
+      for J in 0 .. N.Element_Count (NP2_M * Text46 - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "4.6 row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+      Vision.Close (Eyes);
+      Images.Free (Picture);
+      Free (W);
+   end The_Minicpmv46_Projector_Encodes_As_The_Reference;
+
    ----------
    -- Name --
    ----------
@@ -3874,6 +4580,12 @@ package body Tests.Vision_Cases is
          & "rows a plain computation of the same network gives -- the "
          & "SigLIP encoder placed by the bucketed bank and the resampler "
          & "cross-attention -- and a resampler of another kind is refused");
+      Register_Routine
+        (T, The_Minicpmv46_Projector_Encodes_As_The_Reference'Access,
+         "a MiniCPM-V 4.6 windowed merger written small encodes a picture "
+         & "to the rows a plain computation of the same network gives -- the "
+         & "SigLIP encoder, the windowed self-attention, the two-by-two "
+         & "downsample, and the final merge through the error-function head");
       Register_Routine
         (T, Pictures_Stand_Behind_Their_Markers'Access,
          "a picture's rows take the positions its marker opens in the "
